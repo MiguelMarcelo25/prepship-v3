@@ -101,14 +101,18 @@ assert(
 );
 assert(auditMigration.includes('ENABLE ROW LEVEL SECURITY'), 'migration 0044 enables RLS on audit_log');
 
-// 3. Service: best-effort writer + redaction + runtime ensure mirroring the migration.
+// 3. Service: best-effort writer + redaction + migration-readiness delegation.
 assert(auditService.includes('export async function recordAuditEvent('), 'audit service exports recordAuditEvent');
 assert(auditService.includes('export async function ensureAuditLogSchema('), 'audit service exports ensureAuditLogSchema');
 assert(auditService.includes('export function redactAuditDetails('), 'audit service exports redactAuditDetails');
 assert(auditService.includes('export function auditActorFromContext('), 'audit service exports auditActorFromContext');
 assert(/catch \(err\)[\s\S]*console\.warn/.test(auditService), 'recordAuditEvent is best-effort (never throws into the caller)');
 assert(/secret|token|credential/i.test(auditService) && auditService.includes('[redacted]'), 'audit service redacts secret-shaped fields');
-assert(/BEFORE UPDATE OR DELETE ON audit_log/.test(auditService), 'ensureAuditLogSchema mirrors the append-only trigger');
+assert(
+  auditService.includes('assertRuntimeSchemaReady') &&
+    !/CREATE TABLE|CREATE TRIGGER|ALTER TABLE/i.test(auditService),
+  'ensureAuditLogSchema delegates to migration readiness without runtime DDL',
+);
 
 // 4. Writers wired at the carded mutation points (credentials, labels, orders incl. ?force=1, billing, settings).
 const writerFiles = {

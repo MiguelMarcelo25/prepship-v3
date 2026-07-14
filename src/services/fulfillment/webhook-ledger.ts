@@ -7,13 +7,11 @@
 // shipments; reconciliation that updates canonical status is forward-only and lives in the
 // reconcile layer.
 //
-// A migration (drizzle/0040_webhook_events.sql) owns this table, but we ALSO self-provision
-// it idempotently at runtime so a not-yet-migrated environment can't throw "table does not
-// exist" at the purchase boundary (the rate_cache.diagnostics failure class). All reads are
-// best-effort: a missing/unavailable ledger degrades gracefully and never weakens the
-// order-column safety checks.
+// Migration 0040 owns this table. Boot readiness blocks migration-lag purchase
+// work. Reads remain best-effort and never weaken order-column safety checks.
 
 import { sql as pg } from '../../db/client.js';
+import { assertRuntimeSchemaReady } from '../runtime-schema-readiness.js';
 import { createHash } from 'node:crypto';
 
 export type CanonicalWebhookStatus = 'shipped' | 'cancelled' | 'other';
@@ -36,42 +34,8 @@ export type WebhookEventRecord = {
   metadata?: Record<string, unknown>;
 };
 
-let schemaEnsured: Promise<void> | null = null;
-
 export async function ensureWebhookEventsSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS webhook_events (
-        id serial PRIMARY KEY,
-        provider text NOT NULL,
-        event_type text NOT NULL,
-        canonical_status text,
-        external_event_id text,
-        payload_hash text NOT NULL,
-        dedupe_key text NOT NULL,
-        source_order_number text,
-        source_order_id text,
-        related_order_id integer,
-        related_shipment_id integer,
-        status text NOT NULL DEFAULT 'received',
-        error text,
-        metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-        occurred_at timestamptz,
-        received_at timestamptz NOT NULL DEFAULT now(),
-        created_at timestamptz NOT NULL DEFAULT now(),
-        processed_at timestamptz
-      )
-    `;
-    await pg`CREATE UNIQUE INDEX IF NOT EXISTS webhook_events_dedupe_idx ON webhook_events (dedupe_key)`;
-    await pg`CREATE INDEX IF NOT EXISTS webhook_events_order_status_idx ON webhook_events (related_order_id, canonical_status)`;
-    await pg`CREATE INDEX IF NOT EXISTS webhook_events_source_lookup_idx ON webhook_events (provider, source_order_number)`;
-    await pg`CREATE INDEX IF NOT EXISTS webhook_events_source_id_idx ON webhook_events (source_order_id)`;
-  })().catch((err) => {
-    // Reset so a later call can retry; surface to caller best-effort.
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 /** SHA-256 of the raw body. Stored instead of the payload so we never persist PII. */

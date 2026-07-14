@@ -8,9 +8,8 @@
 // 2 (providerMarker) + 4 (addressValidation).
 //
 // Lockdown: additive table only. No shipped/cancelled data, no shipments writes.
-// Managed by the runtime ensure (address-classification-cache.ts) + the hand-written
-// drizzle/0048 migration — NOT in drizzle.config.ts (same as shipment_tracking_status
-// / audit_log) so it never 500s prod before the migration runs.
+// Managed by the hand-written drizzle/0048 migration and verified by the shared boot
+// readiness gate. It is intentionally NOT in drizzle.config.ts.
 import { boolean, index, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const addressClassifications = pgTable(

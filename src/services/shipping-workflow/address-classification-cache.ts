@@ -16,34 +16,11 @@ import {
   type NewAddressClassificationRow,
 } from '../../db/schema/address-classifications';
 import { normalizeShippingPostalCode } from './postal-code';
+import { assertRuntimeSchemaReady } from '../runtime-schema-readiness.js';
 
-// ── Runtime schema ensure (mirrors drizzle/0048_address_classifications.sql; same
-// pattern as shipment-tracking.ts so worker/API both work pre-migration). ──
-let schemaEnsured: Promise<void> | null = null;
-
+// Migration 0048 owns address-classification schema.
 export async function ensureAddressClassificationsSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS address_classifications (
-        address_key text PRIMARY KEY,
-        business boolean,
-        provider_classification text,
-        provider text,
-        dpv_confirmation text,
-        zip_plus4 text,
-        carrier_route text,
-        raw jsonb,
-        resolved_at timestamptz NOT NULL DEFAULT now(),
-        expires_at timestamptz NOT NULL
-      )
-    `;
-    await pg`CREATE INDEX IF NOT EXISTS address_classifications_expires_idx ON address_classifications (expires_at)`;
-    await pg`ALTER TABLE address_classifications ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 /** Default address-classification TTL: addresses rarely change resi/comm type. */

@@ -77,16 +77,16 @@ check('migration enables RLS with no policy (project model)',
 
 const schema = read('src/db/schema/packaging-rules.ts');
 check('schema defines both tables', schema.includes("'client_sku_classes'") && schema.includes("'client_packing_rules'"));
-// `source` is added by the migration + the runtime ensure, and is INTENTIONALLY
-// not modeled in drizzle (bare select() would emit it and 500 before migrate).
+// `source` is migration-owned and intentionally not modeled in Drizzle.
 const combo = read('src/db/schema/client-combo-package-defaults.ts');
 check('combo-defaults source column is NOT modeled in drizzle (bare-select safety)',
   !/source:\s*text\(/.test(combo) && combo.includes('NOT modeled here'));
 
 const service = read('src/services/packaging-rules.ts');
 check('service has the lazy ensure-schema', service.includes('export async function ensurePackagingRulesSchema'));
-check('service ensure adds the combo-defaults source column (raw SQL)',
-  /ALTER TABLE client_combo_package_defaults ADD COLUMN IF NOT EXISTS source/i.test(service));
+check('service delegates schema ownership to migration readiness',
+  /assertRuntimeSchemaReady/.test(service) &&
+    !/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(service));
 check('service exposes the read-only planner', service.includes('export async function planPackagingForAwaitingOrders'));
 // Read-only: no data mutation (DDL CREATE/ALTER in ensure is allowed; data writes are not).
 check('planner/service performs NO data writes (insert/update set/delete)',

@@ -55,10 +55,12 @@ check('schema is registered in the drizzle schema index', /export \* from '\.\/s
 
 // ── Runtime ensure is CREATE TABLE IF NOT EXISTS (no blocking migration), never DROP/ALTER locked ──
 const ensure = readFileSync('src/services/shipment-bundles/ensure-shipment-bundles-schema.ts', 'utf8');
-check('ensure-schema is CREATE TABLE IF NOT EXISTS for both tables (idempotent, additive)',
-  /CREATE TABLE IF NOT EXISTS shipment_bundles/.test(ensure) &&
-  /CREATE TABLE IF NOT EXISTS shipment_bundle_members/.test(ensure) &&
-  !/DROP TABLE|ALTER TABLE (orders|shipments)/i.test(ensure));
+const migration = readFileSync('drizzle/0052_shipment_bundles.sql', 'utf8');
+check('migration owns both tables and runtime delegates readiness',
+  /CREATE TABLE IF NOT EXISTS shipment_bundles/.test(migration) &&
+  /CREATE TABLE IF NOT EXISTS shipment_bundle_members/.test(migration) &&
+  /assertRuntimeSchemaReady/.test(ensure) &&
+  !/CREATE TABLE|ALTER TABLE|DROP TABLE/i.test(ensure));
 
 if (failures > 0) {
   console.error(`\nPS-312 shipment-bundle schema guard FAILED with ${failures} failure(s).`);

@@ -183,9 +183,10 @@ check('browse producer passes the REAL insurance basis (result.effectiveInsuranc
   /stampHouseTuple\([\s\S]*?insuranceProvider: result\.effectiveInsuranceProvider/.test(browseProducer));
 check('opt-in column is NOT declared on the drizzle billing_config schema (avoids the runtime-DDL gotcha)',
   !/house_account_enabled|houseAccountEnabled/.test(readFileSync('src/db/schema/billing.ts', 'utf8')));
-check('opt-in read is fail-safe (false on error) and idempotently ensures the column',
+check('opt-in read is fail-safe and delegates schema readiness to migration 0050',
   /clientHouseAccountEnabled/.test(readFileSync('src/services/house-account-opt-in.ts', 'utf8')) &&
-  /ADD COLUMN IF NOT EXISTS house_account_enabled/.test(readFileSync('src/services/house-account-opt-in.ts', 'utf8')));
+  /assertRuntimeSchemaReady/.test(readFileSync('src/services/house-account-opt-in.ts', 'utf8')) &&
+  /ADD COLUMN IF NOT EXISTS house_account_enabled/.test(readFileSync('drizzle/0050_billing_config_house_account.sql', 'utf8')));
 
 // ── slice 3: realized capture (reads the projected stamp; freezes the sidecar) ─
 {

@@ -27,6 +27,7 @@
 // pattern as label_purchase_locks); mirrored on prod by migration
 // audit_2026_07_13_label_purchase_intents.
 import { sql } from '../db/client';
+import { assertRuntimeSchemaReady } from '../services/runtime-schema-readiness.js';
 
 export type LabelPurchaseIntentState =
   | 'provider_pending'
@@ -70,34 +71,10 @@ export function isLabelPurchaseReconcileRequiredError(
   );
 }
 
-let schemaEnsured: Promise<void> | null = null;
-
 async function ensureLabelPurchaseIntentSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await sql`
-      CREATE TABLE IF NOT EXISTS label_purchase_intents (
-        id serial PRIMARY KEY,
-        order_id integer NOT NULL,
-        provider text NOT NULL,
-        request_fingerprint text,
-        state text NOT NULL DEFAULT 'provider_pending',
-        shipment_id integer,
-        error text,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )
-    `;
-    await sql`
-      CREATE INDEX IF NOT EXISTS label_purchase_intents_unresolved_idx
-        ON label_purchase_intents (order_id)
-        WHERE state IN ('provider_pending', 'reconcile_required')
-    `;
-    await sql`ALTER TABLE label_purchase_intents ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  // Per user override unlock shipped data on 2026-07-14: migration 0062 owns
+  // purchase-intent schema; purchase flow only verifies readiness before use.
+  await assertRuntimeSchemaReady();
 }
 
 export async function createLabelPurchaseIntent(input: {

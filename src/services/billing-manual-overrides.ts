@@ -9,6 +9,7 @@
  */
 import { sql as drizzleSql, type SQL } from 'drizzle-orm';
 import { db, sql as pg } from '../db/client';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export const MANUAL_BILLING_OVERRIDE_LINE_TYPES = [
   'pick_pack',
@@ -65,36 +66,8 @@ export type ManualBillingLineBase = Omit<
   'lineType' | 'description' | 'qty' | 'unitCost' | 'totalCost'
 >;
 
-let schemaEnsured: Promise<void> | null = null;
-
 export async function ensureBillingManualOverridesSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS billing_manual_overrides (
-        order_id integer NOT NULL,
-        client_id integer NOT NULL,
-        line_type text NOT NULL,
-        amount numeric(10, 2) NOT NULL,
-        reviewer text,
-        reviewed_at timestamptz NOT NULL DEFAULT now(),
-        note text,
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT billing_manual_overrides_line_type_chk
-          CHECK (line_type IN ('pick_pack', 'additional_unit', 'shipping')),
-        CONSTRAINT billing_manual_overrides_order_line_unq
-          UNIQUE (order_id, line_type)
-      )
-    `;
-    await pg`ALTER TABLE billing_manual_overrides ENABLE ROW LEVEL SECURITY`;
-    await pg`
-      CREATE INDEX IF NOT EXISTS billing_manual_overrides_client_order_idx
-      ON billing_manual_overrides (client_id, order_id)
-    `;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 function normalizeLineType(value: unknown): ManualBillingOverrideLineType | null {

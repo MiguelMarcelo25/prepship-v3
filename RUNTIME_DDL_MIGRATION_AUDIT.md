@@ -1,116 +1,65 @@
 # PrepShip Runtime DDL Migration Audit
 
-## Executive Summary
+## Audit 3.3 Result
 
-This is the Phase 11 inventory for remaining runtime `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements in production-capable `src` and `api` paths.
+Production-capable `src` and `api` paths contain no schema DDL. Stable
+schema belongs to Drizzle SQL migrations. `src/services/runtime-schema-readiness.ts`
+is the single boot gate: API verifies it before listening and worker verifies it
+before starting print/sync jobs. Missing schema fails boot with the exact missing
+relations, columns, indexes, functions, or triggers.
 
-Current status: inventory and guard created. Phase 11 Batch 4 moved reporting metrics schema ownership into `drizzle/0029_reporting_metrics.sql` and changed runtime reporting code to a readiness check. Phase 11 Batch 5 removed repeated Walmart selling-fee source index runtime creation and left the index owned by `drizzle/0019_selling_fees.sql`. Phase 11 Batch 6 moved `store_orders` table/index ownership into `drizzle/0030_store_orders.sql` and changed marketplace order handlers to a readiness check. Phase 11 Batch 7 moved credential-account RLS/readiness ownership into migrations and removed credential account request-time table/index creation. Phase 11 Batch 8 moved `order_items`, `analytics_cache`, and the order-items trigger/function to migration-readiness checks. Phase 11 Batch 9 removed duplicate runtime creation for low-risk orders/inventory performance indexes that were already migration-owned. Phase 11 Batch 10 moved fulfillment outbox and direct-label schema ownership to migration-readiness checks, removing the production `source_provider` request-time DDL seen in PS-028 database timing. The remaining runtime DDL is the selling-fee column compatibility fallback and must be handled under a separate shipped-data review because those fields support settled shipped-order fee updates.
+Request/job compatibility functions retain their public names so workflow callers
+do not change, but each now delegates to `assertRuntimeSchemaReady()` instead of
+creating or altering schema.
 
-## Classification Legend
+## Migration Ownership
 
-| Classification | Meaning |
-|---|---|
-| already covered by migration | A Drizzle migration exists; runtime DDL is a temporary safety net or maintenance path |
-| compatibility fallback to keep temporarily | Runtime DDL remains to support older deployments or compatibility handlers until production is verified |
-| safe to move to migration now | No locked shipped/cancelled behavior needs to change; next batch can migrate it |
-| requires separate shipped/label review | DDL is near shipments, labels, fulfillment, or locked operational surfaces and must be handled separately |
+- `drizzle/0019_selling_fees.sql`: settled-fee order columns/index.
+- `drizzle/0021_orders_endpoint_performance.sql`: shipment lookup indexes.
+- `drizzle/0040_webhook_events.sql`: webhook ledger.
+- `drizzle/0041_order_rate_jobs.sql`: per-order rate job state.
+- `drizzle/0042_order_recipient_override.sql`: recipient override column.
+- `drizzle/0042_shipment_tracking_status.sql`: tracking sidecar and queue retirement column.
+- `drizzle/0043_billing_box_resolutions.sql`: box-resolution sidecar.
+- `drizzle/0044_audit_log.sql`: append-only audit table, trigger, and indexes.
+- `drizzle/0047_packaging_rule_engine.sql`: packaging rule tables/indexes.
+- `drizzle/0048_address_classifications.sql`: address cache.
+- `drizzle/0049_order_competitive_rate.sql`: competitive-rate sidecar.
+- `drizzle/0050_billing_config_house_account.sql`: house-account flag.
+- `drizzle/0052_shipment_bundles.sql`: shipment bundle sidecars.
+- `drizzle/0053_billing_hugrab_shipping_rate_override.sql`: HUGRAB billing config.
+- `drizzle/0054_shipments_selected_rate_cost.sql`: additive nullable selected-rate cost.
+- `drizzle/0055_billing_storage_proof.sql`: billing storage proof. Compatibility
+  function: `src/db/ensure-billing-storage-proof.ts`.
+- `drizzle/0057_store_source_cutovers.sql`: store cutover state.
+- `drizzle/0059_billing_finalized_lock.sql`: finalized-billing DB enforcement.
+- `drizzle/0060_package_consumption_ledger.sql`: package identity/review schema.
+- `drizzle/0061_inventory_ledger_effective_at.sql`: inventory ledger identity/date schema.
+- `drizzle/0062_runtime_schema_ownership.sql`: remaining stable sidecars previously
+  created on first use: direct-carrier cache, durable rate limiter, billing waiver
+  and manual override stores, label purchase locks/intents, print queue job/PDF
+  stores, Rate Browser jobs, and worker status events.
 
-## Runtime DDL Inventory
+`src/services/rate-browse-job-store.ts` now reads/writes migration-owned
+`rate_browse_jobs` and `rate_browse_job_provider_statuses`; no rate request creates
+them.
 
-| File | Runtime DDL Surface | Classification | Next Action |
-|---|---|---|---|
-| `src/routes/analysis.ts` | selling-fee order columns | requires separate shipped/label review | Move to migration-readiness only after shipped-fee reporting is reviewed |
-| `api/_lib/walmart-fees-sync.ts` | selling-fee order columns | requires separate shipped/label review | Move to migration-readiness only after shipped-fee sync is reviewed |
-| `api/carriers/walmart/fees.ts` | selling-fee order columns | requires separate shipped/label review | Move to migration-readiness only after shipped-fee sync is reviewed |
-| `api/cron/sync-walmart-fees.ts` | selling-fee order columns | requires separate shipped/label review | Move to migration-readiness only after shipped-fee sync is reviewed |
-| `src/services/orders-performance-maintenance.ts` | shipment support indexes only | requires separate shipped/label review | Move to migration-readiness only after label/shipment performance paths are reviewed |
-| `src/services/direct-carrier-rate-cache.ts` | `direct_carrier_rate_cache` (PS-271 Layer 2 60s per-carrier union cache + durable Layer 1 cooldown), RLS-enabled, no open policy | compatibility fallback to keep temporarily | Promote to a drizzle migration after DJ flips `DIRECT_CARRIER_RATE_CACHE` on Render and the additive table is confirmed in prod (default-OFF canary; OFF path never touches the DB) |
-| `src/connectors/store/walmart-fees.ts` | selling-fee order columns (`selling_fee`, `selling_fee_breakdown`, `selling_fee_synced_at`, `selling_fee_source`) | requires separate shipped/label review | Move to migration-readiness only after shipped-fee sync is reviewed (the column-bootstrap that migrated here from the retired `api/_lib/walmart-fees-sync.ts`) |
-| `src/db/ensure-order-competitive-rate.ts` | `order_competitive_rate` table + indexes (PS-220 house-margin sidecar) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the house-account capture path is confirmed in prod |
-| `src/lib/shipstation/durable-rate-limiter.ts` | `rate_limiter_state` table (durable cross-instance ShipStation limiter) | compatibility fallback to keep temporarily | Promote to a drizzle migration after the durable limiter is confirmed in prod |
-| `src/services/audit-log.ts` | `audit_log` table + resource/ts indexes, RLS-enabled | compatibility fallback to keep temporarily | Promote to a drizzle migration once the audit-log table is confirmed in prod |
-| `src/services/billing-finalization-policy.ts` | `billing_finalization_group_locks` table plus finalized-billing trigger/function mirror (PS-412) | covered by drizzle migration `0059_billing_finalized_lock.sql`; runtime ensure is the fail-closed deployment-lag fallback | Additive billing-only enforcement; drop the runtime ensure after `0059` is confirmed applied in production |
-| `src/services/billing-fee-waiver-store.ts` | `billing_fee_waivers` table, RLS-enabled (PS-275 waiver SOT) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the waiver store is confirmed in prod |
-| `src/services/billing-manual-overrides.ts` | `billing_manual_overrides` table + lookup index, RLS-enabled (PS-392 manual Billing override SOT) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the manual override table is confirmed in prod |
-| `src/services/billing.ts` | `billing_box_resolutions` table (per-order resolved box memo) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the box-resolution memo is confirmed in prod |
-| `src/services/fulfillment/webhook-ledger.ts` | `webhook_events` table + dedupe/lookup indexes (PS-128/129 upstream-shipping safety ledger) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the webhook ledger is confirmed in prod |
-| `src/services/house-account-opt-in.ts` | `billing_config.house_account_enabled` column (PS-220 per-client opt-in) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the house-account opt-in is confirmed in prod |
-| `src/services/order-recipient-override.ts` | `orders.recipient_override` column | requires separate shipped/label review | Move to migration-readiness only after the recipient-override path near shipping is reviewed |
-| `src/services/packaging-rules.ts` | `client_sku_classes` + `client_packing_rules` tables + indexes | compatibility fallback to keep temporarily | Promote to a drizzle migration once the packaging-rules tables are confirmed in prod |
-| `src/lib/label-purchase-lock.ts` | `label_purchase_locks` lease table + expiry index/RLS | requires separate shipped/label review | Keep as label-purchase safety compatibility fallback until migration ownership is added |
-| `src/services/store-source-cutover.ts` | `store_source_cutovers` table + identity/lookup indexes | compatibility fallback to keep temporarily | Promote to a Drizzle migration after store cutover rollout is confirmed |
-| `src/services/package-consumption-schema.ts` | PS-413 additive `package_ledger` identity columns/indexes, restrictive package FK, and `package_consumption_reviews` sidecar/RLS | covered by drizzle migration `0060_package_consumption_ledger.sql`; runtime ensure is the pre-provider deployment-lag fallback | Run before any live label/void/sync package mutation; remove after `0060` is confirmed applied in production |
-| `src/services/inventory-ledger-schema.ts` | PS-414 additive `inventory_ledger.effective_at` and `idempotency_key` columns/indexes | covered by drizzle migration `0061_inventory_ledger_effective_at.sql`; runtime ensure is the pre-write/read deployment-lag fallback | Existing rows stay untouched and read through `coalesce(effective_at, created_at)`; remove after `0061` is confirmed applied in production |
-| `src/services/print-queue/queue-send-job-store.ts` | `print_queue_send_jobs` + `print_queue_batch_job_items` tables (PS-351 queue-send batch/job-item status SOT) | requires separate shipped/label review | Promote to a drizzle migration after PS-351 canary confirms durable job and per-order item status in prod |
-| `src/services/print-queue-pdf-store.ts` | `print_queue_merged_pdfs` table (PS-256 merged-label PDF store) | requires separate shipped/label review | Move to migration-readiness only after the label/print-queue path is reviewed |
-| `src/services/rate-browse-job-store.ts` | `rate_browse_jobs` + `rate_browse_job_provider_statuses` tables (PS-350 backend rate job/progress SOT) | compatibility fallback to keep temporarily | Promote to a drizzle migration after PS-350 canary confirms durable rate job status and provider-status rows in prod |
-| `src/services/shipment-bundles/ensure-shipment-bundles-schema.ts` | `shipment_bundles` + `shipment_bundle_members` tables + indexes (PS-312 combined-shipment-bundle SOT) | covered by drizzle migration `0052_shipment_bundles.sql`; runtime ensure is the belt-and-suspenders fallback | Additive sidecars (no ALTER/DROP of orders/shipments); drop the runtime ensure once `0052` is confirmed applied in prod |
-| `src/db/ensure-shipments-selected-rate-cost.ts` | `shipments.selected_rate_cost` additive column (PS-370 persisted selected/label total) | covered by drizzle migration `0054_shipments_selected_rate_cost.sql`; runtime ensure is the belt-and-suspenders fallback | `ADD COLUMN IF NOT EXISTS` only — additive, nullable, no ALTER/DROP/UPDATE of shipped rows; drop the runtime ensure once `0054` is confirmed applied in prod |
-| `src/db/ensure-billing-storage-proof.ts` | `billing_storage_proof` sidecar table (PS-373 frozen per-period storage evidence) | covered by drizzle migration `0055_billing_storage_proof.sql`; runtime ensure is the belt-and-suspenders fallback | `CREATE TABLE IF NOT EXISTS` on an additive sidecar only (no ALTER/DROP of orders/shipments/billing); drop the runtime ensure once `0055` is confirmed applied in prod |
-| `src/services/billing-hugrab-shipping-rate-override.ts` | `billing_config.hugrab_shipping_rate_override_{enabled,threshold,amount}` additive columns (PS-327 HUGRAB shipping-rate override) | covered by drizzle migration `0053_billing_hugrab_shipping_rate_override.sql`; runtime ensure is the belt-and-suspenders fallback | `ADD COLUMN IF NOT EXISTS` on `billing_config` only (not a shipped/label table); drop the runtime ensure once `0053` is confirmed applied in prod |
-| `src/services/shipment-tracking.ts` | `shipment_tracking_status` table + indexes and tracking columns | requires separate shipped/label review | Move to migration-readiness only after the shipment-tracking path is reviewed |
-| `src/services/shipping-workflow/address-classification-cache.ts` | `address_classifications` cache table + expiry index (PS-276 ADDRESS_RESOLVER) | compatibility fallback to keep temporarily | Promote to a drizzle migration after DJ flips `ADDRESS_RESOLVER` on Render and the additive table is confirmed in prod |
-| `src/services/shipping-workflow/order-rate-job-status.ts` | `order_rate_jobs` table + updated index (PS-120 backend rate-job state) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the rate-job status table is confirmed in prod |
-| `src/services/worker-status-events.ts` | `worker_status_events` table + created_at index (PS-256 worker heartbeat) | compatibility fallback to keep temporarily | Promote to a drizzle migration once the worker-status events table is confirmed in prod |
+## Safety
 
-## Resolved Runtime DDL
+Migration `0062` is additive: no `UPDATE`, `DELETE`, table/column drop, or
+`ALTER TABLE orders/shipments`. Existing shipped/cancelled guards, label purchase
+locks/intents, finalized-billing triggers, rate authority, and inventory idempotency
+remain unchanged. The 2026-07-14 user override covers migration-readiness changes
+near label/shipment workflows; no data migration or provider action is part of this
+patch.
 
-| File | Previous Runtime DDL Surface | Resolution | Verification |
-|---|---|---|---|
-| `src/services/reporting-metrics.ts` | reporting refresh, daily sales, SKU velocity, inventory risk, billing summary metrics | moved to `drizzle/0029_reporting_metrics.sql`; runtime code now verifies tables are present instead of creating them | `npm run test:runtime-ddl` |
-| `src/routes/analysis.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; index remains owned by `drizzle/0019_selling_fees.sql` | `npm run test:runtime-ddl` |
-| `api/_lib/walmart-fees-sync.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; helper still leaves column fallback untouched | `npm run test:runtime-ddl` |
-| `api/cron/sync-walmart-fees.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; cron compatibility path still leaves column fallback untouched | `npm run test:runtime-ddl` |
-| `api/carriers/walmart/fees.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; API compatibility path still leaves column fallback untouched | `npm run test:runtime-ddl` |
-| `api/carriers/ebay/orders.ts` | `store_orders` table/indexes | moved to `drizzle/0030_store_orders.sql`; handler now verifies migration readiness instead of creating schema | `npm run test:runtime-ddl` |
-| `api/carriers/walmart/orders.ts` | `store_orders` table/indexes | moved to `drizzle/0030_store_orders.sql`; handler now verifies migration readiness instead of creating schema | `npm run test:runtime-ddl` |
-| `src/services/credential-account-schema.ts` | `carrier_accounts`, `store_accounts`, `carrier_account_clients`, credential indexes/RLS | carrier/store handlers now verify migration readiness; RLS ownership is in `drizzle/0031_credential_accounts_rls.sql` | `npm run test:runtime-ddl`; `npm run test:credential-accounts` |
-| `src/services/order-items.ts` | `order_items`, `analytics_cache`, analytics indexes, `prepship_order_items_refresh` trigger/function | moved to `drizzle/0024_order_items_phase2.sql` and `drizzle/0025_order_items_sync_trigger.sql`; runtime service now verifies readiness instead of creating schema | `npm run test:runtime-ddl`; `npm run typecheck` |
-| `src/services/orders-performance-maintenance.ts` | orders/inventory performance indexes | moved to `drizzle/0021_orders_endpoint_performance.sql`, `drizzle/0022_dashboard_sales_performance.sql`, `drizzle/0023_inventory_list_performance.sql`, and `drizzle/0026_inventory_lower_sku_idx.sql`; runtime maintenance now keeps only shipment-adjacent index fallback | `npm run test:runtime-ddl`; `npm run typecheck` |
-| `src/services/fulfillment/outbox.ts` | fulfillment outbox and order/shipment support DDL | moved to `drizzle/0020_fulfillment_outbox.sql` and `drizzle/0032_connector_architecture.sql`; runtime code now verifies readiness instead of creating schema | `npm run test:runtime-ddl`; `npm run typecheck` |
-| `api/carriers/labels.ts` | fulfillment outbox, order source, and shipment support DDL | moved to `drizzle/0020_fulfillment_outbox.sql` and `drizzle/0032_connector_architecture.sql`; direct-label serverless code now verifies readiness instead of creating schema | `npm run test:runtime-ddl`; `npm run typecheck` |
+Deploy order is mandatory: apply migrations through `0062`, then deploy API/worker.
+Rollback reverts application code only; do not drop additive sidecars.
 
-## Guard Policy
-
-- New runtime table/index DDL in `src` or `api` must be added to this inventory.
-- Runtime DDL near shipped, cancelled, shipment, label, fulfillment, or settled-fee side-effect paths must stay out of generic cleanup batches.
-- The guard scans `CREATE TABLE/INDEX IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in production-capable `src` and `api` files.
-- `scripts/runtime-ddl-guard.mjs` fails if a new runtime DDL file appears without being documented here.
-
-## Recommended Next Patches
-
-- [x] Create this runtime DDL inventory.
-- [x] Add static guard for known runtime DDL files.
-- [x] Add reporting metrics Drizzle migration.
-- [x] Move Walmart selling-fee index ownership fully to migration/shared helper.
-- [x] Add `store_orders` Drizzle migration and remove marketplace order request-time DDL.
-- [x] Remove credential-account runtime bootstrap and add migration-owned RLS readiness.
-- [x] Remove `order_items` / `analytics_cache` runtime bootstrap and add migration-readiness checks.
-- [x] Remove duplicate orders/inventory performance index runtime creation already covered by migrations.
-- [x] Remove label/outbox/shipment request-time DDL with a label/outbox-specific readiness check.
-- [ ] Schedule separate shipped-fee DDL cleanup plan.
-
-## Test Plan
+## Guard and Proof
 
 - `npm run test:runtime-ddl`
+- `npm run test:audit-runtime-schema-readiness`
 - `npm run typecheck`
 - `npm run build:web`
-- Existing guards:
-  - `npm run test:auth-coverage`
-  - `npm run test:client-redaction`
-  - `npm run test:credential-accounts`
-  - `npm run test:rate-system-hardening`
-  - `npm run test:frontend-failure-states`
-  - `npm run test:orders-ux`
-
-## Deployment/Rollback Notes
-
-- Batch 4 includes one schema ownership change: reporting metrics tables now belong to `drizzle/0029_reporting_metrics.sql`.
-- Batch 6 includes one schema ownership change: marketplace `store_orders` now belongs to `drizzle/0030_store_orders.sql`.
-- Batch 7 includes one schema ownership change: credential account RLS/readiness now belongs to `drizzle/0031_credential_accounts_rls.sql` plus earlier credential migrations.
-- Batch 8 includes one schema ownership change: `order_items`, `analytics_cache`, and order item trigger/function readiness now belongs to `drizzle/0024_order_items_phase2.sql` and `drizzle/0025_order_items_sync_trigger.sql`.
-- Batch 9 includes one schema ownership cleanup: low-risk orders/inventory performance indexes are no longer created by runtime maintenance and remain owned by existing migrations.
-- PS-413 adds migration-owned package-consumption identity/review schema. Runtime readiness runs before provider purchase/void and ShipStation insertion so deployment ordering cannot orphan paid labels.
-- PS-414 adds migration-owned inventory movement effective dates and DB idempotency identity. Runtime readiness runs before new movement writes and date-aware reads; no historical inventory rows are rewritten.
-- Roll back by reverting the relevant migration/readiness-check changes if the migration is not ready for the deployment path.
-- Do not remove runtime DDL from production paths until matching migrations are applied and smoke-tested.
+- affected historical guards plus mandatory SOT guard pack

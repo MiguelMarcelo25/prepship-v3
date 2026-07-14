@@ -109,10 +109,9 @@ async function main(): Promise<void> {
       /regenerate pending billing changes before finalization/i.test(migration),
   );
   check(
-    'runtime policy mirrors the transaction group lock',
-    /billing_finalization_group_locks/i.test(policy) &&
-      /billing_line_item_lock_group/i.test(policy) &&
-      /RETURNING finalized INTO was_finalized/i.test(policy),
+    'runtime policy delegates readiness to migration-owned transaction group locks',
+    /assertRuntimeSchemaReady/.test(policy) &&
+      !/CREATE TABLE|CREATE OR REPLACE FUNCTION|CREATE TRIGGER/i.test(policy),
   );
   check(
     'runtime schema ensure never drops an active finalized-billing trigger',

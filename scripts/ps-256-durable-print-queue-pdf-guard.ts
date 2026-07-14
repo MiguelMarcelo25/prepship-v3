@@ -68,12 +68,14 @@ check('cleanupOldMergedPdfs resolves without throwing when OFF (no-op)', !cleanu
 
 // ── static: durable store — runtime DDL + RLS + env gate + best-effort + bytea ──────────────────
 const store = readFileSync('src/services/print-queue-pdf-store.ts', 'utf8');
-check('runtime-ensures print_queue_merged_pdfs (500-safe additive table)',
-  /CREATE TABLE IF NOT EXISTS print_queue_merged_pdfs/.test(store) && /ensurePrintQueuePdfSchema/.test(store));
+const runtimeSchemaMigration = readFileSync('drizzle/0062_runtime_schema_ownership.sql', 'utf8');
+check('migration owns print_queue_merged_pdfs and runtime verifies readiness',
+  /CREATE TABLE IF NOT EXISTS print_queue_merged_pdfs/.test(runtimeSchemaMigration) &&
+    /ensurePrintQueuePdfSchema/.test(store) && /assertRuntimeSchemaReady/.test(store));
 check('stores the PDF as bytea (binary, not bloated base64 text)',
-  /pdf_bytes bytea/.test(store));
+  /pdf_bytes bytea/.test(runtimeSchemaMigration));
 check('enables RLS on the additive table',
-  /ALTER TABLE print_queue_merged_pdfs ENABLE ROW LEVEL SECURITY/.test(store));
+  /ALTER TABLE print_queue_merged_pdfs ENABLE ROW LEVEL SECURITY/.test(runtimeSchemaMigration));
 check('env-gated via durablePrintQueuePdfEnabled() + DURABLE_PRINT_QUEUE_PDF',
   /durablePrintQueuePdfEnabled/.test(store) && /env\.DURABLE_PRINT_QUEUE_PDF/.test(store));
 check('persistMergedPdf returns early (no-op) when the flag is OFF',

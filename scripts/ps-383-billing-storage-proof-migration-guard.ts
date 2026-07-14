@@ -45,12 +45,12 @@ check('migration 0055 creates the exact storage proof table additively',
     /"proof" jsonb NOT NULL/.test(migration) &&
     /CONSTRAINT "billing_storage_proof_client_period_unq" UNIQUE \("client_id", "period_start", "period_end"\)/.test(migration));
 
-check('runtime ensure mirrors migration and resets memoized failure',
-  /CREATE TABLE IF NOT EXISTS billing_storage_proof/.test(ensure) &&
-    /billing_storage_proof_client_period_unq UNIQUE \(client_id, period_start, period_end\)/.test(ensure) &&
-    /ensured = null;/.test(ensure));
+check('runtime helper delegates to memoized migration readiness',
+  /assertRuntimeSchemaReady/.test(ensure) &&
+    !/CREATE TABLE|ALTER TABLE|CREATE INDEX/i.test(ensure) &&
+    /let readiness: Promise<void> \| null = null/.test(read('src/services/runtime-schema-readiness.ts')));
 
-check('runtime DDL inventory knows the storage proof ensure/migration pair',
+check('runtime readiness audit knows the storage proof helper/migration pair',
   runtimeDdlGuard.includes("'src/db/ensure-billing-storage-proof.ts'") &&
     runtimeDdlAudit.includes('`src/db/ensure-billing-storage-proof.ts`') &&
     runtimeDdlAudit.includes('0055_billing_storage_proof.sql'));

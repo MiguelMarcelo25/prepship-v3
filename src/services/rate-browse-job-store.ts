@@ -1,6 +1,7 @@
 import { sql as pg } from '../db/client.js';
 import { advisoryLockKeyPair } from '../lib/advisory-lock';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export type RateBrowseJobPriority = 'manual' | 'preflight' | 'backfill';
 
@@ -22,11 +23,6 @@ type ProviderStatusRow = {
   limiterWaitMs: number | null;
   diagnostics: Record<string, unknown>;
 };
-
-const RATE_BROWSE_JOB_DDL_LOCK_TIMEOUT_MS = 1_500;
-const RATE_BROWSE_JOB_DDL_STATEMENT_TIMEOUT_MS = 5_000;
-
-let schemaEnsured: Promise<void> | null = null;
 
 function parseRateBrowseWorkflowSnapshot(value: unknown): RateBrowseWorkflowSnapshot | null {
   if (!value) return null;
@@ -78,69 +74,7 @@ function timingRowsByCarrier(result: Record<string, unknown>): Map<string, Recor
 }
 
 export async function ensureRateBrowseJobStoreSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg.begin(async (tx) => {
-      await tx.unsafe(`SET LOCAL lock_timeout = '${RATE_BROWSE_JOB_DDL_LOCK_TIMEOUT_MS}ms'`);
-      await tx.unsafe(`SET LOCAL statement_timeout = '${RATE_BROWSE_JOB_DDL_STATEMENT_TIMEOUT_MS}ms'`);
-      await tx`
-        CREATE TABLE IF NOT EXISTS rate_browse_jobs (
-          job_id text PRIMARY KEY,
-          request_key text,
-          order_id integer,
-          priority text NOT NULL DEFAULT 'manual',
-          status text NOT NULL,
-          active boolean NOT NULL DEFAULT false,
-          total_carriers integer NOT NULL DEFAULT 0,
-          completed_carriers integer NOT NULL DEFAULT 0,
-          successful_carriers integer NOT NULL DEFAULT 0,
-          failed_carriers integer NOT NULL DEFAULT 0,
-          rates_count integer NOT NULL DEFAULT 0,
-          message text,
-          diagnostics jsonb NOT NULL DEFAULT '{}'::jsonb,
-          snapshot jsonb NOT NULL,
-          created_at timestamptz NOT NULL DEFAULT now(),
-          updated_at timestamptz NOT NULL DEFAULT now(),
-          finished_at timestamptz
-        )
-      `;
-      await tx`
-        CREATE INDEX IF NOT EXISTS rate_browse_jobs_request_active_idx
-          ON rate_browse_jobs (request_key, active, updated_at DESC)
-      `;
-      await tx`
-        CREATE INDEX IF NOT EXISTS rate_browse_jobs_order_updated_idx
-          ON rate_browse_jobs (order_id, updated_at DESC)
-      `;
-      await tx`
-        CREATE TABLE IF NOT EXISTS rate_browse_job_provider_statuses (
-          job_id text NOT NULL,
-          provider_key text NOT NULL,
-          carrier_id text,
-          account_id text,
-          carrier_code text,
-          carrier_name text,
-          source text NOT NULL DEFAULT 'unknown',
-          status text NOT NULL,
-          rate_count integer NOT NULL DEFAULT 0,
-          duration_ms integer,
-          limiter_wait_ms integer,
-          diagnostics jsonb NOT NULL DEFAULT '{}'::jsonb,
-          updated_at timestamptz NOT NULL DEFAULT now(),
-          PRIMARY KEY (job_id, provider_key)
-        )
-      `;
-      await tx`
-        CREATE INDEX IF NOT EXISTS rate_browse_job_provider_statuses_status_idx
-          ON rate_browse_job_provider_statuses (job_id, status, updated_at DESC)
-      `;
-      await tx`ALTER TABLE rate_browse_jobs ENABLE ROW LEVEL SECURITY`;
-      await tx`ALTER TABLE rate_browse_job_provider_statuses ENABLE ROW LEVEL SECURITY`;
-    });
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 export function extractRateBrowseProviderStatuses(snapshot: RateBrowseWorkflowSnapshot): ProviderStatusRow[] {

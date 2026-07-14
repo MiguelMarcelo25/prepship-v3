@@ -50,6 +50,7 @@ const runtimeDdlGuard = read(runtimeDdlGuardPath);
 const runtimeDdlAudit = read(runtimeDdlAuditPath);
 const doc = read(docPath);
 const ps352 = read(ps352Path);
+const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
 
 check(
   'PS-350 package guard is wired',
@@ -66,18 +67,19 @@ check(
 );
 
 check(
-  'dedicated rate browse job store owns additive durable job and provider-status tables',
+  'migration owns durable rate jobs and store verifies readiness',
   existsSync(jobStorePath) &&
-    /CREATE TABLE IF NOT EXISTS rate_browse_jobs/.test(jobStore) &&
-    /job_id text PRIMARY KEY/.test(jobStore) &&
-    /request_key text/.test(jobStore) &&
-    /priority text NOT NULL DEFAULT 'manual'/.test(jobStore) &&
-    /snapshot jsonb NOT NULL/.test(jobStore) &&
-    /CREATE TABLE IF NOT EXISTS rate_browse_job_provider_statuses/.test(jobStore) &&
-    /provider_key text NOT NULL/.test(jobStore) &&
-    /diagnostics jsonb NOT NULL DEFAULT '\{\}'::jsonb/.test(jobStore) &&
-    /CREATE INDEX IF NOT EXISTS rate_browse_jobs_request_active_idx/.test(jobStore) &&
-    /ALTER TABLE rate_browse_jobs ENABLE ROW LEVEL SECURITY/.test(jobStore),
+    /CREATE TABLE IF NOT EXISTS rate_browse_jobs/.test(runtimeSchemaMigration) &&
+    /job_id text PRIMARY KEY/.test(runtimeSchemaMigration) &&
+    /request_key text/.test(runtimeSchemaMigration) &&
+    /priority text NOT NULL DEFAULT 'manual'/.test(runtimeSchemaMigration) &&
+    /snapshot jsonb NOT NULL/.test(runtimeSchemaMigration) &&
+    /CREATE TABLE IF NOT EXISTS rate_browse_job_provider_statuses/.test(runtimeSchemaMigration) &&
+    /provider_key text NOT NULL/.test(runtimeSchemaMigration) &&
+    /diagnostics jsonb NOT NULL DEFAULT '\{\}'::jsonb/.test(runtimeSchemaMigration) &&
+    /CREATE INDEX IF NOT EXISTS rate_browse_jobs_request_active_idx/.test(runtimeSchemaMigration) &&
+    /ALTER TABLE rate_browse_jobs ENABLE ROW LEVEL SECURITY/.test(runtimeSchemaMigration) &&
+    /assertRuntimeSchemaReady/.test(jobStore),
 );
 
 check(
@@ -94,11 +96,10 @@ check(
 );
 
 check(
-  'rate browse durable schema checks are bounded so startup DDL cannot consume Render 120s request ceiling',
-  /RATE_BROWSE_JOB_DDL_LOCK_TIMEOUT_MS = 1_500/.test(jobStore) &&
-    /RATE_BROWSE_JOB_DDL_STATEMENT_TIMEOUT_MS = 5_000/.test(jobStore) &&
-    /SET LOCAL lock_timeout/.test(jobStore) &&
-    /SET LOCAL statement_timeout/.test(jobStore),
+  'rate browse schema delegates to the shared boot gate',
+  /ensureRateBrowseJobStoreSchema/.test(jobStore) &&
+    /assertRuntimeSchemaReady/.test(jobStore) &&
+    !/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(jobStore),
 );
 
 check(
@@ -158,7 +159,8 @@ check(
 
 check(
   'shared provider limiter evidence remains backend-owned and durable-capable',
-  /CREATE TABLE IF NOT EXISTS rate_limiter_state/.test(durableLimiter) &&
+  /CREATE TABLE IF NOT EXISTS rate_limiter_state/.test(runtimeSchemaMigration) &&
+    /assertRuntimeSchemaReady/.test(durableLimiter) &&
     /UPDATE rate_limiter_state[\s\S]*RETURNING tokens/.test(durableLimiter) &&
     /RATE_LIMITER_BACKEND=durable/.test(doc),
 );
@@ -170,7 +172,7 @@ check(
 );
 
 check(
-  'runtime DDL inventory documents the new PS-350 rate job store',
+  'migration-readiness audit documents the PS-350 rate job store',
   runtimeDdlGuard.includes("'src/services/rate-browse-job-store.ts'") &&
     runtimeDdlAudit.includes('src/services/rate-browse-job-store.ts') &&
     runtimeDdlAudit.includes('rate_browse_jobs') &&

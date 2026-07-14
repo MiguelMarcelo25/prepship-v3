@@ -39,6 +39,7 @@ const ps256 = read('scripts/ps-256-durable-print-queue-pdf-guard.ts');
 const ps303 = read('scripts/ps-303-print-queue-authority-guard.ts');
 const selectedRateProof = read('scripts/print-to-queue-selected-rate-proof-guard.ts');
 const testOrderQueue = read('scripts/test-order-queue-label-guard.mjs');
+const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
 
 check('PS-285 print queue evidence doc exists', existsSync(docPath));
 check('print queue packet keeps PS-285 conservative at 55%',
@@ -125,7 +126,8 @@ check('print queue route delegates batch-send to backend job owner',
   /app\.post\('\/batch-send'/.test(printQueueRoute) &&
     /startQueueSendJob/.test(printQueueRoute));
 check('durable PDF side-store is additive and flag-gated',
-  /CREATE TABLE IF NOT EXISTS print_queue_merged_pdfs/.test(pdfStore) &&
+  /CREATE TABLE IF NOT EXISTS print_queue_merged_pdfs/.test(runtimeSchemaMigration) &&
+    /assertRuntimeSchemaReady/.test(pdfStore) &&
     /DURABLE_PRINT_QUEUE_PDF/.test(pdfStore) &&
     /if \(!durablePrintQueuePdfEnabled\(\)\) return/.test(pdfStore));
 

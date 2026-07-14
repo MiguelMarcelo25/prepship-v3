@@ -1,12 +1,9 @@
 import { sql as pg } from '../db/client.js';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 // PS-220 — per-client opt-in for the SHIPP house-account margin model. The flag lives on the
-// existing billing_config table (house_account_enabled) but is read via RAW SQL and is
-// INTENTIONALLY NOT declared on the drizzle billing_config schema: declaring a new column there
-// would make every db.select().from(billingConfig) emit it and 500 prod before the migration runs
-// (the known drizzle runtime-DDL gotcha). Migration: drizzle/0050_billing_config_house_account.sql.
-
-let columnEnsured: Promise<void> | null = null;
+// existing billing_config table (house_account_enabled) and is read via raw SQL.
+// Migration 0050 owns the column; boot readiness blocks migration-lag deploys.
 
 export type ShippingMarginPolicyMode = 'pass_through' | 'next_best_customer_rate';
 
@@ -29,15 +26,9 @@ export function shippingMarginPolicyFromRow(
   };
 }
 
-/** Idempotent ADD COLUMN so the API/worker both work pre-migration (mirrors the migration). */
+/** Migration 0050 owns the house-account column. */
 async function ensureHouseAccountColumn(): Promise<void> {
-  columnEnsured ??= (async () => {
-    await pg`ALTER TABLE billing_config ADD COLUMN IF NOT EXISTS house_account_enabled boolean NOT NULL DEFAULT false`;
-  })().catch((err) => {
-    columnEnsured = null;
-    throw err;
-  });
-  return columnEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 /**

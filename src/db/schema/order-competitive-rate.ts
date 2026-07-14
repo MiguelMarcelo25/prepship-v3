@@ -15,8 +15,8 @@ import { shipments } from './shipments.js';
 // PS-220 — SHIPP house-account margin sidecar. LOCKDOWN-SAFE: a NEW table, never a column on the
 // locked shipments table. drp_cost/margin are INTERNAL (portal-redacted); customer_rate is the
 // billed + portal value. FK references to orders/shipments are reads (lockdown-permitted). The
-// CHECK (margin >= 0) and the partial-unique indexes live in the migration + runtime ensure
-// (drizzle/0049_order_competitive_rate.sql / ensure-order-competitive-rate.ts) — this schema is
+// CHECK (margin >= 0) and the partial-unique indexes live in migration 0049; the readiness
+// gate verifies them before boot. This schema is
 // for typed access only and is intentionally NOT registered in drizzle.config.ts.
 export const orderCompetitiveRate = pgTable('order_competitive_rate', {
   id: serial().primaryKey(),

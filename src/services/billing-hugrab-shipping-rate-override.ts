@@ -29,8 +29,6 @@ export type ClientHugrabShippingRateOverrideConfig = {
   amount: number;
 };
 
-let columnsEnsured: Promise<void> | null = null;
-
 async function getPg() {
   return (await import('../db/client.js')).sql;
 }
@@ -79,16 +77,8 @@ export function resolveHugrabShippingRateOverride(
 }
 
 export async function ensureHugrabShippingRateOverrideColumns(): Promise<void> {
-  columnsEnsured ??= (async () => {
-    const pg = await getPg();
-    await pg`ALTER TABLE billing_config ADD COLUMN IF NOT EXISTS hugrab_shipping_rate_override_enabled boolean`;
-    await pg`ALTER TABLE billing_config ADD COLUMN IF NOT EXISTS hugrab_shipping_rate_override_threshold numeric(10, 2)`;
-    await pg`ALTER TABLE billing_config ADD COLUMN IF NOT EXISTS hugrab_shipping_rate_override_amount numeric(10, 2)`;
-  })().catch((err) => {
-    columnsEnsured = null;
-    throw err;
-  });
-  return columnsEnsured;
+  const { assertRuntimeSchemaReady } = await import('./runtime-schema-readiness.js');
+  await assertRuntimeSchemaReady();
 }
 
 export async function hugrabShippingRateOverrideConfigsByClientId(

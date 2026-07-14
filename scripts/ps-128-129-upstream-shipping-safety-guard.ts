@@ -156,8 +156,12 @@ function check(name: string, got: unknown, want: unknown) {
   check('reconcile cancel sets canonical_status, not a hard order_status flip', /canonical_status = 'cancelled'/.test(reconcile) && !/SET order_status = 'cancelled'/.test(reconcile), true);
 
   const ledger = readFileSync('src/services/fulfillment/webhook-ledger.ts', 'utf8');
+  const ledgerMigration = readFileSync('drizzle/0040_webhook_events.sql', 'utf8');
   check('ledger stores payload_hash (not raw payload)', /payload_hash/.test(ledger) && !/raw_body|raw_payload/.test(ledger), true);
-  check('ledger self-provisions schema (no "table missing" failure class)', /CREATE TABLE IF NOT EXISTS webhook_events/.test(ledger), true);
+  check('ledger schema is migration-owned and readiness-gated',
+    /CREATE TABLE IF NOT EXISTS webhook_events/.test(ledgerMigration) &&
+      /assertRuntimeSchemaReady/.test(ledger) &&
+      !/CREATE TABLE IF NOT EXISTS/.test(ledger), true);
 
   const env = readFileSync('src/lib/env.ts', 'utf8');
   check('env exposes webhook signing secret', /WEBHOOK_SIGNING_SECRET/.test(env), true);
@@ -167,8 +171,10 @@ function check(name: string, got: unknown, want: unknown) {
 // ── UI follow-ups: DTO surfacing, OrdersView gating, print-queue merge exclusion ──
 {
   const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+  const ordersReadModel = readFileSync('src/services/orders-read-model.ts', 'utf8');
   check('order DTO surfaces canonicalStatus (list select)', /canonicalStatus:\s*orders\.canonicalStatus/.test(ordersRoute), true);
-  check('order DTO surfaces canonicalStatus (detail)', /canonicalStatus:\s*stringOrNull\(order\.canonicalStatus\)/.test(ordersRoute), true);
+  check('order DTO surfaces canonicalStatus (detail read-model)',
+    /canonicalStatus:\s*stringOrNull\(order\.canonicalStatus\)/.test(ordersReadModel), true);
 
   const ordersSchema = readFileSync('src/db/schema/orders.ts', 'utf8');
   check('orders schema maps canonicalStatus (read mapping)', /canonicalStatus:\s*text\(\)/.test(ordersSchema), true);

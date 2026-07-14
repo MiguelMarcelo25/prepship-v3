@@ -55,7 +55,7 @@ import {
 import { summarizeBillingItemsForDetail } from './billing-detail-utils';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-275: backend owns the $0-shipping review decision + prep-fee waiver
-// (pure policy) and the durable, reversible waiver state (runtime-DDL store).
+// (pure policy) and the durable, reversible waiver state (migration-owned store).
 import {
   applyPrepFeeWaiver,
   decideZeroShippingReview,
@@ -103,6 +103,7 @@ import {
   ensureHugrabShippingRateOverrideColumns,
 } from './billing-hugrab-shipping-rate-override';
 import { requireBillingRegenerationRead } from './billing-regeneration-readiness';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -216,32 +217,9 @@ const billingShipDateSql = sql<Date | null>`date_trunc('day', coalesce(
   ${orders.orderDate}
 ) at time zone 'UTC') at time zone 'UTC'`;
 
-// ── PS-207 runtime schema ensure (mirrors drizzle/0043_billing_box_resolutions.sql;
-// same pattern as shipment-tracking.ts so API/worker both work pre-migration). ──
-let boxResolutionsEnsured: Promise<void> | null = null;
-
+// PS-207 migration readiness; migration 0043 owns billing_box_resolutions.
 export async function ensureBillingBoxResolutionsSchema(): Promise<void> {
-  boxResolutionsEnsured ??= (async () => {
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS billing_box_resolutions (
-        id serial PRIMARY KEY,
-        order_id integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-        shipment_id integer REFERENCES shipments(id),
-        package_id integer REFERENCES packages(id),
-        override_price numeric(10, 2),
-        note text,
-        resolved_by text,
-        resolved_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT billing_box_resolutions_order_unq UNIQUE (order_id)
-      )
-    `);
-    await db.execute(sql`ALTER TABLE billing_box_resolutions ENABLE ROW LEVEL SECURITY`);
-  })().catch((err) => {
-    boxResolutionsEnsured = null;
-    throw err;
-  });
-  return boxResolutionsEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 function billingClientScopePredicate(input: GenerateInput): SQL {
@@ -778,9 +756,7 @@ export async function generateLineItems(input: GenerateInput) {
     () => billingGenerationStatus(input),
   );
   await ensureHugrabShippingRateOverrideColumns();
-  // PS-370: the shipment query below SELECTs shipments.selected_rate_cost — ensure
-  // the additive column exists before reading it (belt-and-suspenders, pre-migration
-  // 0054). Memoized + idempotent; matches the read-side ensure convention above.
+  // PS-370: verify migration-owned selected-rate schema before reading it.
   await ensureShipmentsSelectedRateCostColumn();
   await ensureBillingFinalizationPolicySchema();
 
@@ -2276,8 +2252,7 @@ export async function billingInvoiceHeaderTotals(
 export async function billingDetails(input: GenerateInput) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
-  // PS-370: the SELECT below reads shipments.selected_rate_cost — ensure the
-  // additive column exists first (belt-and-suspenders, pre-migration 0054).
+  // PS-370: verify migration-owned selected-rate schema before reading it.
   await ensureShipmentsSelectedRateCostColumn();
   const rows = await db
     .select({

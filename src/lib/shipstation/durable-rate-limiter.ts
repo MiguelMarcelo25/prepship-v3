@@ -7,29 +7,12 @@
 // ENV-GATED: selected only when RATE_LIMITER_BACKEND=durable (see v1-client and client). Default stays the
 // fast in-memory bucket, so merging this changes nothing until DJ flips it on + watches a canary.
 //
-// Additive-table 500-safe pattern (like ensureAddressClassificationsSchema): runtime CREATE TABLE
-// IF NOT EXISTS, NOT in the drizzle schema index.
+// Migration 0062 owns the additive table; boot verifies it before work starts.
 import { sql as pg } from '../../db/client.js';
-
-let schemaEnsured: Promise<void> | null = null;
+import { assertRuntimeSchemaReady } from '../../services/runtime-schema-readiness.js';
 
 export async function ensureRateLimiterSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS rate_limiter_state (
-        key text PRIMARY KEY,
-        tokens double precision NOT NULL,
-        capacity double precision NOT NULL,
-        tokens_per_sec double precision NOT NULL,
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )
-    `;
-    await pg`ALTER TABLE rate_limiter_state ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 /** Same interface as the in-memory TokenBucket (acquire one token, waiting if necessary). */

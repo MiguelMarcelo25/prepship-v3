@@ -16,13 +16,12 @@
 // changes nothing until DJ flips it on Render after a canary.
 //
 // Best-effort: persist/read NEVER throw into the merge or status hot path (mirrors the existing
-// best-effort persistMergeJobSnapshot). Additive-table 500-safe pattern (like
-// ensureWorkerStatusEventsSchema / ensureRateLimiterSchema): runtime CREATE TABLE IF NOT EXISTS,
-// NOT in the drizzle schema index (a bare drizzle select() over the index would otherwise emit
-// the new table and 500 prod before it exists). Bytes are stored as bytea (binary), not bloated
+// best-effort persistMergeJobSnapshot). Migration 0062 owns the additive sidecars and boot
+// readiness blocks work when they are absent. Bytes are stored as bytea (binary), not bloated
 // base64 text, so a 1-5MB PDF stays compact.
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export type MergedPdfChunkMetadata = {
   jobId: string;
@@ -42,42 +41,11 @@ export function durablePrintQueuePdfEnabled(): boolean {
   return env.DURABLE_PRINT_QUEUE_PDF;
 }
 
-let schemaEnsured: Promise<void> | null = null;
-
-/** Memoized runtime DDL (mirrors ensureWorkerStatusEventsSchema). Additive, 500-safe. */
+/** Migration readiness for durable print artifacts. */
 export async function ensurePrintQueuePdfSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS print_queue_merged_pdfs (
-        job_id text PRIMARY KEY,
-        file_name text,
-        pdf_bytes bytea,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )
-    `;
-    await pg`
-      CREATE TABLE IF NOT EXISTS print_queue_pdf_chunks (
-        job_id text NOT NULL,
-        chunk_number integer NOT NULL,
-        file_name text,
-        label_count integer NOT NULL DEFAULT 0,
-        file_size integer NOT NULL DEFAULT 0,
-        entry_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-        successful_entry_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-        status text NOT NULL DEFAULT 'done',
-        error_message text,
-        pdf_bytes bytea,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (job_id, chunk_number)
-      )
-    `;
-    await pg`ALTER TABLE print_queue_merged_pdfs ENABLE ROW LEVEL SECURITY`;
-    await pg`ALTER TABLE print_queue_pdf_chunks ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  // Per user override unlock shipped data on 2026-07-14: migration 0062 owns
+  // print-artifact sidecars; no label bytes or shipment rows are changed here.
+  await assertRuntimeSchemaReady();
 }
 
 /**

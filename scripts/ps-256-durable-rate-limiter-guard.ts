@@ -27,8 +27,10 @@ check('in-memory TokenBucket grants a full bucket near-instantly', Date.now() - 
 
 // ── static: durable bucket — atomic, shared-row, runtime-ensured ──────────────────────────────
 const durable = readFileSync('src/lib/shipstation/durable-rate-limiter.ts', 'utf8');
-check('runtime-ensures rate_limiter_state (500-safe additive table)',
-  /CREATE TABLE IF NOT EXISTS rate_limiter_state/.test(durable) && /ensureRateLimiterSchema/.test(durable));
+const runtimeSchemaMigration = readFileSync('drizzle/0062_runtime_schema_ownership.sql', 'utf8');
+check('migration owns rate_limiter_state and runtime verifies readiness',
+  /CREATE TABLE IF NOT EXISTS rate_limiter_state/.test(runtimeSchemaMigration) &&
+    /ensureRateLimiterSchema/.test(durable) && /assertRuntimeSchemaReady/.test(durable));
 check('seeds the shared row with ON CONFLICT (no live-balance reset)',
   /INSERT INTO rate_limiter_state[\s\S]*ON CONFLICT \(key\) DO UPDATE/.test(durable));
 check('acquire is ONE atomic refill+decrement UPDATE guarded by tokens >= 1',

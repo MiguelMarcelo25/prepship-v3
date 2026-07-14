@@ -8,58 +8,16 @@
  * only changed-field names + masked metadata (AUDIT_LOGGING_MATRIX.md control:
  * "never store raw credentials").
  *
- * Append-only is enforced at the DB level by ensureAuditLogSchema() (a trigger that
- * blocks UPDATE/DELETE for every role), mirrored by drizzle/0044_audit_log.sql.
+ * Append-only is enforced at the DB level by migration 0044 (a trigger that blocks
+ * UPDATE/DELETE for every role); ensureAuditLogSchema() verifies readiness.
  */
 import type { Context } from 'hono';
-import { db, sql as pg } from '../db/client';
+import { db } from '../db/client';
 import { auditLog } from '../db/schema/audit-log';
-
-let schemaEnsured: Promise<void> | null = null;
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export async function ensureAuditLogSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS audit_log (
-        id serial PRIMARY KEY,
-        ts timestamptz NOT NULL DEFAULT now(),
-        event_type text NOT NULL,
-        actor_id text,
-        actor_email text,
-        resource_type text NOT NULL,
-        resource_id text,
-        action text NOT NULL,
-        details jsonb,
-        ip text
-      )
-    `;
-    await pg`CREATE INDEX IF NOT EXISTS audit_log_resource_idx ON audit_log (resource_type, resource_id)`;
-    await pg`CREATE INDEX IF NOT EXISTS audit_log_ts_idx ON audit_log (ts DESC)`;
-    // RLS posture matches the project model (backend = postgres owner bypasses
-    // RLS; no frontend direct access). Enable RLS with no policy → non-owner denied.
-    await pg`ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY`;
-    // Append-only: block UPDATE/DELETE at the DB level for EVERY role (including
-    // the backend owner) — a stronger guarantee than role grants alone.
-    await pg`
-      CREATE OR REPLACE FUNCTION audit_log_block_mutations() RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'audit_log is append-only (% blocked)', TG_OP;
-      END;
-      $$ LANGUAGE plpgsql
-    `;
-    await pg`DROP TRIGGER IF EXISTS audit_log_no_update_delete ON audit_log`;
-    await pg`
-      CREATE TRIGGER audit_log_no_update_delete
-      BEFORE UPDATE OR DELETE ON audit_log
-      FOR EACH ROW EXECUTE FUNCTION audit_log_block_mutations()
-    `;
-    // Defense in depth: deny mutating grants to non-owner roles (RLS already denies).
-    await pg`REVOKE UPDATE, DELETE ON audit_log FROM PUBLIC`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 export type AuditActor = {

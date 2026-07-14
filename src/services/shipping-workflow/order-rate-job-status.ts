@@ -24,31 +24,13 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db, sql as pg } from '../../db/client';
 import { orderRateJobs } from '../../db/schema/order-rate-jobs';
+import { assertRuntimeSchemaReady } from '../runtime-schema-readiness.js';
 
 export type OrderRateJobState = 'pending' | 'rating';
 
-// ── Runtime schema ensure (matches the project's CREATE TABLE IF NOT EXISTS pattern, e.g.
-// src/services/fulfillment/webhook-ledger.ts). Mirrors drizzle/0041_order_rate_jobs.sql so the
-// table exists across the worker (producer) / API (reader) split even before a migration runs.
-let schemaEnsured: Promise<void> | null = null;
-
+// Migration 0041 owns the table across the worker (producer) / API (reader) split.
 export async function ensureOrderRateJobsSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS order_rate_jobs (
-        order_id integer PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
-        state text NOT NULL,
-        request_fingerprint text NOT NULL,
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )
-    `;
-    await pg`CREATE INDEX IF NOT EXISTS order_rate_jobs_updated_idx ON order_rate_jobs (updated_at DESC)`;
-    await pg`ALTER TABLE order_rate_jobs ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 // ── Shared lightweight fingerprint (pure) ────────────────────────────────────────────────

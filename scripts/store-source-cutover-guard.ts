@@ -33,7 +33,8 @@ const main = readFileSync('src/main.ts', 'utf8');
 const migration = readFileSync('drizzle/0057_store_source_cutovers.sql', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
-assert.match(service, /CREATE TABLE IF NOT EXISTS store_source_cutovers/);
+assert.match(service, /assertRuntimeSchemaReady/);
+assert.doesNotMatch(service, /CREATE TABLE|CREATE INDEX|ALTER TABLE/i);
 assert.match(shopifySync, /account\.source === 'admin' && account\.active === true/);
 assert.match(migration, /CREATE TABLE IF NOT EXISTS "store_source_cutovers"/);
 assert.match(migration, /store_source_cutovers_active_legacy_idx/);

@@ -3,8 +3,7 @@
  *
  * Pins: (1) the address key is deterministic + normalized (same physical address -> same
  * row; missing street/zip -> null so we never key on an ambiguous address); (2) the table
- * is managed by a runtime ensure + hand-written migration and is NOT in drizzle.config.ts
- * / schema index (the 500-before-migration-safe pattern, like shipment_tracking_status);
+ * is migration-owned and is NOT in drizzle.config.ts / schema index;
  * (3) get/set are best-effort (a cache outage never throws into a quote).
  *
  *   npx tsx scripts/ps-276-address-classification-cache-guard.ts
@@ -46,16 +45,14 @@ check('schema declares the address-keyed table (addressKey PK + expires index)',
   /pgTable\(\s*'address_classifications'/.test(schema) &&
     /addressKey: text\(\)\.primaryKey\(\)/.test(schema) &&
     /address_classifications_expires_idx/.test(schema));
-check('runtime ensure exists with the lazy-Promise + reset-on-error pattern',
+check('runtime delegates to shared migration readiness without DDL',
   /export async function ensureAddressClassificationsSchema/.test(svc) &&
-    /schemaEnsured \?\?=/.test(svc) &&
-    /schemaEnsured = null;/.test(svc) &&
-    /CREATE TABLE IF NOT EXISTS address_classifications/.test(svc) &&
-    /ENABLE ROW LEVEL SECURITY/.test(svc));
-check('hand-written migration mirrors the ensure (idempotent CREATE TABLE IF NOT EXISTS)',
+    /assertRuntimeSchemaReady/.test(svc) &&
+    !/CREATE TABLE|CREATE INDEX|ALTER TABLE/i.test(svc));
+check('hand-written migration owns the table and RLS',
   /CREATE TABLE IF NOT EXISTS address_classifications/.test(migration) &&
     /ENABLE ROW LEVEL SECURITY/.test(migration));
-check('NOT in drizzle.config.ts (managed by runtime ensure + hand-written SQL — 500-safe)',
+check('migration-owned and not in drizzle.config.ts',
   !/address-classifications/.test(drizzleConfig));
 check('NOT re-exported from schema/index.ts (service imports it directly)',
   !/address-classifications/.test(schemaIndex));

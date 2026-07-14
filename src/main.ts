@@ -40,6 +40,7 @@ import observabilityRoute from './routes/observability';
 import automationRoute from './routes/automation';
 import storeSourceCutoversRoute from './routes/store-source-cutovers';
 import clientPortalIntegrationsRoute from './routes/client-portal/integrations';
+import { assertRuntimeSchemaReady } from './services/runtime-schema-readiness.js';
 
 type AppVars = {
   requestId: string;
@@ -247,32 +248,47 @@ process.on('uncaughtException', (err) => {
   if (err instanceof Error && err.stack) console.error(err.stack);
 });
 
-serve({ fetch: app.fetch, port: env.PORT }, (info) => {
-  console.log(`API listening on http://localhost:${info.port}`);
-  // Audit 3.2: the API never owns background cadence. RUN_SYNC_SCHEDULER is
-  // consumed only by worker.ts, where pg-boss provides cross-process admission.
-  console.log('[runtime] API scheduler disabled; durable cadence is worker-owned');
+async function main(): Promise<void> {
+  await assertRuntimeSchemaReady();
+  console.log('[runtime] migration-owned schema ready');
 
-  if (env.SHIPMENT_SYNC_WATCHDOG_ENABLED) {
-    console.log('[runtime] SHIPMENT_SYNC_WATCHDOG_ENABLED=true; starting API-side shipment watchdog');
-    void import('./services/shipment-sync-watchdog').then(({ startShipmentSyncWatchdog }) =>
-      startShipmentSyncWatchdog()
-    );
-  } else {
-    console.log('[runtime] shipment sync watchdog disabled');
-  }
+  serve({ fetch: app.fetch, port: env.PORT }, (info) => {
+    console.log(`API listening on http://localhost:${info.port}`);
+    // Audit 3.2: the API never owns background cadence. RUN_SYNC_SCHEDULER is
+    // consumed only by worker.ts, where pg-boss provides cross-process admission.
+    console.log('[runtime] API scheduler disabled; durable cadence is worker-owned');
 
-  const runMaintenance = env.RUN_ORDERS_PERFORMANCE_MAINTENANCE === true;
-  if (runMaintenance) {
-    console.log(
-      '[runtime] RUN_ORDERS_PERFORMANCE_MAINTENANCE=true; starting orders performance maintenance'
-    );
-    void import('./services/orders-performance-maintenance').then(
-      ({ ensureOrdersPerformanceIndexes }) => ensureOrdersPerformanceIndexes()
-    );
-  } else {
-    console.log(
-      '[runtime] orders performance maintenance disabled for this process; set RUN_ORDERS_PERFORMANCE_MAINTENANCE=true to run explicitly'
-    );
-  }
+    if (env.SHIPMENT_SYNC_WATCHDOG_ENABLED) {
+      console.log(
+        '[runtime] SHIPMENT_SYNC_WATCHDOG_ENABLED=true; starting API-side shipment watchdog'
+      );
+      void import('./services/shipment-sync-watchdog').then(({ startShipmentSyncWatchdog }) =>
+        startShipmentSyncWatchdog()
+      );
+    } else {
+      console.log('[runtime] shipment sync watchdog disabled');
+    }
+
+    const runMaintenance = env.RUN_ORDERS_PERFORMANCE_MAINTENANCE === true;
+    if (runMaintenance) {
+      console.log(
+        '[runtime] RUN_ORDERS_PERFORMANCE_MAINTENANCE=true; starting orders performance maintenance'
+      );
+      void import('./services/orders-performance-maintenance').then(
+        ({ ensureOrdersPerformanceIndexes }) => ensureOrdersPerformanceIndexes()
+      );
+    } else {
+      console.log(
+        '[runtime] orders performance maintenance disabled for this process; set RUN_ORDERS_PERFORMANCE_MAINTENANCE=true to run explicitly'
+      );
+    }
+  });
+}
+
+void main().catch((error) => {
+  console.error(
+    '[runtime] boot blocked by schema readiness:',
+    error instanceof Error ? error.message : error,
+  );
+  process.exit(1);
 });

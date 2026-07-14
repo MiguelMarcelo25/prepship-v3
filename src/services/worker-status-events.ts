@@ -10,12 +10,11 @@
 // flips it on + watches a canary on Render.
 //
 // Best-effort: emit NEVER throws into the worker heartbeat/job hot path (mirrors the
-// existing best-effort persistSnapshot). Additive-table 500-safe pattern (like
-// ensureRateLimiterSchema): runtime CREATE TABLE IF NOT EXISTS, NOT in the drizzle
-// schema index (a bare drizzle select() over the index would otherwise emit the new
-// columns and 500 prod before the table exists).
+// existing best-effort persistSnapshot). Migration 0062 owns the additive event table;
+// boot readiness blocks work when the table is absent.
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export type WorkerStatusEventType =
   | 'heartbeat'
@@ -49,33 +48,9 @@ export function workerStatusEventsEnabled(): boolean {
   return env.WORKER_STATUS_EVENTS_DURABLE;
 }
 
-let schemaEnsured: Promise<void> | null = null;
-
-/** Memoized runtime DDL (mirrors ensureRateLimiterSchema). Additive, 500-safe. */
+/** Migration readiness for durable worker events. */
 export async function ensureWorkerStatusEventsSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS worker_status_events (
-        id bigserial PRIMARY KEY,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        worker_service text,
-        worker_pid int,
-        event_type text NOT NULL,
-        job_name text,
-        staleness_level text,
-        details jsonb
-      )
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS worker_status_events_created_at_idx
-        ON worker_status_events (created_at DESC)
-    `;
-    await pg`ALTER TABLE worker_status_events ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 /**

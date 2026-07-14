@@ -1,4 +1,5 @@
 import { sql as pg } from '../../db/client.js';
+import { assertRuntimeSchemaReady } from '../runtime-schema-readiness.js';
 import type { QueueSendJobSnapshot } from './queue-send-snapshot';
 import type {
   QueueSendJobItemInput,
@@ -11,8 +12,6 @@ export type {
   QueueSendJobItemRecord,
   QueueSendJobItemState,
 } from './queue-send-item-state';
-
-let schemaEnsured: Promise<void> | null = null;
 
 function parseQueueSendJobSnapshot(value: unknown): QueueSendJobSnapshot | null {
   if (!value) return null;
@@ -29,68 +28,11 @@ function parseQueueSendJobSnapshot(value: unknown): QueueSendJobSnapshot | null 
   return null;
 }
 
-/**
- * Runtime DDL follows the existing additive durable-state pattern. The table is
- * not in the Drizzle schema index, so first deploys do not 500 before the
- * additive table exists.
- */
+/** Migration readiness for durable queue-send state. */
 export async function ensureQueueSendJobStoreSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS print_queue_send_jobs (
-        job_id text PRIMARY KEY,
-        job_type text NOT NULL DEFAULT 'batch_send',
-        status text NOT NULL,
-        active boolean NOT NULL DEFAULT false,
-        client_id integer,
-        client_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-        progress integer NOT NULL DEFAULT 0,
-        total integer NOT NULL DEFAULT 0,
-        current integer NOT NULL DEFAULT 0,
-        queued integer NOT NULL DEFAULT 0,
-        failed integer NOT NULL DEFAULT 0,
-        message text,
-        snapshot jsonb NOT NULL,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS print_queue_send_jobs_updated_at_idx
-        ON print_queue_send_jobs (updated_at DESC)
-    `;
-    await pg`
-      CREATE TABLE IF NOT EXISTS print_queue_batch_job_items (
-        id bigserial PRIMARY KEY,
-        job_id text NOT NULL,
-        order_id integer NOT NULL,
-        client_id integer,
-        state text NOT NULL,
-        blocked_reason text,
-        error_message text,
-        queue_entry_id text,
-        tracking_number text,
-        result jsonb,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        UNIQUE (job_id, order_id)
-      )
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS print_queue_batch_job_items_job_idx
-        ON print_queue_batch_job_items (job_id, updated_at DESC)
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS print_queue_batch_job_items_state_idx
-        ON print_queue_batch_job_items (state)
-    `;
-    await pg`ALTER TABLE print_queue_send_jobs ENABLE ROW LEVEL SECURITY`;
-    await pg`ALTER TABLE print_queue_batch_job_items ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  // Per user override unlock shipped data on 2026-07-14: migration 0062 owns
+  // queue-send sidecars; job state semantics remain unchanged.
+  await assertRuntimeSchemaReady();
 }
 
 export async function persistQueueSendJobRecord(snapshot: QueueSendJobSnapshot): Promise<void> {

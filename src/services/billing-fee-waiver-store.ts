@@ -5,12 +5,8 @@
  * optional note, and the ORIGINAL prep amount at decision time (so the waiver
  * is reversible — clearing it and regenerating restores the original charge).
  *
- * Runtime-DDL, additive, 500-safe (mirrors ensureDirectCarrierRateCacheSchema /
- * ensureAuditLogSchema): CREATE TABLE IF NOT EXISTS + ENABLE ROW LEVEL SECURITY
- * (RLS on, NO open policy — backend is the postgres owner and bypasses RLS; the
- * Supabase-auth frontend never reads this table). NOT in the drizzle schema
- * index — a bare drizzle select() over the index would otherwise emit the new
- * table and 500 prod before the migration runs.
+ * Migration-owned, additive, and RLS-protected (no open policy; backend owner
+ * bypasses RLS). Migration 0062 creates it before the process starts.
  *
  * Default-inert: with NO waiver row for an order, billing is byte-identical to
  * today. Read failures throw: an unavailable money sidecar is not equivalent
@@ -18,6 +14,7 @@
  */
 import { sql as drizzleSql, type SQL } from 'drizzle-orm';
 import { db, sql as pg } from '../db/client';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export type FeeWaiverDecision = 'waived' | 'not_waived';
 
@@ -43,29 +40,9 @@ export type BillingFeeWaiverExecutor = {
   execute: (query: SQL) => Promise<unknown>;
 };
 
-let schemaEnsured: Promise<void> | null = null;
-
-/** Memoized runtime DDL. Additive, 500-safe (mirrors the audit_log /
- * direct_carrier_rate_cache ensureX pattern). */
+/** Migration readiness for durable fee-waiver decisions. */
 export async function ensureBillingFeeWaiverSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS billing_fee_waivers (
-        order_id integer PRIMARY KEY,
-        decision text NOT NULL,
-        reviewer text,
-        reviewed_at timestamptz NOT NULL DEFAULT now(),
-        note text,
-        original_prep_amount numeric(10, 2),
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )
-    `;
-    await pg`ALTER TABLE billing_fee_waivers ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 function rowDecision(value: unknown): FeeWaiverDecision {

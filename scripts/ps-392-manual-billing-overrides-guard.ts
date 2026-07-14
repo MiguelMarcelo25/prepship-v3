@@ -63,7 +63,9 @@ check('PS-392: durable manual override owner exists', () => {
 });
 
 check('PS-392: manual override owner owns additive schema + read/upsert/apply API', () => {
-  assert.ok(/CREATE TABLE IF NOT EXISTS billing_manual_overrides/.test(manualStore));
+  const migration = read('drizzle/0062_runtime_schema_ownership.sql');
+  assert.ok(/CREATE TABLE IF NOT EXISTS billing_manual_overrides/.test(migration));
+  assert.ok(/assertRuntimeSchemaReady/.test(manualStore));
   assert.ok(/ensureBillingManualOverridesSchema/.test(manualStore));
   assert.ok(/readBillingManualOverrides/.test(manualStore));
   assert.ok(/upsertBillingManualOverride/.test(manualStore));

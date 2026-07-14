@@ -12,8 +12,7 @@
 //
 // The helper takes a postgres client + store-account id + date
 // window and does the full cycle:
-//   1. Self-heal the selling_fee columns (idempotent). The supporting
-//      selling_fee_source index is migration-owned.
+//   1. Verify migration-owned selling_fee schema.
 //   2. Read store-account credentials.
 //   3. Mint a Walmart OAuth token.
 //   4. Page through /v3/payments for the window, defensively
@@ -51,24 +50,13 @@ export interface WalmartFeesSyncError {
 
 export type WalmartFeesSyncOutcome = WalmartFeesSyncResult | WalmartFeesSyncError;
 
-// ── Schema self-heal ──────────────────────────────────────────────
-// Same defense-in-depth pattern used by the analysis route. Lets
-// the sync run on any database state, with or without the formal
-// migration applied. Idempotent — ADD COLUMN IF NOT EXISTS is
-// near-free when the column already exists. Cached behind a
-// module-level flag so we only hit the catalog once per process.
-let columnsEnsured = false;
-async function ensureSellingFeeColumns(sql: ReturnType<typeof postgres>): Promise<void> {
-  if (columnsEnsured) return;
-  try {
-    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee NUMERIC(10, 2) NOT NULL DEFAULT 0`;
-    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`;
-    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`;
-    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`;
-    columnsEnsured = true;
-  } catch (err) {
-    console.warn('[walmart-fees-sync] column bootstrap failed:', err instanceof Error ? err.message : err);
-  }
+// Migration 0019 owns settled-fee columns. Readiness blocks sync when schema
+// is incomplete.
+async function ensureSellingFeeColumns(_sql: ReturnType<typeof postgres>): Promise<void> {
+  // Per user override unlock shipped data on 2026-07-14: migration 0019 owns
+  // selling-fee columns; sync verifies readiness before settled-fee updates.
+  const { assertRuntimeSchemaReady } = await import('../../services/runtime-schema-readiness.js');
+  await assertRuntimeSchemaReady();
 }
 
 // ── OAuth: mint a fresh Walmart access token ───────────────────────

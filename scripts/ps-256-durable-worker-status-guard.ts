@@ -62,10 +62,12 @@ check('readWorkerStatusEvents is a fast no-op when OFF (no DB connect)', Date.no
 
 // ── static: durable module — runtime DDL + env gate + best-effort emit ─────────────────────────
 const events = readFileSync('src/services/worker-status-events.ts', 'utf8');
-check('runtime-ensures worker_status_events (500-safe additive table)',
-  /CREATE TABLE IF NOT EXISTS worker_status_events/.test(events) && /ensureWorkerStatusEventsSchema/.test(events));
+const runtimeSchemaMigration = readFileSync('drizzle/0062_runtime_schema_ownership.sql', 'utf8');
+check('migration owns worker_status_events and runtime verifies readiness',
+  /CREATE TABLE IF NOT EXISTS worker_status_events/.test(runtimeSchemaMigration) &&
+    /ensureWorkerStatusEventsSchema/.test(events) && /assertRuntimeSchemaReady/.test(events));
 check('indexes created_at DESC for recent-first reads',
-  /CREATE INDEX IF NOT EXISTS[\s\S]*worker_status_events[\s\S]*created_at DESC/.test(events));
+  /CREATE INDEX IF NOT EXISTS worker_status_events_created_at_idx[\s\S]*created_at DESC/.test(runtimeSchemaMigration));
 check('env-gated via workerStatusEventsEnabled() + WORKER_STATUS_EVENTS_DURABLE',
   /workerStatusEventsEnabled/.test(events) && /WORKER_STATUS_EVENTS_DURABLE/.test(events));
 check('recordWorkerStatusEvent returns early (no-op) when the flag is OFF',

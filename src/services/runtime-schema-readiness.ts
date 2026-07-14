@@ -1,0 +1,218 @@
+import { sql as pg } from '../db/client.js';
+
+const REQUIRED_RELATIONS = [
+  'address_classifications',
+  'audit_log',
+  'billing_box_resolutions',
+  'billing_fee_waivers',
+  'billing_finalization_group_locks',
+  'billing_manual_overrides',
+  'billing_storage_proof',
+  'client_packing_rules',
+  'client_sku_classes',
+  'direct_carrier_rate_cache',
+  'label_purchase_intents',
+  'label_purchase_locks',
+  'order_competitive_rate',
+  'order_rate_jobs',
+  'package_consumption_reviews',
+  'print_queue_batch_job_items',
+  'print_queue_merged_pdfs',
+  'print_queue_pdf_chunks',
+  'print_queue_send_jobs',
+  'rate_browse_job_provider_statuses',
+  'rate_browse_jobs',
+  'rate_limiter_state',
+  'shipment_bundle_members',
+  'shipment_bundles',
+  'shipment_tracking_status',
+  'store_source_cutovers',
+  'webhook_events',
+  'worker_status_events',
+] as const;
+
+const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
+  billing_config: [
+    'house_account_enabled',
+    'hugrab_shipping_rate_override_enabled',
+    'hugrab_shipping_rate_override_threshold',
+    'hugrab_shipping_rate_override_amount',
+  ],
+  client_combo_package_defaults: ['source'],
+  inventory_ledger: ['effective_at', 'idempotency_key'],
+  orders: [
+    'selling_fee',
+    'selling_fee_breakdown',
+    'selling_fee_synced_at',
+    'selling_fee_source',
+  ],
+  order_overrides: ['recipient_override'],
+  package_ledger: [
+    'shipment_id',
+    'order_id',
+    'source',
+    'source_account_id',
+    'provider_shipment_id',
+    'effective_at',
+    'idempotency_key',
+  ],
+  print_queue_orders: ['auto_retired_at'],
+  shipments: ['selected_rate_cost'],
+};
+
+const REQUIRED_INDEXES = [
+  'address_classifications_expires_idx',
+  'audit_log_resource_idx',
+  'audit_log_ts_idx',
+  'billing_manual_overrides_client_order_idx',
+  'client_packing_rules_client_idx',
+  'client_packing_rules_client_key_idx',
+  'client_sku_classes_client_idx',
+  'client_sku_classes_client_sku_idx',
+  'direct_carrier_rate_cache_lookup_idx',
+  'inventory_ledger_effective_at_idx',
+  'inventory_ledger_idempotency_key_unq',
+  'label_purchase_intents_unresolved_idx',
+  'label_purchase_locks_expires_at_idx',
+  'order_competitive_rate_house_idx',
+  'order_competitive_rate_order_idx',
+  'order_competitive_rate_projected_unq',
+  'order_competitive_rate_realized_unq',
+  'order_rate_jobs_updated_idx',
+  'orders_selling_fee_source_idx',
+  'package_consumption_reviews_idempotency_unq',
+  'package_consumption_reviews_shipment_idx',
+  'package_consumption_reviews_status_idx',
+  'package_ledger_effective_at_idx',
+  'package_ledger_idempotency_key_unq',
+  'package_ledger_order_idx',
+  'package_ledger_shipment_idx',
+  'print_queue_batch_job_items_job_idx',
+  'print_queue_batch_job_items_state_idx',
+  'print_queue_send_jobs_updated_at_idx',
+  'rate_browse_job_provider_statuses_status_idx',
+  'rate_browse_jobs_order_updated_idx',
+  'rate_browse_jobs_request_active_idx',
+  'shipment_bundle_members_bundle_idx',
+  'shipment_bundles_client_idx',
+  'shipment_tracking_status_order_idx',
+  'shipment_tracking_status_poll_idx',
+  'shipments_order_latest_idx',
+  'shipments_order_number_latest_idx',
+  'store_source_cutovers_active_legacy_idx',
+  'store_source_cutovers_client_idx',
+  'store_source_cutovers_identity_idx',
+  'store_source_cutovers_legacy_idx',
+  'store_source_cutovers_target_idx',
+  'webhook_events_dedupe_idx',
+  'webhook_events_order_status_idx',
+  'webhook_events_source_id_idx',
+  'webhook_events_source_lookup_idx',
+  'worker_status_events_created_at_idx',
+] as const;
+
+const REQUIRED_FUNCTIONS = [
+  'audit_log_block_mutations',
+  'billing_line_item_group_is_finalized',
+  'billing_line_item_group_key',
+  'billing_line_item_lock_group',
+  'billing_line_items_block_finalized_mutation',
+  'billing_line_items_block_finalized_truncate',
+  'billing_line_items_block_mixed_finalization_statement',
+] as const;
+
+const REQUIRED_TRIGGERS = [
+  'audit_log_no_update_delete',
+  'billing_line_items_finalized_guard',
+  'billing_line_items_finalized_truncate_guard',
+  'billing_line_items_mixed_finalization_guard',
+] as const;
+
+let readiness: Promise<void> | null = null;
+
+export function resetRuntimeSchemaReadinessForTests(): void {
+  readiness = null;
+}
+
+export function assertRuntimeSchemaReady(): Promise<void> {
+  readiness ??= verifyRuntimeSchema().catch((error) => {
+    readiness = null;
+    throw error;
+  });
+  return readiness;
+}
+
+async function verifyRuntimeSchema(): Promise<void> {
+  const missing: string[] = [];
+
+  const relationRows = await pg<Array<{ relation_name: string }>>`
+    select relation_name
+    from unnest(${[...REQUIRED_RELATIONS]}::text[]) as required(relation_name)
+    where to_regclass('public.' || relation_name) is not null
+  `;
+  const presentRelations = new Set(relationRows.map((row) => String(row.relation_name)));
+  for (const relation of REQUIRED_RELATIONS) {
+    if (!presentRelations.has(relation)) missing.push(`relation:${relation}`);
+  }
+
+  const tableNames = Object.keys(REQUIRED_COLUMNS);
+  const columnRows = await pg<Array<{ table_name: string; column_name: string }>>`
+    select table_name, column_name
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = any(${tableNames})
+  `;
+  const columnsByTable = new Map<string, Set<string>>();
+  for (const row of columnRows) {
+    const columns = columnsByTable.get(row.table_name) ?? new Set<string>();
+    columns.add(row.column_name);
+    columnsByTable.set(row.table_name, columns);
+  }
+  for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    const present = columnsByTable.get(table) ?? new Set<string>();
+    for (const column of columns) {
+      if (!present.has(column)) missing.push(`column:${table}.${column}`);
+    }
+  }
+
+  const indexRows = await pg<Array<{ indexname: string }>>`
+    select indexname
+    from pg_indexes
+    where schemaname = 'public'
+      and indexname = any(${[...REQUIRED_INDEXES]})
+  `;
+  const presentIndexes = new Set(indexRows.map((row) => String(row.indexname)));
+  for (const index of REQUIRED_INDEXES) {
+    if (!presentIndexes.has(index)) missing.push(`index:${index}`);
+  }
+
+  const functionRows = await pg<Array<{ proname: string }>>`
+    select distinct p.proname
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = any(${[...REQUIRED_FUNCTIONS]})
+  `;
+  const presentFunctions = new Set(functionRows.map((row) => String(row.proname)));
+  for (const functionName of REQUIRED_FUNCTIONS) {
+    if (!presentFunctions.has(functionName)) missing.push(`function:${functionName}`);
+  }
+
+  const triggerRows = await pg<Array<{ tgname: string }>>`
+    select tgname
+    from pg_trigger
+    where not tgisinternal
+      and tgname = any(${[...REQUIRED_TRIGGERS]})
+  `;
+  const presentTriggers = new Set(triggerRows.map((row) => String(row.tgname)));
+  for (const trigger of REQUIRED_TRIGGERS) {
+    if (!presentTriggers.has(trigger)) missing.push(`trigger:${trigger}`);
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
+        `0062_runtime_schema_ownership.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+    );
+  }
+}

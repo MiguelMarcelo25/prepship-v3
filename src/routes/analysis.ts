@@ -18,6 +18,7 @@ import {
   reportingOrderShipmentProjectionJoinSql,
   reportingShipmentCostJoinSql,
 } from '../services/reporting-projection';
+import { assertRuntimeSchemaReady } from '../services/runtime-schema-readiness.js';
 
 const app = new Hono();
 
@@ -426,34 +427,12 @@ type SkuBreakdownRow = {
   daily_qty_map: Record<string, number> | null;
 };
 
-// Runtime schema-bootstrap for the selling-fee columns. Idempotent
-// — ADD COLUMN IF NOT EXISTS is essentially free when the column
-// already exists (catalog lookup, no table rewrite). This belt-and-
-// suspenders pattern keeps the route self-healing if the formal
-// migration (drizzle/0019_selling_fees.sql) hasn't been applied yet:
-// the SELECT below references o.selling_fee, so without these
-// columns the query fails with "column o.selling_fee does not
-// exist" and the whole Analysis page breaks (2026-05-13 operator
-// report). The selling_fee_source index is migration-owned, not
-// request-time DDL. Cached behind a module-level flag so we only hit
-// the DB catalog once per process lifetime.
-let sellingFeeColumnsEnsured = false;
+// Migration 0019 owns selling-fee columns and index. Boot readiness fails
+// clearly before the route can run when migration state is incomplete.
 async function ensureSellingFeeColumns(): Promise<void> {
-  if (sellingFeeColumnsEnsured) return;
-  try {
-    await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee NUMERIC(10, 2) NOT NULL DEFAULT 0`);
-    await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`);
-    await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`);
-    await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`);
-    sellingFeeColumnsEnsured = true;
-  } catch (err) {
-    // Don't break the analysis page if bootstrap fails (e.g. DB
-    // role can't ALTER TABLE). The downstream SELECT will fail with
-    // its original error message in that case — surfacing the real
-    // problem rather than the bootstrap symptom.
-    console.warn('[analysis] selling_fee column bootstrap failed:',
-      err instanceof Error ? err.message : err);
-  }
+  // Per user override unlock shipped data on 2026-07-14: migration 0019 owns
+  // selling-fee columns; analysis only verifies schema before reading them.
+  await assertRuntimeSchemaReady();
 }
 
 export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {

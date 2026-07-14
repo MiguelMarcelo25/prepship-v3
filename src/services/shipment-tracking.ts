@@ -23,41 +23,13 @@ import {
   type TrackingPolicyStatus,
 } from './shipment-tracking-policy';
 import { retireDeliveredQueueEntries } from './print-queue';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
-// ── Runtime schema ensure (mirrors drizzle/0042_shipment_tracking_status.sql; same
-// pattern as order-rate-job-status.ts so worker/API both work pre-migration). ──
-let schemaEnsured: Promise<void> | null = null;
-
+// Migration 0042 owns shipment-tracking sidecar schema.
 export async function ensureShipmentTrackingSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS shipment_tracking_status (
-        id serial PRIMARY KEY,
-        order_id integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-        client_id integer,
-        tracking_number text NOT NULL,
-        carrier_code text,
-        status text NOT NULL DEFAULT 'unknown',
-        status_description text,
-        delivered_at timestamptz,
-        last_checked_at timestamptz NOT NULL DEFAULT now(),
-        check_count integer NOT NULL DEFAULT 0,
-        last_error text,
-        source text NOT NULL DEFAULT 'shipstation_v2',
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT shipment_tracking_status_order_tracking_unq UNIQUE (order_id, tracking_number)
-      )
-    `;
-    await pg`CREATE INDEX IF NOT EXISTS shipment_tracking_status_order_idx ON shipment_tracking_status (order_id)`;
-    await pg`CREATE INDEX IF NOT EXISTS shipment_tracking_status_poll_idx ON shipment_tracking_status (status, last_checked_at)`;
-    await pg`ALTER TABLE shipment_tracking_status ENABLE ROW LEVEL SECURITY`;
-    await pg`ALTER TABLE print_queue_orders ADD COLUMN IF NOT EXISTS auto_retired_at timestamptz`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  // Per user override unlock shipped data on 2026-07-14: migration 0042 owns
+  // tracking sidecar schema; shipment reads and queue retirement stay unchanged.
+  await assertRuntimeSchemaReady();
 }
 
 // Polling policy constants — deliberately code, not env (operator knobs are the

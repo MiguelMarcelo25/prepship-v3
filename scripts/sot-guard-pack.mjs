@@ -19,6 +19,7 @@ const REQUIRED_GUARDS = [
   'test:ps-329-orders-wrapper-sot-cleanup',
   'test:audit-orders-service-boundary',
   'test:audit-pg-boss-inventory-outbox',
+  'test:audit-runtime-schema-readiness',
 ];
 
 const npmCli = process.env.npm_execpath;

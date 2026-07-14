@@ -13,14 +13,11 @@
 // and write is a no-op, NO DB call, NO schema ensure, zero cost — so a COLD cache / flag OFF is
 // byte-for-byte identical to today (monotonic-additive). DJ flips it on Render after a canary.
 //
-// Best-effort everywhere: reads/writes NEVER throw into the rate hot path. Additive-table 500-safe
-// pattern (mirrors ensureWorkerStatusEventsSchema / ensurePrintQueuePdfSchema): runtime CREATE TABLE
-// IF NOT EXISTS + ENABLE ROW LEVEL SECURITY (RLS on, NO open policy — backend is the postgres owner
-// and bypasses RLS; the Supabase-auth frontend never reads this table). NOT in the drizzle schema
-// index (a bare drizzle select() over the index would otherwise emit the new table and 500 prod
-// before it exists).
+// Best-effort everywhere: reads/writes NEVER throw into the rate hot path.
+// Migration 0062 owns the table and RLS posture; boot blocks incomplete schema.
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 /** True only when DJ has flipped the canary on Render. Default OFF. */
 export function directCarrierRateCacheEnabled(): boolean {
@@ -61,34 +58,9 @@ export type DirectCarrierCacheWrite = {
   rateJson: unknown;
 };
 
-let schemaEnsured: Promise<void> | null = null;
-
-/** Memoized runtime DDL (mirrors ensureWorkerStatusEventsSchema). Additive, 500-safe. */
+/** Migration readiness for the durable direct-carrier cache. */
 export async function ensureDirectCarrierRateCacheSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS direct_carrier_rate_cache (
-        account_id int NOT NULL,
-        source_table text NOT NULL,
-        carrier_code text NOT NULL,
-        service_code text NOT NULL,
-        request_key text NOT NULL,
-        amount numeric,
-        rate_json jsonb,
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (account_id, source_table, carrier_code, service_code, request_key)
-      )
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS direct_carrier_rate_cache_lookup_idx
-        ON direct_carrier_rate_cache (account_id, source_table, request_key, updated_at DESC)
-    `;
-    await pg`ALTER TABLE direct_carrier_rate_cache ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  await assertRuntimeSchemaReady();
 }
 
 /**

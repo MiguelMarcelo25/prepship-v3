@@ -46,6 +46,7 @@ const ps255 = read('scripts/ps-255-ops-confirm-gate-guard.ts');
 const ps256Worker = read('scripts/ps-256-durable-worker-status-guard.ts');
 const ps256Rate = read('scripts/ps-256-durable-rate-limiter-guard.ts');
 const ps288 = read('scripts/ps-288-label-recovery-guard.ts');
+const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
 
 check('PS-285 recovery/retry evidence doc exists', existsSync(docPath));
 check('recovery/retry packet keeps PS-285 conservative at 65%',
@@ -124,7 +125,8 @@ check('admin routes remain mounted behind requireAdmin',
   /app\.use\('\/admin\/\*', requireAdmin\)/.test(main));
 
 check('worker status events are env-gated, additive, and best-effort',
-  /CREATE TABLE IF NOT EXISTS worker_status_events/.test(workerEvents) &&
+  /CREATE TABLE IF NOT EXISTS worker_status_events/.test(runtimeSchemaMigration) &&
+    /assertRuntimeSchemaReady/.test(workerEvents) &&
     /WORKER_STATUS_EVENTS_DURABLE/.test(workerEvents) &&
     /if \(!workerStatusEventsEnabled\(\)\) return/.test(workerEvents) &&
     /try \{[\s\S]*INSERT INTO worker_status_events[\s\S]*\} catch/.test(workerEvents));
@@ -138,7 +140,8 @@ check('staleness watchdog emits alert events through the durable observer',
     /stalenessLevel: verdict\.level/.test(watchdog));
 
 check('durable rate limiter is additive and selected only by explicit flag',
-  /CREATE TABLE IF NOT EXISTS rate_limiter_state/.test(durableRateLimiter) &&
+  /CREATE TABLE IF NOT EXISTS rate_limiter_state/.test(runtimeSchemaMigration) &&
+    /assertRuntimeSchemaReady/.test(durableRateLimiter) &&
     /UPDATE rate_limiter_state[\s\S]*RETURNING tokens/.test(durableRateLimiter) &&
     /process\.env\.RATE_LIMITER_BACKEND === 'durable'/.test(shipstationClient) &&
     /: new TokenBucket\(38, 38 \/ 60_000\)/.test(shipstationClient));

@@ -166,8 +166,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
   const scoped = clientScopePredicate ?? sql`true`;
 
   // PS-370: the SQL below coalesces s.selected_rate_cost — ensure the additive
-  // column exists before the read (belt-and-suspenders, pre-migration 0054).
-  // Memoized + idempotent (ADD COLUMN IF NOT EXISTS).
+  // fail closed if migration 0054 has not made it available before the read.
   await ensureShipmentsSelectedRateCostColumn();
   await ensureBillingFinalizationPolicySchema();
   const rows = await db.execute<RawCandidate>(sql`

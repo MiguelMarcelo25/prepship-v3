@@ -22,14 +22,16 @@ function check(name: string, cond: boolean): void {
 
 const lock = readFileSync('src/lib/label-purchase-lock.ts', 'utf8');
 const labels = readFileSync('src/services/labels.ts', 'utf8');
+const migration = readFileSync('drizzle/0062_runtime_schema_ownership.sql', 'utf8');
 
 // ── the lock helper ──
-check('lock helper creates the durable label_purchase_locks table',
-  /CREATE TABLE IF NOT EXISTS label_purchase_locks/.test(lock));
-check('lock helper keys the lease by order_id primary key',
-  /order_id integer PRIMARY KEY/.test(lock));
-check('lock helper stores a token and expiry for each lease',
-  /token text NOT NULL/.test(lock) && /expires_at timestamptz NOT NULL/.test(lock));
+check('migration owns durable label_purchase_locks and helper verifies readiness',
+  /CREATE TABLE IF NOT EXISTS label_purchase_locks/.test(migration) &&
+    /assertRuntimeSchemaReady/.test(lock));
+check('migration keys the lease by order_id primary key',
+  /order_id integer PRIMARY KEY/.test(migration));
+check('migration stores a token and expiry for each lease',
+  /token text NOT NULL/.test(migration) && /expires_at timestamptz NOT NULL/.test(migration));
 check('lock helper uses NON-BLOCKING insert/upsert lease acquisition',
   /ON CONFLICT \(order_id\) DO UPDATE SET/.test(lock) &&
     /WHERE label_purchase_locks\.expires_at <= now\(\)/.test(lock) &&

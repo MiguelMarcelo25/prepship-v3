@@ -34,14 +34,14 @@ check('migration 0055: proof jsonb column', /"proof" jsonb NOT NULL/.test(mig));
 
 // ── 3) Runtime ensure mirrors the migration + is memoized/idempotent ──
 const ensure = read('src/db/ensure-billing-storage-proof.ts');
-check('ensure: CREATE TABLE IF NOT EXISTS billing_storage_proof', /CREATE TABLE IF NOT EXISTS billing_storage_proof/.test(ensure));
-check('ensure: same period-keyed unique constraint', /billing_storage_proof_client_period_unq UNIQUE \(client_id, period_start, period_end\)/.test(ensure));
-check('ensure: memoized (idempotent, resets on failure)', /let ensured: Promise<void> \| null = null/.test(ensure) && /ensured = null;/.test(ensure));
+check('ensure delegates to migration readiness', /assertRuntimeSchemaReady/.test(ensure));
+check('ensure contains no table DDL', !/CREATE TABLE|ALTER TABLE|CREATE INDEX/i.test(ensure));
+check('shared readiness is memoized', /let readiness: Promise<void> \| null = null/.test(read('src/services/runtime-schema-readiness.ts')));
 
 // ── 4) Runtime-DDL inventory documents the new ensure ──
 const ddlGuard = read('scripts/runtime-ddl-guard.mjs');
 const ddlAudit = read('RUNTIME_DDL_MIGRATION_AUDIT.md');
-check('runtime-ddl allowlist includes the ensure file', ddlGuard.includes("'src/db/ensure-billing-storage-proof.ts'"));
+check('runtime-ddl guard tracks the readiness caller', ddlGuard.includes("'src/db/ensure-billing-storage-proof.ts'"));
 check('runtime-ddl audit documents the ensure file', ddlAudit.includes('`src/db/ensure-billing-storage-proof.ts`') && ddlAudit.includes('0055_billing_storage_proof.sql'));
 
 // ── 5) billing.ts persists the proof (period-keyed upsert) and freezes evidence ──

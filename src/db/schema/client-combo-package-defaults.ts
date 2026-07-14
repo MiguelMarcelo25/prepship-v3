@@ -41,10 +41,10 @@ export const clientComboPackageDefaults = pgTable(
     height: real(),
     weightOz: real(),
     // PS-223 NOTE: the provenance column `source` (operator|rule_engine|import)
-    // lives in drizzle/0047 + ensurePackagingRulesSchema(), but is INTENTIONALLY
+    // lives in drizzle/0047 and is verified by ensurePackagingRulesSchema(), but is INTENTIONALLY
     // NOT modeled here. These reads use bare `db.select()`, which would emit the
-    // column in the generated SQL and 500 in prod before the out-of-band migration
-    // runs. The rule engine reads `source` via the porsager raw-SQL tag (explicit
+    // column in the generated SQL before migration readiness is established. The
+    // rule engine reads `source` via the porsager raw-SQL tag (explicit
     // columns) instead. Add it here only alongside a drizzle WRITE of source.
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),

@@ -1,20 +1,10 @@
-import { sql as pg } from './client.js';
+import { assertRuntimeSchemaReady } from '../services/runtime-schema-readiness.js';
 
-// PS-370 Phase 1 — runtime schema ensure for the persisted selected/label cost.
-// Mirrors drizzle/0054_shipments_selected_rate_cost.sql EXACTLY so the API + worker
-// both work pre-migration (same belt-and-suspenders pattern as the shipment-bundles
-// / order-competitive-rate ensures). Idempotent + lockdown-safe: an ADDITIVE nullable
-// column ONLY — never an UPDATE/DELETE against the locked shipments rows, and never a
-// drop/type change. Capture call sites await this once before their first insert that
-// writes the column.
-let ensured: Promise<void> | null = null;
-
+// PS-370 Phase 1 — migration readiness for persisted selected/label cost.
+// Migration 0054 owns the additive nullable column. No UPDATE/DELETE against
+// locked shipment rows and no drop/type change occurs here.
 export async function ensureShipmentsSelectedRateCostColumn(): Promise<void> {
-  ensured ??= (async () => {
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS selected_rate_cost numeric(10, 2)`;
-  })().catch((err) => {
-    ensured = null;
-    throw err;
-  });
-  return ensured;
+  // Per user override unlock shipped data on 2026-07-14: migration 0054 owns
+  // this additive column; label/billing paths now only verify boot readiness.
+  await assertRuntimeSchemaReady();
 }

@@ -99,8 +99,9 @@ check('schema: shipments.selectedRateCost additive numeric column exists',
   !/selectedRateCost:[^\n]*\.notNull\(\)/.test(schema));
 check('migration 0054 adds the column additively (IF NOT EXISTS)',
   /ADD COLUMN IF NOT EXISTS "selected_rate_cost" numeric\(10, 2\)/.test(read('drizzle/0054_shipments_selected_rate_cost.sql')));
-check('runtime ensure exists (belt-and-suspenders, additive only)',
-  /ALTER TABLE shipments ADD COLUMN IF NOT EXISTS selected_rate_cost numeric\(10, 2\)/.test(read('src/db/ensure-shipments-selected-rate-cost.ts')));
+check('runtime helper delegates to migration readiness without shipment DDL',
+  /assertRuntimeSchemaReady/.test(read('src/db/ensure-shipments-selected-rate-cost.ts')) &&
+  !/ALTER TABLE shipments ADD COLUMN/i.test(read('src/db/ensure-shipments-selected-rate-cost.ts')));
 
 const billing = read('src/services/billing.ts');
 check('reader (billing generate) prefers the persisted column, falls back to cost/labelCost + otherCost',
@@ -129,11 +130,11 @@ check('read path: billing.ts imports + ensures the column on BOTH read paths (ge
   /import \{ ensureShipmentsSelectedRateCostColumn \}/.test(billing) &&
   (billing.match(/await ensureShipmentsSelectedRateCostColumn\(\)/g) ?? []).length >= 2);
 check('read path (generateLineItems) ensures the column near the top of the function',
-  /export async function generateLineItems[\s\S]{0,500}await ensureShipmentsSelectedRateCostColumn\(\)/.test(billing));
+  /export async function generateLineItems[\s\S]{0,1200}await ensureShipmentsSelectedRateCostColumn\(\)/.test(billing));
 check('read path (billingDetails) ensures the column before its SELECT',
   /export async function billingDetails[\s\S]{0,400}await ensureShipmentsSelectedRateCostColumn\(\)/.test(billing));
 check('read path (HUGRAB floor) ensures the column before its db.execute',
-  /await ensureShipmentsSelectedRateCostColumn\(\);\s*\n\s*const rows = await db\.execute/.test(floor));
+  /await ensureShipmentsSelectedRateCostColumn\(\);[\s\S]{0,160}const rows = await db\.execute/.test(floor));
 
 const labels = read('src/services/labels.ts');
 check('label writer populates the column = postage + other (byte-consistent with the readers)',

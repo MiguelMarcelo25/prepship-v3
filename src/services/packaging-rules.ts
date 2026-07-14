@@ -16,6 +16,7 @@
  * below are the testable core (see scripts/ps-223-packaging-rule-engine-guard.ts).
  */
 import { sql } from '../db/client';
+import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 import { computeComboKey } from '../lib/package-combo.js';
 import {
   classifySkuTotals,
@@ -39,34 +40,8 @@ export {
 
 // ── Schema ensure (idempotent, mirrors drizzle/0047) ────────────────────────
 
-let ensured = false;
 export async function ensurePackagingRulesSchema(): Promise<void> {
-  if (ensured) return;
-  await sql`CREATE TABLE IF NOT EXISTS client_sku_classes (
-    id serial PRIMARY KEY,
-    client_id integer NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    sku text NOT NULL,
-    class_name text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-  )`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS client_sku_classes_client_sku_idx ON client_sku_classes (client_id, sku)`;
-  await sql`CREATE INDEX IF NOT EXISTS client_sku_classes_client_idx ON client_sku_classes (client_id)`;
-  await sql`CREATE TABLE IF NOT EXISTS client_packing_rules (
-    id serial PRIMARY KEY,
-    client_id integer NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-    rule_key text NOT NULL,
-    package_id integer REFERENCES packages(id),
-    package_code text,
-    priority integer NOT NULL DEFAULT 0,
-    source text NOT NULL DEFAULT 'rule_engine',
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-  )`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS client_packing_rules_client_key_idx ON client_packing_rules (client_id, rule_key)`;
-  await sql`CREATE INDEX IF NOT EXISTS client_packing_rules_client_idx ON client_packing_rules (client_id)`;
-  await sql`ALTER TABLE client_combo_package_defaults ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'operator'`;
-  ensured = true;
+  await assertRuntimeSchemaReady();
 }
 
 // ── Read-only dry-run planner ───────────────────────────────────────────────

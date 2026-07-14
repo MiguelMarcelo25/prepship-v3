@@ -33,6 +33,7 @@ const snapshotPath = 'src/services/print-queue/queue-send-snapshot.ts';
 const jobStore = read(jobStorePath);
 const preflight = read(preflightPath);
 const snapshot = read(snapshotPath);
+const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
 const doc = read('docs/ps-tickets/ps-351-durable-print-queue-jobs.md');
 const ps352Doc = read('docs/ps-tickets/ps-352-shipping-workflow-sot-map.md');
 
@@ -45,23 +46,23 @@ check('dedicated queue-send job store module exists',
 check('dedicated backend preflight module exists',
   existsSync(preflightPath));
 
-check('job store owns additive runtime table schema for batch/preflight job snapshots',
-  /CREATE TABLE IF NOT EXISTS print_queue_send_jobs/.test(jobStore) &&
-    /job_id text PRIMARY KEY/.test(jobStore) &&
-    /job_type text NOT NULL DEFAULT 'batch_send'/.test(jobStore) &&
-    /snapshot jsonb NOT NULL/.test(jobStore) &&
-    /CREATE INDEX IF NOT EXISTS print_queue_send_jobs_updated_at_idx/.test(jobStore) &&
-    /ensureQueueSendJobStoreSchema/.test(jobStore));
+check('migration owns queue-send schema and job store verifies readiness',
+  /CREATE TABLE IF NOT EXISTS print_queue_send_jobs/.test(runtimeSchemaMigration) &&
+    /job_id text PRIMARY KEY/.test(runtimeSchemaMigration) &&
+    /job_type text NOT NULL DEFAULT 'batch_send'/.test(runtimeSchemaMigration) &&
+    /snapshot jsonb NOT NULL/.test(runtimeSchemaMigration) &&
+    /CREATE INDEX IF NOT EXISTS print_queue_send_jobs_updated_at_idx/.test(runtimeSchemaMigration) &&
+    /ensureQueueSendJobStoreSchema/.test(jobStore) && /assertRuntimeSchemaReady/.test(jobStore));
 
 check('job store owns durable per-order item states, not just batch snapshots',
-  /CREATE TABLE IF NOT EXISTS print_queue_batch_job_items/.test(jobStore) &&
-    /job_id text NOT NULL/.test(jobStore) &&
-    /order_id integer NOT NULL/.test(jobStore) &&
-    /state text NOT NULL/.test(jobStore) &&
-    /blocked_reason text/.test(jobStore) &&
-    /error_message text/.test(jobStore) &&
-    /UNIQUE \(job_id, order_id\)/.test(jobStore) &&
-    /print_queue_batch_job_items_job_idx/.test(jobStore));
+  /CREATE TABLE IF NOT EXISTS print_queue_batch_job_items/.test(runtimeSchemaMigration) &&
+    /job_id text NOT NULL/.test(runtimeSchemaMigration) &&
+    /order_id integer NOT NULL/.test(runtimeSchemaMigration) &&
+    /state text NOT NULL/.test(runtimeSchemaMigration) &&
+    /blocked_reason text/.test(runtimeSchemaMigration) &&
+    /error_message text/.test(runtimeSchemaMigration) &&
+    /UNIQUE \(job_id, order_id\)/.test(runtimeSchemaMigration) &&
+    /print_queue_batch_job_items_job_idx/.test(runtimeSchemaMigration));
 
 check('job store persists and reads per-job snapshots without using the settings blob',
   /export async function persistQueueSendJobRecord/.test(jobStore) &&

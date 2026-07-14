@@ -8,6 +8,7 @@
 // sessions cannot strand an order behind a stale session advisory lock.
 import { randomUUID } from 'node:crypto';
 import { sql } from '../db/client';
+import { assertRuntimeSchemaReady } from '../services/runtime-schema-readiness.js';
 
 export type LabelPurchaseLock = { release: () => Promise<void> };
 
@@ -21,7 +22,6 @@ export type LabelPurchaseLock = { release: () => Promise<void> };
 // operator-visible) instead of buying postage twice. Overridable for tests via env.
 const LABEL_PURCHASE_LOCK_TTL_SECONDS =
   Number(process.env.LABEL_PURCHASE_LOCK_TTL_SECONDS ?? '') || 45 * 60;
-let schemaEnsured: Promise<void> | null = null;
 
 /** Thrown when another label purchase for the same order holds the lock (operator-safe 409). */
 export class LabelPurchaseInProgressError extends Error {
@@ -33,26 +33,9 @@ export class LabelPurchaseInProgressError extends Error {
 }
 
 async function ensureLabelPurchaseLockSchema(): Promise<void> {
-  schemaEnsured ??= (async () => {
-    await sql`
-      CREATE TABLE IF NOT EXISTS label_purchase_locks (
-        order_id integer PRIMARY KEY,
-        token text NOT NULL,
-        owner text NOT NULL,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        expires_at timestamptz NOT NULL
-      )
-    `;
-    await sql`
-      CREATE INDEX IF NOT EXISTS label_purchase_locks_expires_at_idx
-        ON label_purchase_locks (expires_at)
-    `;
-    await sql`ALTER TABLE label_purchase_locks ENABLE ROW LEVEL SECURITY`;
-  })().catch((err) => {
-    schemaEnsured = null;
-    throw err;
-  });
-  return schemaEnsured;
+  // Per user override unlock shipped data on 2026-07-14: migration 0062 owns
+  // label-lock schema; purchase serialization behavior is unchanged.
+  await assertRuntimeSchemaReady();
 }
 
 export async function acquireLabelPurchaseLock(orderId: number): Promise<LabelPurchaseLock> {

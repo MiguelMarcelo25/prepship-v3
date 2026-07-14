@@ -34,6 +34,7 @@ const lockHelper = read('src/lib/label-purchase-lock.ts');
 const labels = read('src/services/labels.ts');
 const lockGuard = read('scripts/ps-248-label-purchase-lock-guard.ts');
 const atomicGuard = read('scripts/ps-248-persist-mark-shipped-atomic-guard.ts');
+const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
 
 check('PS-285 label purchase evidence doc exists', existsSync(docPath));
 check('label purchase packet keeps PS-285 conservative at 50%',
@@ -73,7 +74,8 @@ check('package keeps PS-248 atomic persist guard wired',
   /"test:ps-248-persist-mark-shipped-atomic"\s*:\s*"tsx scripts\/ps-248-persist-mark-shipped-atomic-guard\.ts"/.test(packageJson));
 
 check('lock helper uses non-blocking durable lease and explicit in-progress error',
-  /CREATE TABLE IF NOT EXISTS label_purchase_locks/.test(lockHelper) &&
+  /CREATE TABLE IF NOT EXISTS label_purchase_locks/.test(runtimeSchemaMigration) &&
+    /assertRuntimeSchemaReady/.test(lockHelper) &&
     /ON CONFLICT \(order_id\) DO UPDATE SET/.test(lockHelper) &&
     /WHERE label_purchase_locks\.expires_at <= now\(\)/.test(lockHelper) &&
     /DELETE FROM label_purchase_locks/.test(lockHelper) &&
@@ -88,7 +90,7 @@ check('label persist and mark-shipped run in one transaction with tx plumbing',
     /persistCreatedLabel\(\{[\s\S]*tx,/.test(labels) &&
     /markOrderShipped\(order\.id, created\.trackingNumber, \{ cleanupQueue: false, tx \}\)/.test(labels));
 check('PS-248 lock guard pins purchase lock mechanism',
-  /durable label_purchase_locks table/.test(lockGuard) &&
+  /migration owns durable label_purchase_locks/.test(lockGuard) &&
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockGuard) &&
     /createLabelV2 acquires the per-order purchase lock/.test(lockGuard));
 check('PS-248 atomic guard pins transaction mechanism',

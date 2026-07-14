@@ -14,6 +14,7 @@ import {
 import { ensureOrdersPerformanceIndexes } from './services/orders-performance-maintenance';
 import { ensureReportingMetricsTables } from './services/reporting-metrics';
 import { startSyncStalenessWatchdog } from './services/sync-staleness-watchdog';
+import { assertRuntimeSchemaReady } from './services/runtime-schema-readiness.js';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
 let stopSyncWatchdog: (() => void) | null = null;
@@ -73,6 +74,9 @@ async function main(): Promise<void> {
   console.log(
     `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; RUN_PRINT_QUEUE_WORKER=${env.RUN_PRINT_QUEUE_WORKER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}`
   );
+
+  await assertRuntimeSchemaReady();
+  console.log('[worker] migration-owned schema ready');
 
   if (env.WORKER_PLACEHOLDER) {
     console.log('[worker] placeholder mode enabled; sync scheduler is not running');
