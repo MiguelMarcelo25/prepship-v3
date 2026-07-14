@@ -85,9 +85,9 @@ check(
   // ROTTED-PIN repoint (b1ae3352 "Add print queue timing proof"): order.label was
   // hoisted to `const labelInput = order.label` and spread as ...labelInput into
   // createLabelV2 — still the same backend-owned buy of the order's label payload.
-  /const labelInput = order\.label\b/.test(printQueueSvc) &&
+    /const labelInput = order\.label\b/.test(printQueueSvc) &&
     /createLabelV2\(\{[\s\S]*?\.\.\.labelInput\b/.test(printQueueSvc) &&
-    printQueueSvc.includes("import { createLabelV2") &&
+    /import\s*\{[\s\S]*?\bcreateLabelV2\b[\s\S]*?\}\s*from '\.\/labels';/.test(printQueueSvc) &&
     /if \(directRef\)[\s\S]*?createDirectCarrierLabelForOrder\(\{[\s\S]*?shipTo: carrierShipTo/.test(labelsSvc),
 );
 

@@ -84,6 +84,10 @@ const migrationOwnership = [
       'worker_status_events',
     ],
   ],
+  [
+    'drizzle/0064_print_queue_merge_jobs.sql',
+    ['print_queue_merge_jobs', 'print_queue_merge_jobs_updated_at_idx'],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -99,6 +103,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(newMigration),
   '0062 is additive and never mutates or destructively alters orders/shipments',
 );
+const mergeJobMigration = read('drizzle/0064_print_queue_merge_jobs.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN))\b/i.test(mergeJobMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(mergeJobMigration),
+  '0064 is additive and never mutates or destructively alters orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -108,7 +118,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0062_runtime_schema_ownership.sql',
+  '0064_print_queue_merge_jobs.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }
@@ -137,6 +147,7 @@ const readinessCallers = [
   'src/services/package-consumption-schema.ts',
   'src/services/packaging-rules.ts',
   'src/services/print-queue/queue-send-job-store.ts',
+  'src/services/print-queue/merge-job-store.ts',
   'src/services/print-queue-pdf-store.ts',
   'src/services/rate-browse-job-store.ts',
   'src/services/shipment-bundles/ensure-shipment-bundles-schema.ts',

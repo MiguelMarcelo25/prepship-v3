@@ -12,7 +12,7 @@
  * wrongly issued a query it would error/hang — a clean resolve + null proves the no-op without a
  * live DB.
  * STATIC: the store runtime-ensures the table (additive, 500-safe) + RLS + env gate + best-effort
- * try/catch; print-queue.ts persists after merge completion AND rehydrates via getMergedPdfBase64
+ * try/catch; print-queue.ts awaits artifact persistence before publishing done AND rehydrates via getMergedPdfBase64
  * on a miss + cites the override; env.ts declares the flag default OFF. LOCKDOWN: no
  * UPDATE/DELETE on orders/shipments was introduced by this slice.
  *
@@ -95,8 +95,8 @@ check('cleanupOldMergedPdfs deletes ONLY the new side-store table, flag-gated',
 const svc = readFileSync('src/services/print-queue.ts', 'utf8');
 check('print-queue imports the durable store helpers',
   /persistMergedPdf[\s\S]*getMergedPdfBase64[\s\S]*cleanupOldMergedPdfs[\s\S]*from '\.\/print-queue-pdf-store'/.test(svc));
-check('persists the merged PDF after the job is marked done',
-  /job\.status = 'done'[\s\S]*persistMergedPdf\(jobId, job\.fileName \?\? null, job\.mergedPdfBase64\)/.test(svc));
+check('awaits the merged PDF before publishing the required done snapshot',
+  /await persistMergedPdf\(jobId, job\.fileName \?\? null, job\.mergedPdfBase64\)[\s\S]*job\.status = 'done'[\s\S]*persistMergeJobSnapshot\(job, \{ required: true \}\)/.test(svc));
 check('rehydrates via getMergedPdfBase64 on an in-memory miss (getMergeJobForServe)',
   /export async function getMergeJobForServe[\s\S]*getMergedPdfBase64\(jobId\)/.test(svc));
 // PS-403 (9d12ad47) chunked the merged PDF; the fast path now returns inMemory when

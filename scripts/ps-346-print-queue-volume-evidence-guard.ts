@@ -97,11 +97,12 @@ check(
 check(
   'backend active batch-send status returns the full in-memory per-order results for the current run',
   /const job = getQueueSendJobStatus\(jobId\)/.test(routeStatusBlock) &&
+    /const jobStatus = deriveQueueSendSnapshotStatus\(job/.test(routeStatusBlock) &&
     /results: job\.results/.test(routeStatusBlock) &&
-    /total: job\.total/.test(routeStatusBlock) &&
-    /current: job\.current/.test(routeStatusBlock) &&
-    /queued: job\.queued/.test(routeStatusBlock) &&
-    /failed: job\.failed/.test(routeStatusBlock),
+    /total: jobStatus\.total/.test(routeStatusBlock) &&
+    /current: jobStatus\.current/.test(routeStatusBlock) &&
+    /queued: jobStatus\.queued/.test(routeStatusBlock) &&
+    /failed: jobStatus\.failed/.test(routeStatusBlock),
 );
 
 check(

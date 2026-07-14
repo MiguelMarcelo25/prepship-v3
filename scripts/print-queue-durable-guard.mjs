@@ -20,6 +20,7 @@ const serviceSource = read('src/services/print-queue.ts');
 const routeSource = read('src/routes/print-queue.ts');
 const snapshotSource = read('src/services/print-queue/queue-send-snapshot.ts');
 const jobStoreSource = read('src/services/print-queue/queue-send-job-store.ts');
+const mergeJobStoreSource = read('src/services/print-queue/merge-job-store.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -35,7 +36,7 @@ assert(
 
 assert(
   serviceSource.includes("PRINT_QUEUE_MERGE_STATUS_KEY = 'print_queue.pdf_merge.last_run'"),
-  'print queue PDF-merge uses durable settings key',
+  'print queue retains the legacy latest-merge compatibility key',
 );
 
 assert(
@@ -70,6 +71,20 @@ assert(
   serviceSource.includes('persistMergeJobSnapshot'),
   'print queue persists PDF-merge job snapshots',
 );
+assert(
+  mergeJobStoreSource.includes('INSERT INTO print_queue_merge_jobs') &&
+    mergeJobStoreSource.includes('WHERE print_queue_merge_jobs.updated_at <= ${snapshot.persistedAt}'),
+  'PDF-merge snapshots persist per job and reject older racing writes',
+);
+assert(
+  serviceSource.includes('getMergeJobSnapshot') &&
+    routeSource.includes('getMergeJobSnapshot(jobId)'),
+  'PDF-merge status reads the requested durable job instead of the last-run singleton',
+);
+assert(
+  serviceSource.includes('persistMergeJobSnapshot(job, { required: true })'),
+  'PDF-merge requires initial and terminal durable snapshots',
+);
 
 assert(
   serviceSource.includes('getLatestQueueSendJobSnapshot'),
@@ -99,7 +114,7 @@ assert(
 
 assert(
   routeSource.includes('getLatestMergeJobSnapshot'),
-  'print queue route imports durable PDF-merge snapshot reader',
+  'print queue route imports latest durable PDF-merge reader for refresh recovery',
 );
 
 assert(

@@ -10,6 +10,7 @@ import {
   clearQueue,
   confirmPrintedQueueEntries,
   getLatestMergeJobSnapshot,
+  getMergeJobSnapshot,
   getLatestQueueSendJobSnapshot,
   getQueueSendJobSnapshot,
   getQueueSendJobStatus,
@@ -34,6 +35,7 @@ import {
   type QueueSendJobSnapshot,
 } from '../services/print-queue';
 import { deriveQueueSendSnapshotStatus } from '../services/print-queue/queue-send-status';
+import { deriveMergeJobSnapshotStatus } from '../services/print-queue/merge-job-status';
 import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
 import {
   getInternalOpsClientStoreScope,
@@ -939,21 +941,29 @@ app.get('/print/status/:jobId', async (c) => {
   const jobId = c.req.param('jobId');
   const scope = printQueueScopeFromContext(c);
   const job = getMergeJobStatus(jobId);
-  const durableJob = await withDurableStatusTimeout(getLatestMergeJobSnapshot);
+  // Per user override unlock shipped data on 2026-07-14: status reads are
+  // scoped to this merge job and only derive stale metadata; no queue/order/
+  // shipment state is mutated.
+  const durableJob = await withDurableStatusTimeout(() => getMergeJobSnapshot(jobId));
   if (!job) {
-    if (durableJob?.jobId === jobId && await canViewMergeSnapshot(durableJob, scope)) {
+    if (durableJob && await canViewMergeSnapshot(durableJob, scope)) {
+      const durableStatus = deriveMergeJobSnapshotStatus(durableJob, {
+        inMemoryJobPresent: false,
+      });
       return c.json({
         job_id: durableJob.jobId,
-        status: durableJob.status,
+        status: durableStatus.status,
         progress: durableJob.progress,
         total: durableJob.total,
         current: durableJob.current,
-        message: durableJob.message,
+        message: durableStatus.message,
         file_name: durableJob.fileName,
         chunk_count: durableJob.chunks?.length ?? 0,
         chunks: buildSignedMergeChunkDtos(c, durableJob.jobId, durableJob.chunks ?? [], 'inline'),
-        error: durableJob.errorMessage,
+        error: durableStatus.errorMessage,
         label_errors: durableJob.labelErrors,
+        stale: durableStatus.staleReason != null,
+        stale_reason: durableStatus.staleReason,
         // PS-194: the entries that actually merged — the FE Confirm-Printed
         // gate consumes this DTO field, never a session-only set.
         successful_entry_ids: durableJob.successfulEntryIds ?? [],
@@ -977,6 +987,8 @@ app.get('/print/status/:jobId', async (c) => {
     chunks: buildSignedMergeChunkDtos(c, job.jobId, job.chunks, 'inline'),
     error: job.errorMessage ?? null,
     label_errors: job.labelErrors ?? [],
+    stale: false,
+    stale_reason: null,
     // PS-194: see above — backend-owned Confirm-Printed evidence.
     successful_entry_ids: job.successfulEntryIds ?? [],
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
@@ -994,16 +1006,21 @@ app.get('/print/last', async (c) => {
   if (!durableJob || !(await canViewMergeSnapshot(durableJob, scope))) {
     return c.json({ job: null });
   }
+  const durableStatus = deriveMergeJobSnapshotStatus(durableJob, {
+    inMemoryJobPresent: getMergeJobStatus(durableJob.jobId) != null,
+  });
   return c.json({
     job: {
       job_id: durableJob.jobId,
-      status: durableJob.status,
+      status: durableStatus.status,
       file_name: durableJob.fileName,
       chunk_count: durableJob.chunks?.length ?? 0,
       chunks: buildSignedMergeChunkDtos(c, durableJob.jobId, durableJob.chunks ?? [], 'inline'),
       successful_entry_ids: durableJob.successfulEntryIds ?? [],
       created_at: durableJob.createdAt,
       persisted_at: durableJob.persistedAt,
+      stale: durableStatus.staleReason != null,
+      stale_reason: durableStatus.staleReason,
     },
   });
 });

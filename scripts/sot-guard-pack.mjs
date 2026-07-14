@@ -21,6 +21,7 @@ const REQUIRED_GUARDS = [
   'test:audit-pg-boss-inventory-outbox',
   'test:audit-runtime-schema-readiness',
   'test:audit-imported-handler-boundary',
+  'test:audit-print-queue-merge-durability',
 ];
 
 const npmCli = process.env.npm_execpath;

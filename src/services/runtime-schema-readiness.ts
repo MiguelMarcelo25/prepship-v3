@@ -17,6 +17,7 @@ const REQUIRED_RELATIONS = [
   'order_rate_jobs',
   'package_consumption_reviews',
   'print_queue_batch_job_items',
+  'print_queue_merge_jobs',
   'print_queue_merged_pdfs',
   'print_queue_pdf_chunks',
   'print_queue_send_jobs',
@@ -89,6 +90,7 @@ const REQUIRED_INDEXES = [
   'package_ledger_shipment_idx',
   'print_queue_batch_job_items_job_idx',
   'print_queue_batch_job_items_state_idx',
+  'print_queue_merge_jobs_updated_at_idx',
   'print_queue_send_jobs_updated_at_idx',
   'rate_browse_job_provider_statuses_status_idx',
   'rate_browse_jobs_order_updated_idx',
@@ -212,7 +214,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0062_runtime_schema_ownership.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0064_print_queue_merge_jobs.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

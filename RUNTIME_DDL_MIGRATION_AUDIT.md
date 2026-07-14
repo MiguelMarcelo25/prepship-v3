@@ -39,6 +39,8 @@ creating or altering schema.
   created on first use: direct-carrier cache, durable rate limiter, billing waiver
   and manual override stores, label purchase locks/intents, print queue job/PDF
   stores, Rate Browser jobs, and worker status events.
+- `drizzle/0064_print_queue_merge_jobs.sql`: per-job PDF-merge metadata and its
+  updated-at lookup index.
 
 `src/services/rate-browse-job-store.ts` now reads/writes migration-owned
 `rate_browse_jobs` and `rate_browse_job_provider_statuses`; no rate request creates
@@ -46,14 +48,18 @@ them.
 
 ## Safety
 
-Migration `0062` is additive: no `UPDATE`, `DELETE`, table/column drop, or
+Migrations `0062` and `0064` are additive: no `UPDATE`, `DELETE`, table/column drop, or
 `ALTER TABLE orders/shipments`. Existing shipped/cancelled guards, label purchase
 locks/intents, finalized-billing triggers, rate authority, and inventory idempotency
 remain unchanged. The 2026-07-14 user override covers migration-readiness changes
 near label/shipment workflows; no data migration or provider action is part of this
 patch.
 
-Deploy order is mandatory: apply migrations through `0062`, then deploy API/worker.
+Credential cutover migration `0063` is documented separately in
+`IMPORTED_HANDLERS_BOUNDARY_AUDIT.md`; the Audit 3.5 migration `0064` contains
+schema-only merge metadata.
+
+Deploy order is mandatory: apply migrations through `0064`, then deploy API/worker.
 Rollback reverts application code only; do not drop additive sidecars.
 
 ## Guard and Proof

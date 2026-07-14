@@ -50,6 +50,7 @@ import {
   getMergedPdfChunks,
   persistMergedPdfChunk,
   cleanupOldMergedPdfs,
+  durablePrintQueuePdfEnabled,
   type MergedPdfChunkMetadata,
 } from './print-queue-pdf-store';
 import { type QueueSendStatusName } from './print-queue/queue-send-status';
@@ -65,6 +66,11 @@ import {
   type QueueSendJobItemInput,
   type QueueSendJobItemState,
 } from './print-queue/queue-send-job-store';
+import {
+  getLatestMergeJobRecord,
+  getMergeJobRecord,
+  persistMergeJobRecord,
+} from './print-queue/merge-job-store';
 // Per user override unlock shipped data on 2026-06-30: durable batch-send
 // snapshots now delegate to a focused backend module that preserves every
 // per-order result, so long queue runs remain auditable after worker fallback.
@@ -169,6 +175,7 @@ export type MergeJob = {
   // entry that sits inside a pending/running merge job.
   entryIds: string[];
   createdAt: number;
+  updatedAt: number;
 };
 
 type QueueSendCarrierLabelInput = Omit<CreateLabelInputDto, 'orderId' | 'orderNumber'> & {
@@ -498,6 +505,7 @@ function mergeChunkFromMetadata(chunk: MergedPdfChunkMetadata): MergeJobChunk {
 }
 
 function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
+  job.updatedAt = Math.max(Date.now(), job.updatedAt + 1);
   return {
     version: 1,
     durableKey: PRINT_QUEUE_MERGE_STATUS_KEY,
@@ -517,7 +525,7 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
     // snapshot is what lets Confirm-Printed survive a page refresh.
     successfulEntryIds: (job.successfulEntryIds ?? []).slice(0, 5000),
     createdAt: new Date(job.createdAt).toISOString(),
-    persistedAt: new Date().toISOString(),
+    persistedAt: new Date(job.updatedAt).toISOString(),
   };
 }
 
@@ -621,9 +629,27 @@ export async function getQueueSendJobSnapshot(jobId: string): Promise<QueueSendJ
   }
 }
 
-export async function persistMergeJobSnapshot(job: MergeJob): Promise<void> {
+// Per user override unlock shipped data on 2026-07-14: PDF-merge durability
+// stores job/artifact metadata only; it does not create labels or mutate orders,
+// shipments, postage, marketplace state, or the shipped/cancelled lock policy.
+export async function persistMergeJobSnapshot(
+  job: MergeJob,
+  options: { required?: boolean; persistLegacy?: boolean } = {},
+): Promise<void> {
+  const snapshot = toMergeSnapshot(job);
   try {
-    const value = JSON.stringify(toMergeSnapshot(job));
+    await persistMergeJobRecord(snapshot);
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to persist per-job PDF-merge status:',
+      err instanceof Error ? err.message : err,
+    );
+    if (options.required) throw new PrintQueueDurableStatusError();
+  }
+
+  if (options.persistLegacy === false) return;
+  try {
+    const value = JSON.stringify(snapshot);
     await db
       .insert(settings)
       .values({ key: PRINT_QUEUE_MERGE_STATUS_KEY, value })
@@ -660,7 +686,7 @@ export async function getLatestQueueSendJobSnapshot(): Promise<QueueSendJobSnaps
   }
 }
 
-export async function getLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | null> {
+async function getLegacyLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | null> {
   try {
     const [row] = await db
       .select({ value: settings.value })
@@ -676,6 +702,19 @@ export async function getLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | nu
     );
     return null;
   }
+}
+
+export async function getLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | null> {
+  const durableJob = await getLatestMergeJobRecord();
+  return durableJob ?? getLegacyLatestMergeJobSnapshot();
+}
+
+export async function getMergeJobSnapshot(jobId: string): Promise<MergeJobSnapshot | null> {
+  const durableJob = await getMergeJobRecord(jobId);
+  if (durableJob) return durableJob;
+
+  const legacyLatest = await getLegacyLatestMergeJobSnapshot();
+  return legacyLatest?.jobId === jobId ? legacyLatest : null;
 }
 
 const QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS = {
@@ -1933,11 +1972,22 @@ export async function startPrintJob(input: {
     chunks: [],
     successfulEntryIds: [],
     entryIds: entries.map((entry) => entry.id),
+    updatedAt: Date.now(),
   };
   mergeJobs.set(jobId, job);
 
-  void persistMergeJobSnapshot(job);
-  void runMergeJob(jobId, entries, input.mergeHeaders !== false, input.requestOrigin);
+  try {
+    await persistMergeJobSnapshot(job, { required: true });
+  } catch (err) {
+    mergeJobs.delete(jobId);
+    throw err;
+  }
+  void runMergeJob(jobId, entries, input.mergeHeaders !== false, input.requestOrigin).catch((err) => {
+    console.error(
+      `[print-queue] merge job ${jobId} failed after status persistence:`,
+      err instanceof Error ? err.message : err,
+    );
+  });
   return { jobId, total: entries.length };
 }
 
@@ -1967,8 +2017,8 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
 
   // In-memory miss (or done-without-bytes). Only attempt a durable rehydrate when the durable
   // snapshot confirms THIS job completed â€” otherwise leave the caller's miss as-is.
-  const snapshot = await getLatestMergeJobSnapshot();
-  if (!snapshot || snapshot.jobId !== jobId || snapshot.status !== 'done') {
+  const snapshot = await getMergeJobSnapshot(jobId);
+  if (!snapshot || snapshot.status !== 'done') {
     return inMemory;
   }
 
@@ -2013,6 +2063,7 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
       successfulEntryIds: snapshot.successfulEntryIds ?? doneChunks.flatMap((chunk) => chunk.successfulEntryIds),
       entryIds: chunks.flatMap((chunk) => chunk.entryIds),
       createdAt: Date.parse(snapshot.createdAt) || Date.now(),
+      updatedAt: Date.parse(snapshot.persistedAt) || Date.now(),
     };
   }
 
@@ -2035,6 +2086,7 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
     successfulEntryIds: snapshot.successfulEntryIds ?? [],
     entryIds: [],
     createdAt: Date.parse(snapshot.createdAt) || Date.now(),
+    updatedAt: Date.parse(snapshot.persistedAt) || Date.now(),
   };
 }
 
@@ -2134,10 +2186,9 @@ async function runMergeJob(
 ) {
   const job = mergeJobs.get(jobId)!;
   job.status = 'running';
-  void persistMergeJobSnapshot(job);
   job.message = 'Initializing PDF merge...';
-
   try {
+    await persistMergeJobSnapshot(job, { required: true });
     const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
     const sorted = [...entries].sort((a, b) =>
       (a.skuGroupId ?? '').localeCompare(b.skuGroupId ?? '')
@@ -2218,7 +2269,7 @@ async function runMergeJob(
       if (context.document.getPageCount() === 0 || context.chunk.successfulEntryIds.length === 0) {
         context.chunk.status = 'error';
         context.chunk.errorMessage = 'No labels merged in this PDF chunk.';
-        await persistMergeJobSnapshot(job);
+        await persistMergeJobSnapshot(job, { required: true });
         return false;
       }
 
@@ -2228,8 +2279,7 @@ async function runMergeJob(
       context.chunk.mergedPdfBase64 = base64;
       context.chunk.fileSize = bytes.byteLength;
       context.chunk.status = 'done';
-      await persistMergeJobSnapshot(job);
-      void persistMergedPdfChunk({
+      const durableChunk = await persistMergedPdfChunk({
         jobId,
         chunkNumber: context.chunk.chunkNumber,
         fileName: context.chunk.fileName ?? null,
@@ -2238,6 +2288,12 @@ async function runMergeJob(
         successfulEntryIds: context.chunk.successfulEntryIds,
         base64,
       });
+      if (durablePrintQueuePdfEnabled() && !durableChunk) {
+        throw new PrintQueueDurableStatusError(
+          'The merged PDF chunk could not be saved durably. Please retry the merge.',
+        );
+      }
+      await persistMergeJobSnapshot(job, { required: true });
       return true;
     };
 
@@ -2407,23 +2463,24 @@ async function runMergeJob(
 
     const failed = failedEntryIds.size;
     const success = successfulEntryIds.length;
-    job.status = 'done';
-    job.progress = 100;
-    job.current = success;
-    job.message =
+    const doneMessage =
       failed > 0
         ? `Done - ${success} merged in ${doneChunks.length} PDF chunk${doneChunks.length === 1 ? '' : 's'} (${failed} failed - re-create those labels and re-queue).`
         : `Done - ${success} label${success === 1 ? '' : 's'} merged in ${doneChunks.length} PDF chunk${doneChunks.length === 1 ? '' : 's'}.`;
-    await persistMergeJobSnapshot(job);
 
     if (job.mergedPdfBase64) {
-      void persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
+      await persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
     }
+    job.status = 'done';
+    job.progress = 100;
+    job.current = success;
+    job.message = doneMessage;
+    await persistMergeJobSnapshot(job, { required: true });
   } catch (err) {
     job.status = 'error';
     job.errorMessage = (err as Error).message;
     job.message = `Error: ${job.errorMessage}`;
-    await persistMergeJobSnapshot(job);
+    await persistMergeJobSnapshot(job, { required: true });
   }
 }
 
