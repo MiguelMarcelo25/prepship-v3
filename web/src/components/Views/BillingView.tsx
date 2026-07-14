@@ -1,4 +1,10 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+// FE-2 (audit 2.2 slice 2): every billing GET now flows through React Query
+// (['billing', ...] keys) so remounts within staleTime paint from cache with
+// zero refetches. Mutations stay imperative and invalidate the same keys the
+// old code refetched manually — useQueryClient exists for those invalidations
+// and for the local cache patches that replace setConfigs/setSavedPackagePrices.
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ListFilter, Loader2, Pencil, SlidersHorizontal } from 'lucide-react'
 import { apiClient } from '../../api/client'
 // PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
@@ -123,6 +129,20 @@ const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummaryDto = {
   marginTotal: 0,
   marginPct: null,
 }
+
+// FE-2 (audit 2.2 slice 2): billing GET data now lives in the React Query cache
+// (keyed under ['billing', ...]) instead of per-mount useState, so navigating
+// away and back re-renders the cached DTOs instantly instead of refiring the
+// billing endpoints. These module-level empty fallbacks keep referential
+// identity stable across renders while a query has no data yet (memo deps
+// depend on it). They are read-only — every consumer treats them as immutable.
+const EMPTY_BILLING_CONFIGS: BillingConfigDto[] = []
+const EMPTY_PACKAGES: PackageDto[] = []
+const EMPTY_BILLING_PACKAGE_PRICES: BillingPackagePriceDto[] = []
+const EMPTY_BILLING_SUMMARY_ROWS: BillingSummaryDto[] = []
+const EMPTY_BILLING_DETAIL_ROWS: BillingDetailDto[] = []
+const EMPTY_SHIPPING_MARGIN_CARRIERS: ShippingMarginCarrierDto[] = []
+const EMPTY_SHIPPING_MARGIN_ROWS: ShippingMarginRowDto[] = []
 
 const SUMMARY_COL_COUNT = 8
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
@@ -280,15 +300,12 @@ export default function BillingView() {
   const fetchRefPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const billingUpdateRunningRef = useRef(false)
 
-  const [configs, setConfigs] = useState<BillingConfigDto[]>([])
+  // FE-2 (audit 2.2 slice 2): configs/packages/saved prices/summary/margin/detail
+  // rows are React Query data now (derived consts below the drag handlers). Only
+  // operator-editable drafts and UI intent remain as useState.
   const [configDrafts, setConfigDrafts] = useState<Record<number, BillingConfigDraft>>({})
-  const [configsLoading, setConfigsLoading] = useState(true)
-  const [packages, setPackages] = useState<PackageDto[]>([])
   const [selectedPkgClientId, setSelectedPkgClientId] = useState('')
-  const [savedPackagePrices, setSavedPackagePrices] = useState<BillingPackagePriceDto[]>([])
   const [packagePriceDrafts, setPackagePriceDrafts] = useState<Record<number, string>>({})
-  const [packagePricingLoading, setPackagePricingLoading] = useState(false)
-  const [packagePricingError, setPackagePricingError] = useState<string | null>(null)
   const [activePreset, setActivePreset] = useState<BillingPresetId | null>('last_30')
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
@@ -301,35 +318,26 @@ export default function BillingView() {
   const [detailColumnsAnchorEl, setDetailColumnsAnchorEl] = useState<HTMLElement | null>(null)
   // Regenerate Range confirmation — a styled modal instead of the native browser confirm().
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
-  const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
   const [summarySort, setSummarySort] = useState<SortState<string>>(null)
   const [detailSort, setDetailSort] = useState<SortState<BillingDetailColumnId>>(null)
   const [summaryPage, setSummaryPage] = useState(1)
   const [summaryPageSize, setSummaryPageSize] = useState(25)
-  const [summaryLoading, setSummaryLoading] = useState(true)
-  const [summaryError, setSummaryError] = useState<string | null>(null)
-  const [shippingMarginSummary, setShippingMarginSummary] = useState<ShippingMarginSummaryDto>(EMPTY_SHIPPING_MARGIN_SUMMARY)
-  const [shippingMarginLoading, setShippingMarginLoading] = useState(false)
-  const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
-  // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]).
-  const [shippingMarginCarriers, setShippingMarginCarriers] = useState<ShippingMarginCarrierDto[]>([])
-  // PS-296 (FE, req6): per-shipment reconciliation rows (backend analytics.rows[]), collapsed by default.
-  const [shippingMarginRows, setShippingMarginRows] = useState<ShippingMarginRowDto[]>([])
   const [shippingMarginDrilldownOpen, setShippingMarginDrilldownOpen] = useState(false)
   const [generateLoading, setGenerateLoading] = useState(false)
   const [generateStatus, setGenerateStatus] = useState('')
   const [fetchRefRunning, setFetchRefRunning] = useState(false)
   const [fetchRefStatus, setFetchRefStatus] = useState('')
   const [backfillLoading, setBackfillLoading] = useState(false)
-  const [detailState, setDetailState] = useState<BillingDetailState>({
+  // FE-2 (audit 2.2 slice 2): which client's line-items panel is open is pure UI
+  // intent; the panel's rows/loading/error now come from the ['billing','details']
+  // query (see detailQuery below) and are assembled into detailStateForView for
+  // the child components that consume the old six-field shape.
+  const [detailState, setDetailState] = useState<{ open: boolean; clientId: number | null; clientName: string }>({
     open: false,
-    loading: false,
     clientId: null,
     clientName: '',
-    rows: [],
-    error: null,
   })
   const [detailPage, setDetailPage] = useState(1)
   const [detailPageSize, setDetailPageSize] = useState(50)
@@ -342,9 +350,6 @@ export default function BillingView() {
   // from the edit-modal save state so the review action does not entangle with
   // the line-item save. Additive — only used when shippingZeroNeedsReview.
   const [zeroShippingReviewSaving, setZeroShippingReviewSaving] = useState(false)
-  // PS — client package prices (packageId -> charge) for the open detail
-  // client, used to auto-fill Box Cost when the operator changes the Box Size.
-  const [billingEditPackagePrices, setBillingEditPackagePrices] = useState<Record<number, number>>({})
   const [detailColumnIds, setDetailColumnIds] = useState<BillingDetailColumnId[]>(() => {
     if (typeof window === 'undefined') return readBillingDetailColumnIds()
     return readBillingDetailColumnIds(window.localStorage)
@@ -389,6 +394,117 @@ export default function BillingView() {
     setDragOverColumnId(null)
   }
 
+  // ── FE-2 (audit 2.2 slice 2): billing GETs as React Query hooks ────────────
+  // Every queryFn calls the SAME apiClient method the old imperative loaders
+  // used, with byte-identical params, so the adapter-level cachedSafe TTLs and
+  // the mutation clearCachedReads() semantics are unchanged. What changed is the
+  // component layer: remounts within the 5-minute staleTime paint from the query
+  // cache with zero requests, and mutations invalidate the matching ['billing',…]
+  // key prefixes instead of manually refetching + setState. PS-316 holds — the
+  // backend DTOs render verbatim through derived consts; no billing money is
+  // computed in the FE.
+  const queryClient = useQueryClient()
+
+  // Same atomic pair the old loadConfigs effect fetched: packages ride along
+  // (non-fatal .catch → []) so the config table and Box Size dropdown appear
+  // together, exactly like before.
+  const billingConfigsQuery = useQuery({
+    queryKey: ['billing', 'configs'],
+    queryFn: async () => {
+      const [nextConfigs, nextPackages] = await Promise.all([
+        apiClient.fetchBillingConfigs(),
+        apiClient.fetchPackages().catch(() => [] as PackageDto[]),
+      ])
+      return { configs: nextConfigs as BillingConfigDto[], packages: nextPackages as PackageDto[] }
+    },
+  })
+  const configs = billingConfigsQuery.data?.configs ?? EMPTY_BILLING_CONFIGS
+  const packages = billingConfigsQuery.data?.packages ?? EMPTY_PACKAGES
+  const configsLoading = billingConfigsQuery.isPending
+
+  // Config drafts are operator-editable useState seeded from the loaded configs —
+  // the same seeding the old loadConfigs success handler did. The ref makes the
+  // seed once-per-mount so a same-mount cache patch (setQueryData after a config
+  // save) never clobbers in-progress operator edits; a remount re-seeds from the
+  // cached configs instantly.
+  const configDraftsSeededRef = useRef(false)
+  useEffect(() => {
+    const data = billingConfigsQuery.data
+    if (!data || configDraftsSeededRef.current) return
+    configDraftsSeededRef.current = true
+    setConfigDrafts(createBillingConfigDraftMap(data.configs))
+    setSelectedPkgClientId((current) => {
+      if (current && data.configs.some((config) => String(config.clientId) === current)) return current
+      return data.configs.length > 0 ? String(data.configs[0]!.clientId) : ''
+    })
+  }, [billingConfigsQuery.data])
+  // Same error toast the old loadConfigs catch showed (fires once per failure).
+  useEffect(() => {
+    if (!billingConfigsQuery.isError) return
+    const error = billingConfigsQuery.error
+    toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load billing config', 'error')
+  }, [billingConfigsQuery.isError, billingConfigsQuery.error, toastContext])
+
+  // Package pricing for the client picked in the pricing table.
+  const packagePricesQuery = useQuery<BillingPackagePriceDto[]>({
+    queryKey: ['billing', 'package-prices', selectedPkgClientId ? Number(selectedPkgClientId) : null],
+    enabled: Boolean(selectedPkgClientId),
+    queryFn: () => apiClient.fetchBillingPackagePrices(Number(selectedPkgClientId)),
+  })
+  const savedPackagePrices = packagePricesQuery.data ?? EMPTY_BILLING_PACKAGE_PRICES
+  const packagePricingLoading = Boolean(selectedPkgClientId) && packagePricesQuery.isPending
+  const packagePricingError = packagePricesQuery.isError
+    ? (packagePricesQuery.error instanceof Error ? packagePricesQuery.error.message : 'Failed to load package prices')
+    : null
+
+  // Price drafts are operator-editable useState seeded per client from the saved
+  // rows — the same reset the old loadPackagePrices success/error handler did on
+  // every client switch. The ref keys the seed by client so a same-client cache
+  // patch (setQueryData after Save Prices) keeps the operator's draft strings.
+  const packagePriceDraftsSeededForRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedPkgClientId) return
+    if (packagePricesQuery.isError) {
+      if (packagePriceDraftsSeededForRef.current !== `error:${selectedPkgClientId}`) {
+        packagePriceDraftsSeededForRef.current = `error:${selectedPkgClientId}`
+        setPackagePriceDrafts({})
+      }
+      return
+    }
+    const rows = packagePricesQuery.data
+    if (!rows || packagePriceDraftsSeededForRef.current === selectedPkgClientId) return
+    packagePriceDraftsSeededForRef.current = selectedPkgClientId
+    const nextRows = buildBillingPackagePriceRows(rows)
+    setPackagePriceDrafts(Object.fromEntries(nextRows.map((row) => [row.packageId, (Number(row.charge) || 0).toFixed(2)])))
+  }, [selectedPkgClientId, packagePricesQuery.data, packagePricesQuery.isError])
+
+  // PS — client package prices (packageId -> charge) for the open detail client,
+  // used to auto-fill Box Cost when the operator changes the Box Size. Shares the
+  // ['billing','package-prices', clientId] key with the pricing table above, so a
+  // price save there is immediately visible here. Fetch fires when the edit modal
+  // opens (the old handleOpenBillingEdit fetch), served from cache within staleTime.
+  const billingEditPricesClientId = billingEditModal && detailState.clientId != null ? Number(detailState.clientId) : null
+  const billingEditPackagePricesQuery = useQuery<BillingPackagePriceDto[]>({
+    queryKey: ['billing', 'package-prices', billingEditPricesClientId],
+    enabled: billingEditPricesClientId != null,
+    queryFn: async () => {
+      // Defensive: enabled above guarantees a client id when this runs.
+      if (billingEditPricesClientId == null) return EMPTY_BILLING_PACKAGE_PRICES
+      return apiClient.fetchBillingPackagePrices(billingEditPricesClientId)
+    },
+  })
+  // Same map the old .then handler built; a load failure leaves it empty exactly
+  // like the old .catch(() => setBillingEditPackagePrices({})) did.
+  const billingEditPackagePrices = useMemo(() => {
+    const map: Record<number, number> = {}
+    for (const p of billingEditPackagePricesQuery.data ?? []) {
+      const pid = Number(p.packageId ?? p.package_id)
+      const price = Number(p.price ?? p.charge)
+      if (Number.isFinite(pid) && Number.isFinite(price)) map[pid] = price
+    }
+    return map
+  }, [billingEditPackagePricesQuery.data])
+
   const packagePricingRows = useMemo(
     () => buildBillingPackagePriceRows(savedPackagePrices, packagePriceDrafts),
     [savedPackagePrices, packagePriceDrafts],
@@ -411,6 +527,80 @@ export default function BillingView() {
     () => (billingClientFilterActive ? selectedBillingClientIds : undefined),
     [billingClientFilterActive, selectedBillingClientIds],
   )
+
+  // ── Summary + shipping-margin queries ──────────────────────────────────────
+  // The old loadSummary effect fired these two requests in one Promise.all on
+  // every from/to/filter change; they stay two parallel requests, now as two
+  // stable-keyed queries so each panel's error reflects its own request and so
+  // mutation invalidation can match the exact per-endpoint refresh sets the old
+  // handlers refetched (bulk box-cost refreshes summary but NOT margin).
+  const billingRangeReady = Boolean(from && to)
+  const summaryQuery = useQuery<BillingSummaryDto[]>({
+    queryKey: ['billing', 'summary', from, to, billingClientQueryIds ?? null],
+    enabled: billingRangeReady,
+    queryFn: () => apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
+  })
+  const summaryRows = summaryQuery.data ?? EMPTY_BILLING_SUMMARY_ROWS
+  const summaryLoading = summaryQuery.isPending
+  // Same message rule the old catch used. Only surfaced when there is no data to
+  // show (first load of this key): the old code never blanked already-rendered
+  // rows on a post-mutation refetch failure — those paths toast instead.
+  const summaryError = summaryQuery.isError && summaryQuery.data === undefined
+    ? (summaryQuery.error instanceof Error ? summaryQuery.error.message : 'Error loading summary')
+    : null
+
+  const shippingMarginQuery = useQuery({
+    queryKey: ['billing', 'shipping-margin', from, to, billingClientQueryIds ?? null],
+    enabled: billingRangeReady,
+    queryFn: () => apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
+  })
+  const shippingMarginSummary: ShippingMarginSummaryDto = shippingMarginQuery.data?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY
+  // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]),
+  // read via a typed derived const (was a useState setter before FE-2); no data → EMPTY.
+  const shippingMarginCarriers: ShippingMarginCarrierDto[] = shippingMarginQuery.data?.carriers ?? EMPTY_SHIPPING_MARGIN_CARRIERS
+  // PS-296 (FE, req6): per-shipment reconciliation rows (backend analytics.rows[]), collapsed by default.
+  const shippingMarginRows = (shippingMarginQuery.data?.rows ?? EMPTY_SHIPPING_MARGIN_ROWS) as ShippingMarginRowDto[]
+  const shippingMarginLoading = shippingMarginQuery.isPending
+  const shippingMarginError = shippingMarginQuery.isError && shippingMarginQuery.data === undefined
+    ? (shippingMarginQuery.error instanceof Error ? shippingMarginQuery.error.message : 'Error loading shipping margin')
+    : null
+
+  // ── Detail (line items) query for the open client ──────────────────────────
+  // PS-069/PS-362: key includes the open client + range, so switching clients or
+  // dates re-keys the query (the old [from, to] effect refired the fetch and
+  // handleLoadDetails did the per-client fetch). `enabled` gates fetching to an
+  // actually-open panel; re-opening a cached client within staleTime paints
+  // instantly with zero requests, and a mutation invalidation marks every cached
+  // client stale so the next open refetches — the old always-fetch-fresh result.
+  const detailQuery = useQuery<BillingDetailDto[]>({
+    queryKey: ['billing', 'details', from, to, detailState.clientId],
+    enabled: billingRangeReady && detailState.open && detailState.clientId != null,
+    queryFn: async () => {
+      // Defensive: enabled above guarantees an open client when this runs (the
+      // null check also narrows the type for the call below).
+      if (detailState.clientId == null) return EMPTY_BILLING_DETAIL_ROWS
+      return apiClient.fetchBillingDetails(from, to, detailState.clientId)
+    },
+  })
+  const detailRows = detailQuery.data ?? EMPTY_BILLING_DETAIL_ROWS
+  const detailLoading = detailState.open && detailState.clientId != null && detailQuery.isPending
+  // Same message rule the old handleLoadDetails catch used. NOT gated on missing
+  // data: a failed details refetch must surface in the panel —
+  // classifyBillingDetailPanel puts hasError before rows (PS-069's honesty rule).
+  const detailError = detailQuery.isError
+    ? (detailQuery.error instanceof Error ? detailQuery.error.message : 'Error loading details')
+    : null
+  // The child tables consume the same {open, loading, clientId, clientName, rows,
+  // error} shape the old useState held — assembled from UI intent + query state.
+  const detailStateForView: BillingDetailState = useMemo(() => ({
+    open: detailState.open,
+    loading: detailLoading,
+    clientId: detailState.clientId,
+    clientName: detailState.clientName,
+    rows: detailRows,
+    error: detailError,
+  }), [detailState.open, detailState.clientId, detailState.clientName, detailLoading, detailRows, detailError])
+
   const filteredSummaryRows = useMemo(() => {
     if (!billingClientFilterActive) return summaryRows
     return summaryRows.filter((row) => selectedBillingClientIdSet.has(Number(row.clientId)))
@@ -469,9 +659,9 @@ export default function BillingView() {
     selectedDetailSummary?.fulfillmentFeeTotal ?? selectedDetailSummary?.grandTotal ?? selectedDetailSummary?.total ?? 0,
   )
   const detailPanelState = classifyBillingDetailPanel({
-    loading: detailState.loading,
-    hasError: Boolean(detailState.error),
-    rowCount: detailState.rows.length,
+    loading: detailLoading,
+    hasError: Boolean(detailError),
+    rowCount: detailRows.length,
     summaryOrders: selectedSummaryOrders,
     summaryTotal: selectedSummaryTotal,
   })
@@ -482,11 +672,11 @@ export default function BillingView() {
   // React renders the DTO instead of collapsing raw billing fee lines.
   const mergedDetailRows = useMemo(
     () => {
-      const merged = detailState.rows
+      const merged = detailRows
       // Back-compat for old cached raw-line payloads. Fresh PS-362 payloads
       // already carry this backend-owned order-level flag.
       const zeroReviewByOrderId = new Map<unknown, boolean>()
-      for (const raw of detailState.rows) {
+      for (const raw of detailRows) {
         const oid = (raw as { orderId?: unknown }).orderId
         if (oid == null || oid === '') continue
         if ((raw as { shippingZeroNeedsReview?: unknown }).shippingZeroNeedsReview === true) {
@@ -501,7 +691,7 @@ export default function BillingView() {
           : row
       })
     },
-    [detailState.rows],
+    [detailRows],
   )
   const sortedDetailRows = useMemo(() => sortRows(
     mergedDetailRows,
@@ -688,163 +878,17 @@ export default function BillingView() {
     setBillingClientFilter([])
   }
 
-  useEffect(() => {
-    let active = true
-
-    const loadConfigs = async () => {
-      setConfigsLoading(true)
-
-      try {
-        const [nextConfigs, nextPackages] = await Promise.all([
-          apiClient.fetchBillingConfigs(),
-          apiClient.fetchPackages().catch(() => [] as PackageDto[]),
-        ])
-
-        if (!active) return
-
-        setConfigs(nextConfigs)
-        setConfigDrafts(createBillingConfigDraftMap(nextConfigs))
-        setPackages(nextPackages)
-
-        setSelectedPkgClientId((current) => {
-          if (current && nextConfigs.some((config) => String(config.clientId) === current)) return current
-          return nextConfigs.length > 0 ? String(nextConfigs[0]!.clientId) : ''
-        })
-      } catch (error) {
-        if (!active) return
-        toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load billing config', 'error')
-      } finally {
-        if (active) setConfigsLoading(false)
-      }
-    }
-
-    void loadConfigs()
-
-    return () => {
-      active = false
-    }
-  }, [toastContext])
-
-  useEffect(() => {
-    if (!selectedPkgClientId) return
-
-    let active = true
-
-    const loadPackagePrices = async () => {
-      setPackagePricingLoading(true)
-      setPackagePricingError(null)
-
-      try {
-        const rows = await apiClient.fetchBillingPackagePrices(Number(selectedPkgClientId))
-        if (!active) return
-
-        setSavedPackagePrices(rows)
-        const nextRows = buildBillingPackagePriceRows(rows)
-        setPackagePriceDrafts(Object.fromEntries(nextRows.map((row) => [row.packageId, (Number(row.charge) || 0).toFixed(2)])))
-      } catch (error) {
-        if (!active) return
-        setSavedPackagePrices([])
-        setPackagePriceDrafts({})
-        setPackagePricingError(error instanceof Error ? error.message : 'Failed to load package prices')
-      } finally {
-        if (active) setPackagePricingLoading(false)
-      }
-    }
-
-    void loadPackagePrices()
-
-    return () => {
-      active = false
-    }
-  }, [selectedPkgClientId])
-
-  useEffect(() => {
-    if (!from || !to) return
-
-    let active = true
-
-    const loadSummary = async () => {
-      setSummaryLoading(true)
-      setSummaryError(null)
-      setShippingMarginLoading(true)
-      setShippingMarginError(null)
-
-      try {
-        const [rows, marginAnalytics] = await Promise.all([
-          apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
-          apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
-        ])
-        if (!active) return
-        setSummaryRows(rows)
-        setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
-        setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
-        setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
-      } catch (error) {
-        if (!active) return
-        setSummaryRows([])
-        setShippingMarginSummary(EMPTY_SHIPPING_MARGIN_SUMMARY)
-        setShippingMarginCarriers([])
-        setShippingMarginRows([])
-        setSummaryError(error instanceof Error ? error.message : 'Error loading summary')
-        setShippingMarginError(error instanceof Error ? error.message : 'Error loading shipping margin')
-      } finally {
-        if (active) {
-          setSummaryLoading(false)
-          setShippingMarginLoading(false)
-        }
-      }
-    }
-
-    void loadSummary()
-
-    return () => {
-      active = false
-    }
-  }, [from, to, billingClientQueryIds])
-
+  // FE-2 (audit 2.2 slice 2): the config/package-price/summary/margin/detail
+  // loads that used to live in effects here are React Query hooks above. This
+  // effect keeps the one piece of the old [from, to] detail effect that was not
+  // a fetch: resetting the detail pager when the operator changes the date
+  // filter while a client is open (the reload itself now happens because the
+  // date is part of the ['billing','details'] query key).
   useEffect(() => {
     if (!from || !to || !detailState.open || detailState.clientId == null) return
-
-    let active = true
-    const clientId = detailState.clientId
-    const clientName = detailState.clientName
-
     setDetailPage(1)
-    setDetailState((current) => (
-      current.open && current.clientId === clientId
-        ? { ...current, loading: true, rows: [], error: null }
-        : current
-    ))
-
-    void apiClient.fetchBillingDetails(from, to, clientId)
-      .then((rows) => {
-        if (!active) return
-        setDetailState({
-          open: true,
-          loading: false,
-          clientId,
-          clientName,
-          rows,
-          error: null,
-        })
-      })
-      .catch((error) => {
-        if (!active) return
-        setDetailState({
-          open: true,
-          loading: false,
-          clientId,
-          clientName,
-          rows: [],
-          error: error instanceof Error ? error.message : 'Error loading details',
-        })
-      })
-
-    return () => {
-      active = false
-    }
-  // Reload the open detail table only when the operator changes the date filter.
-  // Opening a new client still goes through handleLoadDetails to avoid duplicate fetches.
+  // Only when the operator changes the date filter — opening a client resets the
+  // pager in handleLoadDetails.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to])
 
@@ -854,10 +898,21 @@ export default function BillingView() {
 
     try {
       await apiClient.updateBillingConfig(clientId, buildBillingConfigInput(draft))
-      setConfigs((current) => current.map((config) => config.clientId === clientId ? {
-        ...config,
-        ...buildBillingConfigInput(draft),
-      } : config))
+      // Same zero-request local patch the old setConfigs applied, now on the
+      // ['billing','configs'] cache entry (the PATCH already cleared the adapter's
+      // cachedSafe config entry, so the next real fetch is fresh).
+      queryClient.setQueryData<{ configs: BillingConfigDto[]; packages: PackageDto[] }>(
+        ['billing', 'configs'],
+        (current) => current
+          ? {
+              ...current,
+              configs: current.configs.map((config) => config.clientId === clientId ? {
+                ...config,
+                ...buildBillingConfigInput(draft),
+              } : config),
+            }
+          : current,
+      )
       toastContext?.addToast('✅ Config saved', 'success')
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to save config', 'error')
@@ -871,11 +926,20 @@ export default function BillingView() {
       const result = await apiClient.setClientHouseAccount(clientId, enabled)
       const shippingMarginPolicyMode =
         result?.shippingMarginPolicyMode ?? (enabled ? 'next_best_customer_rate' : 'pass_through')
-      setConfigs((current) => current.map((config) => config.clientId === clientId ? {
-        ...config,
-        houseAccountEnabled: enabled,
-        shippingMarginPolicyMode,
-      } : config))
+      // Same zero-request local patch the old setConfigs applied (see handleSaveConfig).
+      queryClient.setQueryData<{ configs: BillingConfigDto[]; packages: PackageDto[] }>(
+        ['billing', 'configs'],
+        (current) => current
+          ? {
+              ...current,
+              configs: current.configs.map((config) => config.clientId === clientId ? {
+                ...config,
+                houseAccountEnabled: enabled,
+                shippingMarginPolicyMode,
+              } : config),
+            }
+          : current,
+      )
       toastContext?.addToast(enabled ? '✅ Margin mode enabled' : 'Margin mode disabled', 'success')
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update margin mode', 'error')
@@ -1021,28 +1085,36 @@ export default function BillingView() {
         }
       }
 
-      const [rows, marginAnalytics] = await Promise.all([
-        apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
-        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
+      // FE-2 (audit 2.2 slice 2): post-generate freshness via key invalidation —
+      // the active summary/margin queries refetch immediately, which is the same
+      // two requests the old manual Promise.all fired (generateBilling already
+      // cleared the adapter-level cachedSafe entries). throwOnError preserves the
+      // old semantics: a failed refresh rejects into the catch below and toasts.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
       ])
+      const rows = queryClient.getQueryData<BillingSummaryDto[]>(['billing', 'summary', from, to, billingClientQueryIds ?? null]) ?? []
       const rowsForStatus = targetClientIds.length > 0
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
       const finalizedStatus = finalizedGroupSkipped > 0 ? ` · ${finalizedNote} unchanged` : ''
       setStatus(`${generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`}${finalizedStatus}`)
-      setSummaryRows(rows)
-      setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
-      setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
-      setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
-      setShippingMarginError(null)
-      setSummaryError(null)
+      // Generated line items make every cached details payload stale. The open
+      // panel's active query refetches now (awaited, errors staying panel-local
+      // exactly like the old handleLoadDetails catch); cached clients refetch
+      // when next opened — the old always-fetch-fresh-on-open result.
+      await queryClient.invalidateQueries({ queryKey: ['billing', 'details'] })
       const detailTarget =
         detailState.open && detailState.clientId
           ? rowsForStatus.find((row) => row.clientId === detailState.clientId)
           : rowsForStatus.find((row) => (row.orderCount || 0) > 0 || (row.grandTotal || row.total || 0) > 0)
       if (detailTarget) {
-        await handleLoadDetails(detailTarget.clientId, detailTarget.clientName)
+        // ?? '' — the summary DTO's clientName is nullable; the old any[] rows
+        // passed null through untyped, and every consumer already handled it
+        // via `|| ''`-style fallbacks, so empty string is behavior-identical.
+        handleLoadDetails(detailTarget.clientId, detailTarget.clientName ?? '')
       }
     } catch (error) {
       if (!silent) toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update billing', 'error')
@@ -1052,15 +1124,16 @@ export default function BillingView() {
     }
   }
 
-  async function handleLoadDetails(clientId: number, clientName: string) {
+  function handleLoadDetails(clientId: number, clientName: string) {
     setDetailPage(1)
+    // Opening a client keys the ['billing','details'] query: first open fetches,
+    // re-opening a cached client within staleTime paints instantly with zero
+    // requests, and an invalidated (post-mutation) client refetches — the same
+    // outcomes the old imperative fetch produced, minus the redundant refires.
     setDetailState({
       open: true,
-      loading: true,
       clientId,
       clientName,
-      rows: [],
-      error: null,
     })
 
     if (typeof window !== 'undefined') {
@@ -1068,56 +1141,20 @@ export default function BillingView() {
         detailWrapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
       })
     }
-
-    try {
-      const rows = await apiClient.fetchBillingDetails(from, to, clientId)
-      setDetailState({
-        open: true,
-        loading: false,
-        clientId,
-        clientName,
-        rows,
-        error: null,
-      })
-    } catch (error) {
-      setDetailState({
-        open: true,
-        loading: false,
-        clientId,
-        clientName,
-        rows: [],
-        error: error instanceof Error ? error.message : 'Error loading details',
-      })
-    }
   }
 
   async function refreshBillingAfterHugrabFloor() {
     try {
-      const detailClientId = detailState.clientId
-      const detailClientName = detailState.clientName
-      const [rows, marginAnalytics, detailRows] = await Promise.all([
-        apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
-        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
-        detailState.open && detailClientId != null
-          ? apiClient.fetchBillingDetails(from, to, detailClientId)
-          : Promise.resolve(null),
+      // Same refresh set the old manual Promise.all fetched — summary + margin +
+      // (only if a panel is open) details — via key invalidation: only ACTIVE
+      // queries refetch, so a closed panel fires no details request, exactly like
+      // the old Promise.resolve(null) branch. throwOnError keeps the old
+      // semantics: any refetch failure rejects into the catch below and toasts.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }, { throwOnError: true }),
       ])
-      setSummaryRows(rows)
-      setSummaryError(null)
-      setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
-      setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
-      setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
-      setShippingMarginError(null)
-      if (detailRows && detailClientId != null) {
-        setDetailState({
-          open: true,
-          loading: false,
-          clientId: detailClientId,
-          clientName: detailClientName,
-          rows: detailRows,
-          error: null,
-        })
-      }
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to refresh billing rows', 'error')
     }
@@ -1138,20 +1175,9 @@ export default function BillingView() {
         error: null,
       }
     })
-    // Load the client's saved package prices so changing the Box Size can
-    // auto-fill Box Cost from the same source billing uses.
-    const clientId = Number(detailState.clientId)
-    void apiClient.fetchBillingPackagePrices(clientId)
-      .then((prices) => {
-        const map: Record<number, number> = {}
-        for (const p of prices ?? []) {
-          const pid = Number(p.packageId ?? p.package_id)
-          const price = Number(p.price ?? p.charge)
-          if (Number.isFinite(pid) && Number.isFinite(price)) map[pid] = price
-        }
-        setBillingEditPackagePrices(map)
-      })
-      .catch(() => setBillingEditPackagePrices({}))
+    // The client's saved package prices (to auto-fill Box Cost on Box Size
+    // change) load via billingEditPackagePricesQuery, which enables itself when
+    // this modal state opens — same trigger as the old imperative fetch here.
   }
 
   function handleCloseBillingEditModal() {
@@ -1226,26 +1252,17 @@ export default function BillingView() {
         packageId: billingEditModal.draft.packageId ? Number(billingEditModal.draft.packageId) : null,
       })
 
-      const [rows] = await Promise.all([
-        apiClient.fetchBillingDetails(from, to, detailState.clientId),
-        apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((nextRows) => {
-          setSummaryRows(nextRows)
-          setSummaryError(null)
-        }),
-        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds).then((marginAnalytics) => {
-          setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
-          setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
-          setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
-          setShippingMarginError(null)
-        }),
+      // PS-375: refresh details + summary + margin after the PATCH — the same
+      // three requests the old Promise.all fired, via key invalidation (the PATCH
+      // already cleared the adapter cachedSafe entries; the open panel's rows
+      // swap in when its active query settles). throwOnError preserves the old
+      // semantics: a failed refresh rejects into the catch below (modal stays
+      // open with the error) instead of silently showing stale rows.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
       ])
-
-      setDetailState((current) => ({
-        ...current,
-        rows,
-        loading: false,
-        error: null,
-      }))
       billingEditDraftCacheRef.current = clearBillingEditDraft(billingEditDraftCacheRef.current, billingEditModal.row)
       setBillingEditModal(null)
       toastContext?.addToast('Billing detail saved', 'success')
@@ -1274,21 +1291,14 @@ export default function BillingView() {
         decision,
       })
 
-      const [rows] = await Promise.all([
-        apiClient.fetchBillingDetails(from, to, detailState.clientId),
-        apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((nextRows) => {
-          setSummaryRows(nextRows)
-          setSummaryError(null)
-        }),
-        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds).then((marginAnalytics) => {
-          setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
-          setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
-          setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
-          setShippingMarginError(null)
-        }),
+      // Same re-pull the old Promise.all did (details + summary + margin) via key
+      // invalidation, so the badge updates immediately from the refreshed rows.
+      // throwOnError: a failed refresh rejects into the catch below and toasts.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
       ])
-
-      setDetailState((current) => ({ ...current, rows, loading: false, error: null }))
       handleCloseBillingEditModal()
       toastContext?.addToast(
         decision === 'waived'
@@ -1323,22 +1333,29 @@ export default function BillingView() {
         })),
       })
 
-      setSavedPackagePrices(packagePricingRows.map((row) => ({
-        packageId: row.packageId,
-        price: Number.parseFloat(packagePriceDrafts[row.packageId] ?? String(row.charge)) || 0,
-        // TODO PS-257: BillingPackagePriceDto.is_custom is typed boolean but the
-        // billing pipeline round-trips it as a 0/1 int (DB convention) — cast keeps
-        // the existing 0/1 runtime value byte-identical.
-        is_custom: (row.isCustom ? 1 : 0) as unknown as boolean,
-        name: row.name,
-        length: row.length,
-        width: row.width,
-        height: row.height,
-        dimsText: row.dimsText,
-        ourCost: row.ourCost,
-        usageCount: row.usageCount,
-        usageSources: row.usageSources,
-      })))
+      // Same zero-request local update the old setSavedPackagePrices applied, now
+      // written to the client's ['billing','package-prices'] cache entry (the PUT
+      // already cleared the adapter cachedSafe entry). The per-client seed ref
+      // above keeps the operator's draft strings untouched by this patch.
+      queryClient.setQueryData<BillingPackagePriceDto[]>(
+        ['billing', 'package-prices', Number(selectedPkgClientId)],
+        packagePricingRows.map((row) => ({
+          packageId: row.packageId,
+          price: Number.parseFloat(packagePriceDrafts[row.packageId] ?? String(row.charge)) || 0,
+          // TODO PS-257: BillingPackagePriceDto.is_custom is typed boolean but the
+          // billing pipeline round-trips it as a 0/1 int (DB convention) — cast keeps
+          // the existing 0/1 runtime value byte-identical.
+          is_custom: (row.isCustom ? 1 : 0) as unknown as boolean,
+          name: row.name,
+          length: row.length,
+          width: row.width,
+          height: row.height,
+          dimsText: row.dimsText,
+          ourCost: row.ourCost,
+          usageCount: row.usageCount,
+          usageSources: row.usageSources,
+        })),
+      )
       toastContext?.addToast('Package prices saved ✓', 'success')
       // PS-068: a price change makes already-generated billing for this client
       // stale. "Update Billing" now detects price/config changes (price-aware
@@ -1538,7 +1555,7 @@ export default function BillingView() {
           summaryLoading={summaryLoading}
           summaryError={summaryError}
           summaryTotals={summaryTotals}
-          detailState={detailState}
+          detailState={detailStateForView}
           handleLoadDetails={handleLoadDetails}
           handleExportInvoice={handleExportInvoice}
           handleExportInvoiceXlsx={handleExportInvoiceXlsx}
@@ -1550,7 +1567,7 @@ export default function BillingView() {
             <BillingLineItemsHeader
               clientName={detailState.clientName}
               rows={sortedDetailRows}
-              loading={detailState.loading}
+              loading={detailLoading}
               isHugrabClient={isHugrabDetailClient}
               columnsAnchorRef={setDetailColumnsAnchorEl}
               onClose={() => setDetailState((current) => ({ ...current, open: false }))}
@@ -1560,7 +1577,7 @@ export default function BillingView() {
 
             <BillingDetailClientStrip
               sortedSummaryRows={sortedSummaryRows}
-              detailState={detailState}
+              detailState={detailStateForView}
               selectedDetailSummary={selectedDetailSummary}
               onLoadDetails={handleLoadDetails as unknown as (clientId: number, clientName: string | null | undefined) => void}
             />
@@ -1578,7 +1595,7 @@ export default function BillingView() {
                 BILLING_DETAIL_COLUMNS / formatBillingMoney from ./billing-parity. The rows array,
                 sort state, totals, and async handlers stay here and are passed as props. */}
             <BillingDetailTable
-              detailState={detailState}
+              detailState={detailStateForView}
               detailPanelState={detailPanelState}
               selectedSummaryOrders={selectedSummaryOrders}
               selectedSummaryTotal={selectedSummaryTotal}
@@ -1687,13 +1704,24 @@ export default function BillingView() {
         packages={packages}
         onCloseBulkBoxCost={() => setBulkBoxCostOpen(false)}
         onBulkBoxCostApplied={() => {
-          void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
-          if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
+          // Same refresh set the old callback fetched manually: summary (errors
+          // swallowed, like the old .catch(() => {})) + the open client's details.
+          // Margin analytics was NOT refreshed here, so its key is deliberately
+          // not invalidated ("nothing more" than the old request set).
+          void queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }).catch(() => {})
+          if (detailState.clientId != null) {
+            void queryClient.invalidateQueries({ queryKey: ['billing', 'details'] })
+            void handleLoadDetails(detailState.clientId, detailState.clientName || '')
+          }
         }}
         onCloseBoxReviewSweep={() => setBoxReviewSweepOpen(false)}
         onBoxReviewSweepApplied={() => {
-          void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
-          if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
+          // Same refresh set as onBulkBoxCostApplied above (summary + open details).
+          void queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }).catch(() => {})
+          if (detailState.clientId != null) {
+            void queryClient.invalidateQueries({ queryKey: ['billing', 'details'] })
+            void handleLoadDetails(detailState.clientId, detailState.clientName || '')
+          }
         }}
         onCloseHugrabShippingFloor={() => setHugrabShippingFloorOpen(false)}
         onHugrabShippingFloorApplied={() => {

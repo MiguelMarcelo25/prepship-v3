@@ -27,10 +27,18 @@ function read(path: string): string {
 const billing = read('web/src/components/Views/BillingView.tsx');
 
 check('BillingView types the carrier breakdown row', /type ShippingMarginCarrierDto = \{/.test(billing));
-check('BillingView holds carrier breakdown state', /shippingMarginCarriers.*useState<ShippingMarginCarrierDto\[\]>/.test(billing));
+// FE-2 (audit 2.2 slice 2, 2026-07-14): BillingView's margin analytics moved onto
+// React Query (['billing','shipping-margin', ...]) — the carriers rollup is now
+// read via a typed derived const instead of a useState setter, same as the
+// DashboardView re-pin below. Same invariants re-pinned: the backend
+// analytics.carriers[] is stored (not discarded) and a no-data/error render
+// falls back to the module-level EMPTY const instead of a setter reset.
+check('BillingView holds carrier breakdown state (query-derived)',
+  /const shippingMarginCarriers: ShippingMarginCarrierDto\[\] = shippingMarginQuery\.data\?\.carriers \?\? EMPTY_SHIPPING_MARGIN_CARRIERS/.test(billing));
 check('BillingView stores the backend analytics.carriers[] (was discarded)',
-  /setShippingMarginCarriers\(marginAnalytics\?\.carriers \?\? \[\]\)/.test(billing));
-check('BillingView resets carriers on error', /setShippingMarginCarriers\(\[\]\)/.test(billing));
+  /shippingMarginQuery\.data\?\.carriers \?\? EMPTY_SHIPPING_MARGIN_CARRIERS/.test(billing));
+check('BillingView resets carriers on error (EMPTY fallback const)',
+  /const EMPTY_SHIPPING_MARGIN_CARRIERS: ShippingMarginCarrierDto\[\] = \[\]/.test(billing));
 // PS-296 restyle: the carrier breakdown table moved onto the shared <Table> (with pagination) in
 // BillingCarrierMarginTable.tsx. BillingView still owns the state/storage above and now WIRES the
 // component from the stored carriers; the rendering + backend-field reads live in the new component.
@@ -50,9 +58,12 @@ check('the table reads backend margin fields (no FE recompute)',
 // BillingShippingMarginReconciliation.tsx. BillingView keeps the row type via the import alias,
 // still stores the backend rows, and now WIRES the component from that stored state; the
 // rendering + backend-field reads live in the extracted component.
+// FE-2 (audit 2.2 slice 2, 2026-07-14): same React Query re-pin as the carriers
+// above — the reconciliation rows are a derived const off the shipping-margin
+// query (cast kept so the extracted component's row type still governs).
 check('BillingView stores the backend analytics.rows[] (per-shipment reconciliation)',
   /type BillingShippingMarginReconciliationRow as ShippingMarginRowDto/.test(billing) &&
-  /setShippingMarginRows\(\(marginAnalytics\?\.rows \?\? \[\]\)/.test(billing));
+  /const shippingMarginRows = \(shippingMarginQuery\.data\?\.rows \?\? EMPTY_SHIPPING_MARGIN_ROWS\) as ShippingMarginRowDto\[\]/.test(billing));
 const reconciliation = read('web/src/components/Views/BillingShippingMarginReconciliation.tsx');
 check('the extracted drilldown component renders the per-order table from backend fields, wired from BillingView',
   /Per-order reconciliation/.test(reconciliation) &&
