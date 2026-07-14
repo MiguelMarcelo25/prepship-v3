@@ -89,6 +89,63 @@ export type BillingConfig = typeof billingConfig.$inferSelect;
 export type NewBillingConfig = typeof billingConfig.$inferInsert;
 export type BillingLineItem = typeof billingLineItems.$inferSelect;
 
+// Audit 3.6 / B-2: immutable billing-close records. billing_line_items remains
+// the frozen invoice truth; this table records which exact client/period was
+// closed and the totals that were frozen in that transaction.
+export const billingFinalizations = pgTable(
+  'billing_finalizations',
+  {
+    id: text().primaryKey(),
+    clientId: integer()
+      .notNull()
+      .references(() => clients.id, { onDelete: 'restrict' }),
+    periodStart: timestamp({ withTimezone: true }).notNull(),
+    periodEnd: timestamp({ withTimezone: true }).notNull(),
+    lineCount: integer().notNull(),
+    orderCount: integer().notNull(),
+    subtotal: numeric({ precision: 12, scale: 2 }).notNull(),
+    finalizedBy: text().notNull(),
+    finalizedByEmail: text(),
+    finalizedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique('billing_finalizations_client_period_unq').on(
+      t.clientId,
+      t.periodStart,
+      t.periodEnd,
+    ),
+    unique('billing_finalizations_id_client_unq').on(t.id, t.clientId),
+  ],
+);
+
+// Corrections never rewrite finalized lines. A credit note is its own
+// immutable, reason-required money record tied to one finalization.
+export const billingCreditNotes = pgTable(
+  'billing_credit_notes',
+  {
+    id: text().primaryKey(),
+    finalizationId: text()
+      .notNull()
+      .references(() => billingFinalizations.id, { onDelete: 'restrict' }),
+    clientId: integer()
+      .notNull()
+      .references(() => clients.id, { onDelete: 'restrict' }),
+    amount: numeric({ precision: 12, scale: 2 }).notNull(),
+    reason: text().notNull(),
+    idempotencyKey: text().notNull(),
+    createdBy: text().notNull(),
+    createdByEmail: text(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique('billing_credit_notes_idempotency_unq').on(t.idempotencyKey),
+    index('billing_credit_notes_finalization_idx').on(t.finalizationId, t.createdAt),
+  ],
+);
+
+export type BillingFinalization = typeof billingFinalizations.$inferSelect;
+export type BillingCreditNote = typeof billingCreditNotes.$inferSelect;
+
 export const clientPackagePrices = pgTable(
   'client_package_prices',
   {

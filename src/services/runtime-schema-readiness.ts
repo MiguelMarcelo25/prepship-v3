@@ -5,7 +5,9 @@ const REQUIRED_RELATIONS = [
   'audit_log',
   'billing_box_resolutions',
   'billing_fee_waivers',
+  'billing_finalizations',
   'billing_finalization_group_locks',
+  'billing_credit_notes',
   'billing_manual_overrides',
   'billing_storage_proof',
   'client_packing_rules',
@@ -66,6 +68,9 @@ const REQUIRED_INDEXES = [
   'audit_log_resource_idx',
   'audit_log_ts_idx',
   'billing_manual_overrides_client_order_idx',
+  'billing_credit_notes_finalization_idx',
+  'billing_credit_notes_idempotency_unq',
+  'billing_finalizations_client_period_unq',
   'client_packing_rules_client_idx',
   'client_packing_rules_client_key_idx',
   'client_sku_classes_client_idx',
@@ -121,6 +126,10 @@ const REQUIRED_FUNCTIONS = [
   'billing_line_items_block_finalized_mutation',
   'billing_line_items_block_finalized_truncate',
   'billing_line_items_block_mixed_finalization_statement',
+  'billing_finalizations_block_overlap',
+  'billing_line_items_block_closed_period_mutation',
+  'billing_close_records_block_mutations',
+  'billing_credit_notes_block_excess',
 ] as const;
 
 const REQUIRED_TRIGGERS = [
@@ -128,6 +137,13 @@ const REQUIRED_TRIGGERS = [
   'billing_line_items_finalized_guard',
   'billing_line_items_finalized_truncate_guard',
   'billing_line_items_mixed_finalization_guard',
+  'billing_finalizations_overlap_guard',
+  'billing_line_items_closed_period_guard',
+  'billing_finalizations_no_update_delete',
+  'billing_credit_notes_no_update_delete',
+  'billing_credit_notes_balance_guard',
+  'billing_finalizations_no_truncate',
+  'billing_credit_notes_no_truncate',
 ] as const;
 
 let readiness: Promise<void> | null = null;
@@ -214,7 +230,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0064_print_queue_merge_jobs.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0065_billing_close_workflow.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

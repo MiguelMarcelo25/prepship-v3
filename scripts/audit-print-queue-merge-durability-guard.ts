@@ -83,10 +83,10 @@ check('merge store persists and reads snapshots by job id with monotonic writes'
   assert.match(store, /export async function getLatestMergeJobRecord/);
 });
 
-check('boot readiness requires the per-job table and index through migration 0064', () => {
+check('boot readiness keeps the 0064 per-job objects at the latest migration frontier', () => {
   assert.match(readiness, /'print_queue_merge_jobs'/);
   assert.match(readiness, /'print_queue_merge_jobs_updated_at_idx'/);
-  assert.match(readiness, /0064_print_queue_merge_jobs\.sql/);
+  assert.match(readiness, /0065_billing_close_workflow\.sql/);
 });
 
 check('merge lifecycle requires initial status persistence before returning a job id', () => {

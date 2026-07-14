@@ -18,12 +18,12 @@ import { shipments } from '../db/schema/shipments';
 import {
   billingDetails,
   billingGenerationStatus,
-  billingInvoiceHeaderTotals,
   billingSummary,
   ensureBillingBoxResolutionsSchema,
   generateLineItems,
   upsertBillingConfig,
 } from '../services/billing';
+import { billingInvoiceHeaderTotals } from '../services/billing-invoice-totals';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
@@ -49,10 +49,15 @@ import {
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import {
+  asBillingCloseWorkflowError,
   assertBillingOrdersEditable,
   BillingFinalizedLockError,
+  createBillingCreditNote,
   ensureBillingFinalizationPolicySchema,
+  finalizeBillingPeriod,
   isBillingFinalizedLockError,
+  listBillingCreditNotes,
+  listBillingFinalizations,
   setBillingOrdersDirty,
 } from '../services/billing-finalization-policy';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
@@ -116,6 +121,14 @@ app.use('*', async (c, next) => {
         regenerationAllowed: error.regenerationAllowed,
         source: error.source,
       }, 503);
+    }
+    const closeError = asBillingCloseWorkflowError(error);
+    if (closeError) {
+      return c.json({
+        error: closeError.message,
+        code: closeError.code,
+        ...closeError.details,
+      }, closeError.status);
     }
     if (!isBillingFinalizedLockError(error)) throw error;
     const lockError = error instanceof BillingFinalizedLockError
@@ -429,6 +442,35 @@ const generateSchema = generateRawSchema
     message: 'dateFrom/from and dateTo/to are required',
   });
 
+const finalizeRawSchema = generateRawSchema.extend({
+  clientId: z.coerce.number().int().positive(),
+});
+const finalizeSchema = finalizeRawSchema
+  .transform((v) => {
+    const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
+    return {
+      clientId: v.clientId,
+      dateFrom: range?.fromUtc,
+      dateTo: range?.toUtcExclusive,
+    };
+  })
+  .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
+    message: 'dateFrom/from and dateTo/to are required',
+  });
+
+const creditNoteSchema = z.object({
+  clientId: z.coerce.number().int().positive(),
+  finalizationId: z.string().trim().min(1).max(100),
+  amount: z.union([z.string(), z.number()]).transform((value) => String(value)),
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey: z.string().trim().min(8).max(100),
+});
+
+const creditNoteQuerySchema = z.object({
+  clientId: z.coerce.number().int().positive(),
+  finalizationId: z.string().trim().min(1).max(100),
+});
+
 const detailsSchema = generateRawSchema
   .transform((v) => {
     const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
@@ -513,6 +555,110 @@ app.post('/generate', requirePermission('financials:write'), zValidator('json', 
     details: { clientId: body.clientId ?? null, dateFrom: body.dateFrom, dateTo: body.dateTo },
   });
   return c.json(result);
+});
+
+// Audit 3.6 / PS-412: period close is a backend-owned money mutation. The
+// route supplies authenticated intent; the policy owner freezes the exact
+// invoice dataset and writes the immutable close record in one transaction.
+app.post(
+  '/finalize',
+  requirePermission('financials:write'),
+  zValidator('json', finalizeSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    if (!(await canAccessBillingClient(body.clientId, scope))) {
+      return c.json({ error: 'Client not found' }, 404);
+    }
+    const actor = auditActorFromContext(c);
+    if (!actor.actorId) {
+      return c.json({ error: 'Authenticated actor is required' }, 401);
+    }
+    const result = await finalizeBillingPeriod({
+      clientId: body.clientId,
+      dateFrom: body.dateFrom!,
+      dateTo: body.dateTo!,
+      actorId: actor.actorId,
+      actorEmail: actor.actorEmail,
+    });
+    await recordAuditEvent({
+      ...actor,
+      eventType: 'billing',
+      resourceType: 'billing_finalization',
+      resourceId: result.finalization.id,
+      action: result.alreadyFinalized ? 'period_finalize_replay' : 'period_finalize',
+      details: {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        lineCount: result.finalization.lineCount,
+        orderCount: result.finalization.orderCount,
+        subtotal: result.finalization.subtotal,
+      },
+    });
+    return c.json({ data: result });
+  },
+);
+
+app.get('/finalizations', zValidator('query', finalizeSchema), async (c) => {
+  const query = c.req.valid('query');
+  const scope = billingScopeFromContext(c);
+  if (!(await canAccessBillingClient(query.clientId, scope))) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
+  const rows = await listBillingFinalizations({
+    clientId: query.clientId,
+    dateFrom: query.dateFrom!,
+    dateTo: query.dateTo!,
+  });
+  return c.json({ data: rows });
+});
+
+// Corrections never rewrite an invoice. They append a reasoned, idempotent
+// credit against the frozen close record and cannot exceed its balance.
+app.post(
+  '/credit-notes',
+  requirePermission('financials:write'),
+  zValidator('json', creditNoteSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    if (!(await canAccessBillingClient(body.clientId, scope))) {
+      return c.json({ error: 'Client not found' }, 404);
+    }
+    const actor = auditActorFromContext(c);
+    if (!actor.actorId) {
+      return c.json({ error: 'Authenticated actor is required' }, 401);
+    }
+    const result = await createBillingCreditNote({
+      ...body,
+      actorId: actor.actorId,
+      actorEmail: actor.actorEmail,
+    });
+    await recordAuditEvent({
+      ...actor,
+      eventType: 'billing',
+      resourceType: 'billing_credit_note',
+      resourceId: result.creditNote.id,
+      action: result.alreadyCreated ? 'credit_note_replay' : 'credit_note_create',
+      details: {
+        clientId: body.clientId,
+        finalizationId: body.finalizationId,
+        amount: result.creditNote.amount,
+      },
+    });
+    return c.json({ data: result });
+  },
+);
+
+app.get('/credit-notes', zValidator('query', creditNoteQuerySchema), async (c) => {
+  const query = c.req.valid('query');
+  const scope = billingScopeFromContext(c);
+  if (!(await canAccessBillingClient(query.clientId, scope))) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
+  const rows = await listBillingCreditNotes(query);
+  return c.json({ data: rows });
 });
 
 app.get('/generate/status', zValidator('query', generateSchema), async (c) => {
@@ -1650,10 +1796,9 @@ async function billingInvoiceData(
   );
   if (!clientRow.length) return null;
 
-  // PS-134 (slice 2): the invoice HEADER totals are now owned by the billing service
-  // (billingInvoiceHeaderTotals — the same aggregate SQL, co-located with billingSummary as the
-  // single source of truth). Byte-identical to the prior inline query. The per-order breakdown
-  // below stays here (billingSummary/the service has no per-order representation to delegate to).
+  // PS-134/Audit 3.6: the invoice header and close workflow share this exact
+  // frozen-total owner. The per-order breakdown stays here because the summary
+  // service has no per-order representation to delegate to.
   const totals = await billingInvoiceHeaderTotals(clientId, dateFrom, dateTo);
   const detailAmount = cancelledNoChargeBillingAmountSql({
     lineType: sql`b.line_type`,

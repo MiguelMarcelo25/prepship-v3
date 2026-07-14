@@ -88,6 +88,20 @@ const migrationOwnership = [
     'drizzle/0064_print_queue_merge_jobs.sql',
     ['print_queue_merge_jobs', 'print_queue_merge_jobs_updated_at_idx'],
   ],
+  [
+    'drizzle/0065_billing_close_workflow.sql',
+    [
+      'billing_finalizations',
+      'billing_credit_notes',
+      'billing_finalizations_overlap_guard',
+      'billing_line_items_closed_period_guard',
+      'billing_finalizations_no_update_delete',
+      'billing_credit_notes_no_update_delete',
+      'billing_credit_notes_balance_guard',
+      'billing_finalizations_no_truncate',
+      'billing_credit_notes_no_truncate',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -109,6 +123,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(mergeJobMigration),
   '0064 is additive and never mutates or destructively alters orders/shipments',
 );
+const billingCloseMigration = read('drizzle/0065_billing_close_workflow.sql');
+assert(
+  !/\b(?:UPDATE\s+(?:public\.)?\w+\s+SET|DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN))\b/i.test(billingCloseMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCloseMigration),
+  '0065 is additive and never mutates or destructively alters orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -118,7 +138,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0064_print_queue_merge_jobs.sql',
+  '0065_billing_close_workflow.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

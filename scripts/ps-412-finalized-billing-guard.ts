@@ -12,6 +12,7 @@ import * as schema from '../src/db/schema/index.js';
 import { billingLineItems } from '../src/db/schema/billing.js';
 
 const MIGRATION_PATH = 'drizzle/0059_billing_finalized_lock.sql';
+const CLOSE_MIGRATION_PATH = 'drizzle/0065_billing_close_workflow.sql';
 const POLICY_PATH = 'src/services/billing-finalization-policy.ts';
 
 let failures = 0;
@@ -47,6 +48,19 @@ async function expectFinalizedLock(
   }
 }
 
+async function expectErrorToken(
+  name: string,
+  token: string,
+  run: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await run();
+    check(name, false);
+  } catch (error) {
+    check(name, error instanceof Error && error.message.includes(token));
+  }
+}
+
 async function main(): Promise<void> {
   // The policy imports the production db singleton for its default executor,
   // but this guard injects PGlite for every query. Provide inert parse-only env
@@ -64,7 +78,9 @@ async function main(): Promise<void> {
   } = await import('../src/services/billing-finalization-policy.js');
 
   const migration = read(MIGRATION_PATH);
+  const closeMigration = read(CLOSE_MIGRATION_PATH);
   const policy = read(POLICY_PATH);
+  const invoiceTotals = read('src/services/billing-invoice-totals.ts');
   const billingService = read('src/services/billing.ts');
   const billingRoute = read('src/routes/billing.ts');
   const bulkService = read('src/services/billing-box-cost-bulk.ts');
@@ -75,6 +91,7 @@ async function main(): Promise<void> {
   const packageJson = read('package.json');
 
   check('finalized-lock migration exists', migration.length > 0);
+  check('billing close workflow migration exists', closeMigration.length > 0);
   check('canonical billing finalization policy exists', policy.length > 0);
   const wrappedDatabaseError = new Error('Failed query');
   (wrappedDatabaseError as Error & { cause?: unknown }).cause = new Error(
@@ -116,6 +133,51 @@ async function main(): Promise<void> {
   check(
     'runtime schema ensure never drops an active finalized-billing trigger',
     !/DROP TRIGGER/i.test(policy),
+  );
+  check(
+    'close workflow owns immutable periods and append-only credit notes',
+    /CREATE TABLE IF NOT EXISTS billing_finalizations/i.test(closeMigration) &&
+      /CREATE TABLE IF NOT EXISTS billing_credit_notes/i.test(closeMigration) &&
+      /billing_line_items_closed_period_guard/.test(closeMigration) &&
+      /billing_finalizations_no_update_delete/.test(closeMigration) &&
+      /billing_credit_notes_no_update_delete/.test(closeMigration) &&
+      /billing_finalizations_no_truncate/.test(closeMigration) &&
+      /billing_credit_notes_no_truncate/.test(closeMigration) &&
+      /billing_credit_notes_balance_guard/.test(closeMigration) &&
+      /BILLING_CLOSE_IMMUTABLE/.test(closeMigration),
+  );
+  check(
+    'close workflow serializes client periods and rejects overlaps',
+    /pg_advisory_xact_lock\(36421/i.test(closeMigration) &&
+      /tstzrange\(existing\.period_start, existing\.period_end, '\[\)'\)/i.test(closeMigration) &&
+      /BILLING_PERIOD_FINALIZED/.test(closeMigration),
+  );
+  check(
+    'policy finalizes exact invoice totals and exposes reasoned idempotent credits',
+    /finalizeBillingPeriod/.test(policy) &&
+      /billingInvoiceHeaderTotals/.test(policy) &&
+      /createBillingCreditNote/.test(policy) &&
+      /BILLING_CREDIT_EXCEEDS_BALANCE/.test(policy) &&
+      /idempotencyKey/.test(policy) &&
+      /reason\.trim/.test(policy),
+  );
+  check(
+    'invoice and finalization share one backend totals owner',
+    /export async function billingInvoiceHeaderTotals/.test(invoiceTotals) &&
+      /billing-invoice-totals/.test(billingRoute) &&
+      /billing-invoice-totals/.test(policy),
+  );
+  check(
+    'billing generation refuses finalized periods before rebuilding lines',
+    /assertBillingPeriodOpen/.test(billingService),
+  );
+  check(
+    'billing routes expose scoped write-gated close and credit operations',
+    /app\.post\([\s\S]*?'\/finalize'[\s\S]*?financials:write/.test(billingRoute) &&
+      /app\.post\([\s\S]*?'\/credit-notes'[\s\S]*?financials:write/.test(billingRoute) &&
+      /canAccessBillingClient/.test(billingRoute) &&
+      /finalizeBillingPeriod/.test(billingRoute) &&
+      /createBillingCreditNote/.test(billingRoute),
   );
   check(
     'policy owns order assertions and range finality reads',
@@ -238,6 +300,7 @@ async function main(): Promise<void> {
       );
     `);
     await pg.exec(migration);
+    await pg.exec(closeMigration);
 
     await pg.exec(`
       INSERT INTO billing_line_items
@@ -436,6 +499,62 @@ async function main(): Promise<void> {
     );
     await pg.exec(`UPDATE billing_line_items SET invoiced = true WHERE order_id = 405`);
     check('clearing dirty state permits pure finalization', true);
+
+    await pg.exec(`
+      INSERT INTO clients (id) VALUES (3);
+      INSERT INTO billing_line_items
+        (client_id, order_id, ship_date, line_type, description, unit_cost, total_cost)
+      VALUES
+        (3, 700, '2026-09-05', 'pick_pack', 'September prep', 2, 2),
+        (3, 700, '2026-09-05', 'shipping', 'September shipping', 8, 8);
+      UPDATE billing_line_items SET invoiced = true WHERE client_id = 3;
+      INSERT INTO billing_finalizations
+        (id, client_id, period_start, period_end, line_count, order_count, subtotal, finalized_by)
+      VALUES
+        ('final-3-september', 3, '2026-09-01', '2026-10-01', 2, 1, 10, 'test-actor');
+    `);
+    await expectErrorToken('closed period blocks later line UPDATE', 'BILLING_PERIOD_FINALIZED', () =>
+      pg.exec(`UPDATE billing_line_items SET total_cost = 9 WHERE client_id = 3`),
+    );
+    await expectErrorToken('closed period blocks later line DELETE', 'BILLING_PERIOD_FINALIZED', () =>
+      pg.exec(`DELETE FROM billing_line_items WHERE client_id = 3`),
+    );
+    await expectErrorToken('closed period blocks later line INSERT', 'BILLING_PERIOD_FINALIZED', () =>
+      pg.exec(`INSERT INTO billing_line_items
+        (client_id, order_id, ship_date, line_type, description, unit_cost, total_cost)
+        VALUES (3, 701, '2026-09-20', 'pick_pack', 'Late charge', 2, 2)`),
+    );
+    await expectErrorToken('overlapping period finalization is rejected', 'BILLING_PERIOD_FINALIZED', () =>
+      pg.exec(`INSERT INTO billing_finalizations
+        (id, client_id, period_start, period_end, line_count, order_count, subtotal, finalized_by)
+        VALUES ('final-3-overlap', 3, '2026-09-15', '2026-10-15', 1, 1, 1, 'test-actor')`),
+    );
+    await pg.exec(`INSERT INTO billing_credit_notes
+      (id, finalization_id, client_id, amount, reason, idempotency_key, created_by)
+      VALUES ('credit-3-one', 'final-3-september', 3, 1.25, 'Carrier adjustment', 'credit-idem-0001', 'test-actor')`);
+    await expectErrorToken('aggregate credits cannot exceed the frozen subtotal', 'BILLING_CREDIT_EXCEEDS_BALANCE', () =>
+      pg.exec(`INSERT INTO billing_credit_notes
+        (id, finalization_id, client_id, amount, reason, idempotency_key, created_by)
+        VALUES ('credit-3-excess', 'final-3-september', 3, 9, 'Excess adjustment', 'credit-idem-excess', 'test-actor')`),
+    );
+    await expectErrorToken('finalization records are append-only', 'BILLING_CLOSE_IMMUTABLE', () =>
+      pg.exec(`UPDATE billing_finalizations SET subtotal = 9 WHERE id = 'final-3-september'`),
+    );
+    await expectErrorToken('credit-note records are append-only', 'BILLING_CLOSE_IMMUTABLE', () =>
+      pg.exec(`DELETE FROM billing_credit_notes WHERE id = 'credit-3-one'`),
+    );
+    await expectErrorToken('credit-note history cannot be truncated', 'BILLING_CLOSE_IMMUTABLE', () =>
+      pg.exec('TRUNCATE billing_credit_notes'),
+    );
+    await expectErrorToken('credit idempotency is durable', 'billing_credit_notes_idempotency_unq', () =>
+      pg.exec(`INSERT INTO billing_credit_notes
+        (id, finalization_id, client_id, amount, reason, idempotency_key, created_by)
+        VALUES ('credit-3-two', 'final-3-september', 3, 1, 'Another adjustment', 'credit-idem-0001', 'test-actor')`),
+    );
+    await pg.exec(`INSERT INTO billing_line_items
+      (client_id, order_id, ship_date, line_type, description, unit_cost, total_cost)
+      VALUES (3, 702, '2026-10-05', 'pick_pack', 'Next period remains open', 2, 2)`);
+    check('a later non-finalized period remains writable', true);
     await pg.close();
   }
 
