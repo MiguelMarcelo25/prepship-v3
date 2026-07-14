@@ -3,6 +3,12 @@ import postgres from 'postgres';
 import { env } from '../lib/env.js';
 import * as schema from './schema/index.js';
 
+// Per user override unlock shipped data on 2026-07-14: DATABASE_URL uses the
+// Supabase transaction pooler. Its transaction proxy can wedge when postgres.js
+// pipelines a large burst on one socket, so keep four sockets available while
+// serializing the queries sent through each socket.
+const transactionPoolerCompatibility = { max_pipeline: 1 } as const;
+
 const sql = postgres(env.DATABASE_URL, {
   prepare: false,
   max: env.DB_POOL_MAX,
@@ -21,6 +27,7 @@ const sql = postgres(env.DATABASE_URL, {
   // 12s is well under Supabase's pooler hard-kill (typically 20-60s) but
   // long enough for legitimate analytical queries like /daily-stats.
   connection: { statement_timeout: env.DB_STATEMENT_TIMEOUT_MS },
+  ...transactionPoolerCompatibility,
 });
 
 export const db = drizzle(sql, { schema, casing: 'snake_case' });

@@ -19,3 +19,7 @@ export function resolveRateBackfillConcurrency({
     ),
   );
 }
+
+export function resolveRateBackfillDbWriteConcurrency(dbPoolMax: number): number {
+  return Math.max(1, Math.min(4, Math.floor(dbPoolMax)));
+}

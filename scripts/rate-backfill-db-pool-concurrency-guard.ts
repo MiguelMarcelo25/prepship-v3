@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { resolveRateBackfillConcurrency } from '../src/services/rate-backfill-execution-policy';
+import {
+  resolveRateBackfillConcurrency,
+  resolveRateBackfillDbWriteConcurrency,
+} from '../src/services/rate-backfill-execution-policy';
 
 assert.equal(
   resolveRateBackfillConcurrency({
@@ -39,6 +42,18 @@ assert.equal(
   }),
   2,
   'the carrier limiter remains an independent upper bound',
+);
+
+assert.equal(
+  resolveRateBackfillDbWriteConcurrency(1),
+  1,
+  'one database connection serializes backfill status writes',
+);
+
+assert.equal(
+  resolveRateBackfillDbWriteConcurrency(20),
+  4,
+  'large pools still cap backfill status-write fan-out at four',
 );
 
 console.log('rate backfill DB-pool concurrency guard passed');

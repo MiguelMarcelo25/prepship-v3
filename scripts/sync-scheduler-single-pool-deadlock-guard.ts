@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
 const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
 const rateJobStore = readFileSync('src/services/rate-browse-job-store.ts', 'utf8');
+const dbClient = readFileSync('src/db/client.ts', 'utf8');
 
 // The durable queue is the canonical cross-process admission owner. A handler
 // must not reserve the shared application pool for a second advisory lock:
@@ -57,6 +58,17 @@ assert.match(
   rateJobStore,
   /const reserved = await rateBrowseJobLockSql\.reserve\(\)/,
   'rate workflow advisory lock uses the dedicated lock client',
+);
+
+assert.match(
+  dbClient,
+  /const transactionPoolerCompatibility = \{ max_pipeline: 1 \}/,
+  'Supabase transaction-pooler queries are serialized per application connection',
+);
+assert.match(
+  dbClient,
+  /prepare: false,[\s\S]*?\.\.\.transactionPoolerCompatibility/,
+  'the shared database client disables prepared statements and deep pipelining for the transaction pooler',
 );
 
 console.log('PASS sync scheduler single-pool deadlock guard');

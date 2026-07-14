@@ -56,7 +56,28 @@ import {
   toGetRatesOptions,
 } from './rate-preexpiry-refresh-request';
 import { env } from '../lib/env';
-import { resolveRateBackfillConcurrency } from './rate-backfill-execution-policy';
+import {
+  resolveRateBackfillConcurrency,
+  resolveRateBackfillDbWriteConcurrency,
+} from './rate-backfill-execution-policy';
+
+async function runBackfillDbWrites<T>(
+  items: readonly T[],
+  write: (item: T) => Promise<void>,
+): Promise<void> {
+  let index = 0;
+  const concurrency = resolveRateBackfillDbWriteConcurrency(env.DB_POOL_MAX);
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (index < items.length) {
+        const item = items[index++];
+        if (item !== undefined) await write(item);
+      }
+    },
+  );
+  await Promise.all(workers);
+}
 
 function toPositiveNumber(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -547,8 +568,12 @@ async function runBackfill(
         rateDimsH: row.rateDimsH,
         raw: row.raw,
       });
-    await Promise.all(
-      rows.map(async (row) => {
+    // Per user override unlock shipped data on 2026-07-14: do not enqueue
+    // thousands of settings/status writes into postgres.js at once. Supabase's
+    // transaction pooler wedges that client-side burst before the provider walk.
+    await runBackfillDbWrites(
+      rows,
+      async (row) => {
         try {
           await setOrderRatePending(row.id, fingerprintForRow(row));
         } catch (err) {
@@ -557,7 +582,7 @@ async function runBackfill(
             err instanceof Error ? err.message : err,
           );
         }
-      }),
+      },
     );
     stampedIds = rows.map((row) => row.id);
 
@@ -976,7 +1001,15 @@ async function runBackfill(
     // (clearOrderRateJob is DELETE WHERE order_id); never throw out of runBackfill.
     try {
       const leftover = stampedIds.filter((id) => !finalizedIds.has(id));
-      if (leftover.length) await Promise.allSettled(leftover.map((id) => clearOrderRateJob(id)));
+      if (leftover.length) {
+        await runBackfillDbWrites(leftover, async (id) => {
+          try {
+            await clearOrderRateJob(id);
+          } catch {
+            // Best-effort cleanup; the age-based reaper remains the backstop.
+          }
+        });
+      }
     } catch (err) {
       console.warn('[rates-backfill] finalize sweep failed:', err instanceof Error ? err.message : err);
     }
