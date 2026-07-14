@@ -19,6 +19,7 @@ import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { ensureBillingStorageProofSchema } from '../db/ensure-billing-storage-proof';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
+import { roundMoney } from '../lib/money';
 import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 import { decideShippingLineBilling } from './billing-shipping-line';
@@ -1294,8 +1295,8 @@ export async function generateLineItems(input: GenerateInput) {
         lineType: 'pick_pack',
         description: `Pick/pack for order ${s.orderNumber ?? s.orderId}`,
         qty: '1',
-        unitCost: pickPackFee.toFixed(2),
-        totalCost: pickPackFee.toFixed(2),
+        unitCost: roundMoney(pickPackFee).toFixed(2),
+        totalCost: roundMoney(pickPackFee).toFixed(2),
         packageId: billedPackageId,
       });
     }
@@ -1324,8 +1325,8 @@ export async function generateLineItems(input: GenerateInput) {
         lineType: 'additional_unit',
         description: `Additional units (×${extraUnits})`,
         qty: String(extraUnits),
-        unitCost: additionalUnitFee.toFixed(2),
-        totalCost: extraCost.toFixed(2),
+        unitCost: roundMoney(additionalUnitFee).toFixed(2),
+        totalCost: roundMoney(extraCost).toFixed(2),
         packageId: billedPackageId,
       });
     }
@@ -1408,8 +1409,8 @@ export async function generateLineItems(input: GenerateInput) {
         lineType: 'shipping',
         description: `Shipping${shippingDecision.descriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
         qty: '1',
-        unitCost: billedShippingAmount.toFixed(2),
-        totalCost: billedShippingAmount.toFixed(2),
+        unitCost: roundMoney(billedShippingAmount).toFixed(2),
+        totalCost: roundMoney(billedShippingAmount).toFixed(2),
         packageId: billedPackageId,
       });
     } else if (fulfillmentConflict?.billingAction === 'shipping_missing_review') {
@@ -1494,8 +1495,8 @@ export async function generateLineItems(input: GenerateInput) {
         lineType: 'package_cost',
         description: `Box (${packageCostDecision.pkgName})`,
         qty: '1',
-        unitCost: packageCostDecision.amount.toFixed(2),
-        totalCost: packageCostDecision.amount.toFixed(2),
+        unitCost: roundMoney(packageCostDecision.amount).toFixed(2),
+        totalCost: roundMoney(packageCostDecision.amount).toFixed(2),
         packageId: billedPackageId,
       });
     } else if (packageCostDecision.kind === 'review') {
@@ -1817,7 +1818,7 @@ export async function generateLineItems(input: GenerateInput) {
       monthlyRatePerCuFt: storage.monthlyRatePerCuFt.toFixed(4),
       dailyRatePerCuFt: storage.dailyRatePerCuFt.toFixed(10),
       totalCuFtDays: storage.totalCuFtDays.toFixed(6),
-      amount: storage.amount.toFixed(2),
+      amount: roundMoney(storage.amount).toFixed(2),
       skuCount: storage.skuProofs.length,
       exceptionCount: storage.exceptions.length,
       proof: { skuProofs: storage.skuProofs, exceptions: storage.exceptions },
@@ -1879,8 +1880,8 @@ export async function generateLineItems(input: GenerateInput) {
             lineType: 'storage',
             description,
             qty: cuFtMonths.toFixed(2),
-            unitCost: storageRate.toFixed(2),
-            totalCost: storage.amount.toFixed(2),
+            unitCost: roundMoney(storageRate).toFixed(2),
+            totalCost: roundMoney(storage.amount).toFixed(2),
           })
           .onConflictDoNothing({
             target: [
@@ -1925,7 +1926,7 @@ export async function generateLineItems(input: GenerateInput) {
   return {
     generated,
     count: generated,
-    total,
+    total: roundMoney(total),
     skipped,
     skippedFinalizedOrderCount,
     skippedFinalizedStorageCount: skippedFinalizedStorageGroups.size,
@@ -2138,16 +2139,17 @@ export async function billingSummary(
   `);
 
   const clientsOut: BillingSummaryRow[] = rows.map((r) => {
-    const pickPackTotal = toNum(r.pickpack_total);
-    const additionalTotal = toNum(r.additional_total);
-    const packageTotal = toNum(r.package_total);
-    const shippingTotal = toNum(r.shipping_total);
+    const pickPackTotal = roundMoney(toNum(r.pickpack_total));
+    const additionalTotal = roundMoney(toNum(r.additional_total));
+    const packageTotal = roundMoney(toNum(r.package_total));
+    const shippingTotal = roundMoney(toNum(r.shipping_total));
     const missingShippingCostCount = Number(r.missing_shipping_cost_count ?? 0);
-    const storageTotal = toNum(r.storage_total);
-    const grandTotal = toNum(r.grand_total);
-    const pickPackFeeTotal = pickPackTotal + additionalTotal;
-    const fulfillmentFeeTotal =
-      shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
+    const storageTotal = roundMoney(toNum(r.storage_total));
+    const grandTotal = roundMoney(toNum(r.grand_total));
+    const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
+    const fulfillmentFeeTotal = roundMoney(
+      shippingTotal + pickPackFeeTotal + packageTotal + storageTotal,
+    );
     return {
       clientId: r.client_id,
       clientName: r.client_name,
@@ -2176,7 +2178,7 @@ export async function billingSummary(
 
   return {
     clients: clientsOut,
-    grandTotal: clientsOut.reduce((sum, c) => sum + c.grandTotal, 0),
+    grandTotal: roundMoney(clientsOut.reduce((sum, c) => sum + c.grandTotal, 0)),
   };
 }
 

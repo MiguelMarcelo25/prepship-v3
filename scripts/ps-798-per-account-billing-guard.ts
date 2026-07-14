@@ -73,7 +73,7 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
 
 // ── END-TO-END chain (drives the REAL key resolver, not a hand-built rule — the audit's "vacuous
 //    guard" fix): a synced shipment with providerAccountId 595995 + settings markup.595995=15% on a
-//    flag-ON generate bills $14.37 — the SAME number the rate quote shows. ──
+//    flag-ON generate bills $14.38 — the SAME number the rate quote shows. ──
 {
   const perAccountMarkups = new Map<string, MarkupRule>([['595995', { type: 'percent', value: 15 }]]);
   const providerAccountId = 595995; // what shipment-sync writes for a "se-595995" ShipStation account
@@ -83,8 +83,8 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
     labelCost: 12.5, cShippingRateAmount: null, billingMode: 'per_shipment', isBaselineCarrier: false,
     refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
   });
-  check('e2e: providerAccountId 595995 + markup.595995=15% => billed $14.37 (quote == invoice, keyed correctly)',
-    d.billedAmount.toFixed(2) === '14.37' && d.markupApplied === true, `billed=${d.billedAmount}`);
+  check('e2e: providerAccountId 595995 + markup.595995=15% => billed $14.38 (quote == invoice, keyed correctly)',
+    d.billedAmount.toFixed(2) === '14.38' && d.markupApplied === true, `billed=${d.billedAmount}`);
   check('e2e: display == invoice for the same account markup (single source of truth)',
     applyCanonicalMarkup(12.5, resolved).toFixed(2) === d.billedAmount.toFixed(2));
 }
@@ -111,10 +111,9 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
     labelCost: 12.5, cShippingRateAmount: null, billingMode: 'per_shipment', isBaselineCarrier: false,
     refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
   });
-  // billing formats with .toFixed(2) (billing.ts unitCost/totalCost); 12.50*1.15 = 14.375 -> 14.37 in
-  // float — the SAME value the documented KF Goods quote shows.
-  check('flag-ON: $12.50 account-595995 line now bills $14.37 (matches the live KF Goods quote)',
-    d.billedAmount.toFixed(2) === '14.37' && d.markupApplied === true, `billed=${d.billedAmount}`);
+  // Audit 3.7: binary 12.50*1.15 lands below 14.375; canonical half-cent rounding restores $14.38.
+  check('flag-ON: $12.50 account-595995 line bills canonical $14.38',
+    d.billedAmount.toFixed(2) === '14.38' && d.markupApplied === true, `billed=${d.billedAmount}`);
   // quote == invoice PROVEN: the rate DISPLAY (applyCanonicalMarkup) and the INVOICE (decideShipping
   // -LineBilling) produce the identical formatted amount for the same per-account markup.
   check('flag-ON: display amount == invoice amount (single source of truth)',

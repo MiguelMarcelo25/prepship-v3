@@ -9,6 +9,7 @@
  */
 import { sql as drizzleSql, type SQL } from 'drizzle-orm';
 import { db, sql as pg } from '../db/client';
+import { roundMoney } from '../lib/money';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export const MANUAL_BILLING_OVERRIDE_LINE_TYPES = [
@@ -78,7 +79,7 @@ function normalizeLineType(value: unknown): ManualBillingOverrideLineType | null
 }
 
 function money(value: number): string {
-  return (Number.isFinite(value) ? value : 0).toFixed(2);
+  return roundMoney(value).toFixed(2);
 }
 
 export function manualBillingOverrideLabel(lineType: string): string {

@@ -324,18 +324,20 @@ assert.ok(pkgJson.includes('"test:ps-207-shipped-box-billing-policy"'),
 
 // The policy module stays OFFLINE-IMPORTABLE (no db/schema/service/env deps), so
 // this guard can exercise the full resolution matrix without a database. PS-371
-// let it delegate to the single markup-formula owner (markup-resolver), which is
-// itself runtime-import-free (only an `import type`), so offline import still holds
+// lets it delegate to the pure markup-formula and roundMoney owners, which stay
+// runtime-import-free, so offline import still holds
 // — proven: this guard imports decidePackageCostLine from the policy module above.
-// The ONLY permitted import is that pure markup owner; db/schema/service imports
+// The ONLY permitted imports are those pure money owners; db/schema/service imports
 // stay banned.
 {
   const importLines = policy.match(/^import\b.*$/gm) ?? [];
   const badImports = importLines.filter(
-    (line) => !/from '\.\/shipping-workflow\/markup-resolver'/.test(line),
+    (line) =>
+      !/from '\.\/shipping-workflow\/markup-resolver'/.test(line) &&
+      !/from '\.\.\/lib\/money'/.test(line),
   );
   assert.ok(badImports.length === 0,
-    `billing-box-policy.ts may import ONLY the pure markup owner; found: ${badImports.join(' | ')}`);
+    `billing-box-policy.ts may import ONLY pure money owners; found: ${badImports.join(' | ')}`);
   assert.ok(!/from '\.\.\/(db|services|routes)\//.test(policy) && !/schema\//.test(policy),
     'billing-box-policy.ts must not import db/schema/service modules (offline-importable)');
 }

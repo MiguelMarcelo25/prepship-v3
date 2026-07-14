@@ -16,12 +16,9 @@
 // in the guard), so wiring it in does not change any amount until a markup is actually configured.
 
 import type { MarkupRule, RateAdjustmentKind } from './rate-money';
+import { roundMoney } from '../../lib/money';
 
 export type CanonicalMarkup = { pct: number; flat: number; adjustmentKind?: RateAdjustmentKind };
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
-}
 
 function finiteOrZero(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -55,8 +52,8 @@ export function resolveCanonicalMarkup(input: {
 }
 
 // PS-371 — THE single base*(1+pct/100)+flat formula, UNROUNDED. Every markup application in the
-// repo delegates here (billing-shipping-line, billing-box-policy, rate-money); each call site keeps
-// its own rounding/formatting so billed numbers stay byte-identical. No markup -> base unchanged.
+// repo delegates here (billing-shipping-line, billing-box-policy, rate-money); roundMoney owns the
+// shared cent boundary. No markup -> base unchanged.
 export function canonicalMarkupAmount(base: number, markup: CanonicalMarkup | null | undefined): number {
   if (!markup) return base;
   return base * (1 + markup.pct / 100) + markup.flat;
@@ -66,5 +63,5 @@ export function canonicalMarkupAmount(base: number, markup: CanonicalMarkup | nu
 // uses, and a superset of the display applyMarkupToAmount (percent-only OR flat-only), so it reproduces
 // both current behaviors exactly. No markup -> base unchanged (2dp).
 export function applyCanonicalMarkup(base: number, markup: CanonicalMarkup | null | undefined): number {
-  return round2(canonicalMarkupAmount(base, markup));
+  return roundMoney(canonicalMarkupAmount(base, markup));
 }

@@ -17,6 +17,7 @@
 import { sql, and, eq, gte, lt, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
+import { roundMoney } from '../lib/money.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
 import {
   assertBillingOrdersEditable,
@@ -52,10 +53,6 @@ export type ByDimsScope = {
   sourceOrderId: number; // the needs-review order the operator started from (its box = the target)
   newCost: number; //  the reviewed per-order box cost to apply
 };
-
-function round2(n: number): number {
-  return Math.round((Number.isFinite(n) ? n : 0) * 100) / 100;
-}
 
 /**
  * The dims SIGNATURE of a needs-review order = the `description` of its package_cost_missing line
@@ -163,11 +160,11 @@ export async function applyBulkBoxCostByDimsResolutions(
   }
   const signature = await fetchBoxReviewSignature(scope.clientId, scope.sourceOrderId, conn);
   if (!signature) {
-    return { matchedOrderCount: 0, appliedOrderCount: 0, skippedFinalizedCount: 0, newCost: round2(scope.newCost), signature: null };
+    return { matchedOrderCount: 0, appliedOrderCount: 0, skippedFinalizedCount: 0, newCost: roundMoney(scope.newCost), signature: null };
   }
   const rows = await fetchUnmatchedBoxOrdersByDims(scope, signature, clientScopePredicate, conn);
   const { editable, skippedFinalized } = splitBulkBoxCostApplyTargets(rows);
-  const overridePrice = round2(scope.newCost).toFixed(2);
+  const overridePrice = roundMoney(scope.newCost).toFixed(2);
   // The deterministic marker note — what UNDO finds. Always stamped (overrides any prior note) so a
   // swept resolution is always reversible by re-deriving this exact marker from the source order.
   const note = sweepNote(signature);
@@ -214,7 +211,7 @@ export async function applyBulkBoxCostByDimsResolutions(
     matchedOrderCount: rows.length,
     appliedOrderCount: editable.length,
     skippedFinalizedCount: skippedFinalized.length,
-    newCost: round2(scope.newCost),
+    newCost: roundMoney(scope.newCost),
     signature,
   };
 }

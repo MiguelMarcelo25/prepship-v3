@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
+import { roundMoney } from '../lib/money.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
 
 export type BillingInvoiceHeaderTotals = {
@@ -72,15 +73,16 @@ export async function billingInvoiceHeaderTotals(
   const s = rows[0];
 
   const orderCount = s?.order_count ?? 0;
-  const pickPackTotal = Number(s?.pickpack_total ?? 0);
-  const additionalTotal = Number(s?.additional_total ?? 0);
-  const pickPackFeeTotal = pickPackTotal + additionalTotal;
-  const packageTotal = Number(s?.package_total ?? 0);
-  const shippingTotal = Number(s?.shipping_total ?? 0);
-  const storageTotal = Number(s?.storage_total ?? 0);
-  const grandTotal = Number(s?.grand_total ?? 0);
-  const fulfillmentFeeTotal =
-    shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
+  const pickPackTotal = roundMoney(Number(s?.pickpack_total ?? 0));
+  const additionalTotal = roundMoney(Number(s?.additional_total ?? 0));
+  const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
+  const packageTotal = roundMoney(Number(s?.package_total ?? 0));
+  const shippingTotal = roundMoney(Number(s?.shipping_total ?? 0));
+  const storageTotal = roundMoney(Number(s?.storage_total ?? 0));
+  const grandTotal = roundMoney(Number(s?.grand_total ?? 0));
+  const fulfillmentFeeTotal = roundMoney(
+    shippingTotal + pickPackFeeTotal + packageTotal + storageTotal,
+  );
 
   return {
     orderCount,

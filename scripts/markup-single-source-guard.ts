@@ -21,6 +21,7 @@ import {
 import { applyMarkupToAmount, parseMarkupSettingValue, buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
 import { decidePackageCostLine } from '../src/services/billing-box-policy';
+import { roundMoney } from '../src/lib/money';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -132,36 +133,34 @@ check('rate-money PREFERS the canonical markup in the carrier branch (falls back
   /facts\.markupRuleCanonical !== undefined[\s\S]*?applyCanonicalRowMarkup/.test(rateMoneySrc2));
 
 // ── PS-371: ONE formula owner — every call site delegates to markup-resolver ──────────────
-// canonicalMarkupAmount is the UNROUNDED single formula; applyCanonicalMarkup = round2 of it.
-check('PS-371 canonicalMarkupAmount is unrounded (call sites keep their own rounding)',
+// canonicalMarkupAmount is the UNROUNDED single formula; roundMoney owns cent conversion.
+check('PS-371 canonicalMarkupAmount stays unrounded until a money boundary',
   canonicalMarkupAmount(10.555, null) === 10.555 &&
   canonicalMarkupAmount(10, { pct: 15, flat: 1 }) === 10 * (1 + 15 / 100) + 1);
-check('PS-371 applyCanonicalMarkup === round2(canonicalMarkupAmount)',
+check('PS-371 applyCanonicalMarkup delegates cent conversion to roundMoney',
   applyCanonicalMarkup(10.555, null) === 10.56 &&
-  applyCanonicalMarkup(9.85, { pct: 15, flat: 0 }) === Math.round(canonicalMarkupAmount(9.85, { pct: 15, flat: 0 }) * 100) / 100);
+  applyCanonicalMarkup(9.85, { pct: 15, flat: 0 }) === roundMoney(canonicalMarkupAmount(9.85, { pct: 15, flat: 0 })));
 
-// billing-shipping-line: billed amount byte-identical to the historical inline formula (raw, unrounded;
-// the caller applies .toFixed(2)).
+// billing-shipping-line: formula parity plus canonical cent conversion.
 for (const [billedCost, pct, flat] of [[9.85, 15, 1], [12.34, 0, 0], [7.5, 7.5, 0], [100, 0, 2.25]] as const) {
   const decision = decideShippingLineBilling({
     labelCost: billedCost, cShippingRateAmount: null, billingMode: 'label_cost',
     isBaselineCarrier: true, refUspsRate: 0, refUpsRate: 0,
     shippingMarkupPct: pct, shippingMarkupFlat: flat,
   });
-  check(`PS-371 shipping line byte-identical (cost=${billedCost}, pct=${pct}, flat=${flat})`,
-    decision.billedAmount === billedCost * (1 + pct / 100) + flat,
+  check(`PS-371 shipping line formula + roundMoney (cost=${billedCost}, pct=${pct}, flat=${flat})`,
+    decision.billedAmount === roundMoney(billedCost * (1 + pct / 100) + flat),
     `got=${decision.billedAmount}`);
 }
 
-// billing-box-policy: box price byte-identical to the historical inline percent-only formula
-// (unrounded; percent-only BY DESIGN — flat never applies to box pricing).
+// billing-box-policy: percent-only formula plus canonical cent conversion.
 for (const [configuredPrice, markupPct] of [[1.11, 15], [0.75, 0], [2.5, 7.5]] as const) {
   const decision = decidePackageCostLine({
     resolution: { status: 'resolved', source: 'dims', packageId: 7, pkg: { id: 7, name: '12x10x3', packageCode: null, length: 12, width: 10, height: 3 }, overridePrice: null, note: null },
     clientHasBoxPricing: true, configuredPrice, markupPct,
   });
-  check(`PS-371 box price byte-identical + percent-only (price=${configuredPrice}, pct=${markupPct})`,
-    decision.kind === 'line' && decision.amount === configuredPrice * (1 + markupPct / 100),
+  check(`PS-371 box price percent-only + roundMoney (price=${configuredPrice}, pct=${markupPct})`,
+    decision.kind === 'line' && decision.amount === roundMoney(configuredPrice * (1 + markupPct / 100)),
     `got=${JSON.stringify(decision)}`);
 }
 

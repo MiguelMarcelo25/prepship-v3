@@ -1,3 +1,5 @@
+import { roundMoney } from '../lib/money';
+
 export const HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME = 'HUGRAB';
 export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD = 6;
 export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT = 7.73;
@@ -31,10 +33,6 @@ export type ClientHugrabShippingRateOverrideConfig = {
 
 async function getPg() {
   return (await import('../db/client.js')).sql;
-}
-
-function roundMoney(value: number): number {
-  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 }
 
 function positiveNumber(value: unknown, fallback: number): number {

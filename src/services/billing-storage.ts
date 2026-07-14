@@ -21,6 +21,8 @@
 // the SQL that loads the ledger lives in billing.ts; the guard exercises the
 // full timeline matrix offline.
 
+import { roundMoney } from '../lib/money';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type StorageLedgerMovement = {
@@ -54,7 +56,7 @@ export type SkuStorageProof = {
   cuFtPerUnit: number;
   segments: StorageSegment[];
   cuFtDays: number;
-  /** this SKU's share of the storage line (round2(cuFtDays × dailyRate)). */
+  /** this SKU's share of the storage line (roundMoney(cuFtDays × dailyRate)). */
   amount: number;
   /** true when the on-hand balance went below zero during the period (over-ship / bad adjust). */
   hadNegativeBalance: boolean;
@@ -65,10 +67,6 @@ export type SkuStorageProof = {
 function toNum(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-function round2(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 /** Floor a timestamp to the start of its UTC calendar day (ms). */
@@ -217,7 +215,7 @@ export type ClientStorageBilling = {
 
 /**
  * The client's single prorated storage line for the month. Bills only when the
- * rate is positive; each eligible SKU contributes round2(cuFtDays × dailyRate),
+ * rate is positive; each eligible SKU contributes roundMoney(cuFtDays × dailyRate),
  * and the line total is the SUM of those rounded shares (exact reconciliation to
  * the frozen proof rows). Returns amount 0 with an empty proof when nothing bills.
  */
@@ -257,7 +255,7 @@ export function computeClientStorageBilling(input: {
     });
     if (timeline.cuFtDays <= 0 && !timeline.hadNegativeBalance) continue;
 
-    const skuAmount = round2(timeline.cuFtDays * dailyRate);
+    const skuAmount = roundMoney(timeline.cuFtDays * dailyRate);
     totalCuFtDays += timeline.cuFtDays;
     amount += skuAmount;
     skuProofs.push({ ...timeline, amount: skuAmount });
@@ -267,7 +265,7 @@ export function computeClientStorageBilling(input: {
   }
 
   return {
-    amount: round2(amount),
+    amount: roundMoney(amount),
     totalCuFtDays: Math.round(totalCuFtDays * 1e6) / 1e6,
     daysInMonth,
     monthlyRatePerCuFt: monthlyRate,

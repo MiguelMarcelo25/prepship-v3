@@ -2,6 +2,7 @@ import {
   resolveHugrabShippingRateOverride,
   type HugrabShippingRateOverrideConfig,
 } from './billing-hugrab-shipping-rate-override';
+import { roundMoney } from '../lib/money';
 import { canonicalMarkupAmount } from './shipping-workflow/markup-resolver';
 import type { RateAdjustmentKind } from './shipping-workflow/rate-money';
 
@@ -40,7 +41,7 @@ export type ShippingLineBillingInput = {
 };
 
 export type ShippingLineBillingResult = {
-  /** the amount to bill (raw; caller applies .toFixed(2), matching prior behavior). */
+  /** Canonical cent amount to bill; callers only serialize this value. */
   billedAmount: number;
   source: 'c_shipping_rate' | 'reference_rate' | 'label_cost';
   markupApplied: boolean;
@@ -77,7 +78,7 @@ export function decideShippingLineBilling(input: ShippingLineBillingInput): Ship
   if (cShippingRateAmount != null) {
     const floor = input.labelCost > 0 ? input.labelCost : cShippingRateAmount;
     return withHugrabShippingRateOverride(input, {
-      billedAmount: Math.max(cShippingRateAmount, floor),
+      billedAmount: roundMoney(Math.max(cShippingRateAmount, floor)),
       source: 'c_shipping_rate',
       markupApplied: false,
       descriptionSuffix: '',
@@ -98,14 +99,15 @@ export function decideShippingLineBilling(input: ShippingLineBillingInput): Ship
   const pct = input.shippingMarkupPct;
   const flat = input.shippingMarkupFlat;
   const isTrueCostUplift = input.shippingMarkupKind === 'true_cost_uplift';
-  // PS-371: the formula lives in ONE owner (markup-resolver.canonicalMarkupAmount); this site
-  // stays unrounded — the caller applies .toFixed(2), matching prior behavior exactly.
-  const billedAmount = isTrueCostUplift ? billedCost : canonicalMarkupAmount(billedCost, { pct, flat });
+  // PS-371: markup-resolver owns the formula; roundMoney owns its cent boundary.
+  const billedAmount = roundMoney(
+    isTrueCostUplift ? billedCost : canonicalMarkupAmount(billedCost, { pct, flat }),
+  );
   const markupApplied = !isTrueCostUplift && (pct > 0 || flat > 0);
   return withHugrabShippingRateOverride(input, {
     billedAmount,
     source,
     markupApplied,
-    descriptionSuffix: markupApplied ? ` (${pct}% + $${flat.toFixed(2)})` : '',
+    descriptionSuffix: markupApplied ? ` (${pct}% + $${roundMoney(flat).toFixed(2)})` : '',
   });
 }

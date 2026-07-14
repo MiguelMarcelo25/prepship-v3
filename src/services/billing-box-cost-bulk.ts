@@ -13,6 +13,7 @@
 import { sql, and, eq, gte, lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
+import { roundMoney } from '../lib/money.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
 import {
   assertBillingOrdersEditable,
@@ -47,10 +48,6 @@ export type BulkBoxCostPreview = {
   sampleOrderNumbers: string[]; //first few editable orders, for the confirm modal
 };
 
-function round2(n: number): number {
-  return Math.round((Number.isFinite(n) ? n : 0) * 100) / 100;
-}
-
 /**
  * PURE: given the orders matched by a (client + range + box) scope, compute the bulk-apply
  * preview. Finalized (invoiced) orders are reported but EXCLUDED from the before/after math —
@@ -60,13 +57,13 @@ export function computeBulkBoxCostPreview(
   rows: BulkBoxCostOrderRow[],
   newCost: number,
 ): BulkBoxCostPreview {
-  const cost = round2(newCost);
+  const cost = roundMoney(newCost);
   const editable = rows.filter((r) => !r.invoiced);
   const finalized = rows.filter((r) => r.invoiced);
-  const beforeTotal = round2(
+  const beforeTotal = roundMoney(
     editable.reduce((sum, r) => sum + (Number.isFinite(r.currentBoxCost) ? r.currentBoxCost : 0), 0),
   );
-  const afterTotal = round2(editable.length * cost);
+  const afterTotal = roundMoney(editable.length * cost);
   return {
     matchedOrderCount: rows.length,
     finalizedOrderCount: finalized.length,
@@ -74,7 +71,7 @@ export function computeBulkBoxCostPreview(
     newCost: cost,
     beforeTotal,
     afterTotal,
-    delta: round2(afterTotal - beforeTotal),
+    delta: roundMoney(afterTotal - beforeTotal),
     sampleOrderNumbers: editable.slice(0, 10).map((r) => r.orderNumber ?? `#${r.orderId}`),
   };
 }
@@ -117,7 +114,7 @@ export async function fetchBulkBoxCostOrderRows(
     .map((r) => ({
       orderId: r.orderId,
       orderNumber: r.orderNumber,
-      currentBoxCost: round2(Number(r.currentBoxCost)),
+      currentBoxCost: roundMoney(Number(r.currentBoxCost)),
       invoiced: r.invoiced === true,
     }));
 }
@@ -178,7 +175,7 @@ export async function applyBulkBoxCostResolutions(
   }
   const rows = await fetchBulkBoxCostOrderRows(scope, clientScopePredicate, conn);
   const { editable, skippedFinalized } = splitBulkBoxCostApplyTargets(rows);
-  const overridePrice = round2(scope.newCost).toFixed(2);
+  const overridePrice = roundMoney(scope.newCost).toFixed(2);
 
   if (editable.length > 0) {
     // ONE transaction for the whole batch — all editable orders get the resolution or none do, so
@@ -224,6 +221,6 @@ export async function applyBulkBoxCostResolutions(
     matchedOrderCount: rows.length,
     appliedOrderCount: editable.length,
     skippedFinalizedCount: skippedFinalized.length,
-    newCost: round2(scope.newCost),
+    newCost: roundMoney(scope.newCost),
   };
 }

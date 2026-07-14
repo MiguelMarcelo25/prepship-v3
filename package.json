@@ -378,6 +378,7 @@
     "test:ps-311-bulk-box-cost-integration": "tsx scripts/ps-311-bulk-box-cost-integration.ts",
     "test:ps-311b-box-cost-by-dims-integration": "tsx scripts/ps-311b-box-cost-by-dims-integration.ts",
     "test:ps-323-billing-sot-parity": "tsx scripts/ps-323-billing-sot-parity-guard.ts",
+    "test:audit-money-rounding": "tsx scripts/audit-money-rounding-guard.ts",
     "test:sot-guard-pack": "node scripts/sot-guard-pack.mjs",
     "test:audit-orders-service-boundary": "tsx scripts/audit-orders-service-boundary-guard.ts",
     "test:audit-pg-boss-inventory-outbox": "tsx scripts/audit-pg-boss-inventory-outbox-guard.ts",

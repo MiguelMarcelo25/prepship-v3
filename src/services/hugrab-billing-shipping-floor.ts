@@ -2,6 +2,7 @@ import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems } from '../db/schema/billing.js';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost.js';
+import { roundMoney } from '../lib/money.js';
 import {
   assertBillingOrdersEditable,
   billingOrderHasNoFinalizedLineSql,
@@ -80,12 +81,8 @@ export class HugrabBillingShippingFloorCountMismatchError extends Error {
   }
 }
 
-function round2(value: number): number {
-  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
-}
-
 function money(value: number): string {
-  return round2(value).toFixed(2);
+  return roundMoney(value).toFixed(2);
 }
 
 function toNumber(value: string | number | null | undefined): number {
@@ -95,7 +92,7 @@ function toNumber(value: string | number | null | undefined): number {
 
 function positiveMoneyOrDefault(value: number | string | null | undefined, fallback: number): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? round2(parsed) : fallback;
+  return Number.isFinite(parsed) && parsed > 0 ? roundMoney(parsed) : fallback;
 }
 
 export function resolveHugrabBillingShippingFloorParams(
@@ -112,7 +109,7 @@ function nextShippingFor(
   row: HugrabBillingShippingFloorCandidate,
   params: HugrabBillingShippingFloorParams,
 ): number {
-  return action === 'revert' ? round2(row.selectedRateCost) : params.targetShipping;
+  return action === 'revert' ? roundMoney(row.selectedRateCost) : params.targetShipping;
 }
 
 export function summarizeHugrabBillingShippingFloorCandidates(
@@ -121,14 +118,14 @@ export function summarizeHugrabBillingShippingFloorCandidates(
   paramsInput: HugrabBillingShippingFloorParamInput = {},
 ): HugrabBillingShippingFloorPreview {
   const params = resolveHugrabBillingShippingFloorParams(paramsInput);
-  const currentTotal = round2(rows.reduce((sum, row) => sum + row.currentShipping, 0));
+  const currentTotal = roundMoney(rows.reduce((sum, row) => sum + row.currentShipping, 0));
   const sampleRows = rows.slice(0, 25).map((row) => ({
     ...row,
-    currentShipping: round2(row.currentShipping),
-    selectedRateCost: round2(row.selectedRateCost),
+    currentShipping: roundMoney(row.currentShipping),
+    selectedRateCost: roundMoney(row.selectedRateCost),
     nextShipping: nextShippingFor(action, row, params),
   }));
-  const newTotal = round2(rows.reduce((sum, row) => sum + nextShippingFor(action, row, params), 0));
+  const newTotal = roundMoney(rows.reduce((sum, row) => sum + nextShippingFor(action, row, params), 0));
   return {
     action,
     clientName: HUGRAB_BILLING_CLIENT_NAME,
@@ -137,7 +134,7 @@ export function summarizeHugrabBillingShippingFloorCandidates(
     count: rows.length,
     currentTotal,
     newTotal,
-    delta: round2(newTotal - currentTotal),
+    delta: roundMoney(newTotal - currentTotal),
     sampleRows,
   };
 }
@@ -149,8 +146,8 @@ function mapCandidate(row: RawCandidate): HugrabBillingShippingFloorCandidate {
     orderId: row.order_id == null ? null : Number(row.order_id),
     orderNumber: row.order_number,
     shipDate: row.ship_date,
-    currentShipping: round2(toNumber(row.current_shipping)),
-    selectedRateCost: round2(toNumber(row.selected_rate_cost)),
+    currentShipping: roundMoney(toNumber(row.current_shipping)),
+    selectedRateCost: roundMoney(toNumber(row.selected_rate_cost)),
   };
 }
 

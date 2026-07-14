@@ -295,7 +295,7 @@ check('billing: the captured customer_rate is loaded by shipment id + fed to the
 check('billing: the sidecar (orderCompetitiveRate / isHouseOrder) supplies the house rate; markup suppression is proven behaviorally (decideShippingLineBilling house => markupApplied=false, suffix empty)',
   billingSrc.includes('orderCompetitiveRate') && /isHouseOrder/.test(billingSrc) &&
   /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
-  /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc));
+  /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc));
 
 // ── slice 4 (P7 money tuple): house mapping + carrier-markup suppression ──────
 {
@@ -499,7 +499,7 @@ const billingDelegateSrc = readFileSync('src/services/billing.ts', 'utf8');
 check('billing.ts delegates the shipping-line amount to the pure decideShippingLineBilling owner (single source of truth)',
   /import \{ decideShippingLineBilling \}/.test(billingDelegateSrc) &&
   /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingDelegateSrc) &&
-  /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingDelegateSrc));
+  /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingDelegateSrc));
 
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').

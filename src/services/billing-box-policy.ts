@@ -46,6 +46,7 @@
  */
 
 import { canonicalMarkupAmount } from './shipping-workflow/markup-resolver';
+import { roundMoney } from '../lib/money';
 
 export type BoxPackage = {
   id: number;
@@ -329,7 +330,7 @@ export function decidePackageCostLine(args: {
   if (r.overridePrice != null) {
     return {
       kind: 'line',
-      amount: r.overridePrice > 0 ? r.overridePrice : 0,
+      amount: r.overridePrice > 0 ? roundMoney(r.overridePrice) : 0,
       packageId: r.packageId,
       pkgName: resolvedPackageDisplayName(r, 'operator-resolved'),
     };
@@ -339,8 +340,8 @@ export function decidePackageCostLine(args: {
   const effective =
     args.configuredPrice != null && args.configuredPrice > 0
       // PS-371: delegate to the single formula owner. Box markup is percent-only BY DESIGN
-      // (flat: 0) and unrounded here — the caller formats, matching prior behavior exactly.
-      ? canonicalMarkupAmount(args.configuredPrice, { pct: args.markupPct, flat: 0 })
+      // (flat: 0); roundMoney owns the decision's cent boundary.
+      ? roundMoney(canonicalMarkupAmount(args.configuredPrice, { pct: args.markupPct, flat: 0 }))
       : null;
   // PS-222b: a flagged no-charge/factory box shows an EXPLICIT $0.00 line when no
   // positive price applies — instead of the silent suppression below. A real

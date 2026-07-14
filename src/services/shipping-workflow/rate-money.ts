@@ -27,6 +27,7 @@ import {
   resolveHugrabShippingRateOverride,
   type HugrabShippingRateOverrideConfig,
 } from '../billing-hugrab-shipping-rate-override';
+import { roundMoney } from '../../lib/money';
 // PS-371: the markup FORMULA lives in exactly one owner (markup-resolver). This module keeps its
 // public API (applyMarkupToAmount / the canonical row markup) but delegates the math. The import is
 // value-safe: markup-resolver only imports a TYPE from this file, so no runtime cycle exists.
@@ -100,10 +101,6 @@ export function parseMarkupSettingValue(raw: unknown): MarkupRule | null {
   } catch {
     return null;
   }
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 /**
@@ -289,11 +286,11 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       : rawCShippingRateAmount;
     const shippingMarginAmount =
       cShippingRateAmount != null && selectedRateCost != null
-        ? round2(cShippingRateAmount - selectedRateCost)
+        ? roundMoney(cShippingRateAmount - selectedRateCost)
         : null;
     return {
-      cShippingRateAmount: cShippingRateAmount != null ? round2(cShippingRateAmount) : null,
-      selectedRateCost: selectedRateCost != null ? round2(selectedRateCost) : null,
+      cShippingRateAmount: cShippingRateAmount != null ? roundMoney(cShippingRateAmount) : null,
+      selectedRateCost: selectedRateCost != null ? roundMoney(selectedRateCost) : null,
       shippingMarginAmount,
       shippingMarginPct:
         shippingMarginAmount != null &&
@@ -320,10 +317,10 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       ? positive(facts.bestRateBaseAmount)
       : (positive(facts.selectedRateBaseAmount) ?? positive(facts.labelFinalCost));
     if (base == null) return null;
-    const markupAmount = Math.max(0, round2(houseMarked - base));
+    const markupAmount = Math.max(0, roundMoney(houseMarked - base));
     return {
-      baseAmount: round2(base),
-      markedAmount: round2(houseMarked),
+      baseAmount: roundMoney(base),
+      markedAmount: roundMoney(houseMarked),
       markupAmount,
       insuranceAddOn,
       marginPercent: markupAmount >= 0.005 && base > 0 ? Math.round((markupAmount / base) * 100) : null,
@@ -351,9 +348,9 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       ? canonicalMarkupAdjustmentKind(facts.markupRuleCanonical)
       : markupRuleAdjustmentKind(facts.markupRule);
     const selectedRateCost = rateAdjustmentKind === 'true_cost_uplift' ? marked : base;
-    const markupAmount = Math.max(0, round2(marked - base));
+    const markupAmount = Math.max(0, roundMoney(marked - base));
     return {
-      baseAmount: round2(base),
+      baseAmount: roundMoney(base),
       markedAmount: marked,
       markupAmount,
       insuranceAddOn,
@@ -381,9 +378,9 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     ? canonicalMarkupAdjustmentKind(facts.markupRuleCanonical)
     : markupRuleAdjustmentKind(facts.markupRule);
   const selectedRateCost = rateAdjustmentKind === 'true_cost_uplift' ? marked : markupBasis;
-  const markupAmount = base != null ? Math.max(0, round2(marked - base)) : null;
+  const markupAmount = base != null ? Math.max(0, roundMoney(marked - base)) : null;
   return {
-    baseAmount: base != null ? round2(base) : null,
+    baseAmount: base != null ? roundMoney(base) : null,
     markedAmount: marked,
     markupAmount,
     insuranceAddOn,
@@ -435,8 +432,8 @@ export function computeMarketplaceFee(
       : s >= rule.threshold
         ? rule.atOrAbovePercent
         : rule.belowPercent;
-  if (!Number.isFinite(pct)) return round2(0);
-  return round2(s * (pct / 100));
+  if (!Number.isFinite(pct)) return roundMoney(0);
+  return roundMoney(s * (pct / 100));
 }
 
 export type OrderRowMarketplaceDisplay = {
@@ -462,13 +459,13 @@ export function buildOrderRowMarketplace(facts: {
     typeof facts.productSubtotal === 'number' &&
     Number.isFinite(facts.productSubtotal) &&
     facts.productSubtotal > 0
-      ? round2(facts.productSubtotal)
+      ? roundMoney(facts.productSubtotal)
       : null;
   const marketplaceFee = computeMarketplaceFee(subtotal, facts.marketplaceFeeRule);
   if (subtotal == null && marketplaceFee == null) return null;
   const profit =
     subtotal != null && facts.markedAmount != null
-      ? round2(subtotal - (marketplaceFee ?? 0) - facts.markedAmount)
+      ? roundMoney(subtotal - (marketplaceFee ?? 0) - facts.markedAmount)
       : null;
   return { productSubtotal: subtotal, marketplaceFee, profit };
 }

@@ -1,4 +1,5 @@
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
+import { roundMoney } from '../lib/money';
 
 export type BillingSelectedRateCostInput = {
   // PS-370: the persisted normalized total (shipments.selected_rate_cost). When
@@ -32,14 +33,10 @@ function firstNumber(record: Record<string, unknown> | null, keys: string[]): nu
   return null;
 }
 
-function roundCents(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
 export function resolveBillingSelectedRateCost(input: BillingSelectedRateCostInput): number | null {
   // PS-370: the persisted column is the source of truth when present.
   const persisted = toFiniteNumber(input.selectedRateCost);
-  if (persisted != null) return roundCents(persisted);
+  if (persisted != null) return roundMoney(persisted);
 
   // NULL column (un-backfilled row) -> the component derivation, UNCHANGED. The
   // card's Phase-1 note to collapse this to normalizeShippingRateMoney is
@@ -58,11 +55,11 @@ export function resolveBillingSelectedRateCost(input: BillingSelectedRateCostInp
     toFiniteNumber(input.labelCost) ??
     firstNumber(selectedRate, ['shipmentCost', 'shipment_cost', 'labelCost', 'label_cost']);
 
-  if (postageCost != null) return roundCents(postageCost + otherCost);
+  if (postageCost != null) return roundMoney(postageCost + otherCost);
 
   const selectedJsonTotal = firstNumber(selectedRate, ['totalCost', 'total_cost', 'total']);
-  if (selectedJsonTotal != null) return roundCents(selectedJsonTotal);
+  if (selectedJsonTotal != null) return roundMoney(selectedJsonTotal);
 
   const selectedTotal = normalizeShippingRateMoney(selectedRate).selectedRateCost;
-  return selectedTotal != null ? roundCents(selectedTotal) : null;
+  return selectedTotal != null ? roundMoney(selectedTotal) : null;
 }
