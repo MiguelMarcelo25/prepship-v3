@@ -30,6 +30,7 @@ function read(path: string): string {
 
 const ordersRoute = read('src/routes/orders.ts');
 const applyBestRateOwner = read('src/services/shipping-workflow/apply-best-rate.ts');
+const ordersCommand = read('src/services/orders-overrides-command.ts');
 const packageJson = read('package.json');
 
 check('apply-best-rate owner exports reusable dims-label parser',
@@ -38,16 +39,25 @@ check('apply-best-rate owner exports reusable dims-label parser',
 check('apply-best-rate owner exports persisted best-rate dims validator',
   /export function validateBestRateDimsForPersistedRate\(/.test(applyBestRateOwner));
 
-check('orders route imports best-rate dims validation from the service owner',
-  /import \{[^}]*buildApplyBestRatePatch[^}]*validateBestRateDimsForPersistedRate[^}]*\} from '\.\.\/services\/shipping-workflow\/apply-best-rate'/.test(ordersRoute));
+check('orders route imports persisted-rate dims validation for the legacy PATCH boundary',
+  /import \{[^}]*validateBestRateDimsForPersistedRate[^}]*\} from '\.\.\/services\/shipping-workflow\/apply-best-rate'/.test(ordersRoute));
+
+check('orders command imports apply/dims policy from the canonical service owner',
+  /import \{[^}]*buildApplyBestRatePatch[^}]*validateBestRateDimsForPersistedRate[^}]*\} from '\.\/shipping-workflow\/apply-best-rate'/.test(ordersCommand));
 
 check('orders route no longer defines route-local best-rate dims parser/schema/validator',
   !/function parseBestRateDimsLabel\(/.test(ordersRoute) &&
   !/const bestRateDimsSchema\b/.test(ordersRoute) &&
   !/function validateBestRateDimsForPersistedRate\(/.test(ordersRoute));
 
-check('orders route remains a caller of the canonical persisted-rate dims validator',
-  (ordersRoute.match(/validateBestRateDimsForPersistedRate\(/g)?.length ?? 0) >= 2);
+check('route PATCH and extracted command both call the canonical persisted-rate dims validator',
+  (ordersRoute.match(/validateBestRateDimsForPersistedRate\(/g)?.length ?? 0) >= 1 &&
+  (ordersCommand.match(/validateBestRateDimsForPersistedRate\(/g)?.length ?? 0) >= 1);
+
+check('dedicated rate routes delegate and no longer implement persisted-rate validation',
+  /applyBestRateForOrder\(/.test(ordersRoute) &&
+  /saveBestRateForOrder\(/.test(ordersRoute) &&
+  !/assertPersistedOrderBestRateDto\(/.test(ordersRoute));
 
 check('package wires PS-322 route-boundary guard',
   /"test:ps-322-orders-route-boundary"\s*:\s*"tsx scripts\/ps-322-orders-route-boundary-guard\.ts"/.test(packageJson));

@@ -256,10 +256,14 @@ check('RateRowItem: recommended SHIPP row renders the house tuple (houseTuple pr
 
 // ── 13. STATIC: the SAVE handlers + the shipped read + the opt-in gate are wired (anti-regression) ──
 const ordersSrc = readFileSync('src/routes/orders.ts', 'utf8');
+const ordersCommandSrc = readFileSync('src/services/orders-overrides-command.ts', 'utf8');
 check('static: orders SAVE rejects a half-house behind the HOUSE_TUPLE_SAVE_GUARD canary',
-  /shouldRejectHalfHouseSave\(hStatus\) && process\.env\.HOUSE_TUPLE_SAVE_GUARD === 'on'/.test(ordersSrc));
+  /shouldRejectHalfHouseSave\(hStatus\) && process\.env\.HOUSE_TUPLE_SAVE_GUARD === 'on'/.test(ordersSrc) &&
+  /shouldRejectHalfHouseSave\(hStatus\) && process\.env\.HOUSE_TUPLE_SAVE_GUARD === 'on'/.test(ordersCommandSrc));
 check('static: orders SAVE stamps the houseTupleStatus verdict onto the persisted best rate (both routes)',
-  /houseTupleStatus = hStatus/.test(ordersSrc) && /canonical\.houseTupleStatus = hStatus/.test(ordersSrc));
+  /houseTupleStatus = hStatus/.test(ordersSrc) &&
+  /canonicalBestRate\.houseTupleStatus = hStatus/.test(ordersCommandSrc) &&
+  /canonical\.houseTupleStatus = hStatus/.test(ordersCommandSrc));
 check('static: item3 shipped realized read present + financially gated (orderCompetitiveRate + canViewFinancials)',
   /orderCompetitiveRate/.test(ordersSrc) && /canViewFinancials/.test(ordersSrc));
 const stampSrc = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');

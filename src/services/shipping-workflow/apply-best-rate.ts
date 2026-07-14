@@ -8,7 +8,7 @@
 // request fingerprint is supplied — the rate's proof must match it) and returns the
 // exact order_overrides patch to persist, or a structured, machine-readable error.
 // No I/O, no normalization side effects, no purchase — the route normalizes the rate
-// payload and runs the single applyOverridesPatch behind assertOrderEditable.
+// payload; orders-overrides-command persists it once after the route's assertOrderEditable guard.
 
 import { validateExactSelectedRate } from './rate-fingerprint.js';
 import { stampPurchaseCustomerRateAliases } from './purchase-customer-rate-aliases.js';

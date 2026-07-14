@@ -32,6 +32,7 @@ function money(value: unknown): number | null {
 }
 
 const ordersRoute = read('src/routes/orders.ts');
+const ordersCommand = read('src/services/orders-overrides-command.ts');
 const applyBestRateService = read('src/services/shipping-workflow/apply-best-rate.ts');
 const packageJson = read('package.json');
 
@@ -43,16 +44,17 @@ const applyRoute = applyRouteStart >= 0 && applyRouteEnd > applyRouteStart
 
 check('guard found the backend Apply Best Rate route', applyRoute.length > 0);
 check(
-  'Apply Best Rate route resolves backend quote snapshots before persisting',
-  /loadRateQuoteSnapshot/.test(applyRoute) &&
-    /finalizeAppliedBestRateFromSnapshot/.test(applyRoute) &&
-    /bestRateJsonForApply/.test(applyRoute),
+  'Apply Best Rate command resolves backend quote snapshots before persisting',
+  /loadRateQuoteSnapshot/.test(ordersCommand) &&
+    /finalizeAppliedBestRateFromSnapshot/.test(ordersCommand) &&
+    /bestRateJsonForApply/.test(ordersCommand) &&
+    /applyBestRateForOrder/.test(applyRoute),
 );
 check(
-  'Apply Best Rate route stamps the same house tuple verdict as saved best-rate persistence',
-  /stampHouseTuple\(/.test(applyRoute) &&
-    /houseTupleStatus/.test(applyRoute) &&
-    /HOUSE_TUPLE_REQUIRED/.test(applyRoute),
+  'Apply Best Rate command stamps the same house tuple verdict as saved best-rate persistence',
+  /stampHouseTuple\(/.test(ordersCommand) &&
+    /houseTupleStatus/.test(ordersCommand) &&
+    /HOUSE_TUPLE_REQUIRED/.test(ordersCommand),
 );
 check(
   'apply-best-rate service exposes the backend snapshot finalizer',

@@ -74,10 +74,12 @@ check('RateInput carries addressValidation + providerMarker',
 check('classifyRateInputResidential passes addressValidation + providerMarker to the classifier',
   /addressValidation: input\.addressValidation \?\? undefined/.test(rates) &&
     /providerMarker: input\.providerMarker \?\? undefined/.test(rates));
-const orders = readFileSync('src/routes/orders.ts', 'utf8');
+const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+const orders = readFileSync('src/services/orders-read-model.ts', 'utf8');
 check('buildCanonicalOrderModel threads resolved evidence into its classifier call',
   /resolved: resolvedResidential \?\? null/.test(orders) &&
-    /addressValidation: residentialEvidence\.addressValidation \?\? undefined/.test(orders));
+    /addressValidation: residentialEvidence\.addressValidation \?\? undefined/.test(orders) &&
+    /from '\.\.\/services\/orders-read-model'/.test(ordersRoute));
 
 check('package.json wires test:ps-276-resolver-consumption',
   /test:ps-276-resolver-consumption/.test(readFileSync('package.json', 'utf8')));

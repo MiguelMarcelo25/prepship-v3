@@ -17,6 +17,7 @@ const REQUIRED_GUARDS = [
   'test:ps-320-v2-api-client-transport',
   'test:ps-321-ratebrowsermodal-thin-ui',
   'test:ps-329-orders-wrapper-sot-cleanup',
+  'test:audit-orders-service-boundary',
 ];
 
 const npmCli = process.env.npm_execpath;

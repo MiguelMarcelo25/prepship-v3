@@ -5,7 +5,7 @@
  * as a UNIT (rate + complete dims + chosen package, with optional selected-rate-proof
  * fingerprint matching) and returns the single atomic override patch or a structured
  * error; (b) the route POST /:id/apply-best-rate exists, runs behind assertOrderEditable,
- * delegates to the owner, and persists via ONE applyOverridesPatch (not three browser
+ * delegates to the owner, and persists via ONE applyOrderOverridesPatch (not three browser
  * writes).
  *
  * Offline only: no DB, no network, no providers, no labels, no postage, no marketplace
@@ -63,24 +63,36 @@ check('fingerprint match accepted', match.ok === true, match);
 const noFpOnRate = buildApplyBestRatePatch({ bestRateJson: { amount: 5, carrierCode: 'usps' }, dimsLabel: '8x6x6', selectedPid: 42, currentRequestFingerprint: FP });
 check('fingerprint absent on rate is tolerated', noFpOnRate.ok === true, noFpOnRate);
 
-// 6. ROUTE wiring — backend owns the command; one atomic persist behind the lock.
+// 6. ROUTE wiring — the lock stays in the HTTP boundary; business command lives in its service.
 const ordersRoute = read('src/routes/orders.ts');
-check('orders route imports the apply-best-rate owner',
-  /import \{[^}]*buildApplyBestRatePatch[^}]*\} from '\.\.\/services\/shipping-workflow\/apply-best-rate'/.test(ordersRoute));
+const commandOwner = read('src/services/orders-overrides-command.ts');
+check('orders route imports the apply-best-rate command owner',
+  /import \{[^}]*applyBestRateForOrder[^}]*\} from '\.\.\/services\/orders-overrides-command'/.test(ordersRoute));
 check('POST /:id/apply-best-rate route exists',
   /'\/:id\{\[0-9\]\+\}\/apply-best-rate'/.test(ordersRoute));
 
-// Slice the apply-best-rate handler (from its route path to the next route) and assert
-// it runs behind assertOrderEditable, delegates to the owner, and does ONE persist.
 const applyStart = ordersRoute.indexOf("'/:id{[0-9]+}/apply-best-rate'");
 const applyEnd = ordersRoute.indexOf("'/:id{[0-9]+}/selected-package-id'", applyStart);
 const handler = applyStart >= 0 && applyEnd > applyStart ? ordersRoute.slice(applyStart, applyEnd) : '';
-check('apply handler guards with assertOrderEditable', /assertOrderEditable\(c, id\)/.test(handler));
-check('apply handler delegates to buildApplyBestRatePatch', /buildApplyBestRatePatch\(\{/.test(handler));
-check('apply handler persists via exactly ONE applyOverridesPatch (atomic, not 3 writes)',
-  (handler.match(/applyOverridesPatch\(/g)?.length ?? 0) === 1, handler.match(/applyOverridesPatch\(/g));
-check('apply handler enforces rate eligibility before persisting',
-  /shippingRateEligibilityReason\(/.test(handler));
+check('apply handler guards with assertOrderEditable before delegation',
+  handler.indexOf('assertOrderEditable(c, id)') >= 0 &&
+  handler.indexOf('assertOrderEditable(c, id)') < handler.indexOf('applyBestRateForOrder('));
+check('apply handler delegates to the command owner', /applyBestRateForOrder\(id, \{/.test(handler));
+check('apply handler contains no DB persistence or rate-policy implementation',
+  !/db\.|buildApplyBestRatePatch\(|applyOrderOverridesPatch\(|houseTupleStatus\(|loadRateQuoteSnapshot\(/.test(handler));
+
+const commandStart = commandOwner.indexOf('export async function applyBestRateForOrder(');
+const commandEnd = commandOwner.indexOf('export async function saveBestRateForOrder(', commandStart);
+const command = commandStart >= 0 && commandEnd > commandStart
+  ? commandOwner.slice(commandStart, commandEnd)
+  : '';
+check('command owner builds one atomic apply patch', /buildApplyBestRatePatch\(\{/.test(command));
+check('command owner persists via exactly ONE override command',
+  (command.match(/applyOrderOverridesPatch\(/g)?.length ?? 0) === 1);
+check('command owner enforces eligibility before persisting',
+  /shippingRateEligibilityReason\(/.test(command));
+check('command owner finalizes backend quote proof before applying',
+  /finalizeAppliedBestRateFromSnapshot\(\{/.test(command));
 
 if (failures > 0) {
   console.error(`\nPS-302 apply-best-rate owner guard FAILED with ${failures} failure(s).`);

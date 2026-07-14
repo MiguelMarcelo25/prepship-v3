@@ -50,12 +50,15 @@ check('no display-name-based legacy mapping remains',
   !/LEGACY_CLIENT_ID_BY_DISPLAY_NAME/.test(ordersView) && !/LEGACY_CLIENT_ID_BY_DISPLAY_NAME/.test(rowDisplay));
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+const ordersReadModel = readFileSync('src/services/orders-read-model.ts', 'utf8');
 check('backend resolveLegacyClientId owner unchanged',
-  /function resolveLegacyClientId\(/.test(ordersRoute) &&
-  /LEGACY_CLIENT_ID_BY_STORE_ID/.test(ordersRoute) &&
-  /LEGACY_CLIENT_ID_BY_CURRENT_ID/.test(ordersRoute));
+  /export function resolveLegacyClientId\(/.test(ordersReadModel) &&
+  /LEGACY_CLIENT_ID_BY_STORE_ID/.test(ordersReadModel) &&
+  /LEGACY_CLIENT_ID_BY_CURRENT_ID/.test(ordersReadModel));
 check('list rows + detail payload both stamp legacyClientId from the owner',
-  (ordersRoute.match(/resolveLegacyClientId\(/g)?.length ?? 0) >= 3);
+  /resolveLegacyClientId\(/.test(ordersRoute) &&
+  /resolveLegacyClientId\(/.test(ordersReadModel) &&
+  /buildOrderDetailPayload/.test(ordersRoute));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-184 legacy client-id passthrough guard (${failures} failing)`);

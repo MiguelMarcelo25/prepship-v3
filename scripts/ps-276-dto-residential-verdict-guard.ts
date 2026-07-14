@@ -63,11 +63,13 @@ check('no evidence -> DTO verdict residential (fallback, money-safe)',
   fallback.classification === 'residential' && fallback.confidence === 'fallback');
 
 // ── 2. orders.ts wires the shared owner + classifier + money-safe policy ──────
-const orders = readFileSync('src/routes/orders.ts', 'utf8');
-check('orders.ts imports the shared evidence owner + classifier + money-safe policy',
+const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+const orders = readFileSync('src/services/orders-read-model.ts', 'utf8');
+check('orders read-model imports the shared evidence owner + classifier + money-safe policy',
   /buildResidentialEvidenceFromOrder/.test(orders) &&
     /classifyShippingAddress/.test(orders) &&
-    /residentialForShipping/.test(orders));
+    /residentialForShipping/.test(orders) &&
+    /from '\.\.\/services\/orders-read-model'/.test(ordersRoute));
 check('buildCanonicalOrderModel resolves the verdict via the shared owner',
   /const residentialEvidence = buildResidentialEvidenceFromOrder\(\{/.test(orders) &&
     /const residentialResult = classifyShippingAddress\(\{/.test(orders) &&

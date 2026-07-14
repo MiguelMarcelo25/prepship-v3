@@ -65,14 +65,15 @@ check('frontend account filter prevents applying proof from a different account'
 const rateStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
 check('single backend finalizer returns bestRate, rates, and rateQuoteId',
   /export async function finalizeBestRateWithQuote/.test(rateStore) &&
-  /bestRate: T & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}/.test(rateStore) &&
-  /rates: Array<Record<string, unknown> & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}>/.test(rateStore) &&
+  /bestRate: T & \{[\s\S]{0,220}selectedRateKey: string;[\s\S]{0,220}rateQuoteId\?: string;[\s\S]{0,220}proofSource: string;[\s\S]{0,220}isComplete: boolean;/.test(rateStore) &&
+  /rates: Array<Record<string, unknown> & \{[\s\S]{0,220}selectedRateKey: string;[\s\S]{0,220}rateQuoteId\?: string;[\s\S]{0,220}proofSource: string;[\s\S]{0,220}isComplete: boolean;/.test(rateStore) &&
   /rateQuoteId\?: string/.test(rateStore));
 check('single backend finalizer stamps backend proof source',
   /proofSource: BACKEND_RATE_PROOF_SOURCE/.test(rateStore) &&
   /BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'/.test(rateStore));
 check('single backend finalizer stamps rateQuoteId and backend completeness onto each emitted rate',
-  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(rateStore));
+  /const isComplete = input\.bestRateComplete === true/.test(rateStore) &&
+  /const rates = rateQuoteId[\s\S]{0,500}ratesWithKeys\.map\(\(rate\) => \(\{[\s\S]{0,180}rateQuoteId,[\s\S]{0,180}proofSource: BACKEND_RATE_PROOF_SOURCE,[\s\S]{0,180}isComplete,/.test(rateStore));
 
 const ratesRoute = read('src/routes/rates.ts');
 const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
@@ -141,20 +142,24 @@ check('frontend proof helper describes itself as pass-through',
   rateProof.includes('NEVER recompute a fingerprint'));
 
 const ordersRoute = read('src/routes/orders.ts');
-check('Apply Best Rate endpoint canonicalizes and validates persisted best-rate DTO',
-  /app\.post\(\s*['"]\/:id\{\[0-9\]\+\}\/best-rate['"]/.test(ordersRoute) &&
-  ordersRoute.includes("assertPersistedOrderBestRateDto(body.bestRateJson, 'bestRateJson')") &&
-  ordersRoute.includes('validateBestRateDimsForPersistedRate(') &&
-  ordersRoute.includes('shippingRateEligibilityReason('));
-check('Apply Best Rate endpoint does not mint backend proof fields itself',
+const ordersCommand = read('src/services/orders-overrides-command.ts');
+check('Apply Best Rate service canonicalizes and validates persisted best-rate DTO',
+  /export async function saveBestRateForOrder\(/.test(ordersCommand) &&
+  ordersCommand.includes("assertPersistedOrderBestRateDto(body.bestRateJson, 'bestRateJson')") &&
+  ordersCommand.includes('validateBestRateDimsForPersistedRate(') &&
+  ordersCommand.includes('shippingRateEligibilityReason('));
+check('Apply Best Rate route guards then delegates without owning proof or persistence',
   (() => {
     const match = /app\.post\(\s*['"]\/:id\{\[0-9\]\+\}\/best-rate['"]/.exec(ordersRoute);
     const start = match?.index ?? -1;
     const end = start >= 0 ? ordersRoute.indexOf('app.post(', start + 10) : -1;
-    const block = start >= 0 ? ordersRoute.slice(start, end > start ? end : start + 5000) : '';
-    return !/proofSource:\s*BACKEND_RATE_PROOF_SOURCE/.test(block) &&
+    const block = start >= 0 ? ordersRoute.slice(start, end > start ? end : start + 3000) : '';
+    return block.indexOf('assertOrderEditable(c, id)') >= 0 &&
+      block.indexOf('assertOrderEditable(c, id)') < block.indexOf('saveBestRateForOrder(') &&
+      !/proofSource:\s*BACKEND_RATE_PROOF_SOURCE/.test(block) &&
       !/rateQuoteId:\s*deriveRateQuoteId/.test(block) &&
-      !/selectedRateKey:\s*selectedRateOpaqueKey/.test(block);
+      !/selectedRateKey:\s*selectedRateOpaqueKey/.test(block) &&
+      !/db\.|assertPersistedOrderBestRateDto\(|houseTupleStatus\(/.test(block);
   })());
 
 const labels = read('src/services/labels.ts');

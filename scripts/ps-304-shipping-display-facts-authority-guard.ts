@@ -204,15 +204,17 @@ check('backend workflow DTO computes display tuple in withOrderRowWorkflow',
   /display: displayTupleFor\(facts\)/.test(workflowOwner));
 
 const ordersRoute = read('src/routes/orders.ts');
+const ordersReadModel = read('src/services/orders-read-model.ts');
 check('orders route imports and emits backend package facts on detail payloads',
   ordersRoute.includes('resolveOrderPackageFacts') &&
   (ordersRoute.match(/packageFacts: await resolveOrderPackageFacts\(id\)/g)?.length ?? 0) >= 2);
 check('orders canonical model owns weight and dimension source maps',
-  ordersRoute.includes('function buildCanonicalOrderModel(') &&
-  ordersRoute.includes("weight: overrideWeightOz != null") &&
-  ordersRoute.includes("dimensions: dimensionSource") &&
-  ordersRoute.includes("'dimensions.length': dimensionSource") &&
-  ordersRoute.includes("'dimensions.height': dimensionSource"));
+  ordersReadModel.includes('export function buildCanonicalOrderModel(') &&
+  ordersReadModel.includes("weight: overrideWeightOz != null") &&
+  ordersReadModel.includes("dimensions: dimensionSource") &&
+  ordersReadModel.includes("'dimensions.length': dimensionSource") &&
+  ordersReadModel.includes("'dimensions.height': dimensionSource") &&
+  ordersRoute.includes("from '../services/orders-read-model'"));
 check('orders route builds canonical shipping display facts before returning rows',
   ordersRoute.includes('const shipping = {') &&
   ordersRoute.includes('carrierCode: canonicalCarrierCode') &&

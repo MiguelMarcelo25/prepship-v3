@@ -210,6 +210,7 @@ assert.equal(decidePackageCostLine({ resolution: resolved31, clientHasBoxPricing
 const service = read('src/services/billing.ts');
 const routes = read('src/routes/billing.ts');
 const ordersRoute = read('src/routes/orders.ts');
+const ordersOverridesCommand = read('src/services/orders-overrides-command.ts');
 const schema = read('src/db/schema/billing.ts');
 const policy = read('src/services/billing-box-policy.ts');
 const feTable = read('web/src/components/Views/BillingDetailTable.tsx');
@@ -251,7 +252,7 @@ assert.ok(service.includes('ensureBillingBoxResolutionsSchema'),
   'runtime ensure must exist so API/worker work pre-migration');
 assert.ok(!/delete\(billingBoxResolutions\)/.test(service) && !/delete\(billingBoxResolutions\)/.test(routes),
   'NOTHING may delete billing_box_resolutions — operator decisions persist');
-assert.ok(/db\.delete\(billingLineItems\)/.test(service),
+assert.ok(/(?:db|tx)\.delete\(billingLineItems\)/.test(service),
   'regeneration deletes line items only');
 
 // Schema + migration.
@@ -279,15 +280,18 @@ assert.ok(service.includes('packageCostNeedsReview') && service.includes('packag
   'detail DTO must carry the review flag + reason');
 
 // Dims ⇄ box coherence upstream (mutable orders only; package channel only).
-assert.ok(ordersRoute.includes('applyBoxDimsCoherence'),
+assert.ok(ordersRoute.includes('applyBoxDimsCoherence') &&
+  ordersOverridesCommand.includes('export async function applyBoxDimsCoherence'),
   'order save paths must run box/dims coherence');
 const coherenceCalls = ordersRoute.split('await applyBoxDimsCoherence(').length - 1;
 assert.equal(coherenceCalls, 3,
   `coherence wired at PATCH /:id + /selected-package-id + /save-dims (found ${coherenceCalls})`);
 assert.ok(ordersRoute.includes('BOX_DIMS_MISMATCH'),
   'explicit package+dims conflicts must reject with a structured code');
-assert.ok(ordersRoute.includes("from '../services/billing-box-policy'"),
-  'order-side coherence must share boxDimsKey with the billing resolver');
+assert.ok(ordersOverridesCommand.includes("from './billing-box-policy'"),
+  'order command owner must share boxDimsKey with the billing resolver');
+assert.ok(ordersRoute.includes("from '../services/orders-overrides-command'"),
+  'orders route must delegate box/dims coherence to the command owner');
 // The /selected-pid route is the SHIP ACCOUNT channel — no box coherence.
 const selectedPidRoute = ordersRoute.slice(
   ordersRoute.indexOf("'/:id{[0-9]+}/selected-pid'"),
