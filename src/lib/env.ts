@@ -39,6 +39,12 @@ const schema = z.object({
   SUPABASE_JWT_SECRET: renderOnlySecret,
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  // Audit 4.6 (PL-11): stop admission immediately, then give active API
+  // requests most of Render's termination window to finish before force-close.
+  API_GRACEFUL_SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(25_000),
+  // A single escaped background failure remains observable and survivable, but
+  // repeated escapes indicate poisoned process state and request a supervisor restart.
+  API_UNCAUGHT_FAILURE_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
   WEB_ORIGIN: z.string().optional(),
   // Public base URL of this API. Used when we need to emit an absolute link
   // back to the frontend (e.g. mock label PDFs opened via window.open).

@@ -42,6 +42,7 @@ import automationRoute from './routes/automation';
 import storeSourceCutoversRoute from './routes/store-source-cutovers';
 import clientPortalIntegrationsRoute from './routes/client-portal/integrations';
 import { assertRuntimeSchemaReady } from './services/runtime-schema-readiness.js';
+import { createApiProcessLifecycle } from './services/api-process-lifecycle';
 
 type AppVars = {
   requestId: string;
@@ -217,31 +218,11 @@ app.onError((err, c) => {
   return c.json({ error: message }, status as 500);
 });
 
-// Keep the process alive on unhandled rejections / uncaught exceptions.
-// Node v25 crashes on unhandled rejections by default — that's the right
-// default for scripts, but a long-running API server has many background
-// promise chains (the sync scheduler, rate backfill, mock-label persist,
-// connection-level postgres.js events) where a single Postgres timeout or
-// ShipStation error shouldn't take the entire service down. Hono's
-// app.onError already responds 500 to the HTTP caller; these handlers
-// catch anything that escapes the request lifecycle.
-//
-// Render's health check (/health) will start returning non-200 only if the
-// process truly can't respond — which is what we want. Silent timeouts on
-// a single query should log and continue.
-process.on('unhandledRejection', (reason) => {
-  reportError('process.unhandled_rejection', reason);
-});
-
-process.on('uncaughtException', (err) => {
-  reportError('process.uncaught_exception', err);
-});
-
 async function main(): Promise<void> {
   await assertRuntimeSchemaReady();
   console.log('[runtime] migration-owned schema ready');
 
-  serve({ fetch: app.fetch, port: env.PORT }, (info) => {
+  const server = serve({ fetch: app.fetch, port: env.PORT }, (info) => {
     console.log(`API listening on http://localhost:${info.port}`);
     // Audit 3.2: the API never owns background cadence. RUN_SYNC_SCHEDULER is
     // consumed only by worker.ts, where pg-boss provides cross-process admission.
@@ -271,6 +252,20 @@ async function main(): Promise<void> {
         '[runtime] orders performance maintenance disabled for this process; set RUN_ORDERS_PERFORMANCE_MAINTENANCE=true to run explicitly'
       );
     }
+  });
+
+  const lifecycle = createApiProcessLifecycle({
+    server,
+    shutdownTimeoutMs: env.API_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    uncaughtFailureLimit: env.API_UNCAUGHT_FAILURE_LIMIT,
+  });
+  process.once('SIGINT', (signal) => lifecycle.shutdown(signal));
+  process.once('SIGTERM', (signal) => lifecycle.shutdown(signal));
+  process.on('unhandledRejection', (reason) => {
+    lifecycle.recordUncaughtFailure('unhandled_rejection', reason);
+  });
+  process.on('uncaughtException', (error) => {
+    lifecycle.recordUncaughtFailure('uncaught_exception', error);
   });
 }
 
