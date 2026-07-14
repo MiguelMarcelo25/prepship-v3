@@ -52,7 +52,11 @@ const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
 ]);
 
 export function syncJobLaneFor(name: string): SyncJobLane {
-  return SYNC_JOB_LANES.get(name) ?? 'misc';
+  // Per user override unlock shipped data on 2026-07-14: unknown worker jobs
+  // are conservatively database-heavy. They must opt into an independent lane
+  // explicitly instead of silently overlapping sync through the old misc
+  // fallback (production rate-cache overlap reproduced the pool wedge).
+  return SYNC_JOB_LANES.get(name) ?? 'shipstation-sync';
 }
 
 export function getSyncJobLaneBlocker(

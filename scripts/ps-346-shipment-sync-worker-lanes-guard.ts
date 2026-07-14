@@ -80,6 +80,10 @@ check(
   'carrier snapshot refresh shares the DB-heavy lane with shipment sync',
   getSyncJobLaneBlocker(activeShipmentSync, carrierSnapshotsJob) === shipmentsJob
 );
+check(
+  'unclassified maintenance defaults to the DB-heavy lane',
+  getSyncJobLaneBlocker(activeShipmentSync, 'prepship.maintenance.rate-cache') === shipmentsJob
+);
 
 const schedulerActive = new Map([[syncJobLaneFor('shipments sync'), 'shipments sync']]);
 check(
