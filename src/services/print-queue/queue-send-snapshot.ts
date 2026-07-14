@@ -55,6 +55,7 @@ export type QueueSendSnapshotJob = {
   workerOrders?: QueueSendOrderInput[];
   workerConcurrency?: number | null;
   workerScope?: PrintQueueListScope | null;
+  recoveryAttempts?: number;
 };
 
 export type QueueSendResultSnapshot = QueueSendSnapshotResult;
@@ -92,6 +93,7 @@ export type QueueSendJobSnapshot = {
   workerOrders: QueueSendOrderInput[];
   workerConcurrency: number | null;
   workerScope: PrintQueueListScope | null;
+  recoveryAttempts: number;
   createdAt: string;
   updatedAt: string;
   persistedAt: string;
@@ -167,6 +169,7 @@ export function toQueueSendSnapshot(
     workerOrders: [...(job.workerOrders ?? [])],
     workerConcurrency: job.workerConcurrency ?? null,
     workerScope: job.workerScope ?? null,
+    recoveryAttempts: Math.max(0, Math.floor(Number(job.recoveryAttempts ?? 0) || 0)),
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt).toISOString(),
     persistedAt: persistedAt.toISOString(),

@@ -78,8 +78,9 @@ check('backend remains the print queue worker concurrency owner',
     !/BACKEND_TEST_QUEUE_SEND_CONCURRENCY/.test(ordersView));
 
 check('worker startup re-enqueues stale active durable jobs with stored payloads',
-  /getRecoverableQueueSendJobRecords/.test(printWorker) &&
+  /claimRecoverableQueueSendJobRecords/.test(printWorker) &&
     /recoverStaleQueueSendJobs/.test(printWorker) &&
+    /startPeriodicRecovery/.test(printWorker) &&
     /snapshot\.workerOrders/.test(printWorker) &&
     /Queue job interrupted before a durable worker payload was available/.test(printWorker));
 

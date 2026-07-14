@@ -292,30 +292,142 @@ export async function getLatestQueueSendJobRecord(): Promise<QueueSendJobSnapsho
   }
 }
 
-export async function getRecoverableQueueSendJobRecords(options: {
+/**
+ * Audit PQ-2: atomically lease stale durable jobs and increment their recovery
+ * attempt before enqueue. SKIP LOCKED prevents two worker processes from
+ * claiming the same parent job on the same reaper pass.
+ */
+export async function claimRecoverableQueueSendJobRecords(options: {
   staleAfterMs: number;
+  maxAttempts: number;
   limit?: number;
 }): Promise<QueueSendJobSnapshot[]> {
   const staleAfterSeconds = Math.max(1, Math.ceil(options.staleAfterMs / 1000));
+  const maxAttempts = Math.max(1, Math.floor(options.maxAttempts));
   const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 25)));
   try {
     await ensureQueueSendJobStoreSchema();
+    // Per user override unlock shipped data on 2026-07-14: this updates only
+    // print_queue_send_jobs orchestration metadata; it never touches orders,
+    // shipments, labels, postage, inventory, or marketplace confirmation.
     const rows = await pg<{ snapshot: unknown }[]>`
-      SELECT snapshot
-      FROM print_queue_send_jobs
-      WHERE status IN ('pending', 'running')
-        AND updated_at < now() - (${staleAfterSeconds} * interval '1 second')
-      ORDER BY updated_at ASC
-      LIMIT ${limit}
+      UPDATE print_queue_send_jobs AS jobs
+      SET
+        status = 'pending',
+        active = true,
+        message = 'Recovery attempt claimed',
+        snapshot = jobs.snapshot || jsonb_build_object(
+          'status', 'pending',
+          'active', true,
+          'message', 'Recovery attempt claimed',
+          'errorMessage', null,
+          'recoveryAttempts',
+            CASE
+              WHEN coalesce(jobs.snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+                THEN (jobs.snapshot->>'recoveryAttempts')::integer + 1
+              ELSE 1
+            END,
+          'updatedAt', now(),
+          'persistedAt', now()
+        ),
+        updated_at = now()
+      WHERE jobs.job_id IN (
+        SELECT candidate.job_id
+        FROM print_queue_send_jobs AS candidate
+        WHERE candidate.status IN ('pending', 'running', 'interrupted')
+          AND candidate.updated_at < now() - (${staleAfterSeconds} * interval '1 second')
+          AND CASE
+            WHEN coalesce(candidate.snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+              THEN (candidate.snapshot->>'recoveryAttempts')::integer
+            ELSE 0
+          END < ${maxAttempts}
+          AND (
+            candidate.status <> 'interrupted'
+            OR jsonb_array_length(coalesce(candidate.snapshot->'workerOrders', '[]'::jsonb)) > 0
+          )
+        ORDER BY candidate.updated_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING jobs.snapshot
     `;
     return rows
       .map((row) => parseQueueSendJobSnapshot(row.snapshot))
       .filter((snapshot): snapshot is QueueSendJobSnapshot => Boolean(snapshot));
   } catch (err) {
     console.warn(
-      '[print-queue-job-store] failed to read recoverable queue-send jobs:',
+      '[print-queue-job-store] failed to claim recoverable queue-send jobs:',
       err instanceof Error ? err.message : err,
     );
     return [];
   }
+}
+
+/** Persist a visible terminal/intermediate interruption without rewriting order data. */
+export async function markQueueSendJobInterrupted(
+  jobId: string,
+  message: string,
+): Promise<boolean> {
+  if (!jobId) return false;
+  await ensureQueueSendJobStoreSchema();
+  // Per user override unlock shipped data on 2026-07-14: interruption is
+  // durable queue metadata only; no label/postage or shipped history mutation.
+  const rows = await pg<{ job_id: string }[]>`
+    UPDATE print_queue_send_jobs
+    SET
+      status = 'interrupted',
+      active = false,
+      message = ${message},
+      snapshot = snapshot || jsonb_build_object(
+        'status', 'interrupted',
+        'active', false,
+        'message', ${message},
+        'errorMessage', ${message},
+        'updatedAt', now(),
+        'persistedAt', now()
+      ),
+      updated_at = now()
+    WHERE job_id = ${jobId}
+      AND status IN ('pending', 'running', 'interrupted')
+    RETURNING job_id
+  `;
+  return rows.length > 0;
+}
+
+/** Mark stale active jobs terminal once their durable recovery budget is spent. */
+export async function interruptExhaustedQueueSendJobs(options: {
+  staleAfterMs: number;
+  maxAttempts: number;
+}): Promise<number> {
+  const staleAfterSeconds = Math.max(1, Math.ceil(options.staleAfterMs / 1000));
+  const maxAttempts = Math.max(1, Math.floor(options.maxAttempts));
+  await ensureQueueSendJobStoreSchema();
+  const message = `Queue job interrupted after ${maxAttempts} recovery attempts; verify the queue before retrying.`;
+  // Per user override unlock shipped data on 2026-07-14: attempt exhaustion
+  // updates orchestration metadata only; it cannot buy or mutate a label.
+  const rows = await pg<{ job_id: string }[]>`
+    UPDATE print_queue_send_jobs
+    SET
+      status = 'interrupted',
+      active = false,
+      message = ${message},
+      snapshot = snapshot || jsonb_build_object(
+        'status', 'interrupted',
+        'active', false,
+        'message', ${message},
+        'errorMessage', ${message},
+        'updatedAt', now(),
+        'persistedAt', now()
+      ),
+      updated_at = now()
+    WHERE status IN ('pending', 'running')
+      AND updated_at < now() - (${staleAfterSeconds} * interval '1 second')
+      AND CASE
+        WHEN coalesce(snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+          THEN (snapshot->>'recoveryAttempts')::integer
+        ELSE 0
+      END >= ${maxAttempts}
+    RETURNING job_id
+  `;
+  return rows.length;
 }

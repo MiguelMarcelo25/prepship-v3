@@ -84,6 +84,11 @@ import {
 } from './print-queue/queue-send-snapshot';
 import { preflightQueueSendOrders } from './print-queue/queue-send-preflight';
 import { enqueueQueueSendWorkerJob } from './print-queue-worker';
+import {
+  QueueSendJobInterruptedError,
+  runQueueSendPool,
+  runQueueSendSingleFlight,
+} from './print-queue/queue-send-execution';
 export {
   PRINT_QUEUE_SEND_STATUS_KEY,
   queueSendJobStatusKey,
@@ -263,6 +268,7 @@ export type QueueSendJob = {
   workerOrders?: QueueSendOrderInput[];
   workerConcurrency?: number | null;
   workerScope?: PrintQueueListScope | null;
+  recoveryAttempts?: number;
 };
 
 export const PRINT_QUEUE_MERGE_STATUS_KEY = 'print_queue.pdf_merge.last_run';
@@ -310,6 +316,12 @@ export type PrintQueueListScope = {
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
+type QueueSendWorkerRunResult = {
+  ok: true;
+  jobId: string;
+  skipped?: string;
+  remaining: number;
+};
 export const PRINT_QUEUE_PDF_CHUNK_SIZE = 50;
 const QUEUE_SEND_WORKER_MAX_CONCURRENCY = 4;
 const QUEUE_SEND_PROVIDER_PENDING_AFTER_MS = 90_000;
@@ -748,27 +760,6 @@ function cleanOldJobs() {
   void cleanupOldMergedPdfs(DURABLE_PDF_RETENTION_MS);
 }
 
-async function withConcurrency<T>(
-  items: T[],
-  fn: (item: T) => Promise<void>,
-  maxConcurrent = 5
-): Promise<void> {
-  const queue = [...items];
-  const running = new Set<Promise<void>>();
-  while (queue.length > 0 || running.size > 0) {
-    while (running.size < maxConcurrent && queue.length > 0) {
-      const item = queue.shift();
-      if (item !== undefined) {
-        const task = fn(item).finally(() => running.delete(task));
-        running.add(task);
-      }
-    }
-    if (running.size > 0) {
-      await Promise.race(running);
-    }
-  }
-}
-
 function updateQueueSendProgress(job: QueueSendJob) {
   job.progress = job.total > 0 ? Math.round((job.current / job.total) * 100) : 100;
   job.updatedAt = Math.max(Date.now(), job.updatedAt + 1);
@@ -842,6 +833,7 @@ function queueSendJobFromSnapshot(snapshot: QueueSendJobSnapshot): QueueSendJob 
     workerOrders: snapshot.workerOrders ?? [],
     workerConcurrency: snapshot.workerConcurrency ?? null,
     workerScope: snapshot.workerScope ?? null,
+    recoveryAttempts: Math.max(0, Math.floor(Number(snapshot.recoveryAttempts ?? 0) || 0)),
   };
 }
 
@@ -1600,6 +1592,7 @@ export async function startQueueSendJob(input: {
     workerOrders: preflight.readyOrders,
     workerConcurrency,
     workerScope: input.scope ?? {},
+    recoveryAttempts: 0,
   };
   updateQueueSendProgress(job);
   queueSendJobs.set(jobId, job);
@@ -1645,42 +1638,61 @@ export async function runQueueSendJobFromWorker(payload: {
   orders: QueueSendOrderInput[];
   concurrency?: number;
   scope?: PrintQueueListScope;
-}): Promise<{ ok: true; jobId: string; skipped?: string; remaining: number }> {
-  const durableJob = await getQueueSendJobRecord(payload.jobId);
-  if (!durableJob) {
-    throw new Error(`Queue send job ${payload.jobId} was not found`);
-  }
+}, options: { signal?: AbortSignal } = {}): Promise<QueueSendWorkerRunResult> {
+  // Per user override unlock shipped data on 2026-07-14: a pg-boss retry may
+  // arrive while the timed-out promise is still settling. Join that one run;
+  // this does not weaken shipped/cancelled edit locks or perform provider work.
+  return runQueueSendSingleFlight(payload.jobId, async (): Promise<QueueSendWorkerRunResult> => {
+    const durableJob = await getQueueSendJobRecord(payload.jobId);
+    if (!durableJob) {
+      throw new Error(`Queue send job ${payload.jobId} was not found`);
+    }
 
-  if (durableJob.status === 'done' || durableJob.status === 'error') {
-    return {
-      ok: true,
-      jobId: payload.jobId,
-      skipped: `already_${durableJob.status}`,
-      remaining: 0,
-    };
-  }
+    if (durableJob.status === 'done' || durableJob.status === 'error') {
+      return {
+        ok: true,
+        jobId: payload.jobId,
+        skipped: `already_${durableJob.status}`,
+        remaining: 0,
+      };
+    }
 
-  const job = queueSendJobs.get(payload.jobId) ?? queueSendJobFromSnapshot(durableJob);
-  queueSendJobs.set(payload.jobId, job);
+    const job = queueSendJobs.get(payload.jobId) ?? queueSendJobFromSnapshot(durableJob);
+    queueSendJobs.set(payload.jobId, job);
 
-  const completedOrderIds = new Set(job.results.map((result) => result.orderId));
-  const remainingOrders = payload.orders.filter((order) => !completedOrderIds.has(order.orderId));
-  if (remainingOrders.length === 0) {
-    job.status = 'done';
-    updateQueueSendProgress(job);
-    await persistQueueSendJobSnapshot(job, { required: true });
-    return { ok: true, jobId: payload.jobId, skipped: 'no_remaining_orders', remaining: 0 };
-  }
+    const completedOrderIds = new Set(job.results.map((result) => result.orderId));
+    const remainingOrders = payload.orders.filter((order) => !completedOrderIds.has(order.orderId));
+    if (remainingOrders.length === 0) {
+      if (job.current >= job.total) {
+        job.status = 'done';
+        updateQueueSendProgress(job);
+        await persistQueueSendJobSnapshot(job, { required: true });
+      }
+      return {
+        ok: true,
+        jobId: payload.jobId,
+        skipped: 'chunk_already_complete',
+        remaining: 0,
+      };
+    }
 
-  await runQueueSendJob(payload.jobId, remainingOrders, payload.concurrency, payload.scope);
-  return { ok: true, jobId: payload.jobId, remaining: remainingOrders.length };
+    await runQueueSendJob(
+      payload.jobId,
+      remainingOrders,
+      payload.concurrency,
+      payload.scope,
+      options.signal,
+    );
+    return { ok: true, jobId: payload.jobId, remaining: remainingOrders.length };
+  });
 }
 
 async function runQueueSendJob(
   jobId: string,
   orders: QueueSendOrderInput[],
   requestedConcurrency = QUEUE_SEND_WORKER_MAX_CONCURRENCY,
-  scope: PrintQueueListScope = {}
+  scope: PrintQueueListScope = {},
+  signal?: AbortSignal,
 ) {
   const job = queueSendJobs.get(jobId);
   if (!job) return;
@@ -1691,7 +1703,7 @@ async function runQueueSendJob(
   void persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
 
   try {
-    await withConcurrency(
+    await runQueueSendPool(
       orders,
       async (order) => {
         const orderStartedAt = Date.now();
@@ -1748,7 +1760,8 @@ async function runQueueSendJob(
           await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
         }
       },
-      concurrency
+      concurrency,
+      signal,
     );
 
     const seenOrderIds = new Set(job.results.map((result) => result.orderId));
@@ -1768,15 +1781,17 @@ async function runQueueSendJob(
       await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
     }
     if (job.current > job.total) job.current = job.total;
-    job.status = 'done';
+    job.status = job.current >= job.total ? 'done' : 'pending';
     updateQueueSendProgress(job);
     await persistQueueSendJobSnapshot(job, { required: true });
   } catch (err) {
-    job.status = 'error';
+    const interrupted = err instanceof QueueSendJobInterruptedError;
+    job.status = interrupted ? 'interrupted' : 'error';
     job.errorMessage = err instanceof Error ? err.message : 'Queue send failed';
     job.message = job.errorMessage;
     job.updatedAt = Date.now();
     await persistQueueSendJobSnapshot(job, { required: true });
+    if (interrupted) throw err;
   } finally {
     // Audit PQ-6 (2026-07-13): the worker process never pruned its job map —
     // cleanOldJobs only runs from API-process entry points, so every processed

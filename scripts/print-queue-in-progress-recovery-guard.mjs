@@ -55,7 +55,8 @@ const checks = [
       /PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS/.test(env) &&
       /withDeadline\(/.test(worker) &&
       /env\.PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS/.test(worker) &&
-      /runQueueSendJobFromWorker\(payload\)/.test(worker),
+      /runQueueSendJobFromWorker\(payload, \{ signal: abortController\.signal \}\)/.test(worker) &&
+      /onTimeout: \(\) => abortController\.abort\(\)/.test(worker),
   },
   {
     name: 'package.json exposes the in-progress recovery guard',

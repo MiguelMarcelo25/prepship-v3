@@ -87,6 +87,7 @@ check('durable snapshot stores worker payload needed to resume the 30-label inci
   assert.equal(snapshot.itemStates.length, 30);
   assert.equal(snapshot.workerConcurrency, 4);
   assert.equal(snapshot.workerScope?.scopeRestricted, false);
+  assert.equal(snapshot.recoveryAttempts, 0);
 });
 
 check('durable snapshot can carry 100-label workflow payload without losing item state', () => {
@@ -127,18 +128,21 @@ check('worker-owned jobs preserve payload and use bounded provider concurrency',
 check('worker startup recovery re-enqueues stale active durable jobs', () => {
   const worker = read('src/services/print-queue-worker.ts');
   const store = read('src/services/print-queue/queue-send-job-store.ts');
-  assert.match(store, /getRecoverableQueueSendJobRecords/);
-  assert.match(store, /status IN \('pending', 'running'\)/);
+  assert.match(store, /claimRecoverableQueueSendJobRecords/);
+  assert.match(store, /status IN \('pending', 'running', 'interrupted'\)/);
+  assert.match(store, /FOR UPDATE SKIP LOCKED/);
   assert.match(worker, /recoverStaleQueueSendJobs/);
+  assert.match(worker, /startPeriodicRecovery/);
   assert.match(worker, /snapshot\.workerOrders/);
   assert.match(worker, /scope: snapshot\.workerScope \?\? \{\}/);
-  assert.match(worker, /singletonKey: snapshot\.jobId/);
+  assert.match(worker, /singletonKey: queueSendChunkSingletonKey\(payload\)/);
+  assert.match(worker, /PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS = 3/);
 });
 
 check('missing legacy worker payload becomes interrupted instead of stranded running forever', () => {
   const worker = read('src/services/print-queue-worker.ts');
-  assert.match(worker, /status: 'interrupted'/);
-  assert.match(worker, /durable worker payload is missing/);
+  assert.match(worker, /markQueueSendJobInterrupted/);
+  assert.match(worker, /Queue job interrupted before a durable worker payload was available/);
 });
 
 check('duplicate-postage safety remains before purchase', () => {
