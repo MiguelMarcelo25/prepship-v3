@@ -593,6 +593,7 @@
     "test:ps-339-ebay-api-testing-certification": "tsx scripts/ps-339-ebay-api-testing-certification-guard.ts",
     "test:ps-339-rate-wrapper-sot": "tsx scripts/ps-339-rate-wrapper-sot-guard.ts",
     "test:ps-340-backend-rate-engine": "tsx scripts/ps-340-backend-rate-engine-guard.ts",
+    "test:rate-backfill-db-pool-concurrency": "tsx scripts/rate-backfill-db-pool-concurrency-guard.ts",
     "test:ps-340-rate-engine-volume-proof": "tsx scripts/ps-340-rate-engine-volume-proof-guard.ts",
     "test:ps-341-frontend-compatibility-helper-audit": "tsx scripts/ps-341-frontend-compatibility-helper-audit-guard.ts",
     "test:ps-342-legacy-rate-display-adapter-cleanup": "tsx scripts/ps-342-legacy-rate-display-adapter-cleanup-guard.ts",

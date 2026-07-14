@@ -91,7 +91,8 @@ async function main() {
   check('getRates runs through runWithTimeoutAndRetry with a bounded retry on the live path',
     /runWithTimeoutAndRetry\(/.test(backfill) && /maxRetries: rateFetchDecision\.forceRefresh \? LIVE_MAX_RETRIES : 0/.test(backfill));
   check('the live burst is throttled below the passive concurrency (orders stop starving the limiter)',
-    /liveRateBudget \? LIVE_BACKFILL_CONCURRENCY/.test(backfill));
+    /liveRateBudget\s*\?\s*LIVE_BACKFILL_CONCURRENCY/.test(backfill) &&
+    /resolveRateBackfillConcurrency\(\{[\s\S]*dbPoolMax:\s*env\.DB_POOL_MAX/.test(backfill));
   // Preserve the PS-12x forceRefresh contract (the existing recalculate-all-live guard pins it too).
   check('live recalc still forces the full live carrier fan-out (no cache regression)',
     /getRates\(rateInput, toGetRatesOptions\(rateFetchDecision\)\)/.test(backfill));

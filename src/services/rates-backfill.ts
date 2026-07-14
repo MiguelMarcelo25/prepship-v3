@@ -55,6 +55,8 @@ import {
   buildBackfillRateFetchDecision,
   toGetRatesOptions,
 } from './rate-preexpiry-refresh-request';
+import { env } from '../lib/env';
+import { resolveRateBackfillConcurrency } from './rate-backfill-execution-policy';
 
 function toPositiveNumber(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -573,7 +575,18 @@ async function runBackfill(
     // #750/PS-348: throttle live bursts so force-refresh orders do not starve each other for the global
     // rate-limiter's permits. PS-348 pre-expiry runs force live only for policy-selected non-fresh rows,
     // but the job still uses the live budget because those rows must push cacheExpiresAt forward.
-    const CONCURRENCY = Math.max(1, Math.min(liveRateBudget ? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY));
+    // Per user override unlock shipped data on 2026-07-14: production can run with
+    // DB_POOL_MAX=1. Do not pipeline multiple background rate workflows through that
+    // single application connection; a stalled rate read otherwise starves shipment
+    // sync, fulfillment outbox, and worker-status persistence behind it.
+    const configuredRateFetchConcurrency = liveRateBudget
+      ? LIVE_BACKFILL_CONCURRENCY
+      : RATE_FETCH_CONCURRENCY;
+    const CONCURRENCY = resolveRateBackfillConcurrency({
+      liveRateBudget,
+      rateFetchConcurrency: configuredRateFetchConcurrency,
+      dbPoolMax: env.DB_POOL_MAX,
+    });
     // #750/PS-348: live paths need a larger per-order budget because this wraps the limiter queue wait.
     const perOrderTimeoutMs = liveRateBudget ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
     const processOne = async (row: (typeof rows)[number]) => {

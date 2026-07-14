@@ -43,6 +43,7 @@ const ratesService = read('src/services/rates.ts');
 const ratesRoute = read('src/routes/rates.ts');
 const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
 const ratesBackfill = read('src/services/rates-backfill.ts');
+const rateBackfillPolicy = read('src/services/rate-backfill-execution-policy.ts');
 const volumeProofGuard = read('scripts/ps-340-rate-engine-volume-proof-guard.ts');
 const openWorkflow = read('web/src/components/rate-browser-open-workflow.ts');
 const modal = read('web/src/components/RateBrowserModal.tsx');
@@ -119,7 +120,9 @@ check(
 check(
   'backend backfill stays bounded and uses background priority for ShipStation quotes',
   /const liveRateBudget = backfillUsesLiveRateBudget\(\{ liveRecalculate, mode: opts\.mode \}\)/.test(ratesBackfill) &&
-    /const CONCURRENCY = Math\.max\(1, Math\.min\(liveRateBudget \? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY\)\)/.test(ratesBackfill) &&
+    /const CONCURRENCY = resolveRateBackfillConcurrency\(\{/.test(ratesBackfill) &&
+    /dbPoolMax:\s*env\.DB_POOL_MAX/.test(ratesBackfill) &&
+    /Math\.min\([\s\S]*desiredConcurrency[\s\S]*rateFetchConcurrency[\s\S]*dbPoolMax/.test(rateBackfillPolicy) &&
     /buildBackfillRateFetchDecision\(\{[\s\S]*preExpiryRefreshReason/.test(ratesBackfill) &&
     /getRates\(rateInput, toGetRatesOptions\(rateFetchDecision\)\)/.test(ratesBackfill),
 );
