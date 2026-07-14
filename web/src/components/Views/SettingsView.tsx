@@ -24,6 +24,7 @@
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 // PS-155: presentational helpers + section accent tokens extracted to ./settings-ui (behavior-preserving).
@@ -369,10 +370,10 @@ export default function SettingsView() {
   }
 
   // ─── Sandbox / test orders ────────────────────────────────────────────────
-  const [testClients, setTestClients] = useState<
-    Array<{ id: number; name: string; order_count: number }>
-  >([])
-  const [testClientsLoading, setTestClientsLoading] = useState(true)
+  // FE-2 (audit 2026-07-14): the test-clients list is useQuery-backed (see
+  // testClientsQuery below the type decls) so a Settings revisit within the
+  // app staleTime paints from cache with zero refetches. `sandboxState`
+  // stays real UI state for the seed/purge op machine.
   const [sandboxState, setSandboxState] = useState<
     | { kind: 'idle' }
     | { kind: 'loading'; op: 'seed' | 'purge' | 'refresh' }
@@ -413,13 +414,12 @@ export default function SettingsView() {
       }>
     }
   }
-  const [systemStatus, setSystemStatus] = useState<ObservabilityStatus | null>(null)
-  const [systemStatusLoading, setSystemStatusLoading] = useState(false)
-  const [systemStatusError, setSystemStatusError] = useState<string | null>(null)
+  // FE-2: system status + automation availability are useQuery-backed below
+  // (section-lazy via `enabled`). automationRows stays a MUTABLE working
+  // copy — the per-carrier/service toggles patch it optimistically — seeded
+  // from the availability query whenever a fetch lands.
   const [automationRows, setAutomationRows] = useState<AutomationStoreAvailability[]>([])
   const [automationServiceCatalog, setAutomationServiceCatalog] = useState<Record<string, AutomationCarrierService[]>>({})
-  const [automationLoading, setAutomationLoading] = useState(false)
-  const [automationError, setAutomationError] = useState<string | null>(null)
   const [automationUpdatedAt, setAutomationUpdatedAt] = useState<string | null>(null)
   const [automationSavingKey, setAutomationSavingKey] = useState<string | null>(null)
   const [automationQuery, setAutomationQuery] = useState('')
@@ -432,68 +432,48 @@ export default function SettingsView() {
   // to this set as needed.
   const HIDDEN_TEST_CLIENT_NAMES = new Set(['Manual Orders'])
 
-  const refreshTestClients = useCallback(async () => {
-    setTestClientsLoading(true)
-    try {
-      const res = await api.get<{
+  // ── FE-2 (audit 2026-07-14): settings GET loads live in TanStack Query ──
+  // Home.tsx remounts views on navigation; the old refresh callbacks refired
+  // /admin/test-clients on every Settings visit (and the section loads on
+  // every section re-entry). Each GET is a useQuery — test-clients fetches
+  // on mount, system status + automation availability stay lazy behind
+  // their section via `enabled`. The refresh* names survive as refetch
+  // wrappers because seed/purge/manual-refresh flows call them.
+  const testClientsQuery = useQuery({
+    queryKey: ['settings', 'test-clients'],
+    queryFn: () =>
+      api.get<{
         data: Array<{ id: number; name: string; order_count: number }>
-      }>('/admin/test-clients')
-      // Filter at the source so every downstream consumer (render
-      // + Seed/Purge button enabled checks) sees the same clean list.
-      const filtered = (res.data ?? []).filter(
+      }>('/admin/test-clients'),
+  })
+  // Filter at the source so every downstream consumer (render
+  // + Seed/Purge button enabled checks) sees the same clean list.
+  const testClients = useMemo(
+    () =>
+      (testClientsQuery.data?.data ?? []).filter(
         (c) => !HIDDEN_TEST_CLIENT_NAMES.has(c.name?.trim() ?? ''),
-      )
-      setTestClients(filtered)
-    } catch (err) {
-      setSandboxState({
-        kind: 'error',
-        message: err instanceof Error ? err.message : 'Failed to load test clients',
-      })
-    } finally {
-      setTestClientsLoading(false)
-    }
-  }, [])
+      ),
+    // HIDDEN_TEST_CLIENT_NAMES is a render-stable literal Set (content never
+    // changes), intentionally not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [testClientsQuery.data],
+  )
+  const testClientsLoading = testClientsQuery.isPending || testClientsQuery.isFetching
+  useEffect(() => {
+    if (!testClientsQuery.error) return
+    setSandboxState({
+      kind: 'error',
+      message: testClientsQuery.error instanceof Error ? testClientsQuery.error.message : 'Failed to load test clients',
+    })
+  }, [testClientsQuery.error])
+  const { refetch: refetchTestClients } = testClientsQuery
+  const refreshTestClients = useCallback(async () => {
+    await refetchTestClients()
+  }, [refetchTestClients])
 
-  const refreshSystemStatus = useCallback(async () => {
-    setSystemStatusLoading(true)
-    setSystemStatusError(null)
-    try {
-      const status = await api.get<ObservabilityStatus>('/observability/status', {
-        timeoutMs: 6_000,
-      })
-      setSystemStatus(status)
-    } catch (err) {
-      setSystemStatusError(err instanceof Error ? err.message : 'Failed to load system status')
-    } finally {
-      setSystemStatusLoading(false)
-    }
-  }, [])
-
-  const refreshAutomationAvailability = useCallback(async () => {
-    setAutomationLoading(true)
-    setAutomationError(null)
-    try {
-      const payload = await api.get<{
-        data: Array<{
-          store: AutomationStoreRow
-          carriers: AutomationCarrierRow[]
-        }>
-        updatedAt?: string
-      }>('/automation/availability', { timeoutMs: 20_000 })
-      setAutomationServiceCatalog({})
-      setAutomationRows((payload.data ?? []).map((row) => ({
-        store: row.store,
-        loading: false,
-        error: null,
-        carriers: row.carriers ?? [],
-      })))
-      setAutomationUpdatedAt(payload.updatedAt ?? new Date().toISOString())
-    } catch (err) {
-      setAutomationError(err instanceof Error ? err.message : 'Failed to load automation carrier map')
-    } finally {
-      setAutomationLoading(false)
-    }
-  }, [])
+  // (FE-2: the section-gated systemStatusQuery + automationAvailabilityQuery
+  // are declared AFTER the activeSection state below — their `enabled` reads
+  // it. Only the mount-time test-clients query lives up here.)
 
   // Immutably patch carriers for a single store row. Used for optimistic
   // updates so a single toggle never flips the whole panel into a loading
@@ -653,9 +633,8 @@ export default function SettingsView() {
     }
   }
 
-  useEffect(() => {
-    void refreshTestClients()
-  }, [refreshTestClients])
+  // FE-2: the mount-time test-clients load is gone — testClientsQuery above
+  // fetches on mount and dedupes across view remounts.
 
   async function handleSeedTestOrders() {
     const count = Number.parseInt(seedCount, 10)
@@ -817,6 +796,68 @@ export default function SettingsView() {
     }
     return 'markups'
   })
+
+  // FE-2 (audit 2026-07-14): the section-lazy loads, gated on activeSection.
+  const systemStatusQuery = useQuery({
+    queryKey: ['settings', 'system-status'],
+    queryFn: () =>
+      api.get<ObservabilityStatus>('/observability/status', {
+        timeoutMs: 6_000,
+      }),
+    enabled: activeSection === 'system',
+  })
+  const systemStatus = systemStatusQuery.data ?? null
+  const systemStatusLoading = systemStatusQuery.isFetching
+  const systemStatusError =
+    !systemStatusQuery.isFetching && systemStatusQuery.error
+      ? systemStatusQuery.error instanceof Error
+        ? systemStatusQuery.error.message
+        : 'Failed to load system status'
+      : null
+  const { refetch: refetchSystemStatus } = systemStatusQuery
+  const refreshSystemStatus = useCallback(async () => {
+    await refetchSystemStatus()
+  }, [refetchSystemStatus])
+
+  const automationAvailabilityQuery = useQuery({
+    queryKey: ['settings', 'automation-availability'],
+    queryFn: () =>
+      api.get<{
+        data: Array<{
+          store: AutomationStoreRow
+          carriers: AutomationCarrierRow[]
+        }>
+        updatedAt?: string
+      }>('/automation/availability', { timeoutMs: 20_000 }),
+    enabled: activeSection === 'automation',
+  })
+  // Seed the mutable working copy whenever a fetch lands — the same wholesale
+  // rebuild the old refreshAutomationAvailability applied. Optimistic toggle
+  // patches (patchAutomationStore) live on the rows between fetches.
+  useEffect(() => {
+    const payload = automationAvailabilityQuery.data
+    if (payload === undefined) return
+    setAutomationServiceCatalog({})
+    setAutomationRows((payload.data ?? []).map((row) => ({
+      store: row.store,
+      loading: false,
+      error: null,
+      carriers: row.carriers ?? [],
+    })))
+    setAutomationUpdatedAt(payload.updatedAt ?? new Date().toISOString())
+  }, [automationAvailabilityQuery.data])
+  const automationLoading = automationAvailabilityQuery.isFetching
+  const automationError =
+    !automationAvailabilityQuery.isFetching && automationAvailabilityQuery.error
+      ? automationAvailabilityQuery.error instanceof Error
+        ? automationAvailabilityQuery.error.message
+        : 'Failed to load automation carrier map'
+      : null
+  const { refetch: refetchAutomationAvailability } = automationAvailabilityQuery
+  const refreshAutomationAvailability = useCallback(async () => {
+    await refetchAutomationAvailability()
+  }, [refetchAutomationAvailability])
+
   // Keep activeSection in sync when the URL changes mid-session
   // (e.g. the operator clicks a link that does
   // `navigate('/settings/store')`). Without this effect the initial
@@ -866,16 +907,10 @@ export default function SettingsView() {
     }
   }, [activeSection])
 
-  useEffect(() => {
-    if (activeSection !== 'system') return
-    void refreshSystemStatus()
-  }, [activeSection, refreshSystemStatus])
-
-  useEffect(() => {
-    if (activeSection !== 'automation') return
-    if (automationRows.length > 0) return
-    void refreshAutomationAvailability()
-  }, [activeSection, automationRows.length, refreshAutomationAvailability])
+  // FE-2: the per-section system/automation load effects are gone — both
+  // queries above are gated on their section via `enabled`, so entering the
+  // section fetches (or serves cache) and re-entering within staleTime is
+  // free. The manual Refresh buttons force a refetch through the wrappers.
 
   const isRefetching = refetchState.kind === 'loading'
 
