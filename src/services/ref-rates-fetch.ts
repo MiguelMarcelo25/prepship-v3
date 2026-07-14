@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, gte, isNotNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
-import { billingRefRates } from '../db/schema/billing';
 import { settings } from '../db/schema/settings';
+import { upsertBillingReferenceRates } from './billing-ref-rate-store';
 import { getRates } from './rates';
 
 // v2 had a "RateShopper" job that fetched live ShipStation rates for every
@@ -275,18 +275,20 @@ async function runFetch(
           }
         }
 
-        for (const entry of byKey.values()) {
-          await db.insert(billingRefRates).values({
+        // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
+        // this shipped-data read path now refreshes the derived reference-rate
+        // cache through its idempotent owner; shipments remain read-only.
+        job.inserted += await upsertBillingReferenceRates(
+          [...byKey.values()].map((entry) => ({
             weightOz: pair.weight_oz,
             zipTo: pair.zip_to,
             carrier: entry.carrier,
             service: entry.service,
-            cost: entry.cost.toFixed(2),
+            cost: entry.cost,
             source: 'shipstation_live',
             fetchedAt: new Date(),
-          });
-          job.inserted += 1;
-        }
+          })),
+        );
       } catch (err) {
         job.failed += 1;
         const msg = (err as Error).message ?? 'unknown';

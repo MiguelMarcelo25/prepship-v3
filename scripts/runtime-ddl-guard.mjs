@@ -102,6 +102,10 @@ const migrationOwnership = [
       'billing_credit_notes_no_truncate',
     ],
   ],
+  [
+    'drizzle/0066_billing_ref_rate_identity.sql',
+    ['billing_ref_rates_identity_unq'],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -129,6 +133,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCloseMigration),
   '0065 is additive and never mutates or destructively alters orders/shipments',
 );
+const billingRefRateMigration = read('drizzle/0066_billing_ref_rate_identity.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingRefRateMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingRefRateMigration),
+  '0066 only deduplicates billing_ref_rates and never mutates orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -138,7 +148,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0065_billing_close_workflow.sql',
+  '0066_billing_ref_rate_identity.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

@@ -24,6 +24,7 @@ import {
   upsertBillingConfig,
 } from '../services/billing';
 import { billingInvoiceHeaderTotals } from '../services/billing-invoice-totals';
+import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
@@ -36,6 +37,7 @@ import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
 import { backfillReferenceRates } from '../services/billing-ref-rates';
+import { upsertBillingReferenceRates } from '../services/billing-ref-rate-store';
 // PS-275/PS-389: durable, reversible prep-fee waiver state.
 import {
   ensureBillingFeeWaiverSchema,
@@ -2023,12 +2025,19 @@ function renderInvoiceHtml(args: {
       const pickpackAmt = Number(d.pickpack_amt);
       const additionalAmt = Number(d.additional_amt);
       const pickPackFeeAmt = pickpackAmt + additionalAmt;
+      const packageCostAmt = Number(d.package_cost_amt);
       const shippingAmt = Number(d.shipping_amt);
       const storageAmt = Number(d.storage_amt);
-      const rowTotal = Number(d.row_total);
-      const fulfillmentFeeAmt = rowTotal > 0
-        ? rowTotal
-        : pickPackFeeAmt + shippingAmt + storageAmt;
+      // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
+      // export display delegates the read-only legacy fallback to the backend
+      // invoice owner; no order/shipment row is changed.
+      const fulfillmentFeeAmt = resolveBillingInvoiceRowTotal({
+        rowTotal: d.row_total,
+        pickPackFee: pickPackFeeAmt,
+        packageCost: packageCostAmt,
+        shipping: shippingAmt,
+        storage: storageAmt,
+      });
       const shipDate = invoiceShipDateTimeCell(d.ship_date);
       return `
       <tr>
@@ -2037,7 +2046,7 @@ function renderInvoiceHtml(args: {
         <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
-        <td class="num">${Number(d.package_cost_amt) > 0 ? fmt(d.package_cost_amt) : '—'}</td>
+        <td class="num">${packageCostAmt > 0 ? fmt(packageCostAmt) : '—'}</td>
         <td class="num">${totalQty}</td>
         <td class="num">${fmt(pickPackFeeAmt)}</td>
         <td class="num">${addlQty > 0 ? fmt(additionalAmt) : '—'}</td>
@@ -2217,14 +2226,23 @@ async function renderInvoiceXlsx(args: {
   ];
   invoice.getRow(1).font = { bold: true };
   for (const d of details) {
+    // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
+    // XLSX consumes the same backend compatibility total as HTML/CSV.
     // Identical derivation to the HTML rows — qty/fee composition and the
     // rowTotal>0 fallback must stay in lockstep with renderInvoiceHtml.
     const baseQty = Number(d.base_qty);
     const addlQty = Number(d.addl_qty);
     const pickPackFeeAmt = Number(d.pickpack_amt) + Number(d.additional_amt);
+    const packageCostAmt = Number(d.package_cost_amt);
     const shippingAmt = Number(d.shipping_amt);
     const storageAmt = Number(d.storage_amt);
-    const rowTotal = Number(d.row_total);
+    const fulfillmentFeeAmt = resolveBillingInvoiceRowTotal({
+      rowTotal: d.row_total,
+      pickPackFee: pickPackFeeAmt,
+      packageCost: packageCostAmt,
+      shipping: shippingAmt,
+      storage: storageAmt,
+    });
     invoice.addRow({
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
       status: d.billing_status_label || 'Fulfilled',
@@ -2235,11 +2253,11 @@ async function renderInvoiceXlsx(args: {
       qty: baseQty + addlQty,
       pickPackFee: pickPackFeeAmt,
       additional: addlQty > 0 ? Number(d.additional_amt) : 0,
-      boxCost: Number(d.package_cost_amt),
+      boxCost: packageCostAmt,
       boxSize: invoiceOneLineCell(d.box_label),
       shipping: shippingAmt,
       storage: storageAmt,
-      fulfillmentFee: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,
+      fulfillmentFee: fulfillmentFeeAmt,
     });
   }
   if (details.length) {
@@ -2495,7 +2513,7 @@ const refRatesUpsertBody = z.object({
 // Unified backfill endpoint — accepts two shapes:
 //
 //   A) { rates: [{weightOz, zipTo, carrier, ...}] }  → manual CSV upload
-//      Inserts those rates directly into billing_ref_rates.
+//      Upserts those rates through the canonical reference-rate store.
 //
 //   B) { from, to, clientId? }                       → cache-driven backfill
 //      Walks orders in the range missing ref_usps_rate / ref_ups_rate,
@@ -2512,13 +2530,13 @@ app.post('/backfill-ref-rates', requirePermission('financials:write'), async (c)
     if (!parsed.success) {
       return c.json({ ok: false, error: parsed.error.flatten() }, 400);
     }
-    await db.insert(billingRefRates).values(
+    const persistedCount = await upsertBillingReferenceRates(
       parsed.data.rates.map((r) => ({
         weightOz: r.weightOz,
-        zipTo: r.zipTo.toUpperCase(),
+        zipTo: r.zipTo,
         carrier: r.carrier,
         service: r.service ?? null,
-        cost: r.cost.toFixed(2),
+        cost: r.cost,
         source: r.source ?? 'manual',
         fetchedAt: new Date(),
       }))
@@ -2531,9 +2549,9 @@ app.post('/backfill-ref-rates', requirePermission('financials:write'), async (c)
       resourceType: 'billing_ref_rates',
       resourceId: null,
       action: 'ref_rates_manual_backfill',
-      details: { inserted: parsed.data.rates.length, shape: 'manual_rows' },
+      details: { inserted: persistedCount, shape: 'manual_rows' },
     });
-    return c.json({ ok: true, inserted: parsed.data.rates.length });
+    return c.json({ ok: true, inserted: persistedCount });
   }
 
   // Shape B: range-driven cache backfill — PS-134: owned by the billing service.

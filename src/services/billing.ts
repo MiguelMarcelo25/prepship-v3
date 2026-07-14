@@ -1857,7 +1857,7 @@ export async function generateLineItems(input: GenerateInput) {
     };
     try {
       await ensureBillingStorageProofSchema();
-      await db.transaction(async (tx) => {
+      const insertedStorageLines = await db.transaction(async (tx) => {
         // Audit B-4 (2026-07-13): serialize concurrent storage writers for this
         // client+period. Storage rows have orderId=null, and Postgres default
         // NULLS DISTINCT means billing_li_unique(orderId, lineType, description)
@@ -1900,7 +1900,7 @@ export async function generateLineItems(input: GenerateInput) {
             ],
             set: proofValues,
           });
-        await tx
+        return tx
           .insert(billingLineItems)
           .values({
             clientId,
@@ -1920,10 +1920,14 @@ export async function generateLineItems(input: GenerateInput) {
               billingLineItems.lineType,
               billingLineItems.description,
             ],
-          });
+          })
+          // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
+          // report only the derived billing rows Postgres actually persisted.
+          // This does not write orders or shipments.
+          .returning({ totalCost: billingLineItems.totalCost });
       });
-      generated += 1;
-      total += storage.amount;
+      generated += insertedStorageLines.length;
+      for (const row of insertedStorageLines) total += toNum(row.totalCost);
     } catch (storageErr) {
       skipped += 1;
       if (isBillingFinalizedLockError(storageErr)) {

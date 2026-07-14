@@ -14,9 +14,9 @@
  *    out-of-scope client);
  *  - set Content-Type text/csv + a Content-Disposition attachment filename.
  *
- * The money/column derivation is the backend source of truth (renderInvoiceCsvRow
- * in src/routes/billing-invoice-csv.ts). Routes stay thin; the FE renders the
- * downloaded bytes verbatim and never recomputes a dollar amount.
+ * The money fallback is backend-owned by billing-invoice-row-total; the CSV
+ * serializer delegates to it. Routes stay thin; the FE renders the downloaded
+ * bytes verbatim and never recomputes a dollar amount.
  *
  * Two layers:
  *  1) Behavioral: drive the pure CSV serializer over a fixture and assert the
@@ -80,7 +80,7 @@ const richRow: InvoiceCsvDetailRow = {
 };
 
 // An order with NO row_total (0) — the Total must fall back to
-// pickPackFee + shipping + storage, IDENTICAL to the XLSX loop. Also addl_qty
+// pickPackFee + package cost + shipping + storage, IDENTICAL to the XLSX loop. Also addl_qty
 // is 0 so the Additional Units column must serialize 0, not additional_amt.
 const fallbackRow: InvoiceCsvDetailRow = {
   order_id: 9002,
@@ -94,8 +94,8 @@ const fallbackRow: InvoiceCsvDetailRow = {
   storage_amt: '1.00',
   row_total: '0',
   skus: null,
-  package_cost_amt: '0',
-  box_label: '—',
+  package_cost_amt: '2.00',
+  box_label: 'Small',
   box_review: false,
   fee_waived: false,
 };
@@ -116,10 +116,10 @@ assert.equal(
 );
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
-// pickPackFee(3) + shipping(2) + storage(1) = 6. Empty SKUs serialize blank.
+// pickPackFee(3) + package cost(2) + shipping(2) + storage(1) = 8. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,—,0,1,3,0,2,1,6',
+  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 
@@ -150,6 +150,7 @@ assert.ok(
 
 const routes = read('src/routes/billing.ts');
 const csvSrc = read('src/routes/billing-invoice-csv.ts');
+const rowTotalOwner = read('src/services/billing-invoice-row-total.ts');
 const feClient = read('web/src/lib/v2-apiClient.ts');
 const feView = read('web/src/components/Views/BillingView.tsx');
 const feTable = read('web/src/components/Views/BillingSummaryTable.tsx');
@@ -184,9 +185,12 @@ assert.ok(!/from ['"]\.\.\/db\//.test(csvSrc) && !csvSrc.includes('db.execute'),
   'billing-invoice-csv.ts must be a pure serializer — no DB access');
 assert.ok(!csvSrc.includes('WAIVED_COLUMN_HEADER') && !csvSrc.includes('waivedCellText'),
   'CSV serializer must not import the prep-fee waiver column owner');
-// Derivation parity tokens with the XLSX loop (no independent recomputation).
-assert.ok(csvSrc.includes('Number(row.row_total)') || csvSrc.includes('Number(d.row_total)'),
-  'CSV total must derive from row_total (XLSX-identical), not a recomputed sum');
+// Derivation parity delegates to the same backend owner as HTML/XLSX.
+assert.ok(
+  csvSrc.includes('resolveBillingInvoiceRowTotal({')
+    && rowTotalOwner.includes('const rowTotal = Number(input.rowTotal)'),
+  'CSV total must delegate to the backend row-total owner and preserve row_total authority',
+);
 
 // FE: apiClient download helper + handler wired through the table, next to the
 // Excel button.

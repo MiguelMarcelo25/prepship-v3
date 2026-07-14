@@ -14,9 +14,9 @@
  *      shipment package at invoice time.
  *   3. Both renderers expose visible Box Size + Box Cost columns.
  *   4. billingInvoiceData is consumed by BOTH renderers (no forked query).
- *   5. NO double-counting: the per-row Fulfillment Fee (HTML/XLSX)
- *      fallbacks are byte-identical and contain no box-cost term — box cost is
- *      DISPLAY-ONLY (already inside row_total).
+ *   5. NO double-counting: positive row_total remains authoritative (and
+ *      already includes box cost); only the legacy zero-total compatibility
+ *      fallback adds the separately billed package_cost amount.
  *   6. The XLSX totals SUM formulas match the one-sheet Invoice layout
  *      (Fulfillment Fee -> M) and a Box Cost SUM exists.
  *   7. Unresolved/mismatched boxes surface a review reason, not a blank.
@@ -27,6 +27,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const routes = readFileSync('src/routes/billing.ts', 'utf8');
+const rowTotalOwner = readFileSync('src/services/billing-invoice-row-total.ts', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
 let failures = 0;
@@ -72,12 +73,13 @@ check('XLSX adds a Box Cost column', routes.includes("{ header: 'Box Cost', key:
 const dataCalls = routes.split('await billingInvoiceData(').length - 1;
 check(`both renderers consume billingInvoiceData (found ${dataCalls})`, dataCalls >= 2);
 
-// 5. No double-counting: per-row Fulfillment Fee (HTML) + Total (XLSX) fallbacks
-//    are byte-identical and carry NO box-cost term.
-check('HTML per-row Fulfillment Fee fallback unchanged (no box term)',
-  routes.includes(': pickPackFeeAmt + shippingAmt + storageAmt;'));
-check('XLSX per-row Fulfillment Fee fallback unchanged (no box term)',
-  routes.includes('fulfillmentFee: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,'));
+// 5. No double-counting: both renderers delegate. The owner returns positive
+//    row_total unchanged and adds package cost only for the legacy fallback.
+check('HTML and XLSX delegate per-row Fulfillment Fee to one owner',
+  routes.split('resolveBillingInvoiceRowTotal({').length - 1 >= 2);
+check('row-total owner preserves authoritative totals and includes box in fallback',
+  rowTotalOwner.includes('if (rowTotal > 0) return rowTotal;')
+    && rowTotalOwner.includes('+ Number(input.packageCost)'));
 
 // 6. XLSX totals match the current one-sheet Invoice layout.
 // PS-393 (b95126dc) inserted the Status column, shifting every column one letter right

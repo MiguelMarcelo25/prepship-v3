@@ -86,7 +86,7 @@ check('merge store persists and reads snapshots by job id with monotonic writes'
 check('boot readiness keeps the 0064 per-job objects at the latest migration frontier', () => {
   assert.match(readiness, /'print_queue_merge_jobs'/);
   assert.match(readiness, /'print_queue_merge_jobs_updated_at_idx'/);
-  assert.match(readiness, /0065_billing_close_workflow\.sql/);
+  assert.match(readiness, /0066_billing_ref_rate_identity\.sql/);
 });
 
 check('merge lifecycle requires initial status persistence before returning a job id', () => {

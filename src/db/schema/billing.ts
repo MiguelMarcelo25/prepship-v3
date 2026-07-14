@@ -176,6 +176,9 @@ export const billingRefRates = pgTable(
   },
   (t) => [
     index('billing_ref_rates_lookup_idx').on(t.weightOz, t.zipTo, t.carrier),
+    unique('billing_ref_rates_identity_unq')
+      .on(t.weightOz, t.zipTo, t.carrier, t.service)
+      .nullsNotDistinct(),
   ]
 );
 

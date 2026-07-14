@@ -35,6 +35,7 @@ const REQUIRED_GUARDS = [
   'test:audit-limiter-fingerprint-hygiene',
   'test:audit-sync-cursor-webhook-hygiene',
   'test:audit-frontend-cache-bundle-hygiene',
+  'test:audit-billing-small-fixes',
 ];
 
 const npmCli = process.env.npm_execpath;

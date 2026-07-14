@@ -68,6 +68,7 @@ const REQUIRED_INDEXES = [
   'audit_log_resource_idx',
   'audit_log_ts_idx',
   'billing_manual_overrides_client_order_idx',
+  'billing_ref_rates_identity_unq',
   'billing_credit_notes_finalization_idx',
   'billing_credit_notes_idempotency_unq',
   'billing_finalizations_client_period_unq',
@@ -230,7 +231,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0065_billing_close_workflow.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0066_billing_ref_rate_identity.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

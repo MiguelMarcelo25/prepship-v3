@@ -7,11 +7,11 @@
  * SAME backend read model (billingInvoiceData → sum(total_cost) over billing_line_items). This guard
  * LOCKS that conclusion so a future change cannot make one surface recompute money differently:
  *
- *   1. Behavioral: the extracted CSV serializer derives the per-order Total by the canonical
- *      `row_total > 0 ? row_total : pickPackFee + shipping + storage` rule (and gates Additional
- *      Units on addl_qty>0). It reads the backend row_total verbatim — no markup, no re-derivation.
- *   2. Cross-export lockstep: that SAME Total expression appears in all THREE renderers (CSV file +
- *      the HTML and XLSX loops in routes/billing.ts), so they cannot silently diverge.
+ *   1. Behavioral: the extracted CSV serializer derives the per-order Total through the canonical
+ *      backend row-total owner. A positive row_total remains authoritative; its zero fallback sums
+ *      pick/pack + package + shipping + storage (and gates Additional Units on addl_qty>0).
+ *   2. Cross-export lockstep: all THREE renderers (CSV + HTML + XLSX) delegate to that SAME owner,
+ *      so they cannot silently diverge or omit package cost from the fallback.
  *   3. Single source: all three export routes feed off billingInvoiceData, whose per-order Total is
  *      sum(b.total_cost) — the generated/frozen line-item dollars — and waiver visibility stays as
  *      the invoice-level period note (not a trailing CSV/XLSX column).
@@ -75,11 +75,18 @@ const billed = renderInvoiceCsvRow(baseRow({ row_total: '10.66' })).split(',');
 check('CSV Total reads the backend row_total verbatim when present (no FE recompute)', billed[TOTAL_COL] === '10.66');
 
 // ── 2) Behavioral: the documented fallback fires ONLY when row_total is 0 (sums the same backend
-//        per-line amounts: pickPackFee + shipping + storage) — clean integers to avoid float noise ──
+//        per-line amounts: pickPackFee + package + shipping + storage) — clean integers to avoid float noise ──
 const fallback = renderInvoiceCsvRow(
-  baseRow({ row_total: '0', pickpack_amt: '2', additional_amt: '1', shipping_amt: '7', storage_amt: '1' }),
+  baseRow({
+    row_total: '0',
+    pickpack_amt: '2',
+    additional_amt: '1',
+    package_cost_amt: '2',
+    shipping_amt: '7',
+    storage_amt: '1',
+  }),
 ).split(',');
-check('CSV Total fallback = pickPackFee + shipping + storage when row_total is 0 (3 + 7 + 1 = 11)', fallback[TOTAL_COL] === '11');
+check('CSV Total fallback includes package cost when row_total is 0 (3 + 2 + 7 + 1 = 13)', fallback[TOTAL_COL] === '13');
 
 // ── 3) Behavioral: Additional Units is gated on addl_qty>0; Qty = base + addl (display derivation
 //        of the SAME backend amounts, never a new charge) ──
@@ -90,13 +97,17 @@ const withAddl = renderInvoiceCsvRow(baseRow({ addl_qty: '2', additional_amt: '1
 check('Additional Units shows the backend additional_amt when addl_qty>0', withAddl[ADDITIONAL_COL] === '1');
 check('Qty = base + addl when addl present (1 + 2 = 3)', withAddl[QTY_COL] === '3');
 
-// ── 4) Cross-export lockstep: the SAME Total expression in all three renderers ──
+// ── 4) Cross-export lockstep: all three renderers delegate to the SAME backend Total owner ──
 const csvSrc = read('src/routes/billing-invoice-csv.ts');
 const billingRoute = read('src/routes/billing.ts');
-const totalExpr = /rowTotal > 0[\s\S]{0,12}rowTotal[\s\S]{0,40}pickPackFeeAmt \+ shippingAmt \+ storageAmt/;
-check('CSV serializer uses the canonical Total expression', totalExpr.test(csvSrc));
-const billingMatches = billingRoute.match(new RegExp(totalExpr, 'g')) ?? [];
-check('routes/billing.ts HTML + XLSX renderers BOTH use the SAME Total expression (>=2 occurrences)', billingMatches.length >= 2);
+const rowTotalOwner = read('src/services/billing-invoice-row-total.ts');
+check('backend Total owner preserves positive row_total and includes package cost in the zero fallback',
+  /if \(rowTotal > 0\) return rowTotal/.test(rowTotalOwner) &&
+  /Number\(input\.pickPackFee\)[\s\S]{0,80}Number\(input\.packageCost\)[\s\S]{0,80}Number\(input\.shipping\)[\s\S]{0,80}Number\(input\.storage\)/.test(rowTotalOwner));
+check('CSV serializer delegates to the canonical backend Total owner',
+  (csvSrc.match(/resolveBillingInvoiceRowTotal\s*\(\{/g) ?? []).length === 1);
+check('routes/billing.ts HTML + XLSX renderers BOTH delegate to the same backend Total owner',
+  (billingRoute.match(/resolveBillingInvoiceRowTotal\s*\(\{/g) ?? []).length === 2);
 
 // ── 5) Single source: per-order Total = sum(total_cost) over billing_line_items (the frozen dollars),
 //        and all three export routes feed off the one billingInvoiceData read model ──

@@ -6,7 +6,7 @@
  * produced by billingInvoiceData (the invoice source of truth) and emits CSV
  * with the same money derivation as renderInvoiceXlsx — qty, pick&pack fee
  * composition, the addl_qty>0 gate on Additional Units, and the
- * `row_total > 0 ? row_total : pickPackFee + shipping + storage` fallback.
+ * backend-owned row-total fallback (including billed package cost).
  * Text cells are normalized to one line so Excel does not open the CSV with
  * tall/clipped rows. No DB access, no recomputation of any money verdict beyond
  * the same display arithmetic the XLSX export already performs.
@@ -16,6 +16,7 @@
  * instant into the prior Pacific evening.
  */
 import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell, invoiceShipDateTimeCell } from './billing-invoice-text';
+import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
@@ -79,9 +80,18 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const baseQty = Number(row.base_qty);
   const addlQty = Number(row.addl_qty);
   const pickPackFeeAmt = Number(row.pickpack_amt) + Number(row.additional_amt);
+  const packageCostAmt = Number(row.package_cost_amt);
   const shippingAmt = Number(row.shipping_amt);
   const storageAmt = Number(row.storage_amt);
-  const rowTotal = Number(row.row_total);
+  // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
+  // CSV delegates the read-only total fallback to the backend owner.
+  const total = resolveBillingInvoiceRowTotal({
+    rowTotal: row.row_total,
+    pickPackFee: pickPackFeeAmt,
+    packageCost: packageCostAmt,
+    shipping: shippingAmt,
+    storage: storageAmt,
+  });
 
   const cells = [
     invoiceShipDateTimeCell(row.ship_date),
@@ -89,13 +99,13 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     row.billing_status_label || 'Fulfilled',
     invoiceOneLineCell(row.skus),
     invoiceOneLineCell(row.box_label),
-    num(Number(row.package_cost_amt)),
+    num(packageCostAmt),
     num(baseQty + addlQty),
     num(pickPackFeeAmt),
     num(addlQty > 0 ? Number(row.additional_amt) : 0),
     num(shippingAmt),
     num(storageAmt),
-    num(rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt),
+    num(total),
   ];
   return cells.map(csvField).join(',');
 }
