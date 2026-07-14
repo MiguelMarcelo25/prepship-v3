@@ -93,7 +93,8 @@ assert.ok(
   queue.includes('ORDER_STARVATION_DEFER_THRESHOLD') &&
     queue.includes('ORDER_STARVATION_DEFER_SECONDS') &&
     queue.includes('deferCount') &&
-    queue.includes('busy-defer-priority-orders'),
+    queue.includes("kind: 'busy-defer'") &&
+    queue.includes('priority: admission.priority'),
   'queue owner must escalate repeated order deferrals instead of using the same one-minute retry forever',
 );
 assert.ok(

@@ -45,8 +45,8 @@ check('busy-defer set excludes fulfillment outbox side effects', !/JOBS\.fulfill
 check('busy-defer set excludes external shipped classifier mutations', !/JOBS\.externalShippedClassifier/.test(deferSet));
 check('busy-defer set excludes walmart fees sync', !/JOBS\.walmartFees/.test(deferSet));
 check('busy-defer uses pg-boss sendAfter for durable retry', /await boss\.sendAfter\(/.test(queue));
-check('busy-defer uses singleton keys to prevent pileups',
-  /const singletonKey = orderStarvation \? 'busy-defer-priority-orders' : 'busy-defer';/.test(queue));
+check('busy-defer delegates singleton keys to the canonical admission owner',
+  /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer',[\s\S]*orderStarvation,[\s\S]*singletonKey: admission\.singletonKey/.test(queue));
 check('blocked queue jobs call deferBusySyncJob before returning skipped',
   /deferBusySyncJob\(name, blockedBy, lane, busyDeferCount\(job\?\.data\)\)/.test(skipBlock));
 check('blocked queue return exposes deferred status', /deferred:\s*Boolean\(deferredJobId\)/.test(skipBlock));
@@ -75,7 +75,7 @@ check(
     /import \{ syncOrders \} from '\.\/order-sync';/.test(queue) &&
     /import \{ syncShipments \} from '\.\/shipment-sync';/.test(queue) &&
     /registerWorker\(JOBS\.orders,\s*async \(jobData, \{ identity, signal \}\) => \{[\s\S]*orderSyncOptionsFromJobPayload\(jobData\)[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue) &&
-    /registerWorker\(JOBS\.shipments,\s*\(jobData\) =>[\s\S]*syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(queue) &&
+    /registerWorker\(JOBS\.shipments,\s*\(jobData, \{ signal \}\) =>[\s\S]*syncShipments\(\{ \.\.\.shipmentSyncOptionsFromJobPayload\(jobData\), signal \}\)/.test(queue) &&
     !/runOrderSync/.test(queue) &&
     !/runShipmentSync/.test(queue),
 );

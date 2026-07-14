@@ -82,13 +82,16 @@ check(
 );
 
 const queue = read('src/services/sync-job-queue.ts');
+const admission = read('src/services/sync-job-admission.ts');
 check(
   'pg-boss worker uses per-lane active jobs instead of one global activeJobName',
   /activeJobsByLane/.test(queue) && !/let activeJobName/.test(queue)
 );
 check(
-  'pg-boss worker skips duplicate active job enqueues before creating more backlog',
-  /isSyncJobNameActive\(activeJobsByLane, name\)/.test(queue)
+  'pg-boss admission prevents duplicate order/shipment backlog across workers',
+  /await targetBoss\.updateQueue\(name, options\)/.test(queue) &&
+    /policy: syncQueuePolicyForJob\(name\)/.test(queue) &&
+    /return name === SHIPSTATION_SYNC_JOBS\.orders \|\| name === SHIPSTATION_SYNC_JOBS\.shipments[\s\S]*\? 'stately'/.test(admission)
 );
 
 const scheduler = read('src/services/sync-scheduler.ts');

@@ -87,7 +87,7 @@ check('queued order worker delegates to the bounded syncOrders service',
   /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue) &&
     !/syncOrders\(\{[^}]*(?:limit|batch|maxPages)/.test(queue));
 check('queued shipment worker delegates to the bounded syncShipments service',
-  /syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(queue) &&
+  /syncShipments\(\{ \.\.\.shipmentSyncOptionsFromJobPayload\(jobData\), signal \}\)/.test(queue) &&
     !/syncShipments\(\{[^}]*(?:limit|batch|maxPages|pageSize)/.test(queue));
 check('runInventoryImportFromOrders delegates to importSkusFromOrders (bound owned by the service)',
   /importSkusFromOrders\(\)/.test(read('src/services/sync-scheduler.ts')));

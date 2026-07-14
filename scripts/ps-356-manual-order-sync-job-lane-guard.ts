@@ -70,12 +70,13 @@ check(
   'sync-job-queue exposes a manual enqueue helper for the order job',
   /export async function enqueueManualOrderSyncJob/.test(queue) &&
     /JOBS\.orders/.test(queue) &&
-    /singletonKey: `manual-\$\{payload\.mode\}`/.test(queue),
+    /kind: 'manual-order'/.test(queue) &&
+    /singletonKey: admission\.singletonKey/.test(queue),
 );
 check(
   'manual enqueue uses transient pg-boss from API process when worker queue is external',
   /application_name: 'prepship-api-manual-order-sync'/.test(queue) &&
-    /await transientBoss\.createQueue\(JOBS\.orders/.test(queue),
+    /await ensureQueue\(transientBoss, JOBS\.orders\)/.test(queue),
 );
 check(
   'queued order worker consumes payload and propagates attempt cancellation context',

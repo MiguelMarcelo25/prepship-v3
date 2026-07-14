@@ -186,7 +186,8 @@ assert.doesNotMatch(scheduler, /from ['"]\.\/shipment-sync['"]/);
 assert.match(queue, /registerWorker\(JOBS\.orders/);
 assert.match(queue, /registerWorker\(JOBS\.shipments/);
 assert.match(queue, /await boss\.schedule\(/);
-assert.match(queue, /singletonKey: 'cadence'/);
+assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
+assert.match(queue, /singletonKey: admission\.singletonKey/);
 for (const route of [cronRoute, ordersRoute, shipmentsRoute, adminRoute]) {
   assert.doesNotMatch(route, /await syncOrders\(/);
   assert.doesNotMatch(route, /await syncShipments\(/);

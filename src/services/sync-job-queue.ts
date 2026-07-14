@@ -52,6 +52,11 @@ import {
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
 import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-account-snapshot-worker';
+import {
+  resolveSyncJobAdmission,
+  SHIPSTATION_SYNC_JOBS,
+  syncQueuePolicyForJob,
+} from './sync-job-admission';
 
 // PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
 // endpoint). Local aliases keep the rest of this file unchanged.
@@ -66,9 +71,9 @@ const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedC
 const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking;
 const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees;
 const JOBS = {
-  orders: 'prepship.sync.orders',
+  orders: SHIPSTATION_SYNC_JOBS.orders,
   shopifyOrders: 'prepship.sync.shopify-orders',
-  shipments: 'prepship.sync.shipments',
+  shipments: SHIPSTATION_SYNC_JOBS.shipments,
   rateBackfill: 'prepship.sync.rate-backfill',
   inventoryImport: 'prepship.sync.inventory-import',
   syncProducts: 'prepship.sync.products',
@@ -104,6 +109,28 @@ const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
+
+function queueOptionsFor(name: JobName): PgBoss.Queue {
+  return {
+    name,
+    policy: syncQueuePolicyForJob(name),
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    expireInSeconds: 30 * 60,
+    retentionDays: 7,
+  };
+}
+
+async function ensureQueue(targetBoss: PgBoss, name: JobName): Promise<void> {
+  const options = queueOptionsFor(name);
+  await targetBoss.createQueue(name, options);
+  if (options.policy !== 'stately') return;
+  // Per user override unlock shipped data on 2026-07-14: createQueue is a
+  // no-op for existing pg-boss queues, so updateQueue is required to move the
+  // two ShipStation queues to the canonical stately coalescing policy.
+  await targetBoss.updateQueue(name, options);
+}
 
 const SCHEDULE_CRON = {
   everyMinute: '* * * * *',
@@ -219,6 +246,9 @@ async function sendShipmentSyncWatchdogJob(
   queueStarted: boolean,
 ): Promise<ShipmentSyncWatchdogEnqueueResult> {
   try {
+    const admission = resolveSyncJobAdmission(JOBS.shipments, {
+      kind: 'watchdog-shipment',
+    });
     // Per user override unlock shipped data on 2026-07-01: PS-361 recovery
     // enqueues one shipment import tick only. It does not buy labels, create
     // postage, notify marketplaces, or mutate shipped/cancelled rows here.
@@ -229,8 +259,9 @@ async function sendShipmentSyncWatchdogJob(
         requestedBy: 'shipment-sync-watchdog',
       },
       {
-        singletonKey: 'watchdog-recovery',
+        singletonKey: admission.singletonKey,
         singletonSeconds: 60,
+        priority: admission.priority,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
@@ -261,6 +292,10 @@ async function sendManualOrderSyncJob(
 ): Promise<ManualOrderSyncEnqueueResult> {
   const payload = buildManualOrderSyncJobPayload(request);
   try {
+    const admission = resolveSyncJobAdmission(JOBS.orders, {
+      kind: 'manual-order',
+      mode: payload.mode,
+    });
     // Per user override unlock shipped data on 2026-07-02: this only
     // enqueues the existing backend order-sync worker lane. The request no
     // longer runs ShipStation import inline, buys labels, prints postage, or
@@ -269,8 +304,9 @@ async function sendManualOrderSyncJob(
       JOBS.orders,
       payload,
       {
-        singletonKey: `manual-${payload.mode}`,
+        singletonKey: admission.singletonKey,
         singletonSeconds: 60,
+        priority: admission.priority,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
@@ -323,14 +359,7 @@ export async function enqueueManualOrderSyncJob(
 
   try {
     await transientBoss.start();
-    await transientBoss.createQueue(JOBS.orders, {
-      name: JOBS.orders,
-      retryLimit: 2,
-      retryDelay: 30,
-      retryBackoff: true,
-      expireInSeconds: 30 * 60,
-      retentionDays: 7,
-    });
+    await ensureQueue(transientBoss, JOBS.orders);
     return await sendManualOrderSyncJob(transientBoss, false, request);
   } catch (err) {
     const payload = buildManualOrderSyncJobPayload(request);
@@ -355,12 +384,16 @@ async function sendManualShipmentSyncJob(
 ): Promise<ManualShipmentSyncEnqueueResult> {
   const payload = buildManualShipmentSyncJobPayload(request);
   try {
+    const admission = resolveSyncJobAdmission(JOBS.shipments, {
+      kind: 'manual-shipment',
+    });
     const id = await targetBoss.send(
       JOBS.shipments,
       payload,
       {
-        singletonKey: 'manual-shipment-sync',
+        singletonKey: admission.singletonKey,
         singletonSeconds: 60,
+        priority: admission.priority,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
@@ -410,14 +443,7 @@ export async function enqueueManualShipmentSyncJob(
 
   try {
     await transientBoss.start();
-    await transientBoss.createQueue(JOBS.shipments, {
-      name: JOBS.shipments,
-      retryLimit: 2,
-      retryDelay: 30,
-      retryBackoff: true,
-      expireInSeconds: 30 * 60,
-      retentionDays: 7,
-    });
+    await ensureQueue(transientBoss, JOBS.shipments);
     return await sendManualShipmentSyncJob(transientBoss, false, request);
   } catch (err) {
     return {
@@ -454,14 +480,7 @@ export async function enqueueShipmentSyncWatchdogJob(): Promise<ShipmentSyncWatc
 
   try {
     await transientBoss.start();
-    await transientBoss.createQueue(JOBS.shipments, {
-      name: JOBS.shipments,
-      retryLimit: 2,
-      retryDelay: 30,
-      retryBackoff: true,
-      expireInSeconds: 30 * 60,
-      retentionDays: 7,
-    });
+    await ensureQueue(transientBoss, JOBS.shipments);
     return await sendShipmentSyncWatchdogJob(transientBoss, false);
   } catch (err) {
     return {
@@ -487,7 +506,10 @@ async function deferBusySyncJob(
     const orderStarvation =
       name === JOBS.orders && deferCount >= ORDER_STARVATION_DEFER_THRESHOLD;
     const delaySeconds = orderStarvation ? ORDER_STARVATION_DEFER_SECONDS : BUSY_DEFER_SECONDS;
-    const singletonKey = orderStarvation ? 'busy-defer-priority-orders' : 'busy-defer';
+    const admission = resolveSyncJobAdmission(name, {
+      kind: 'busy-defer',
+      orderStarvation,
+    });
     // Per user override unlock shipped data on 2026-07-01: this only creates a
     // replacement pg-boss sync tick for order/shipment import when the shared
     // ShipStation lane is busy. It does not touch orders, shipments, labels,
@@ -502,14 +524,14 @@ async function deferBusySyncJob(
         orderStarvation,
       },
       {
-        singletonKey,
+        singletonKey: admission.singletonKey,
         singletonSeconds: delaySeconds,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
         expireInMinutes: 30,
         retentionDays: 7,
-        priority: orderStarvation ? 100 : 0,
+        priority: admission.priority,
       },
       delaySeconds,
     );
@@ -544,17 +566,21 @@ async function reconcileDurableSchedule(
     return;
   }
 
+  const admission = resolveSyncJobAdmission(name, { kind: 'cadence' });
+
   // Per user override unlock shipped data on 2026-07-14: pg-boss persists
-  // cadence in Postgres and admits one singleton wake-up across all workers.
-  // This schedules work only; shipped/cancelled protections remain in the handlers.
+  // cadence in Postgres. The canonical admission owner gives equivalent
+  // cadence/manual/defer wake-ups one key on stately ShipStation queues.
+  // This schedules work only; shipped/cancelled protections remain in handlers.
   await boss.schedule(
     name,
     cron,
     { requestedBy: 'pg-boss-cron' },
     {
       tz: 'UTC',
-      singletonKey: 'cadence',
+      singletonKey: admission.singletonKey,
       singletonSeconds: jobSingletonSeconds(intervalMs),
+      priority: admission.priority,
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
@@ -778,17 +804,7 @@ async function registerWorker(
 async function createQueues(): Promise<void> {
   if (!boss) return;
   for (const name of Object.values(JOBS)) {
-    await boss.createQueue(name, {
-      name,
-      retryLimit: 2,
-      retryDelay: 30,
-      retryBackoff: true,
-      // PS-272: explicit per-queue expiration so pg-boss's OWN expire() reaps stale 'active' rows on
-      // this queue (the queue row is the authority pg-boss reads during maintenance). expireInSeconds
-      // is the canonical unit on PgBoss.Queue (ExpirationOptions); 30 min === the constructor value.
-      expireInSeconds: 30 * 60,
-      retentionDays: 7,
-    });
+    await ensureQueue(boss, name);
   }
 }
 

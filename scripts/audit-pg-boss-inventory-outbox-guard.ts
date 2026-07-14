@@ -26,7 +26,8 @@ assert.doesNotMatch(env + envExample, /USE_PG_BOSS_SCHEDULER/);
 
 assert.match(queue, /await boss\.schedule\(/);
 assert.match(queue, /await boss\.unschedule\(name\)/);
-assert.match(queue, /singletonKey: 'cadence'/);
+assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
+assert.match(queue, /singletonKey: admission\.singletonKey/);
 assert.doesNotMatch(queue, /scheduleEnqueue|SYNC_STARTUP_DELAY_MS|setTimeout\(/);
 assert.equal(
   queue.match(/setInterval\(/g)?.length ?? 0,

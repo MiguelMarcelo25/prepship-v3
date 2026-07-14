@@ -156,7 +156,7 @@ check('watchdog recovery can clear stale busy-defer/watchdog shipment queue rows
   service.includes('reapStaleQueuedCadenceJobs') &&
   reaper.includes("'busy-defer'") &&
   reaper.includes("'watchdog-recovery'") &&
-  /PARTITION BY name, singleton_key/.test(reaper));
+  /PARTITION BY name, logical_singleton_key/.test(reaper));
 check('Render restart path is explicit, env-gated, and auditable',
   service.includes('SHIPMENT_SYNC_WATCHDOG_ALLOW_RESTARTS') &&
   service.includes('RENDER_API_KEY') &&

@@ -21,6 +21,7 @@ const REQUIRED_GUARDS = [
   'test:audit-money-rounding',
   'test:audit-orders-service-boundary',
   'test:audit-pg-boss-inventory-outbox',
+  'test:sync-job-admission',
   'test:audit-runtime-schema-readiness',
   'test:audit-imported-handler-boundary',
   'test:audit-print-queue-merge-durability',

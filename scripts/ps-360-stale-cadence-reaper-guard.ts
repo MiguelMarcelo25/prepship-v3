@@ -35,7 +35,7 @@ check('reaper exports stale queued cadence age threshold',
   /REAPER_STALE_QUEUED_MIN_AGE_MS\s*=\s*15 \* 60_000/.test(reaper));
 check('reaper keeps the newest cadence row per safe job',
   /REAPER_STALE_QUEUED_KEEP_PER_JOB\s*=\s*1/.test(reaper) &&
-  /PARTITION BY name, singleton_key/.test(reaper));
+  /PARTITION BY name, logical_singleton_key/.test(reaper));
 check('stale queued reaper ranks all queued ticks before applying stale cutoff',
   /created_on,\s*row_number\(\) OVER/.test(reaper) &&
   /WHERE newest_rank > \$\{REAPER_STALE_QUEUED_KEEP_PER_JOB\}\s*AND created_on < now\(\)/.test(reaper));
@@ -47,9 +47,16 @@ check('stale queued reaper only considers safe sync singleton rows',
   /'busy-defer'/.test(reaper) &&
   /'manual-incremental'/.test(reaper) &&
   /'watchdog-recovery'/.test(reaper) &&
+  /ORDER_REFRESH_SINGLETON_KEY/.test(reaper) &&
+  /SHIPMENT_REFRESH_SINGLETON_KEY/.test(reaper) &&
   /singleton_key = ANY\(\$\{REAPER_STALE_QUEUED_SINGLETON_KEYS as string\[\]\}\)/.test(reaper));
+check('legacy producer keys are ranked as one logical ShipStation refresh',
+  /LEGACY_ORDER_REFRESH_SINGLETON_KEYS/.test(reaper) &&
+  /LEGACY_SHIPMENT_REFRESH_SINGLETON_KEYS/.test(reaper) &&
+  /END AS logical_singleton_key/.test(reaper));
 check('stale queued reaper collapses old manual refresh ticks',
-  /manual refresh clicks enqueue[\s\S]*watermark-based order sync ticks/.test(reaper));
+  /LEGACY_ORDER_REFRESH_SINGLETON_KEYS[\s\S]*'manual-incremental'/.test(reaper) &&
+  /THEN \$\{ORDER_REFRESH_SINGLETON_KEY\}/.test(reaper));
 check('stale cadence reaper uses the stale-queued allow-list',
   /REAPER_STALE_QUEUED_JOB_NAMES/.test(reaper) &&
   /name = ANY\(\$\{REAPER_STALE_QUEUED_JOB_NAMES as string\[\]\}\)/.test(reaper));

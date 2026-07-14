@@ -23,6 +23,11 @@ import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
 import { syncJobLaneFor, type SyncJobLane } from './sync-job-lanes';
 import { isSyncLaneAdvisoryLockHeld } from './sync-lane-lock';
+import {
+  ORDER_REFRESH_SINGLETON_KEY,
+  SHIPMENT_REFRESH_SINGLETON_KEY,
+  SHIPSTATION_SYNC_JOBS,
+} from './sync-job-admission.js';
 
 /**
  * Allow-list of pgboss queue names the reaper may clear. These are idempotent queue jobs where
@@ -62,14 +67,25 @@ export const REAPER_MIN_ACTIVE_AGE_MS = 15 * 60_000;
 export const REAPER_ORPHAN_ACTIVE_GRACE_MS = 60_000;
 export const REAPER_STALE_QUEUED_MIN_AGE_MS = 15 * 60_000;
 export const REAPER_STALE_QUEUED_KEEP_PER_JOB = 1;
-export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
+const LEGACY_ORDER_REFRESH_SINGLETON_KEYS: readonly string[] = [
   'cadence',
   'busy-defer',
-  // Per user override unlock shipped data on 2026-07-07: manual refresh clicks enqueue
-  // watermark-based order sync ticks too. Old queued manual ticks are redundant once a newer
-  // one exists, and keeping them can starve the fresh sync that turns the UI badge green.
+  'busy-defer-priority-orders',
   'manual-incremental',
+];
+const LEGACY_SHIPMENT_REFRESH_SINGLETON_KEYS: readonly string[] = [
+  'cadence',
+  'busy-defer',
   'watchdog-recovery',
+  'manual-shipment-sync',
+];
+export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
+  ...new Set([
+    ...LEGACY_ORDER_REFRESH_SINGLETON_KEYS,
+    ...LEGACY_SHIPMENT_REFRESH_SINGLETON_KEYS,
+    ORDER_REFRESH_SINGLETON_KEY,
+    SHIPMENT_REFRESH_SINGLETON_KEY,
+  ]),
 ];
 
 export const REAPER_STALE_QUEUED_JOB_NAMES: readonly string[] = [
@@ -220,6 +236,9 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
  * job/singleton and fail older redundant rows.
  * Per user override unlock shipped data on 2026-07-02: fulfillment-outbox is included only for
  * stale QUEUED cadence rows. ACTIVE fulfillment jobs remain excluded from reapStuckActiveJobs.
+ * Per user override unlock shipped data on 2026-07-14: legacy producer-specific keys are
+ * normalized to the new logical refresh keys while ranking, so deployment drains the old
+ * backlog instead of preserving one redundant row for every former producer.
  */
 export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
   if (!env.SYNC_STUCK_JOB_REAPER) {
@@ -229,20 +248,36 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
   try {
     const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
     const stale = await pg<ReapedJobRow[]>`
-      WITH candidates AS (
+      WITH normalized AS (
         SELECT
           id::text AS id,
           name,
           singleton_key,
           created_on,
-          row_number() OVER (
-            PARTITION BY name, singleton_key
-            ORDER BY created_on DESC, id DESC
-          ) AS newest_rank
+          CASE
+            WHEN name = ${SHIPSTATION_SYNC_JOBS.orders}
+              AND singleton_key = ANY(${LEGACY_ORDER_REFRESH_SINGLETON_KEYS as string[]})
+              THEN ${ORDER_REFRESH_SINGLETON_KEY}
+            WHEN name = ${SHIPSTATION_SYNC_JOBS.shipments}
+              AND singleton_key = ANY(${LEGACY_SHIPMENT_REFRESH_SINGLETON_KEYS as string[]})
+              THEN ${SHIPMENT_REFRESH_SINGLETON_KEY}
+            ELSE singleton_key
+          END AS logical_singleton_key
         FROM ${pg(jobTable)}
         WHERE state IN ('created', 'retry')
           AND name = ANY(${REAPER_STALE_QUEUED_JOB_NAMES as string[]})
           AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
+      ), candidates AS (
+        SELECT
+          id,
+          name,
+          singleton_key,
+          created_on,
+          row_number() OVER (
+            PARTITION BY name, logical_singleton_key
+            ORDER BY created_on DESC, id DESC
+          ) AS newest_rank
+        FROM normalized
       )
       SELECT id, name
       FROM candidates
