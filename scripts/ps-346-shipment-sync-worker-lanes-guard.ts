@@ -95,9 +95,14 @@ check(
 );
 
 const scheduler = read('src/services/sync-scheduler.ts');
+// Per user override unlock shipped data on 2026-07-14: the durable queue is
+// now the only lane-admission owner; scheduler handlers only execute admitted
+// work and therefore cannot reserve DB_POOL_MAX=1 behind their own lock.
 check(
-  'scheduler uses per-lane active jobs instead of one global heavySchedulerJobRunning',
-  /activeSchedulerJobsByLane/.test(scheduler) && !/let heavySchedulerJobRunning/.test(scheduler)
+  'scheduler delegates lane admission to pg-boss instead of owning a second lock',
+  /runSchedulerJob/.test(scheduler) &&
+    !/activeSchedulerJobsByLane/.test(scheduler) &&
+    !/pg\.reserve\(\)|pg_try_advisory_lock/.test(scheduler)
 );
 
 const pkg = read('package.json');

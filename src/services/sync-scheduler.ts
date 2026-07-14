@@ -12,21 +12,10 @@ import {
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
 import { enqueueMissingInventoryDeductions } from './fulfillment/inventory-deduction-outbox';
-import {
-  recordWorkerJobFailure,
-  recordWorkerJobSkipped,
-  recordWorkerJobStart,
-  recordWorkerJobSuccess,
-} from './worker-status';
 import { refreshReportingMetrics } from './reporting-metrics';
 import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
 import { runShipmentTrackingPollOnce } from './shipment-tracking';
 import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';
-import {
-  getSyncJobLaneBlocker,
-  syncJobLaneFor,
-  type SyncJobLane,
-} from './sync-job-lanes';
 
 // Audit 3.2: handler-only module. Durable cadence and cross-process admission
 // live in sync-job-queue.ts/pg-boss; this file must not start process-local work timers.
@@ -44,69 +33,21 @@ let reportingRefreshRunning = false;
 let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
 let walmartFeesRunning = false;
-const activeSchedulerJobsByLane = new Map<SyncJobLane, string>();
 
-async function withSchedulerAdvisoryLock<T>(
+// Per user override unlock shipped data on 2026-07-14: pg-boss plus
+// withSyncLaneAdvisoryLock in sync-job-queue.ts is the sole admission owner.
+// Do not reserve the shared DB pool here: production supports DB_POOL_MAX=1,
+// and a handler that reserves that connection deadlocks on its first DB query.
+async function runSchedulerJob<T>(
   name: string,
   fn: () => Promise<T>,
-): Promise<T | null> {
-  const lockName = `prepship.scheduler.${name}`;
-  const reserved = await pg.reserve();
+): Promise<T> {
+  const startedAt = Date.now();
   try {
-    const [row] = await reserved<{ acquired: boolean }[]>`
-      select pg_try_advisory_lock(hashtext(${lockName})) as acquired
-    `;
-    if (!row?.acquired) {
-      console.log(`[scheduler] ${name} skipped - another process holds the scheduler lock`);
-      await recordWorkerJobSkipped(name, 'scheduler lock held by another process');
-      return null;
-    }
-    try {
-      return await fn();
-    } finally {
-      await reserved`select pg_advisory_unlock(hashtext(${lockName}))`;
-    }
+    return await fn();
   } finally {
-    reserved.release();
-  }
-}
-async function runHeavySchedulerJob<T>(
-  name: string,
-  fn: () => Promise<T>,
-): Promise<T | null> {
-  const lane = syncJobLaneFor(name);
-  const blockedBy = getSyncJobLaneBlocker(activeSchedulerJobsByLane, name);
-  if (blockedBy) {
-    console.log(
-      `[scheduler] ${name} skipped - ${blockedBy} is still running in ${lane} lane`
-    );
-    await recordWorkerJobSkipped(
-      name,
-      `${blockedBy} is still running in ${lane} lane`
-    );
-    return null;
-  }
-  activeSchedulerJobsByLane.set(lane, name);
-  try {
-    return await withSchedulerAdvisoryLock(name, async () => {
-      const startedAt = Date.now();
-      await recordWorkerJobStart(name);
-      try {
-        const result = await fn();
-        await recordWorkerJobSuccess(name, startedAt, result);
-        return result;
-      } catch (err) {
-        await recordWorkerJobFailure(name, startedAt, err);
-        throw err;
-      } finally {
-        const elapsedMs = Date.now() - startedAt;
-        console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
-      }
-    });
-  } finally {
-    if (activeSchedulerJobsByLane.get(lane) === name) {
-      activeSchedulerJobsByLane.delete(lane);
-    }
+    const elapsedMs = Date.now() - startedAt;
+    console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
   }
 }
 
@@ -120,7 +61,7 @@ export async function runShopifyOrderSyncTick(signal?: AbortSignal): Promise<voi
   }
   shopifyOrderSyncRunning = true;
   try {
-    const result = await runHeavySchedulerJob('Shopify orders sync', () => syncShopifyOrders(signal));
+    const result = await runSchedulerJob('Shopify orders sync', () => syncShopifyOrders(signal));
     if (!result?.enabled) return;
     console.log(
       `[scheduler] Shopify orders synced: accounts=${result.accounts}, rows=${result.synced}, errors=${result.errors}`
@@ -210,7 +151,7 @@ export async function runInventoryImportFromOrders(): Promise<void> {
   }
   inventoryImportRunning = true;
   try {
-    const result = await runHeavySchedulerJob('inventory import-from-orders', () => importSkusFromOrders());
+    const result = await runSchedulerJob('inventory import-from-orders', () => importSkusFromOrders());
     if (!result) return;
     console.log(
       `[scheduler] inventory import-from-orders: ${result.inserted} new SKU(s), ${result.skipped} already existed`
@@ -239,7 +180,7 @@ export async function runSyncProductsTick(): Promise<void> {
   }
   syncProductsRunning = true;
   try {
-    const result = await runHeavySchedulerJob('inventory sync-products', () => syncShipStationProducts());
+    const result = await runSchedulerJob('inventory sync-products', () => syncShipStationProducts());
     if (!result) return;
     console.log(
       `[scheduler] inventory sync-products: ${result.inserted} new + ${result.updated} updated across ${Object.keys(result.byAccount).length} account(s)`
@@ -261,22 +202,13 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
   }
   fulfillmentOutboxRunning = true;
   try {
-    const result = await withSchedulerAdvisoryLock('fulfillment outbox', async () => {
-      const startedAt = Date.now();
-      await recordWorkerJobStart('fulfillment outbox');
-      try {
-        const recoveryResult = await enqueueMissingShipmentConfirmations({ limit: 25 });
-        // Per user override unlock shipped data on 2026-07-14: repair missing
-        // deduction intent only; execution remains in the kill-switched owner.
-        const inventoryRecovered = await enqueueMissingInventoryDeductions(100);
-        const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
-        const combinedResult = { ...outboxResult, autoRecovered: recoveryResult, inventoryRecovered };
-        await recordWorkerJobSuccess('fulfillment outbox', startedAt, combinedResult);
-        return combinedResult;
-      } catch (err) {
-        await recordWorkerJobFailure('fulfillment outbox', startedAt, err);
-        throw err;
-      }
+    const result = await runSchedulerJob('fulfillment outbox', async () => {
+      const recoveryResult = await enqueueMissingShipmentConfirmations({ limit: 25 });
+      // Per user override unlock shipped data on 2026-07-14: repair missing
+      // deduction intent only; execution remains in the kill-switched owner.
+      const inventoryRecovered = await enqueueMissingInventoryDeductions(100);
+      const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
+      return { ...outboxResult, autoRecovered: recoveryResult, inventoryRecovered };
     });
     if (!result) return;
     if (result.autoRecovered.enqueued > 0 || result.inventoryRecovered > 0 || result.processed > 0) {
@@ -303,7 +235,7 @@ export async function runReportingRefreshTick(): Promise<void> {
   }
   reportingRefreshRunning = true;
   try {
-    const result = await runHeavySchedulerJob('reporting metrics refresh', () =>
+    const result = await runSchedulerJob('reporting metrics refresh', () =>
       refreshReportingMetrics({ days: 45, inventoryLimit: 2000 })
     );
     if (!result) return;
@@ -327,7 +259,7 @@ export async function runExternalShippedClassifierTick(): Promise<void> {
   }
   externalShippedClassifierRunning = true;
   try {
-    const result = await runHeavySchedulerJob(
+    const result = await runSchedulerJob(
       'external-shipped classifier',
       runExternalShippedClassifierJob,
     );
@@ -374,7 +306,7 @@ export async function runShipmentTrackingTick(): Promise<void> {
   }
   shipmentTrackingRunning = true;
   try {
-    const result = await runHeavySchedulerJob('shipment tracking poll', () =>
+    const result = await runSchedulerJob('shipment tracking poll', () =>
       runShipmentTrackingPollOnce({
         // Tracking-driven print-queue retirement: observe-only unless the
         // operator explicitly enables auto-retire (the instant kill-switch).
@@ -408,7 +340,7 @@ export async function runWalmartFeesTick(): Promise<void> {
   }
   walmartFeesRunning = true;
   try {
-    const result = await runHeavySchedulerJob('walmart fees sync', async () => {
+    const result = await runSchedulerJob('walmart fees sync', async () => {
       const days = 14;
       const now = new Date();
       const fromDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
