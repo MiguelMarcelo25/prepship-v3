@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { api } from '../lib/api';
+import { clientQueryKeys } from '../lib/client-query';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 
@@ -102,9 +103,7 @@ export default function ClientModal({
         ? api.patch<Client>(`/clients/${existing!.id}`, body)
         : api.post<Client>('/clients', body),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-      queryClient.invalidateQueries({ queryKey: ['clients', 'admin'] });
-      queryClient.invalidateQueries({ queryKey: ['v2-hooks:clients'] });
+      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root });
       onClose();
     },
   });

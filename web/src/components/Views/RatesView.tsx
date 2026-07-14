@@ -479,7 +479,7 @@ export default function RatesView() {
 
       {/* Results */}
       <div id="ratesResult" className="mt-5 w-full max-w-4xl">
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {resultState.kind === 'loading' ? (
             <motion.div
               key="loading"

@@ -1,11 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
-import {
-  SHARED_DATA_STALE_MS,
-  SHARED_DATA_CACHE_MS,
-  type V4ClientFullRow,
-} from './v2Hooks-shared';
+import { activeClientRowsQueryOptions } from '../lib/client-query';
 
 // ──────────────────────────────────────────────────────────────────
 // useInventory — v4 returns paginated thin rows; adapt to v2's rich
@@ -164,13 +160,7 @@ export function useInventory(
 
   // 2026-05-12: explicit activeOnly=true so the inventory query's
   // clientName resolution never picks up disabled clients.
-  const clientsQuery = useQuery<V4ClientFullRow[]>({
-    queryKey: ['v2-hooks:clients', 'active-only'],
-    queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true'),
-    staleTime: SHARED_DATA_STALE_MS,
-    gcTime: SHARED_DATA_CACHE_MS,
-    refetchOnWindowFocus: false,
-  });
+  const clientsQuery = useQuery(activeClientRowsQueryOptions());
 
   const query = useQuery<Paginated<V4InventoryRow>>({
     queryKey: [

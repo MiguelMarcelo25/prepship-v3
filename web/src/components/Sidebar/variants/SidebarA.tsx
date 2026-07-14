@@ -5,32 +5,25 @@ import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
-  Box,
   ChevronDown,
   ChevronRight,
   LogOut,
   Circle,
+  LayoutDashboard,
+  Warehouse,
+  Users,
+  Package,
+  CircleDollarSign,
+  BarChart3,
+  Settings,
+  ReceiptText,
+  ClipboardList,
+  Inbox,
+  CircleCheckBig,
+  CircleX,
+  type LucideIcon,
 } from 'lucide-react'
-// Tinted react-icons for the sidebar — each item gets its own intrinsic
-// color rather than the previous uniform `text-slate-900`. Material
-// Design (`md`) has the cleanest filled variants for a colored-icon
-// sidebar; we mix in `bs` (Bootstrap) for the package shape since BsBox
-// reads as "shipping box" more clearly than MdInventory.
-import {
-  MdDashboard,
-  MdInventory2,
-  MdPeople,
-  MdLocationOn,
-  MdAttachMoney,
-  MdInsights,
-  MdSettings,
-  MdReceiptLong,
-  MdAssignment,
-  MdInbox,
-  MdCheckCircle,
-  MdCancel,
-} from 'react-icons/md'
-import { BsBoxSeam } from 'react-icons/bs'
+// Audit FE-9: one Lucide icon dependency, with per-item tint retained.
 import { useSidebarController, type SidebarVariantProps, type SidebarViewType } from './useSidebarController'
 
 const STATUS_LABELS = {
@@ -40,28 +33,26 @@ const STATUS_LABELS = {
 } as const
 
 // Each status carries its own brand color in `tint` — applied via inline
-// `style.color` because intrinsic SVG fill on react-icons honors the
-// CSS `color` property (they paint with `currentColor`). That means the
-// surrounding Tailwind `text-slate-900` no longer washes them out.
-const STATUS_ICON: Record<string, { Icon: any; tint: string }> = {
-  awaiting_shipment: { Icon: MdInbox, tint: '#f59e0b' },     // amber-500
-  shipped: { Icon: MdCheckCircle, tint: '#10b981' },          // emerald-500
-  cancelled: { Icon: MdCancel, tint: '#f43f5e' },             // rose-500
+// `style.color` because Lucide paints with `currentColor`.
+const STATUS_ICON: Record<string, { Icon: LucideIcon; tint: string }> = {
+  awaiting_shipment: { Icon: Inbox, tint: '#f59e0b' },
+  shipped: { Icon: CircleCheckBig, tint: '#10b981' },
+  cancelled: { Icon: CircleX, tint: '#f43f5e' },
 }
 
-const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string; tint: string }> = [
-  { view: 'dashboard', Icon: MdDashboard,    label: 'Dashboard', tint: '#6366f1' }, // indigo-500
-  { view: 'inventory', Icon: MdInventory2,   label: 'Inventory', tint: '#f97316' }, // orange-500
-  { view: 'clients',   Icon: MdPeople,       label: 'Clients',   tint: '#06b6d4' }, // cyan-500
+const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: LucideIcon; label: string; tint: string }> = [
+  { view: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard', tint: '#6366f1' },
+  { view: 'inventory', Icon: Warehouse, label: 'Inventory', tint: '#f97316' },
+  { view: 'clients', Icon: Users, label: 'Clients', tint: '#06b6d4' },
   // 2026-05-13: Locations moved into Settings (Ship-From Locations
   // tab). Old route /locations is redirected to /settings/locations
   // by Home.tsx so existing bookmarks still resolve.
-  { view: 'packages',  Icon: BsBoxSeam,      label: 'Packages',  tint: '#8b5cf6' }, // violet-500
-  { view: 'rates',     Icon: MdAttachMoney,  label: 'Rate Shop', tint: '#10b981' }, // emerald-500
-  { view: 'analysis',  Icon: MdInsights,     label: 'Analysis',  tint: '#3b82f6' }, // blue-500
-  { view: 'settings',  Icon: MdSettings,     label: 'Settings',  tint: '#64748b' }, // slate-500
-  { view: 'billing',   Icon: MdReceiptLong,  label: 'Billing',   tint: '#0ea5e9' }, // sky-500
-  { view: 'manifests', Icon: MdAssignment,   label: 'Manifests', tint: '#14b8a6' }, // teal-500
+  { view: 'packages', Icon: Package, label: 'Packages', tint: '#8b5cf6' },
+  { view: 'rates', Icon: CircleDollarSign, label: 'Rate Shop', tint: '#10b981' },
+  { view: 'analysis', Icon: BarChart3, label: 'Analysis', tint: '#3b82f6' },
+  { view: 'settings', Icon: Settings, label: 'Settings', tint: '#64748b' },
+  { view: 'billing', Icon: ReceiptText, label: 'Billing', tint: '#0ea5e9' },
+  { view: 'manifests', Icon: ClipboardList, label: 'Manifests', tint: '#14b8a6' },
 ]
 
 export default function SidebarA(props: SidebarVariantProps) {
@@ -141,8 +132,7 @@ export default function SidebarA(props: SidebarVariantProps) {
                 >
                   <ChevronDown size={11} strokeWidth={2.25} />
                 </button>
-                {/* react-icons paint via SVG `fill` (uses currentColor),
-                    so the inline `color` here drives the icon hue. Slight
+                {/* The inline color drives the Lucide icon hue. Slight
                     drop-shadow makes the colored fill read on white
                     without looking gaudy. */}
                 <StatusIcon

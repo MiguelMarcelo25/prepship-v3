@@ -5,6 +5,7 @@ import { ArrowLeft, Package as PackageIcon, Printer } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
 import { api, qs } from '../lib/api';
+import { activeClientRowsQueryOptions } from '../lib/client-query';
 import { formatCaDateTimeLabeled } from '../lib/ca-time';
 import {
   SortableHeader,
@@ -58,11 +59,7 @@ export default function Picklist() {
 
   // 2026-05-12: explicit activeOnly=true — picklist groups orders by
   // client, and disabled tenants should never appear as a group header.
-  const clients = useQuery({
-    queryKey: ['clients', 'active-only'],
-    queryFn: () => api.get<{ id: number; name: string }[]>('/clients?activeOnly=true'),
-    staleTime: 60_000,
-  });
+  const clients = useQuery(activeClientRowsQueryOptions());
 
   // Group rows by client for display
   const grouped = useMemo(() => {

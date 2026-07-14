@@ -13,8 +13,8 @@ import {
   Search as SearchIcon,
   X as XIcon,
   Check as CheckIcon,
+  Printer,
 } from 'lucide-react'
-import { FcPrint } from 'react-icons/fc'
 import { apiClient } from '../../api/client'
 import { CALIFORNIA_TZ } from '../../lib/ca-time'
 import type { PrintQueueEntryDto } from '../../types/api'
@@ -290,7 +290,7 @@ export function OrdersPrintQueueDrawer({
                     type="button"
                     onClick={() => void printQueueEntries(group.orders.map((entry) => entry.queue_entry_id))}
                   >
-                    <FcPrint size={15} aria-hidden className="shrink-0" /> Print Group
+                    <Printer size={15} aria-hidden className="shrink-0" /> Print Group
                   </button>
                 </div>
                 <div className="pq-group-orders flex flex-col gap-1.5 p-2 bg-page/40">
@@ -449,7 +449,7 @@ export function OrdersPrintQueueDrawer({
                   disabled={queueCount === 0 || queuePrintInFlight}
                   onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
                 >
-                  <FcPrint size={16} aria-hidden className="shrink-0 drop-shadow-sm" />
+                  <Printer size={16} aria-hidden className="shrink-0 drop-shadow-sm" />
                   Print All
                 </button>
                 <button

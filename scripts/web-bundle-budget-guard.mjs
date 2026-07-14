@@ -8,6 +8,8 @@ const packageJsonPath = path.join(root, 'package.json')
 const RAW_LIMIT = 1_000_000
 const GZIP_LIMIT = 110_000
 const GRADIENT_RULE_LIMIT = 300
+const JS_CHUNK_RAW_LIMIT = 500_000
+const JS_CHUNK_GZIP_LIMIT = 140_000
 
 function fail(message) {
   console.error(`FAIL ${message}`)
@@ -43,6 +45,21 @@ async function findIndexCssAsset() {
   return stats[0].filePath
 }
 
+async function readJavaScriptAssets() {
+  const entries = await readdir(assetsDir)
+  const paths = entries
+    .filter((entry) => /\.js$/.test(entry))
+    .map((entry) => path.join(assetsDir, entry))
+  return Promise.all(paths.map(async (filePath) => {
+    const contents = await readFile(filePath)
+    return {
+      filePath,
+      rawSize: contents.byteLength,
+      gzipSize: gzipSync(contents).byteLength,
+    }
+  }))
+}
+
 function countGradientUtilityRules(css) {
   const rules = css.match(/[^{}]+\{[^{}]*\}/g) ?? []
   return rules.filter((rule) => /(^|[,\s])\.(?:[-_a-zA-Z0-9]+\\:)*(?:from|via|to)-/.test(rule)).length
@@ -55,6 +72,7 @@ const rawSize = css.byteLength
 const gzipSize = gzipSync(css).byteLength
 const cssText = css.toString('utf8')
 const gradientRuleCount = countGradientUtilityRules(cssText)
+const javaScriptAssets = await readJavaScriptAssets()
 
 console.log(`CSS asset: ${path.relative(root, cssPath)}`)
 console.log(`Raw size: ${formatBytes(rawSize)}`)
@@ -77,6 +95,24 @@ if (gradientRuleCount > GRADIENT_RULE_LIMIT) {
   fail(`generated gradient from/via/to rules must be <= ${GRADIENT_RULE_LIMIT}`)
 } else {
   pass(`generated gradient from/via/to rules are within ${GRADIENT_RULE_LIMIT}`)
+}
+
+for (const asset of javaScriptAssets) {
+  const name = path.relative(root, asset.filePath)
+  if (asset.rawSize > JS_CHUNK_RAW_LIMIT) {
+    fail(`${name} raw size must be <= ${formatBytes(JS_CHUNK_RAW_LIMIT)} (got ${formatBytes(asset.rawSize)})`)
+  }
+  if (asset.gzipSize > JS_CHUNK_GZIP_LIMIT) {
+    fail(`${name} gzip size must be <= ${formatBytes(JS_CHUNK_GZIP_LIMIT)} (got ${formatBytes(asset.gzipSize)})`)
+  }
+}
+
+const largestRawChunk = javaScriptAssets.toSorted((a, b) => b.rawSize - a.rawSize)[0]
+const largestGzipChunk = javaScriptAssets.toSorted((a, b) => b.gzipSize - a.gzipSize)[0]
+if (largestRawChunk && largestGzipChunk) {
+  console.log(`Largest JS raw: ${path.relative(root, largestRawChunk.filePath)} (${formatBytes(largestRawChunk.rawSize)})`)
+  console.log(`Largest JS gzip: ${path.relative(root, largestGzipChunk.filePath)} (${formatBytes(largestGzipChunk.gzipSize)})`)
+  pass(`${javaScriptAssets.length} JavaScript chunks are within per-chunk budgets`)
 }
 
 if (packageJson.scripts?.['test:web-bundle-budget'] !== 'npm run build:web && node scripts/web-bundle-budget-guard.mjs') {

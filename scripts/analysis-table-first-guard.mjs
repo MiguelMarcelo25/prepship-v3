@@ -35,7 +35,7 @@ assert(
 );
 
 assert(
-  analysis.includes('queryFn: () => apiClient.fetchClients()') &&
+  analysis.includes("queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true')") &&
     analysis.includes('queryFn: () => apiClient.fetchAnalysisSkus(analysisQuery)') &&
     analysis.includes('queryFn: () => apiClient.fetchAnalysisDailySales(analysisQuery)') &&
     analysis.includes('return apiClient.fetchInventorySkuOrders(skuDrawerRequest.invSkuId, {'),

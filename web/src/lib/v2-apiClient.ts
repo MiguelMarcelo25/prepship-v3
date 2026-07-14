@@ -13,6 +13,13 @@ import { API_BASE } from './api-base';
 // PS-325 (slice 4): the additive analytics provenance envelope, shared backend+frontend.
 import type { DashboardProvenance } from '../../../src/lib/analytics-provenance';
 import { getCachedAuthToken } from './auth-session-cache';
+import {
+  activeClientRowsQueryOptions,
+  clientDtosFromRows,
+  clientQueryKeys,
+  includeInactiveClientRowsQueryOptions,
+} from './client-query';
+import { queryClient } from './query-client';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
 import {
   requiredReportingNumber,
@@ -116,6 +123,11 @@ function stableRateBrowseKey(body: Record<string, unknown>): string {
     keyed[key] = Array.isArray(value) ? [...value].map(String).sort() : value;
   }
   return JSON.stringify(keyed);
+}
+
+function invalidateClientReads(): void {
+  void queryClient.invalidateQueries({ queryKey: clientQueryKeys.root });
+  clearCachedReads('fetchStores', 'fetchCounts');
 }
 
 function parseDailyStatsSummary(value: unknown): DailyStatsSummary {
@@ -395,7 +407,7 @@ export const apiClient = {
       async () => {
         const [storesRes, clientRowsRes] = await Promise.all([
           api.get<any>('/init/stores', { timeoutMs: 25_000 }).catch(() => ({ data: [] })),
-          api.get<any>('/clients?includeInactive=true', { timeoutMs: 25_000 }).catch(() => []),
+          queryClient.fetchQuery(includeInactiveClientRowsQueryOptions()).catch(() => []),
         ]);
         const clientRows = Array.isArray(clientRowsRes) ? clientRowsRes : [];
         const clientsById = new Map<number, any>();
@@ -448,18 +460,7 @@ export const apiClient = {
 
   // ─── Clients ────────────────────────────────────────────────────────────────
   fetchClients(): Promise<any[]> {
-    return cachedSafe(
-      'fetchClients',
-      'fetchClients',
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
-        const res = await api.get<any>(`/clients${qs({ activeOnly: true })}`, { timeoutMs: 25_000 });
-        return normalizeClientDtoRows(Array.isArray(res) ? res : []);
-      },
-      [],
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
-    );
+    return queryClient.fetchQuery(activeClientRowsQueryOptions()).then(clientDtosFromRows);
   },
 
   listClients(): Promise<any[]> {
@@ -475,7 +476,7 @@ export const apiClient = {
 
   createClient(data: Record<string, unknown>): Promise<any> {
     return api.post<any>('/clients', normalizeClientMutationPayload(data)).then((res) => {
-      clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+      invalidateClientReads();
       return res;
     });
   },
@@ -486,7 +487,7 @@ export const apiClient = {
 
   updateClient(clientId: number, data: Record<string, unknown>): Promise<any> {
     return api.patch<any>(`/clients/${clientId}`, normalizeClientMutationPayload(data)).then((res) => {
-      clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+      invalidateClientReads();
       return res;
     });
   },
@@ -497,7 +498,7 @@ export const apiClient = {
 
   deleteClientRecord(clientId: number): Promise<any> {
     return api.delete<any>(`/clients/${clientId}`).then((res) => {
-      clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+      invalidateClientReads();
       return res;
     });
   },
@@ -507,7 +508,7 @@ export const apiClient = {
       'syncClientsFromStores',
       async () => {
         const res = await api.post<any>('/clients/sync-stores', {});
-        clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+        invalidateClientReads();
         return {
           ...res,
           clients: normalizeClientDtoRows(Array.isArray(res?.clients) ? res.clients : []),

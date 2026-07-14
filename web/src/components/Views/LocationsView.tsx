@@ -231,7 +231,7 @@ export function LocationsViewContent({
       </AnimatePresence>
 
       <div id="locationsContent" className="max-w-3xl">
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {contentState === 'loading' ? (
             <motion.div
               key="loading"

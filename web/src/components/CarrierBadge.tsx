@@ -2,9 +2,9 @@
  * Shared CarrierBadge — single source of truth for how a carrier
  * (UPS, USPS, FedEx, DHL, etc.) renders anywhere in the app.
  *
- * For UPS and USPS specifically, this component renders the official
- * SVG marks (web/src/utils/logo/ups.tsx and usps.tsx). For everyone
- * else, it falls back to the existing pastel pill defined in
+ * Known carrier marks load as static SVG assets from web/public so their
+ * path data stays out of JavaScript chunks. Unknown carriers fall back to
+ * the existing pastel pill defined in
  * app-shell.css (.carrier-badge + .carrier-{ups,usps,fedex,other}),
  * preserving every place in the app that already styles those.
  *
@@ -23,14 +23,9 @@
  * aligned regardless of which carrier each row uses.
  */
 
-import UpsLogo from '../utils/logo/ups'
-import UspsLogo from '../utils/logo/usps'
-import FedexLogo from '../utils/logo/fedex'
-import ShippLogo from '../utils/logo/shipp'
-import EasyPostLogo from '../utils/logo/easypost'
-import WalmartLogo from '../utils/logo/walmart'
-
 type CarrierBadgeSize = 'xs' | 'sm' | 'md'
+type CarrierKind = 'ups' | 'usps' | 'fedex' | 'shipp' | 'easypost' | 'walmart' | 'other'
+type LogoCarrier = Exclude<CarrierKind, 'other'>
 
 interface Props {
   code: string | null | undefined
@@ -74,7 +69,16 @@ const SIZES: Record<CarrierBadgeSize, SizeConfig> = {
   md: { slot: { w: 78, h: 48 }, ups: 46, usps: 32, fedex: 20, shipp: 19, easypost: 38, walmart: 39, pillFontSize: 13, pillPaddingX: 9 },
 }
 
-export function classifyCarrier(code: string): 'ups' | 'usps' | 'fedex' | 'shipp' | 'easypost' | 'walmart' | 'other' {
+const STATIC_CARRIER_LOGOS: Record<LogoCarrier, { src: string; title: string }> = {
+  ups: { src: '/carrier-logos/ups.svg', title: 'UPS' },
+  usps: { src: '/carrier-logos/usps.svg', title: 'USPS' },
+  fedex: { src: '/carrier-logos/fedex.svg', title: 'FedEx' },
+  shipp: { src: '/carrier-logos/shipp.svg', title: 'Shipp' },
+  easypost: { src: '/carrier-logos/easypost.svg', title: 'EasyPost' },
+  walmart: { src: '/carrier-logos/walmart.svg', title: 'Walmart' },
+}
+
+export function classifyCarrier(code: string): CarrierKind {
   const lower = code.toLowerCase().trim()
   if (
     lower === 'shipp' ||
@@ -144,50 +148,15 @@ export default function CarrierBadge({ code, size = 'sm', className = '' }: Prop
 
   const carrier = classifyCarrier(cleanCode)
 
-  if (carrier === 'usps') {
+  if (carrier !== 'other') {
+    const logo = STATIC_CARRIER_LOGOS[carrier]
     return (
-      <span className={slotClass} style={slotStyle} title="USPS">
-        <UspsLogo height={dims.usps} />
-      </span>
-    )
-  }
-
-  if (carrier === 'ups') {
-    return (
-      <span className={slotClass} style={slotStyle} title="UPS">
-        <UpsLogo height={dims.ups} />
-      </span>
-    )
-  }
-
-  if (carrier === 'fedex') {
-    return (
-      <span className={slotClass} style={slotStyle} title="FedEx">
-        <FedexLogo height={dims.fedex} />
-      </span>
-    )
-  }
-
-  if (carrier === 'shipp') {
-    return (
-      <span className={slotClass} style={slotStyle} title="Shipp">
-        <ShippLogo height={dims.shipp} />
-      </span>
-    )
-  }
-
-  if (carrier === 'easypost') {
-    return (
-      <span className={slotClass} style={slotStyle} title="EasyPost">
-        <EasyPostLogo height={dims.easypost} />
-      </span>
-    )
-  }
-
-  if (carrier === 'walmart') {
-    return (
-      <span className={slotClass} style={slotStyle} title="Walmart">
-        <WalmartLogo height={dims.walmart} />
+      <span className={slotClass} style={slotStyle} title={logo.title}>
+        <img
+          src={logo.src}
+          alt={`${logo.title} logo`}
+          style={{ width: 'auto', height: `${dims[carrier]}px` }}
+        />
       </span>
     )
   }

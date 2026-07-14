@@ -21,7 +21,8 @@ assert.match(settings, /'\/automation\/availability'/);
 assert.doesNotMatch(settings, /setTestClients|setSystemStatus|setAutomationRows/);
 
 assert.match(marketplaceFees, /queryFn: \(\) => apiClient\.fetchMarketplaceFeeRules\(\)/);
-assert.match(marketplaceFees, /queryFn: \(\) => apiClient\.fetchClients\(\)/);
+assert.match(marketplaceFees, /\.\.\.activeClientRowsQueryOptions\(\)/);
+assert.match(marketplaceFees, /select: clientDtosFromRows/);
 assert.match(marketplaceFees, /queryFn: \(\) => apiClient\.fetchStores\(\)/);
 assert.doesNotMatch(marketplaceFees, /useEffect/);
 

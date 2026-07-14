@@ -12,6 +12,13 @@ import { BarChart3, Loader2 } from 'lucide-react'
 type AnalysisDailySalesResponse = any
 type AnalysisSkuDto = any
 import { ApiError, apiClient } from '../../api/client'
+import { api } from '../../lib/api'
+import { clientDtosFromRows, clientQueryKeys } from '../../lib/client-query'
+import {
+  SHARED_DATA_CACHE_MS,
+  SHARED_DATA_STALE_MS,
+  type V4ClientFullRow,
+} from '../../hooks/v2Hooks-shared'
 import { ToastContext } from '../../contexts/ToastContext'
 // TODO PS-257: ClientDto / InventorySkuOrdersDto are not exported by ../../types/api
 // in v4; aliased to `any` locally until those DTOs are restored.
@@ -679,10 +686,14 @@ export default function AnalysisView({
   // ── FE-2: stable per-endpoint Analysis queries ─────────────────────────────────────
   // Keep each apiClient call literal inline: repo guards pin these endpoint
   // boundaries, and extracting them would hide which backend owner supplies a
-  // panel. Global QueryClient staleTime gives cached remounts zero requests.
-  const clientsQuery = useQuery<ClientDto[]>({
-    queryKey: ['analysis', 'clients'],
-    queryFn: () => apiClient.fetchClients(),
+  // panel. The shared client key still deduplicates this endpoint app-wide.
+  const clientsQuery = useQuery({
+    queryKey: clientQueryKeys.active,
+    queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true'),
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
+    select: clientDtosFromRows,
   })
   const clients = clientsQuery.data ?? EMPTY_ANALYSIS_CLIENTS
 

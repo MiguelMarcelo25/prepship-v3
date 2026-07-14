@@ -6,6 +6,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { api, qs } from '../lib/api';
+import { activeClientRowsQueryOptions } from '../lib/client-query';
 import {
   californiaDateInputValue,
   californiaDayEndIso,
@@ -97,11 +98,7 @@ export default function Invoice() {
 
   // 2026-05-12: explicit activeOnly=true — invoices for disabled
   // clients are accessible via the admin Clients tab, not this view.
-  const clients = useQuery({
-    queryKey: ['clients', 'active-only'],
-    queryFn: () => api.get<Client[]>('/clients?activeOnly=true'),
-    staleTime: 60_000,
-  });
+  const clients = useQuery(activeClientRowsQueryOptions());
   const client = clients.data?.find((c) => c.id === clientId) ?? null;
 
   const detailsQs = useMemo(

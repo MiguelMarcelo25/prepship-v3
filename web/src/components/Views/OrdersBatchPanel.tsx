@@ -245,7 +245,7 @@ export function OrdersBatchPanel({
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-semibold text-ink-2 hover:text-brand bg-surface-2 hover:bg-brand/5 ring-1 ring-line hover:ring-brand/30 transition"
                   title="Copy all order numbers to clipboard (newline-separated)"
                 >
-                  <AnimatePresence mode="wait" initial={false}>
+                  <AnimatePresence initial={false}>
                     {copiedAll ? (
                       <motion.span
                         key="copied"
@@ -312,7 +312,7 @@ export function OrdersBatchPanel({
                             }`}
                         >
                           <span className="truncate max-w-[180px]">{orderNum}</span>
-                          <AnimatePresence mode="wait" initial={false}>
+                          <AnimatePresence initial={false}>
                             {wasCopied ? (
                               <motion.span
                                 key="check"

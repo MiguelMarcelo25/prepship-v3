@@ -850,7 +850,7 @@ export default function Home() {
           </button>
 
           {/* Title — animates out when batch-bar appears */}
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {false ? (
               <motion.div
                 key="batch-bar"

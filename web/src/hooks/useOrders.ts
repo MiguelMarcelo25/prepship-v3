@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
 import { californiaDayEndIso, californiaDayStartIso } from '../lib/ca-time';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
+import { activeClientRowsQueryOptions } from '../lib/client-query';
 import { createOrdersRefetchCoordinator } from './orders-refetch-coordinator';
 import {
   ORDERS_STALE_MS,
@@ -45,8 +46,6 @@ export interface UseOrdersResult {
   refetch: () => Promise<void>;
   goToPage: (page: number) => Promise<void>;
 }
-
-type V4ClientRow = { id: number; name: string; isTest?: boolean };
 
 // PS-184: the legacy client-id parity map is BACKEND-owned — every order row
 // carries `legacyClientId` from resolveLegacyClientId (src/routes/orders.ts).
@@ -403,13 +402,7 @@ export function useOrders(
 
   // 2026-05-12: explicit activeOnly=true so the orders query's client
   // lookup never includes disabled clients (mirrors useClients() above).
-  const clientsQuery = useQuery<V4ClientRow[]>({
-    queryKey: ['v2-hooks:clients', 'active-only'],
-    queryFn: () => api.get<V4ClientRow[]>('/clients?activeOnly=true'),
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
-    refetchOnWindowFocus: false,
-  });
+  const clientsQuery = useQuery(activeClientRowsQueryOptions());
 
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);

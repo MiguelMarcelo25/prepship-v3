@@ -36,11 +36,12 @@
 import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  HiExclamationTriangle,
-  HiSparkles,
-  HiInformationCircle,
-  HiCheckCircle,
-} from 'react-icons/hi2'
+  AlertTriangle,
+  Sparkles,
+  Info,
+  CheckCircle2,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 type ConfirmTone = 'default' | 'danger' | 'magic' | 'info'
 
@@ -66,32 +67,32 @@ interface ConfirmModalProps {
 const TONE_STYLES: Record<
   ConfirmTone,
   {
-    Icon: React.ComponentType<{ size?: number; className?: string }>
+    Icon: LucideIcon
     iconBg: string
     iconColor: string
     confirmBtn: string
   }
 > = {
   default: {
-    Icon: HiCheckCircle,
+    Icon: CheckCircle2,
     iconBg: 'bg-sky-50',
     iconColor: 'text-sky-600',
     confirmBtn: 'bg-ink text-white hover:bg-ink-2',
   },
   danger: {
-    Icon: HiExclamationTriangle,
+    Icon: AlertTriangle,
     iconBg: 'bg-rose-50',
     iconColor: 'text-rose-600',
     confirmBtn: 'bg-rose-600 text-white hover:bg-rose-700',
   },
   magic: {
-    Icon: HiSparkles,
+    Icon: Sparkles,
     iconBg: 'bg-violet-50',
     iconColor: 'text-violet-600',
     confirmBtn: 'bg-violet-600 text-white hover:bg-violet-700',
   },
   info: {
-    Icon: HiInformationCircle,
+    Icon: Info,
     iconBg: 'bg-sky-50',
     iconColor: 'text-sky-600',
     confirmBtn: 'bg-sky-600 text-white hover:bg-sky-700',

@@ -1242,7 +1242,7 @@ export default function SettingsView() {
           {/* Section header — animates per active section change.
               Key on activeSection so AnimatePresence treats every
               switch as a fresh enter/exit sequence. */}
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             <motion.header
               key={activeMeta.id}
               initial={{ opacity: 0, y: -6 }}
@@ -1297,7 +1297,7 @@ export default function SettingsView() {
               key so React unmounts the old one and mounts the new
               one cleanly (preserves component lifecycle for stateful
               children like CarrierIntegrationsCard). */}
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             <motion.div
               key={activeMeta.id}
               id={`settings-panel-${activeMeta.id}`}

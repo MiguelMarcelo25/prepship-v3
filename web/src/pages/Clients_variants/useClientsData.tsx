@@ -9,6 +9,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
+import { clientQueryKeys, includeInactiveClientRowsQueryOptions } from '../../lib/client-query'
 import {
   ConfirmActiveToggleDialog,
   type ConfirmActiveTogglePending,
@@ -74,8 +75,11 @@ export function useClientsData(): ClientsDataResult {
   )
 
   const { data, isLoading } = useQuery({
-    queryKey: ['clients', 'admin'],
-    queryFn: () => api.get<Client[]>('/clients?includeInactive=true'),
+    ...includeInactiveClientRowsQueryOptions(),
+    select: (rows): Client[] => rows.map((row) => ({
+      ...row,
+      storeIds: row.storeIds ?? [],
+    })),
   })
 
   const stats = useQuery({
@@ -90,8 +94,7 @@ export function useClientsData(): ClientsDataResult {
   const remove = useMutation<unknown, Error, number>({
     mutationFn: (id: number) => api.delete(`/clients/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['clients'] })
-      queryClient.invalidateQueries({ queryKey: ['clients', 'admin'] })
+      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
     },
   })
 
@@ -99,16 +102,16 @@ export function useClientsData(): ClientsDataResult {
     mutationFn: ({ id, active }) =>
       api.patch<Client>(`/clients/${id}`, { active }),
     onMutate: async ({ id, active }) => {
-      await queryClient.cancelQueries({ queryKey: ['clients', 'admin'] })
-      const previous = queryClient.getQueryData<Client[]>(['clients', 'admin'])
-      queryClient.setQueryData<Client[]>(['clients', 'admin'], (current) =>
+      await queryClient.cancelQueries({ queryKey: clientQueryKeys.includeInactive })
+      const previous = queryClient.getQueryData<Client[]>(clientQueryKeys.includeInactive)
+      queryClient.setQueryData<Client[]>(clientQueryKeys.includeInactive, (current) =>
         current?.map((c) => (c.id === id ? { ...c, active } : c)),
       )
       return { previous }
     },
     onError: (err, _vars, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(['clients', 'admin'], context.previous)
+        queryClient.setQueryData(clientQueryKeys.includeInactive, context.previous)
       }
       alert(`Active toggle failed: ${err.message}`)
     },
@@ -121,13 +124,10 @@ export function useClientsData(): ClientsDataResult {
     },
     onSettled: () => {
       // Cascade-invalidate every cache that depends on client active state
+      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
       ;[
-        ['clients'],
-        ['clients', 'admin'],
         ['clients-order-stats'],
-        ['clients-order-stats', 'admin'],
         ['orders-count'],
-        ['v2-hooks:clients'],
         ['v2-hooks:orders'],
         ['inventory'],
         ['billing-config'],
@@ -145,7 +145,7 @@ export function useClientsData(): ClientsDataResult {
         {},
       ),
     onSuccess: (r) => {
-      queryClient.invalidateQueries({ queryKey: ['clients'] })
+      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
       alert(r.message)
     },
     onError: (err) => alert(`Sync failed: ${err.message}`),

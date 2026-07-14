@@ -25,6 +25,7 @@ import {
   type ConfirmActiveTogglePending,
 } from '../ConfirmActiveToggleDialog'
 import { api } from '../../lib/api'
+import { activeClientRowsQueryOptions, clientDtosFromRows, clientQueryKeys } from '../../lib/client-query'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
 import { SortableHeader, nextSortState, sortRows, type SortState } from '../SortableTable'
@@ -846,11 +847,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     [stockClientId, activeOnly, stockSearch, alertOnly, stockPage, stockPageSize],
   )
   const clientsQuery = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => apiClient.fetchClients(),
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
-    refetchOnWindowFocus: false,
+    ...activeClientRowsQueryOptions(),
+    select: clientDtosFromRows,
   })
   const packagesQuery = useQuery({
     queryKey: ['packages', 'custom'],
@@ -2247,10 +2245,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       // includeInactive only when the toolbar Active-only toggle
       // is OFF so manual refreshes match the current visible filter.
       const nextStockQuery = buildStockQuery(stockClientId, activeOnly, stockSearch, alertOnly, stockPage, stockPageSize)
-      const [nextClients, nextPage] = await Promise.all([
+      const [nextClientRows, nextPage] = await Promise.all([
         queryClient.fetchQuery({
-          queryKey: ['clients'],
-          queryFn: () => apiClient.fetchClients(),
+          ...activeClientRowsQueryOptions(),
           staleTime: 0,
         }),
         queryClient.fetchQuery({
@@ -2259,7 +2256,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
           staleTime: 0,
         }),
       ])
-      setClients(normalizeInventoryClients(nextClients))
+      setClients(normalizeInventoryClients(clientDtosFromRows(nextClientRows)))
       setItems(nextPage.items)
       if (activeTab === 'alerts' || alertOnly) {
         const nextAlerts = await queryClient.fetchQuery({
@@ -2734,10 +2731,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       // analysis, billing, inventory all repaint within ms instead of
       // waiting for the 60s staleTime tick. Re-enable case especially:
       // toggling a client back ON immediately surfaces them everywhere.
-      queryClient.invalidateQueries({ queryKey: ['clients'] })
+      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
       queryClient.invalidateQueries({ queryKey: ['clients-order-stats'] })
       queryClient.invalidateQueries({ queryKey: ['orders-count'] })
-      queryClient.invalidateQueries({ queryKey: ['v2-hooks:clients'] })
       queryClient.invalidateQueries({ queryKey: ['v2-hooks:orders'] })
       queryClient.invalidateQueries({ queryKey: ['inventory'] })
       queryClient.invalidateQueries({ queryKey: ['billing-config'] })
@@ -3027,7 +3023,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 each tab switch as a fresh enter/exit and the icon
                 spring-rotates in. mb-4 spacing mirrors the original
                 header so downstream toolbar layouts don't shift. */}
-            <AnimatePresence mode="wait">
+            <AnimatePresence>
               <motion.header
                 key={activeMeta.id}
                 initial={{ opacity: 0, y: -6 }}

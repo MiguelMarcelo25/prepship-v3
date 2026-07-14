@@ -79,7 +79,9 @@ check('section no longer binds a raw input to clientId/storeId',
   !/update\(index, \{ clientId: numOrNull/.test(section) && !/update\(index, \{ storeId: numOrNull/.test(section));
 check('section renders <MarketplaceFeeScopeSelectors>', /<MarketplaceFeeScopeSelectors/.test(section));
 check('section loads the canonical client + store lists',
-  /apiClient\.fetchClients\(\)/.test(section) && /apiClient\.fetchStores\(\)/.test(section));
+  /\.\.\.activeClientRowsQueryOptions\(\)/.test(section)
+    && /select: clientDtosFromRows/.test(section)
+    && /apiClient\.fetchStores\(\)/.test(section));
 check('section shows a non-destructive warning on option lookup failure',
   /options\.kind === 'error'/.test(section));
 

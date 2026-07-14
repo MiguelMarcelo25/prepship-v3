@@ -29,39 +29,17 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-// 2026-05-13: migrated icons from lucide-react → react-icons (Heroicons
-// v2, solid variants). Visual style is noticeably different from
-// lucide's feather-derived outline geometry — rounded corners, heavier
-// fill, more modern dashboard feel. Solid variants picked specifically
-// because they read better at 11–13px row-action sizes than outline
-// strokes would. The Users icon sits in a saturated gradient pill on
-// the page header where solid also looks better than outline.
-//
-// API note: react-icons accepts `size` and `className` like lucide,
-// but does NOT accept `strokeWidth` (icons are pre-baked SVG paths
-// with fixed weight, not stroked). Every `strokeWidth={...}` prop
-// was removed during this port.
-//
-// Semantic mapping:
-//   Plus       → HiPlus              ("New client" + page-actions)
-//   Pencil     → HiPencilSquare      (Edit row)
-//   Trash2     → HiTrash             (Delete row)
-//   Wand2      → HiSparkles          (Backfill = "magic" auto-assign)
-//   RefreshCw  → HiArrowPath         (Sync stores button)
-//   Users      → HiUsers             (Page header icon)
-//   Building2  → HiBuildingStorefront (Stores column — semantic upgrade
-//                                       from "building" to "storefront")
-//   Search     → HiMagnifyingGlass   (Search input)
+// Audit FE-9: keep the application on one tree-shakeable icon library.
 import {
-  HiPlus,
-  HiPencilSquare,
-  HiTrash,
-  HiSparkles,
-  HiArrowPath,
-  HiUsers,
-  HiBuildingStorefront,
-  HiMagnifyingGlass,
-} from 'react-icons/hi2'
+  Plus,
+  Pencil,
+  Trash2,
+  Sparkles,
+  RefreshCw,
+  Users,
+  Store,
+  Search,
+} from 'lucide-react'
 import { Button } from '../components/ui/Button'
 import { ConfirmModal } from '../components/ui/ConfirmModal'
 import { Table, type TableColumn } from '../components/ui/Table'
@@ -277,7 +255,7 @@ export default function Clients() {
           <span className="text-[11px] text-ink-3 italic">none</span>
         ) : (
           <div className="flex items-center justify-start gap-1 flex-wrap">
-            <HiBuildingStorefront size={13} className="text-indigo-500 flex-shrink-0" />
+            <Store size={13} className="text-indigo-500 flex-shrink-0" />
             {row.storeIds.slice(0, 3).map((sid) => (
               <span key={sid} className="font-mono text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line/70" title={`Store ${sid}`}>
                 {sid}
@@ -379,7 +357,7 @@ export default function Clients() {
               destructive actions). Backfill and Delete now route
               through ConfirmModal — see the modal block below. */}
           <RowAction tone="edit" title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
-            <HiPencilSquare size={16} />
+            <Pencil size={16} />
           </RowAction>
           <RowAction
             tone="magic"
@@ -390,7 +368,7 @@ export default function Clients() {
               setConfirmBackfill(row)
             }}
           >
-            <HiSparkles size={16} />
+            <Sparkles size={16} />
           </RowAction>
           <RowAction
             title={`Delete "${row.name}"`}
@@ -401,7 +379,7 @@ export default function Clients() {
               setConfirmDelete(row)
             }}
           >
-            <HiTrash size={16} />
+            <Trash2 size={16} />
           </RowAction>
         </div>
       ),
@@ -416,7 +394,7 @@ export default function Clients() {
       <header className="flex-shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-3 bg-surface border-b border-line sm:px-6 sm:py-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center shadow-sm ring-1 ring-brand/30 flex-shrink-0">
-            <HiUsers size={17} className="text-white" />
+            <Users size={17} className="text-white" />
           </div>
           <div className="min-w-0">
             <h1 className="text-[16px] font-extrabold tracking-tight text-ink m-0 leading-none">Clients</h1>
@@ -431,11 +409,11 @@ export default function Clients() {
               stores" instead of inside the table card below. */}
           <span ref={setColumnsAnchor} className="inline-flex items-center" />
           <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            <HiArrowPath size={13} className={`text-emerald-600 ${sync.isPending ? 'animate-spin' : ''}`} />
+            <RefreshCw size={13} className={`text-emerald-600 ${sync.isPending ? 'animate-spin' : ''}`} />
             {sync.isPending ? 'Syncing…' : 'Sync stores'}
           </Button>
           <Button variant="primary" size="sm" onClick={() => navigate('/settings/store')}>
-            <HiPlus size={13} />
+            <Plus size={13} />
             New client
           </Button>
         </div>
@@ -472,7 +450,7 @@ export default function Clients() {
           toolbar={
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 min-w-[220px] max-w-md">
-                <HiMagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" />
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" />
                 <input
                   type="text"
                   value={search}
@@ -645,7 +623,7 @@ export default function Clients() {
 //
 //   edit   → sky-600   (calm, informational blue — the "modify"
 //                       color used in most dashboard UIs)
-//   magic  → violet-600 (matches HiSparkles' "magic auto-assign"
+//   magic  → violet-600 (matches Sparkles' "magic auto-assign"
 //                        semantic — purple = AI/automation in 2026)
 //   danger → rose-500  (destructive — stays distinct from any
 //                       sortable-cancellation-count text-rose-700
