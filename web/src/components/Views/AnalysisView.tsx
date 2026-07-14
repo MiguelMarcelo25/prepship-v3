@@ -1,4 +1,8 @@
 import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+// FE-2 (audit 2.2 slice 3): every Analysis GET uses a stable React Query key.
+// Backend analysis/read-model DTOs remain authoritative; this view only schedules
+// requests and renders their responses.
+import { useQuery } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { BarChart3, Loader2 } from 'lucide-react'
@@ -204,14 +208,22 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
   },
 ]
 
-interface AnalysisDataState {
-  loading: boolean
-  error: string | null
-  rows: AnalysisSkuDto[]
-  orderCount: number
-  totals: AnalysisTotals | null
-  chartData: AnalysisDailySalesResponse | null
-  chartError: string | null
+const EMPTY_ANALYSIS_CLIENTS: ClientDto[] = []
+const EMPTY_ANALYSIS_ROWS: AnalysisSkuDto[] = []
+
+function scheduleAnalysisNonCriticalWork(callback: () => void) {
+  if (typeof window === 'undefined') {
+    const timeoutId = setTimeout(callback, 0)
+    return () => clearTimeout(timeoutId)
+  }
+
+  if ('requestIdleCallback' in window) {
+    const idleId = window.requestIdleCallback(callback, { timeout: 1200 })
+    return () => window.cancelIdleCallback?.(idleId)
+  }
+
+  const timeoutId = (window as Window).setTimeout(callback, 0)
+  return () => (window as Window).clearTimeout(timeoutId)
 }
 
 // CA-time delegation per boss directive 2026-05-07. AnalysisView
@@ -640,21 +652,11 @@ export default function AnalysisView({
   const [drawerOrderWidths, setDrawerOrderWidths] = useState<Partial<Record<DrawerOrdersColumnKey, number>>>(
     readStoredDrawerOrderWidths
   )
-  const [clients, setClients] = useState<ClientDto[]>([])
-  const [dataState, setDataState] = useState<AnalysisDataState>({
-    loading: true,
-    error: null,
-    rows: [],
-    orderCount: 0,
-    totals: null,
-    chartData: null,
-    chartError: null,
-  })
-  const [skuDrawer, setSkuDrawer] = useState<InventorySkuOrdersDto | null>(null)
-  const [skuDrawerTitle, setSkuDrawerTitle] = useState('Loading…')
-  const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
-  const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
-  const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
+  const [skuDrawerRequest, setSkuDrawerRequest] = useState<{
+    invSkuId: number
+    from: string
+    to: string
+  } | null>(null)
   // Sort for the drawer's "Recent Orders" table. Persists across drawer
   // opens within the session (so the operator's sort choice survives
   // jumping between SKUs), resets on page refresh.
@@ -673,15 +675,115 @@ export default function AnalysisView({
     order: null as Record<string, unknown> | null,
     orderNumber: '',
   })
+
+  // ── FE-2: stable per-endpoint Analysis queries ─────────────────────────────────────
+  // Keep each apiClient call literal inline: repo guards pin these endpoint
+  // boundaries, and extracting them would hide which backend owner supplies a
+  // panel. Global QueryClient staleTime gives cached remounts zero requests.
+  const clientsQuery = useQuery<ClientDto[]>({
+    queryKey: ['analysis', 'clients'],
+    queryFn: () => apiClient.fetchClients(),
+  })
+  const clients = clientsQuery.data ?? EMPTY_ANALYSIS_CLIENTS
+
+  const analysisClientId = clientId ? Number.parseInt(clientId, 10) : undefined
+  const analysisQuery = useMemo(() => ({
+    from: from || undefined,
+    to: to || undefined,
+    clientId: analysisClientId,
+  }), [analysisClientId, from, to])
+  const analysisScopeKey = `${from}|${to}|${analysisClientId ?? 'all'}`
+
+  // Critical first paint: table payload stays ungated.
+  const analysisSkusQuery = useQuery<{
+    skus?: AnalysisSkuDto[]
+    orderCount?: number
+    totals?: AnalysisTotals | null
+  }>({
+    queryKey: ['analysis', 'skus', from || null, to || null, analysisClientId ?? null],
+    queryFn: () => apiClient.fetchAnalysisSkus(analysisQuery),
+  })
+
+  // Daily chart stays behind table settlement plus a browser-idle arm. `enabled`
+  // delays first network work only; cached chart data still paints immediately.
+  // Scope-keying re-arms the sequence when date/client filters change.
+  const analysisSkusSettled = !analysisSkusQuery.isPending
+  const [dailySalesReadyScopeKey, setDailySalesReadyScopeKey] = useState<string | null>(null)
+  const dailySalesReady = dailySalesReadyScopeKey === analysisScopeKey
+  useEffect(() => {
+    if (dailySalesReady || !analysisSkusSettled) return
+    const runNonCriticalAnalysisWork = () => setDailySalesReadyScopeKey(analysisScopeKey)
+    return scheduleAnalysisNonCriticalWork(runNonCriticalAnalysisWork)
+  }, [analysisScopeKey, analysisSkusSettled, dailySalesReady])
+
+  const dailySalesQuery = useQuery<AnalysisDailySalesResponse>({
+    queryKey: ['analysis', 'daily-sales', from || null, to || null, analysisClientId ?? null],
+    enabled: dailySalesReady,
+    queryFn: () => apiClient.fetchAnalysisDailySales(analysisQuery),
+  })
+
+  // Drawer request captures its date range when opened, preserving the old
+  // behavior if filters change behind an already-open drawer. Reopening the same
+  // SKU/range within staleTime paints from cache.
+  const skuDrawerQuery = useQuery<InventorySkuOrdersDto>({
+    queryKey: [
+      'analysis',
+      'sku-orders',
+      skuDrawerRequest?.invSkuId ?? null,
+      skuDrawerRequest?.from ?? null,
+      skuDrawerRequest?.to ?? null,
+    ],
+    enabled: skuDrawerRequest != null,
+    queryFn: async () => {
+      if (skuDrawerRequest == null) throw new Error('SKU drawer request is unavailable')
+      return apiClient.fetchInventorySkuOrders(skuDrawerRequest.invSkuId, {
+        from: skuDrawerRequest.from,
+        to: skuDrawerRequest.to,
+      })
+    },
+  })
+
+  const analysisRows = analysisSkusQuery.data?.skus ?? EMPTY_ANALYSIS_ROWS
+  const analysisOrderCount = analysisSkusQuery.data?.orderCount || 0
+  const analysisLoading = analysisSkusQuery.isPending
+  const analysisError = analysisSkusQuery.isError
+    ? (analysisSkusQuery.error instanceof Error ? analysisSkusQuery.error.message : 'Failed to load analysis')
+    : null
+  const chartData = dailySalesQuery.data ?? null
+  const chartError = dailySalesQuery.isError
+    ? (dailySalesQuery.error instanceof Error ? dailySalesQuery.error.message : 'Failed to load sales trend')
+    : null
+  const skuDrawerOpen = skuDrawerRequest != null
+  const skuDrawer = skuDrawerQuery.data ?? null
+  const skuDrawerLoading = skuDrawerOpen && skuDrawerQuery.isPending
+  const skuDrawerError = skuDrawerQuery.isError
+    ? (skuDrawerQuery.error instanceof Error ? skuDrawerQuery.error.message : 'Failed to load SKU activity')
+    : null
+  const skuDrawerTitle = skuDrawerLoading
+    ? 'Loading…'
+    : skuDrawerQuery.error instanceof ApiError && skuDrawerQuery.error.status === 404
+      ? 'SKU not found'
+      : skuDrawerError
+        ? 'Error'
+        : skuDrawer
+          ? skuDrawer.name || skuDrawer.sku
+          : 'Loading…'
+
+  // Same operator toast the old imperative drawer catch emitted.
+  useEffect(() => {
+    if (!skuDrawerOpen || !skuDrawerQuery.isError || !skuDrawerError) return
+    toastContext?.addToast(skuDrawerError, 'error')
+  }, [skuDrawerError, skuDrawerOpen, skuDrawerQuery.isError, toastContext])
+
   const filteredRows = useMemo(
-    () => filterAnalysisRows(dataState.rows, search),
-    [dataState.rows, search],
+    () => filterAnalysisRows(analysisRows, search),
+    [analysisRows, search],
   )
   const sortedRows = useMemo(
     () => sortAnalysisRows(filteredRows, sortKey, sortDir),
     [filteredRows, sortKey, sortDir],
   )
-  const totals = search.trim() ? null : dataState.totals
+  const totals = search.trim() ? null : analysisSkusQuery.data?.totals ?? null
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
     return sortedRows.slice(start, start + pageSize)
@@ -866,21 +968,6 @@ export default function AnalysisView({
     }
   }, [columnsMenuOpen])
 
-  // Load clients once for the filter dropdown.
-  useEffect(() => {
-    let active = true
-    const loadClients = async () => {
-      try {
-        const nextClients = await apiClient.fetchClients()
-        if (active) setClients(nextClients)
-      } catch {}
-    }
-    void loadClients()
-    return () => {
-      active = false
-    }
-  }, [])
-
   // Persist date filters to localStorage so presets survive reloads.
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -978,68 +1065,6 @@ export default function AnalysisView({
     setPage((currentPage) => Math.min(currentPage, maxPage))
   }, [pageSize, sortedRows.length])
 
-  // Main load: paint SKU rows first, then hydrate the heavier daily chart.
-  useEffect(() => {
-    let active = true
-    const loadAnalysis = async () => {
-      setDataState((current) => ({
-        ...current,
-        loading: true,
-        error: null,
-        chartData: null,
-        chartError: null,
-      }))
-      try {
-        const query = {
-          from: from || undefined,
-          to: to || undefined,
-          clientId: clientId ? Number.parseInt(clientId, 10) : undefined,
-        }
-        const skuData = await apiClient.fetchAnalysisSkus(query)
-        if (!active) return
-        setDataState({
-          loading: false,
-          error: null,
-          rows: skuData.skus || [],
-          orderCount: skuData.orderCount || 0,
-          totals: skuData.totals || null,
-          chartData: null,
-          chartError: null,
-        })
-        void apiClient.fetchAnalysisDailySales(query)
-          .then((chartData) => {
-            if (!active) return
-            setDataState((current) => ({
-              ...current,
-              chartData,
-            }))
-          })
-          .catch((chartError) => {
-            if (!active) return
-            setDataState((current) => ({
-              ...current,
-              chartData: null,
-              chartError: chartError instanceof Error
-                ? chartError.message
-                : 'Failed to load sales trend',
-            }))
-          })
-      } catch (error) {
-        if (!active) return
-        setDataState((current) => ({
-          ...current,
-          loading: false,
-          error: error instanceof Error ? error.message : 'Failed to load analysis',
-          totals: null,
-        }))
-      }
-    }
-    void loadAnalysis()
-    return () => {
-      active = false
-    }
-  }, [from, to, clientId])
-
   useEffect(() => {
     if (!orderModal.open) return undefined
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1056,26 +1081,8 @@ export default function AnalysisView({
     setTo(range.to)
   }
 
-  async function openSkuDrawer(invSkuId: number) {
-    setSkuDrawerOpen(true)
-    setSkuDrawerLoading(true)
-    setSkuDrawerError(null)
-    setSkuDrawer(null)
-    setSkuDrawerTitle('Loading…')
-    try {
-      const result = await apiClient.fetchInventorySkuOrders(invSkuId, { from, to })
-      setSkuDrawer(result)
-      setSkuDrawerTitle(result.name || result.sku)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load SKU activity'
-      setSkuDrawerError(message)
-      setSkuDrawerTitle(
-        error instanceof ApiError && error.status === 404 ? 'SKU not found' : 'Error',
-      )
-      toastContext?.addToast(message, 'error')
-    } finally {
-      setSkuDrawerLoading(false)
-    }
+  function openSkuDrawer(invSkuId: number) {
+    setSkuDrawerRequest({ invSkuId, from, to })
   }
 
   async function openOrderDetails(order: Record<string, unknown>) {
@@ -1117,9 +1124,9 @@ export default function AnalysisView({
   }
 
   const hasChart =
-    dataState.chartData
-    && (dataState.chartData.topSkus?.length ?? 0) > 0
-    && (dataState.chartData.dates?.length ?? 0) > 0
+    chartData
+    && (chartData.topSkus?.length ?? 0) > 0
+    && (chartData.dates?.length ?? 0) > 0
   const modalOrder = orderModal.order
   const modalRaw = getOrderRaw(modalOrder)
   const modalShipTo = getOrderShipTo(modalOrder)
@@ -1330,7 +1337,7 @@ export default function AnalysisView({
             id="analysis-summary"
             style={{ fontSize: 11.5, color: 'var(--text3)', marginLeft: 'auto' }}
           >
-            {getAnalysisSummaryText(dataState.rows.length, dataState.orderCount)}
+            {getAnalysisSummaryText(analysisRows.length, analysisOrderCount)}
           </span>
           <div
             className="inline-flex items-center gap-0 border border-line-2 rounded-md bg-surface p-0.5 ml-2 h-7"
@@ -1505,12 +1512,12 @@ export default function AnalysisView({
           </div>
         </div>
 
-        {dataState.chartError ? (
+        {chartError ? (
           <div
             role="alert"
             className="border-t border-line px-4 py-3 text-sm text-danger"
           >
-            Sales trend unavailable: {dataState.chartError}
+            Sales trend unavailable: {chartError}
           </div>
         ) : hasChart ? (
           <Suspense
@@ -1531,12 +1538,12 @@ export default function AnalysisView({
               </div>
             }
           >
-            <AnalysisTopSkusChart data={dataState.chartData!} />
+            <AnalysisTopSkusChart data={chartData!} />
           </Suspense>
         ) : null}
       </div>
 
-      {dataState.loading ? (
+      {analysisLoading ? (
         <div
           id="analysis-loading"
           style={{
@@ -1569,18 +1576,18 @@ export default function AnalysisView({
           onResizeColumn={handleResizeColumn}
           onResetColumn={handleResetColumn}
           columnSize={columnSize}
-          rows={dataState.loading ? [] : pagedRows}
+          rows={analysisLoading ? [] : pagedRows}
           totals={totals}
           maxQty={maxQty}
-          loading={dataState.loading}
-          error={dataState.error}
+          loading={analysisLoading}
+          error={analysisError}
           emptyMessage={getAnalysisEmptyMessage(search)}
-          onRowClick={(invSkuId) => void openSkuDrawer(invSkuId)}
+          onRowClick={openSkuDrawer}
           onReorder={handleReorderColumns}
         />
       </Suspense>
 
-      {!dataState.loading && !dataState.error && sortedRows.length > 0 ? (
+      {!analysisLoading && !analysisError && sortedRows.length > 0 ? (
         <div className="analysis-pagination-sticky">
           <AnalysisPagination
             page={page}
@@ -1597,7 +1604,7 @@ export default function AnalysisView({
       ) : null}
 
       {skuDrawerOpen ? (
-        <div className="inventory-drawer-overlay" onClick={() => setSkuDrawerOpen(false)}>
+        <div className="inventory-drawer-overlay" onClick={() => setSkuDrawerRequest(null)}>
           <div
             className="inventory-drawer-panel analysis-sku-drawer-panel"
             onClick={(event) => event.stopPropagation()}
@@ -1629,7 +1636,7 @@ export default function AnalysisView({
               </div>
               <button
                 type="button"
-                onClick={() => setSkuDrawerOpen(false)}
+                onClick={() => setSkuDrawerRequest(null)}
                 style={{
                   padding: '5px 10px',
                   border: '1px solid var(--border2)',

@@ -198,8 +198,8 @@ check(
 );
 check(
   'Analysis renders backend totals and projections without frontend financial formulas',
-  analysisView.includes('totals: skuData.totals || null')
-    && analysisView.includes('Sales trend unavailable: {dataState.chartError}')
+  analysisView.includes('const totals = search.trim() ? null : analysisSkusQuery.data?.totals ?? null')
+    && analysisView.includes('Sales trend unavailable: {chartError}')
     && !analysisView.includes('buildAnalysisTotals')
     && analysisTable.includes('row as { profit?: number | null }')
     && analysisTable.includes('totals.avgSellingPrice')
