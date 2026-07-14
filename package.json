@@ -320,6 +320,7 @@
     "test:audit-billing-cross-period-reconciliation": "tsx scripts/audit-billing-cross-period-reconciliation-guard.ts",
     "test:audit-dead-code-cleanup": "tsx scripts/audit-dead-code-cleanup-guard.ts",
     "test:audit-limiter-fingerprint-hygiene": "tsx scripts/audit-limiter-fingerprint-hygiene-guard.ts",
+    "test:audit-sync-cursor-webhook-hygiene": "tsx scripts/audit-sync-cursor-webhook-hygiene-guard.ts",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:ebay-confirmation:mocked": "tsx scripts/ebay-confirmation-mocked-guard.ts",
     "test:walmart-confirmation:payload": "tsx scripts/walmart-confirmation-payload-guard.ts",

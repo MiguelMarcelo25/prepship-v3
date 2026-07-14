@@ -83,6 +83,19 @@ export function shipStationSyncAccountId(account: ShipStationSyncAccountIdentity
     : `account:${account.label}`;
 }
 
+export function shipStationSyncWatermarkKeys(
+  baseKey: string,
+  account: ShipStationSyncAccountIdentity,
+): { primaryKey: string; legacyKey: string | null } {
+  const accountId = shipStationSyncAccountId(account);
+  const primaryKey = accountId === 'main' ? baseKey : `${baseKey}:${accountId}`;
+  const legacyKey = account.label === 'main' ? null : `${baseKey}:${account.label}`;
+  return {
+    primaryKey,
+    legacyKey: legacyKey === primaryKey ? null : legacyKey,
+  };
+}
+
 export function shipStationSyncAccountDisplayName(
   account: ShipStationSyncAccountIdentity,
 ): string {

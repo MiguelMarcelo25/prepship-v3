@@ -32,6 +32,7 @@ const REQUIRED_GUARDS = [
   'test:audit-billing-cross-period-reconciliation',
   'test:audit-dead-code-cleanup',
   'test:audit-limiter-fingerprint-hygiene',
+  'test:audit-sync-cursor-webhook-hygiene',
 ];
 
 const npmCli = process.env.npm_execpath;

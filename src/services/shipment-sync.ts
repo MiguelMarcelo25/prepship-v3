@@ -26,6 +26,7 @@ import {
   syncRunBudgetExhausted,
   syncRunBudgetTimeExhausted,
 } from '../lib/sync-run-budget';
+import { shipStationSyncWatermarkKeys } from './shipstation-sync-account-state';
 // PS-286 (per user override `unlock shipped data` on 2026-06-17): best-effort capture of
 // shipments.label_url after each account's sync — the v1 list payload omits it.
 import { enrichLabelUrls } from './shipment-label-url-enrich';
@@ -514,6 +515,7 @@ export type ShipmentSyncResult = {
 type ShipmentSyncAccount = {
   label: string;
   sourceAccountId: string;
+  ownerClientId: number | null;
   isTest: boolean;
   apiKey: string | undefined;
   apiSecret: string | undefined;
@@ -532,6 +534,7 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
     {
       label: 'main',
       sourceAccountId: 'main',
+      ownerClientId: null,
       isTest: false,
       apiKey: undefined,
       apiSecret: undefined,
@@ -554,6 +557,7 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
       accounts.push({
         label: `client:${r.name}`,
         sourceAccountId: `client:${r.id}`,
+        ownerClientId: r.id,
         isTest: r.isTest,
         apiKey: r.ssApiKey,
         apiSecret: r.ssApiSecret,
@@ -564,8 +568,15 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
   return accounts;
 }
 
-function shipWatermarkKey(label: string): string {
-  return label === 'main' ? LAST_SYNC_KEY : `${LAST_SYNC_KEY}:${label}`;
+async function readShipmentSyncWatermark(
+  acct: ShipmentSyncAccount,
+): Promise<{ primaryKey: string; value: number | null }> {
+  // Per user override unlock shipped data on 2026-07-14: migrate only sync
+  // cursor metadata to immutable account identity; shipment history is unchanged.
+  const { primaryKey, legacyKey } = shipStationSyncWatermarkKeys(LAST_SYNC_KEY, acct);
+  const stableValue = await getSettingNumber(primaryKey);
+  if (stableValue !== null || legacyKey === null) return { primaryKey, value: stableValue };
+  return { primaryKey, value: await getSettingNumber(legacyKey) };
 }
 
 /**
@@ -604,8 +615,7 @@ export async function syncShipments(
   for (const acct of accounts) {
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
     try {
-      const key = shipWatermarkKey(acct.label);
-      const storedLastSync = await getSettingNumber(key);
+      const { primaryKey: key, value: storedLastSync } = await readShipmentSyncWatermark(acct);
       const lastSync =
         opts.sinceMs ??
         (storedLastSync != null
@@ -655,8 +665,12 @@ export async function syncShipments(
         // PS-265: track the newest CreateDate processed (results are CreateDate ASC) as a
         // resume cursor for a budget-bounded run.
         for (const s of res.shipments) {
-          const ms = Date.parse(s.createDate ?? '');
-          if (Number.isFinite(ms) && (cursorCreateMs === null || ms > cursorCreateMs)) cursorCreateMs = ms;
+          // Per user override unlock shipped data on 2026-07-14: parse provider
+          // wall-clock cursor text at its canonical Pacific-time boundary.
+          const ms = parseShipStationV1Date(s.createDate ?? '')?.getTime();
+          if (ms !== undefined && Number.isFinite(ms) && (cursorCreateMs === null || ms > cursorCreateMs)) {
+            cursorCreateMs = ms;
+          }
         }
 
         if (!res.shipments.length || page >= res.pages) {

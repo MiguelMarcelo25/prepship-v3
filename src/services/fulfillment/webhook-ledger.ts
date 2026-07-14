@@ -23,7 +23,7 @@ export type WebhookEventRecord = {
   externalEventId?: string | null;
   /** Hash of the raw body (for dedupe / audit) — never the raw body itself. */
   payloadHash: string;
-  /** Stable dedupe key: external event id when present, else provider+hash+window. */
+  /** Stable dedupe key: external event id when present, else provider+hash+event window. */
   dedupeKey: string;
   sourceOrderNumber?: string | null;
   sourceOrderId?: string | null;
@@ -45,12 +45,13 @@ export function hashWebhookBody(rawBody: string): string {
 
 /**
  * Stable dedupe key. Prefer the provider's own event id; otherwise fold the payload hash
- * into a coarse time window so identical re-deliveries collapse but distinct events don't.
+ * into the event occurrence window so delayed retries collapse but distinct events don't.
  */
 export function webhookDedupeKey(input: {
   provider: string;
   externalEventId?: string | null;
   payloadHash: string;
+  occurredAt?: Date | null;
   receivedAtMs: number;
   windowMs?: number;
 }): string {
@@ -58,7 +59,11 @@ export function webhookDedupeKey(input: {
     return `${input.provider}:eid:${input.externalEventId.trim()}`;
   }
   const windowMs = input.windowMs ?? 5 * 60_000;
-  const bucket = Math.floor(input.receivedAtMs / windowMs);
+  // Per user override unlock shipped data on 2026-07-14: dedupe only webhook
+  // ledger ingestion metadata; shipped/cancelled mutation guards are unchanged.
+  const occurredAtMs = input.occurredAt?.getTime();
+  const bucketSourceMs = Number.isFinite(occurredAtMs) ? occurredAtMs! : input.receivedAtMs;
+  const bucket = Math.floor(bucketSourceMs / windowMs);
   return `${input.provider}:hash:${input.payloadHash}:${bucket}`;
 }
 

@@ -65,6 +65,9 @@ app.post('/:provider', async (c) => {
     provider,
     externalEventId: normalized.externalEventId,
     payloadHash,
+    // Per user override unlock shipped data on 2026-07-14: pass normalized
+    // event time to the ledger owner; this route still performs no order mutation.
+    occurredAt: normalized.occurredAt,
     receivedAtMs: Date.now(),
   });
 

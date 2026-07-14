@@ -42,6 +42,7 @@ import {
   readShipStationSyncAccountStates,
   shipStationSyncAccountDisplayName,
   shipStationSyncAccountId,
+  shipStationSyncWatermarkKeys,
   summarizeShipStationAccountWatermarks,
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
@@ -618,10 +619,15 @@ async function loadSyncAccounts(): Promise<SyncAccount[]> {
   return buildSyncAccountsFromClientRows(clientRows);
 }
 
-function watermarkKey(accountLabel: string): string {
-  return accountLabel === 'main'
-    ? LAST_SYNC_KEY
-    : `${LAST_SYNC_KEY}:${accountLabel}`;
+async function readOrderSyncWatermark(
+  account: SyncAccount,
+): Promise<{ primaryKey: string; value: number | null }> {
+  // Per user override unlock shipped data on 2026-07-14: migrate only sync
+  // cursor metadata to immutable account identity; order edit locks are unchanged.
+  const { primaryKey, legacyKey } = shipStationSyncWatermarkKeys(LAST_SYNC_KEY, account);
+  const stableValue = await getSettingNumber(primaryKey);
+  if (stableValue !== null || legacyKey === null) return { primaryKey, value: stableValue };
+  return { primaryKey, value: await getSettingNumber(legacyKey) };
 }
 
 // v2-parity: one paginated pass for a (status, since) pair. Factored out so
@@ -914,10 +920,10 @@ async function syncOrdersForAccount(
   succeeded: boolean;
   error: string | null;
 }> {
-  const key = watermarkKey(account.label);
+  const { primaryKey: key, value: storedLastSync } = await readOrderSyncWatermark(account);
   const lastSync =
     opts.sinceMs ??
-    (await getSettingNumber(key)) ??
+    storedLastSync ??
     Date.now() - DEFAULT_LOOKBACK_MS;
 
   // Smaller default pages keep the background worker below its 10-minute guard
@@ -1124,7 +1130,7 @@ export async function syncOrders(opts: {
   const accountWatermarks = await Promise.all(
     loadedAccounts.map(async (account) => ({
       account,
-      watermarkMs: await getSettingNumber(watermarkKey(account.label)),
+      watermarkMs: (await readOrderSyncWatermark(account)).value,
     })),
   );
   const accounts = accountWatermarks
@@ -1208,7 +1214,7 @@ export async function syncOrders(opts: {
   }
 
   const completedWatermarks = await Promise.all(
-    accounts.map((account) => getSettingNumber(watermarkKey(account.label))),
+    accounts.map(async (account) => (await readOrderSyncWatermark(account)).value),
   );
   const { completeThroughMs } = summarizeShipStationAccountWatermarks(completedWatermarks);
   return {
@@ -1309,7 +1315,7 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
   const [statusCatchup, runStates, watermarks, queueTruth] = await Promise.all([
     getOrderStatusCatchupSnapshot(),
     readShipStationSyncAccountStates(),
-    Promise.all(accounts.map((account) => getSettingNumber(watermarkKey(account.label)))),
+    Promise.all(accounts.map(async (account) => (await readOrderSyncWatermark(account)).value)),
     readOrderSyncQueueTruth(),
   ]);
   const nowMs = Date.now();
