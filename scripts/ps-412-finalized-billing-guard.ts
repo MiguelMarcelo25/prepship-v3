@@ -189,6 +189,27 @@ async function main(): Promise<void> {
     'sidecar assertions acquire the database group lock before row locks',
     /assertBillingOrdersEditable[\s\S]*billing_line_item_lock_group[\s\S]*for update/i.test(policy),
   );
+  const setDirtyStart = policy.indexOf('export async function setBillingOrdersDirty');
+  const assertEditableStart = policy.indexOf('export async function assertBillingOrdersEditable');
+  const assertEditableEnd = policy.indexOf('export function asBillingCloseWorkflowError');
+  const setDirtyPolicy = policy.slice(setDirtyStart, assertEditableStart);
+  const assertEditablePolicy = policy.slice(assertEditableStart, assertEditableEnd);
+  // Per user override unlock shipped data on 2026-07-15: the production timeout
+  // came from one application/DB round trip per shipped-order billing group.
+  // Pin the canonical policy to constant application-level query counts while
+  // the migration-owned function/table protocol still locks every group inside
+  // Postgres and finalized guards remain fail-closed.
+  check(
+    'billing group locks and dirty updates use constant application-level round trips',
+    (setDirtyPolicy.match(/conn\.execute/g) ?? []).length === 1 &&
+      (assertEditablePolicy.match(/conn\.execute/g) ?? []).length === 2 &&
+      /upserted_groups\s+as\s+materialized/i.test(setDirtyPolicy) &&
+      /on conflict \(group_key\) do update/i.test(setDirtyPolicy) &&
+      /when locks\.finalized then locks\.dirty/i.test(setDirtyPolicy) &&
+      /locked_groups\s+as\s+materialized/i.test(assertEditablePolicy) &&
+      !/for\s*\(const group/.test(setDirtyPolicy) &&
+      !/for\s*\(const group/.test(assertEditablePolicy),
+  );
   check(
     'generator delegates to finalization policy',
     /ensureBillingFinalizationPolicySchema/.test(billingService) &&

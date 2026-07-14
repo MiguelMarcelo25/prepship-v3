@@ -689,36 +689,51 @@ export async function setBillingOrdersDirty(input: {
 }, conn: BillingPolicyExecutor = db): Promise<void> {
   const orderIds = [...new Set(input.orderIds.filter((id) => Number.isInteger(id) && id > 0))];
   if (!orderIds.length) return;
-  const groups = resultRows<{ orderId: number; groupKey: string }>(await conn.execute(sql`
-    select distinct
-      ${billingLineItems.orderId} as "orderId",
-      billing_line_item_group_key(
-        ${billingLineItems.clientId},
-        ${billingLineItems.orderId},
-        ${billingLineItems.shipDate},
-        ${billingLineItems.lineType}
-      ) as "groupKey"
-    from ${billingLineItems}
-    where ${billingLineItems.orderId} in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
-      ${input.clientId !== undefined ? sql`and ${billingLineItems.clientId} = ${input.clientId}` : sql``}
-      and ${input.scopePredicate ?? sql`true`}
-    order by "groupKey"
+  // Per user override unlock shipped data on 2026-07-15: lock every derived
+  // billing group and update its dirty guard inside one Postgres statement.
+  // This is the set form of billing_line_item_lock_group's migration-owned
+  // INSERT ... ON CONFLICT row-lock protocol, extended to change `dirty` only
+  // when the latest committed guard is not finalized. Calling that one-row
+  // function and then updating the same tuple in one command is forbidden by
+  // Postgres. Orders and shipments remain read-only.
+  const lockedGroups = resultRows<{ orderId: number; finalized: boolean }>(await conn.execute(sql`
+    with target_groups as materialized (
+      select distinct
+        ${billingLineItems.orderId} as "orderId",
+        billing_line_item_group_key(
+          ${billingLineItems.clientId},
+          ${billingLineItems.orderId},
+          ${billingLineItems.shipDate},
+          ${billingLineItems.lineType}
+        ) as "groupKey"
+      from ${billingLineItems}
+      where ${billingLineItems.orderId} in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
+        ${input.clientId !== undefined ? sql`and ${billingLineItems.clientId} = ${input.clientId}` : sql``}
+        and ${input.scopePredicate ?? sql`true`}
+    ),
+    upserted_groups as materialized (
+      insert into billing_finalization_group_locks as locks (group_key, finalized, dirty)
+      select target_groups."groupKey", false, ${input.dirty}
+      from target_groups
+      order by target_groups."groupKey"
+      on conflict (group_key) do update
+      set
+        group_key = excluded.group_key,
+        dirty = case
+          when locks.finalized then locks.dirty
+          else excluded.dirty
+        end
+      returning locks.group_key as "groupKey", locks.finalized
+    )
+    select target_groups."orderId", upserted_groups.finalized
+    from target_groups
+    inner join upserted_groups
+      on upserted_groups."groupKey" = target_groups."groupKey"
+    order by target_groups."groupKey"
   `));
-  const finalizedIds: number[] = [];
-  for (const group of groups) {
-    const [guard] = resultRows<{ finalized: boolean }>(await conn.execute(sql`
-      select billing_line_item_lock_group(${group.groupKey}) as finalized
-    `));
-    if (guard?.finalized === true) {
-      finalizedIds.push(Number(group.orderId));
-      continue;
-    }
-    await conn.execute(sql`
-      update billing_finalization_group_locks
-      set dirty = ${input.dirty}
-      where group_key = ${group.groupKey}
-    `);
-  }
+  const finalizedIds = lockedGroups
+    .filter((group) => group.finalized === true)
+    .map((group) => Number(group.orderId));
   if (finalizedIds.length) throw new BillingFinalizedLockError(finalizedIds);
 }
 
@@ -735,28 +750,39 @@ export async function assertBillingOrdersEditable(input: {
   const orderIds = [...new Set(input.orderIds.filter((id) => Number.isInteger(id) && id > 0))];
   if (!orderIds.length) return;
 
-  const groupResult = await conn.execute<{ orderId: number; groupKey: string }>(sql`
-    select distinct
-      ${billingLineItems.orderId} as "orderId",
-      billing_line_item_group_key(
-        ${billingLineItems.clientId},
-        ${billingLineItems.orderId},
-        ${billingLineItems.shipDate},
-        ${billingLineItems.lineType}
-      ) as "groupKey"
-    from ${billingLineItems}
-    where ${billingLineItems.orderId} in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
-      ${input.clientId !== undefined ? sql`and ${billingLineItems.clientId} = ${input.clientId}` : sql``}
-      and ${input.scopePredicate ?? sql`true`}
-    order by "groupKey"
-  `);
-  const finalizedGuardIds: number[] = [];
-  for (const group of resultRows<{ orderId: number; groupKey: string }>(groupResult)) {
-    const [guard] = resultRows<{ finalized: boolean }>(await conn.execute(sql`
-      select billing_line_item_lock_group(${group.groupKey}) as finalized
-    `));
-    if (guard?.finalized === true) finalizedGuardIds.push(Number(group.orderId));
-  }
+  // Per user override unlock shipped data on 2026-07-15: acquire the same
+  // migration-owned transaction locks as one ordered set. Finalized detection
+  // remains fail-closed before the existing FOR UPDATE row boundary.
+  const lockedGroups = resultRows<{ orderId: number; finalized: boolean }>(await conn.execute(sql`
+    with target_groups as materialized (
+      select distinct
+        ${billingLineItems.orderId} as "orderId",
+        billing_line_item_group_key(
+          ${billingLineItems.clientId},
+          ${billingLineItems.orderId},
+          ${billingLineItems.shipDate},
+          ${billingLineItems.lineType}
+        ) as "groupKey"
+      from ${billingLineItems}
+      where ${billingLineItems.orderId} in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
+        ${input.clientId !== undefined ? sql`and ${billingLineItems.clientId} = ${input.clientId}` : sql``}
+        and ${input.scopePredicate ?? sql`true`}
+    ),
+    locked_groups as materialized (
+      select
+        target_groups."orderId",
+        target_groups."groupKey",
+        billing_line_item_lock_group(target_groups."groupKey") as finalized
+      from target_groups
+      order by target_groups."groupKey"
+    )
+    select locked_groups."orderId", locked_groups.finalized
+    from locked_groups
+    order by locked_groups."groupKey"
+  `));
+  const finalizedGuardIds = lockedGroups
+    .filter((group) => group.finalized === true)
+    .map((group) => Number(group.orderId));
   if (finalizedGuardIds.length) throw new BillingFinalizedLockError(finalizedGuardIds);
 
   const result = await conn.execute<{ orderId: number; invoiced: boolean }>(sql`
