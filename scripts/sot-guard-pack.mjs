@@ -28,6 +28,7 @@ const REQUIRED_GUARDS = [
   'test:audit-orders-bulk-snapshot',
   'test:audit-order-editable-write',
   'test:audit-print-queue-lifecycle',
+  'test:audit-sync-watchdog-lifecycle',
 ];
 
 const npmCli = process.env.npm_execpath;

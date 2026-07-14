@@ -316,6 +316,7 @@
     "test:audit-orders-bulk-snapshot": "tsx scripts/audit-orders-bulk-snapshot-guard.ts",
     "test:audit-order-editable-write": "tsx scripts/audit-order-editable-write-guard.ts",
     "test:audit-print-queue-lifecycle": "tsx scripts/audit-print-queue-lifecycle-guard.ts",
+    "test:audit-sync-watchdog-lifecycle": "tsx scripts/audit-sync-watchdog-lifecycle-guard.ts",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:ebay-confirmation:mocked": "tsx scripts/ebay-confirmation-mocked-guard.ts",
     "test:walmart-confirmation:payload": "tsx scripts/walmart-confirmation-payload-guard.ts",

@@ -53,6 +53,7 @@ import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const STATUS_CATCHUP_SNAPSHOT_KEY = 'order_sync.status_catchup.snapshot';
+const AWAITING_RESUME_CURSOR_KEY_PREFIX = 'order_sync.awaiting_resume_page';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
 const STATUS_CATCHUP_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const AWAITING_CATCHUP_LOOKBACK_MS = STATUS_CATCHUP_LOOKBACK_MS;
@@ -776,6 +777,31 @@ async function fetchOrdersPage(
   };
 }
 
+export function nextOrderSyncResumePage(input: {
+  complete: boolean;
+  startPage: number;
+  lastPageProcessed: number;
+}): number {
+  if (input.complete) return 1;
+  const startPage = Math.max(1, Math.floor(Number(input.startPage) || 1));
+  const lastPageProcessed = Math.max(
+    0,
+    Math.floor(Number(input.lastPageProcessed) || 0),
+  );
+  // A resumed pass probes DESC page 1 before returning to old backlog. If the
+  // budget expires after only that probe, keep the old cursor instead of
+  // falsely advancing from page 1 to page 2.
+  if (startPage > 1 && lastPageProcessed === 1) return startPage;
+  return lastPageProcessed > 0 ? lastPageProcessed + 1 : startPage;
+}
+
+function awaitingOrderResumeCursorKey(
+  account: SyncAccount,
+  storeId: number | undefined,
+): string {
+  return `${AWAITING_RESUME_CURSOR_KEY_PREFIX}:${shipStationSyncAccountId(account)}:${storeId ?? 'all'}`;
+}
+
 function statusCatchupEntryKey(args: {
   accountLabel: string;
   storeId: number | null | undefined;
@@ -837,14 +863,9 @@ function statusCatchupEntry(args: {
   const hasBacklog =
     stoppedBy !== 'complete' ||
     (totalPages !== null && lastPageProcessed > 0 && lastPageProcessed < totalPages);
-  const nextPage =
-    hasBacklog && startPage > 1 && lastPageProcessed === 1
-      ? startPage
-      : hasBacklog && lastPageProcessed > 0
-        ? lastPageProcessed + 1
-        : hasBacklog
-          ? startPage
-          : null;
+  const nextPage = hasBacklog
+    ? nextOrderSyncResumePage({ complete: false, startPage, lastPageProcessed })
+    : null;
   const processedThroughPage =
     nextPage !== null
       ? Math.max(0, nextPage - 1)
@@ -936,13 +957,24 @@ async function syncOrdersForAccount(
       break;
     }
     try {
+      const cursorKey = awaitingOrderResumeCursorKey(account, target.storeId);
+      const startPage = Math.max(
+        1,
+        Math.floor(Number((await getSettingNumber(cursorKey)) ?? 1) || 1),
+      );
       const result = await fetchOrdersPage(account, storeToClient, {
         orderStatus: 'awaiting_shipment',
         sinceMs: awaitingSinceMs,
         pageSize,
         storeId: target.storeId,
+        sortDir: 'DESC',
+        startPage,
         signal: opts.signal,
       }, budget);
+      // Audit SY-7: persist only after a successful provider/import pass. A
+      // failed or not-started target retains its old cursor, while every
+      // resumed pass still probes newest-first page 1 before older backlog.
+      await setSetting(cursorKey, String(nextOrderSyncResumePage(result)));
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
       if (!result.complete) complete = false;

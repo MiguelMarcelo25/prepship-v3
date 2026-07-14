@@ -1,6 +1,11 @@
 import { sql as pg } from '../db/client.js';
+import { withAdvisoryTransactionLock } from '../lib/advisory-session-lock';
 import { env } from '../lib/env.js';
-import { getSyncStatus, type OrderStatusCatchupSnapshot } from './order-sync';
+import {
+  getSyncStatus,
+  type OrderStatusCatchupSnapshot,
+  type OrderSyncAccountDiagnostic,
+} from './order-sync';
 import { getShipmentSyncStatus } from './shipment-sync';
 import { getSetting, setSetting } from './settings';
 import { enqueueManualOrderSyncJob, enqueueShipmentSyncWatchdogJob } from './sync-job-queue';
@@ -17,6 +22,7 @@ export const SHIPMENT_SYNC_JOB_NAME = 'prepship.sync.shipments';
 const SNAPSHOT_KEY = 'shipment_sync.watchdog.snapshot';
 const LAST_ACTION_KEY = 'shipment_sync.watchdog.last_action';
 const RESTART_ATTEMPTS_KEY = 'shipment_sync.watchdog.restart_attempts';
+const WATCHDOG_TICK_LOCK = 'shipment_sync.watchdog.tick';
 
 export type ShipmentSyncWatchdogThresholds = {
   workerHeartbeatStaleSeconds: number;
@@ -67,6 +73,7 @@ export type ShipmentSyncWatchdogState =
   | 'ok'
   | 'worker_stale'
   | 'order_stale'
+  | 'order_account_stale'
   | 'order_status_backlog'
   | 'shipment_job_stuck'
   | 'shipment_backlog'
@@ -98,7 +105,23 @@ export type ShipmentSyncWatchdogVerdict = {
   missingShipmentRate: number;
   orderStatusBacklog: boolean;
   orderStatusBacklogCount: number;
+  staleOrderAccountCount: number;
 };
+
+export type ShipmentSyncWatchdogAccountAlert = Pick<
+  OrderSyncAccountDiagnostic,
+  | 'accountId'
+  | 'displayName'
+  | 'ownerClientId'
+  | 'state'
+  | 'lastSyncedAt'
+  | 'ageSeconds'
+  | 'runAgeSeconds'
+  | 'lastFailureAt'
+  | 'lastError'
+  | 'backlogPasses'
+  | 'backlogPages'
+>;
 
 export type ShipmentSyncQueueHealth = ShipmentSyncWatchdogQueueInput & {
   oldestCreatedAt: string | null;
@@ -133,6 +156,8 @@ export type ShipmentSyncWatchdogStatus = {
     lastJobStatus: string | null;
     lastJobFinishedAt: string | null;
     statusCatchup: OrderStatusCatchupSnapshot;
+    staleAccountCount: number;
+    accountAlerts: ShipmentSyncWatchdogAccountAlert[];
   };
   shipments: { lastSyncedAt: string | null };
   worker: {
@@ -277,6 +302,26 @@ function orderBlockedBy(workerStatus: WorkerStatusSnapshot | null): {
   };
 }
 
+function orderAccountAlerts(
+  accounts: OrderSyncAccountDiagnostic[],
+): ShipmentSyncWatchdogAccountAlert[] {
+  return accounts
+    .filter((account) => account.stale)
+    .map((account) => ({
+      accountId: account.accountId,
+      displayName: account.displayName,
+      ownerClientId: account.ownerClientId,
+      state: account.state,
+      lastSyncedAt: account.lastSyncedAt,
+      ageSeconds: account.ageSeconds,
+      runAgeSeconds: account.runAgeSeconds,
+      lastFailureAt: account.lastFailureAt,
+      lastError: account.lastError,
+      backlogPasses: account.backlogPasses,
+      backlogPages: account.backlogPages,
+    }));
+}
+
 export function evaluateShipmentSyncWatchdog(
   input: {
     nowMs: number;
@@ -288,6 +333,7 @@ export function evaluateShipmentSyncWatchdog(
     consecutiveBacklogChecks: number;
     orderStatusCatchupBacklog?: boolean;
     orderStatusCatchupBacklogCount?: number;
+    staleOrderAccountCount?: number;
   },
   thresholds: ShipmentSyncWatchdogThresholds = SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 ): ShipmentSyncWatchdogVerdict {
@@ -296,8 +342,14 @@ export function evaluateShipmentSyncWatchdog(
   const workerStale =
     input.workerHeartbeatAgeSeconds === null ||
     input.workerHeartbeatAgeSeconds > thresholds.workerHeartbeatStaleSeconds;
+  const staleOrderAccountCount = Math.max(
+    0,
+    Math.floor(Number(input.staleOrderAccountCount ?? 0) || 0),
+  );
   const orderFresh =
-    orderAgeSeconds !== null && orderAgeSeconds <= thresholds.orderFreshSeconds;
+    orderAgeSeconds !== null &&
+    orderAgeSeconds <= thresholds.orderFreshSeconds &&
+    staleOrderAccountCount === 0;
   const orderStale = !orderFresh;
   const shipmentStale =
     shipmentAgeSeconds === null || shipmentAgeSeconds > thresholds.shipmentStaleSeconds;
@@ -324,6 +376,7 @@ export function evaluateShipmentSyncWatchdog(
     missingShipmentRate,
     orderStatusBacklog,
     orderStatusBacklogCount,
+    staleOrderAccountCount,
   };
 
   if (
@@ -382,6 +435,26 @@ export function evaluateShipmentSyncWatchdog(
     };
   }
 
+  if (orderStatusBacklog && !shipmentStale) {
+    return {
+      ...base,
+      state: 'order_status_backlog',
+      alert: true,
+      reason: `order status catch-up has ${orderStatusBacklogCount} partial/backlogged pass(es)`,
+      recommendedAction: 'enqueue_order_sync',
+    };
+  }
+
+  if (staleOrderAccountCount > 0 && !shipmentStale) {
+    return {
+      ...base,
+      state: 'order_account_stale',
+      alert: true,
+      reason: `${staleOrderAccountCount} order sync account(s) are stale or failed`,
+      recommendedAction: 'enqueue_order_sync',
+    };
+  }
+
   if (shipmentStale && !orderFresh) {
     return {
       ...base,
@@ -398,16 +471,6 @@ export function evaluateShipmentSyncWatchdog(
       state: 'order_stale',
       alert: true,
       reason: `order sync is stale (${orderAgeSeconds ?? 'none'}s) while shipment sync is fresh`,
-      recommendedAction: 'enqueue_order_sync',
-    };
-  }
-
-  if (orderStatusBacklog) {
-    return {
-      ...base,
-      state: 'order_status_backlog',
-      alert: true,
-      reason: `order status catch-up has ${orderStatusBacklogCount} partial/backlogged pass(es)`,
       recommendedAction: 'enqueue_order_sync',
     };
   }
@@ -608,10 +671,12 @@ async function buildShipmentSyncWatchdogStatus(
       consecutiveBacklogChecks,
       orderStatusCatchupBacklog: orders.statusCatchup.hasBacklog,
       orderStatusCatchupBacklogCount: orders.statusCatchup.backlogCount,
+      staleOrderAccountCount: orders.staleAccountCount,
     },
     thresholds,
   );
   const orderBlocker = orderBlockedBy(worker.status);
+  const accountAlerts = orderAccountAlerts(orders.accounts);
 
   return {
     enabled: env.SHIPMENT_SYNC_WATCHDOG_ENABLED,
@@ -623,6 +688,8 @@ async function buildShipmentSyncWatchdogStatus(
       fresh: verdict.orderFresh && !orders.statusCatchup.hasBacklog,
       stale: !verdict.orderFresh || orders.statusCatchup.hasBacklog,
       statusCatchup: orders.statusCatchup,
+      staleAccountCount: orders.staleAccountCount,
+      accountAlerts,
       ...orderBlocker,
     },
     shipments: { lastSyncedAt: shipments.lastSyncedAt },
@@ -667,11 +734,18 @@ function shouldCooldown(
   };
 }
 
+export function heartbeatGatedWatchdogAction(
+  action: ShipmentSyncWatchdogRecommendedAction,
+  workerStale: boolean,
+): ShipmentSyncWatchdogRecommendedAction {
+  return action === 'restart_worker' && !workerStale ? 'alert_only' : action;
+}
+
 function maybeEscalateAction(
   status: ShipmentSyncWatchdogStatus,
   nowMs: number,
 ): ShipmentSyncWatchdogRecommendedAction {
-  const action = status.verdict.recommendedAction;
+  let action = status.verdict.recommendedAction;
   const lastAction = status.lastAction;
   if (
     (action === 'enqueue_shipment_sync' || action === 'enqueue_order_sync') &&
@@ -680,16 +754,25 @@ function maybeEscalateAction(
   ) {
     const lastMs = Date.parse(lastAction.at);
     if (Number.isFinite(lastMs) && nowMs - lastMs >= status.thresholds.noProgressRestartMs) {
-      return 'restart_worker';
+      action = 'restart_worker';
     }
   }
-  return action;
+  return heartbeatGatedWatchdogAction(action, status.verdict.workerStale);
 }
 
 async function triggerRenderWorkerRestart(
   status: ShipmentSyncWatchdogStatus,
   nowMs: number,
 ): Promise<ShipmentSyncWatchdogAction> {
+  if (!status.verdict.workerStale) {
+    return {
+      action: 'restart_worker',
+      status: 'skipped',
+      at: new Date(nowMs).toISOString(),
+      reason: 'worker heartbeat is fresh; restart blocked',
+    };
+  }
+
   if (!env.SHIPMENT_SYNC_WATCHDOG_ALLOW_RESTARTS) {
     return {
       action: 'restart_worker',
@@ -836,73 +919,6 @@ async function runRecoveryAction(
   return null;
 }
 
-function isStatusNudgeRecoveryAction(
-  action: ShipmentSyncWatchdogRecommendedAction,
-): action is 'enqueue_order_sync' | 'enqueue_shipment_sync' | 'reap_stale_jobs' {
-  return action === 'enqueue_order_sync' || action === 'enqueue_shipment_sync' || action === 'reap_stale_jobs';
-}
-
-export async function nudgeShipmentSyncWatchdogRecovery(
-  status: ShipmentSyncWatchdogStatus,
-  options: { nowMs?: number; source?: 'status' } = {},
-): Promise<ShipmentSyncWatchdogAction | null> {
-  if (!env.SHIPMENT_SYNC_WATCHDOG_ENABLED || !status.verdict.alert) return null;
-
-  const action = status.verdict.recommendedAction;
-  if (!isStatusNudgeRecoveryAction(action)) return null;
-
-  const nowMs = options.nowMs ?? Date.now();
-  const cooldown = shouldCooldown(status, action, nowMs);
-  if (cooldown) return cooldown;
-
-  let recovery: ShipmentSyncWatchdogAction;
-  // Per user override unlock shipped data on 2026-07-06: protected sync-status
-  // reads may nudge only pg-boss sync recovery. This never buys labels,
-  // creates postage, notifies marketplaces, or modifies orders/shipments rows.
-  if (action === 'reap_stale_jobs') {
-    const [active, cadence]: [ReapResult, ReapResult] = await Promise.all([
-      reapStuckActiveJobs(),
-      reapStaleQueuedCadenceJobs(),
-    ]);
-    recovery = {
-      action,
-      status: 'completed',
-      at: new Date(nowMs).toISOString(),
-      reason: `safe pg-boss reapers ran from ${options.source ?? 'status'} nudge`,
-      details: { active, cadence },
-    };
-  } else if (action === 'enqueue_order_sync') {
-    const enqueued = await enqueueManualOrderSyncJob({});
-    recovery = {
-      action,
-      status: enqueued.error ? 'failed' : 'completed',
-      at: new Date(nowMs).toISOString(),
-      reason: enqueued.error
-        ? `order sync enqueue failed: ${enqueued.error}`
-        : enqueued.queued
-          ? `order sync recovery job enqueued from ${options.source ?? 'status'} nudge`
-          : 'order sync recovery job already queued',
-      details: enqueued,
-    };
-  } else {
-    const enqueued = await enqueueShipmentSyncWatchdogJob();
-    recovery = {
-      action,
-      status: enqueued.error ? 'failed' : 'completed',
-      at: new Date(nowMs).toISOString(),
-      reason: enqueued.error
-        ? `shipment sync enqueue failed: ${enqueued.error}`
-        : enqueued.enqueued
-          ? `shipment sync recovery job enqueued from ${options.source ?? 'status'} nudge`
-          : 'shipment sync recovery job already queued',
-      details: enqueued,
-    };
-  }
-
-  await recordWatchdogAction(recovery);
-  return recovery;
-}
-
 async function persistWatchdogSnapshot(status: ShipmentSyncWatchdogStatus): Promise<void> {
   await setSetting(
     SNAPSHOT_KEY,
@@ -921,6 +937,8 @@ async function persistWatchdogSnapshot(status: ShipmentSyncWatchdogStatus): Prom
         hasBacklog: status.orders.statusCatchup.hasBacklog,
         backlogCount: status.orders.statusCatchup.backlogCount,
       },
+      staleOrderAccountCount: status.orders.staleAccountCount,
+      accountAlerts: status.orders.accountAlerts,
       shipmentLastSyncedAt: status.shipments.lastSyncedAt,
       workerHeartbeatAgeSeconds: status.worker.heartbeatAgeSeconds,
       queue: status.queue,
@@ -933,30 +951,41 @@ async function persistWatchdogSnapshot(status: ShipmentSyncWatchdogStatus): Prom
 export async function runShipmentSyncWatchdogTick(
   options: { recover?: boolean; nowMs?: number; source?: 'timer' | 'cron' | 'manual' } = {},
 ): Promise<ShipmentSyncWatchdogStatus> {
-  const nowMs = options.nowMs ?? Date.now();
-  const status = await buildShipmentSyncWatchdogStatus({
-    nowMs,
-    advanceBacklogCounter: true,
-  });
+  // Audit SY-4: the process timer plus the cron GET/POST drivers share one
+  // cross-process lock. Health, cooldown, recovery, and snapshot persistence
+  // therefore form one serialized tick instead of racing stale observations.
+  return withAdvisoryTransactionLock(WATCHDOG_TICK_LOCK, async () => {
+    const nowMs = options.nowMs ?? Date.now();
+    const status = await buildShipmentSyncWatchdogStatus({
+      nowMs,
+      advanceBacklogCounter: true,
+    });
 
-  if (status.verdict.alert) {
-    console.error(
-      `[shipment-sync-watchdog] ${status.verdict.state}: ${status.verdict.reason} ` +
-        `(action=${status.verdict.recommendedAction}, source=${options.source ?? 'timer'})`,
-    );
-  }
-
-  let recovery: ShipmentSyncWatchdogAction | null = null;
-  if (options.recover !== false && env.SHIPMENT_SYNC_WATCHDOG_ENABLED) {
-    recovery = await runRecoveryAction(status, nowMs);
-    if (recovery && recovery.action !== 'cooldown') {
-      await recordWatchdogAction(recovery);
+    if (status.verdict.alert) {
+      console.error(
+        `[shipment-sync-watchdog] ${status.verdict.state}: ${status.verdict.reason} ` +
+          `(action=${status.verdict.recommendedAction}, source=${options.source ?? 'timer'})`,
+      );
     }
-  }
+    for (const account of status.orders.accountAlerts) {
+      console.error(
+        `[shipment-sync-watchdog] account=${account.accountId} state=${account.state}: ` +
+          `${account.lastError ?? `${account.displayName} order sync is stale`}`,
+      );
+    }
 
-  const finalStatus = { ...status, recovery };
-  await persistWatchdogSnapshot(finalStatus);
-  return finalStatus;
+    let recovery: ShipmentSyncWatchdogAction | null = null;
+    if (options.recover !== false && env.SHIPMENT_SYNC_WATCHDOG_ENABLED) {
+      recovery = await runRecoveryAction(status, nowMs);
+      if (recovery && recovery.action !== 'cooldown') {
+        await recordWatchdogAction(recovery);
+      }
+    }
+
+    const finalStatus = { ...status, recovery };
+    await persistWatchdogSnapshot(finalStatus);
+    return finalStatus;
+  });
 }
 
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;

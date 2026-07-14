@@ -1,6 +1,7 @@
 import { and, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
+import { shipments } from '../db/schema/shipments';
 import { replaceOrderItemsForOrders } from './order-items';
 import { materializePackageFactsForImportedOrderIds } from './combo-package-defaults';
 import type { NormalizedOrderSource } from './normalized-order-persistence';
@@ -487,7 +488,22 @@ export async function upsertNormalizedStoreOrders(
         shippingAmount: sql`excluded.shipping_amount`,
         items: sql`excluded.items`,
         raw: sql`excluded.raw`,
-        externallyShipped: sql`case when excluded.externally_shipped = true then true else orders.externally_shipped end`,
+        // Per user override unlock shipped data on 2026-07-14 (Audit SY-6):
+        // Shopify may echo PrepShip's own marketplace confirmation as
+        // fulfilled. A linked, active outbound shipment is the canonical proof
+        // that the fulfillment is local, so the provider echo must not become
+        // the one-way externally_shipped latch that blocks a relabel after void.
+        externallyShipped: sql`case
+          when excluded.externally_shipped = true and exists (
+            select 1
+            from ${shipments}
+            where ${shipments.orderId} = ${orders.id}
+              and coalesce(${shipments.voided}, false) = false
+              and coalesce(${shipments.isReturn}, false) = false
+          ) then false
+          when excluded.externally_shipped = true then true
+          else ${orders.externallyShipped}
+        end`,
         updatedAt: sql`excluded.updated_at`,
       },
     })
