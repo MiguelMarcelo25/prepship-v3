@@ -26,6 +26,9 @@ jobs:
       - name: SOT / backend-truth / no-wrapper guard pack (PS-335)
         run: npm run test:sot-guard-pack
 
+      - name: ShipStation batched rate fan-out guard
+        run: npm run test:shipstation-batched-rate-fanout
+
       - name: Typecheck (backend + frontend)
         run: npm run typecheck
 

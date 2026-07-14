@@ -29,6 +29,7 @@
     "test:ps-109-multi-sku-header-names": "tsx scripts/ps-109-multi-sku-header-names-guard.ts",
     "test:rates-multi-cache": "tsx scripts/rates-multi-carrier-cache-behavior-test.ts",
     "test:rates-multi-durable-snapshot": "tsx scripts/rates-multi-durable-snapshot-behavior-test.ts",
+    "test:shipstation-batched-rate-fanout": "tsx scripts/shipstation-batched-rate-fanout-guard.ts",
     "watchdog:production": "node scripts/production-watchdog.mjs",
     "diagnose:production-timing": "tsx scripts/capture-production-timing.ts",
     "test:web-bundle-budget": "npm run build:web && node scripts/web-bundle-budget-guard.mjs",

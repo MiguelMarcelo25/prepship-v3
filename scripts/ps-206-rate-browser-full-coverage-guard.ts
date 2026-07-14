@@ -116,7 +116,7 @@ const rateBrowseProducer = readFileSync('src/services/rate-browse-response-produ
 // resolvedForBrowse and now lives in a Promise.all IIFE) — widen the span; the invariant (the
 // SAME cachedOnly is threaded through to the direct universe) is unchanged.
 check('/rates/browse passes cachedOnly through to the direct universe',
-  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,1600}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(rateBrowseProducer));
+  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,1600}?\},\s*\{[\s\S]{0,160}?cachedOnly:\s*isCachedOnlyLookup[\s\S]{0,160}?\}\)/.test(rateBrowseProducer));
 check('the misleading source ternary is gone (cache+live-direct reports mixed)',
   !/source: result\.cached \? 'cache' : filtered\.length \? 'live' : 'live'/.test(rateBrowseProducer) &&
   /'mixed' : 'cache'/.test(rateBrowseProducer));

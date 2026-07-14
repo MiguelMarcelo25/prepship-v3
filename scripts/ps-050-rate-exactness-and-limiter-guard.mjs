@@ -64,8 +64,10 @@ assert(
 assert(
   ratesService.includes('globalRateFetchActive') &&
     ratesService.includes('runWithGlobalRateLimiter') &&
-    ratesService.includes('runWithGlobalRateLimiter(() => fetchEstimateForCarrier'),
-  'ShipStation carrier estimate calls use a module-level global limiter across passive/manual/backfill callers',
+    ratesService.includes('return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs);') &&
+    ratesService.includes('const batch = await runWithGlobalRateLimiter(() => {') &&
+    ratesService.includes('return fetchEstimateForCarriers(carriers, input, shipFrom, policy.timeoutMs);'),
+  'ShipStation batch and fallback estimate calls use one module-level global limiter across passive/manual/backfill callers',
 )
 
 assert(

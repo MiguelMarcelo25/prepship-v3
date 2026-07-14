@@ -95,6 +95,7 @@ import {
   type DirectCarrierCacheRow,
 } from './direct-carrier-rate-cache';
 import { isShopifyShippingDisplayOnlyProvider } from './shopify-rates';
+import { partitionShipStationEstimateBatch } from './shipstation-rate-batch';
 import {
   isDirectShippingAccount,
   isStoreScopedCarrierProvider,
@@ -282,6 +283,9 @@ export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
     Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BURST ?? '20', 10) || 20
   )
 );
+export function shipStationBatchedRateFanoutEnabled(): boolean {
+  return /^(1|true|yes)$/i.test(String(process.env.SHIPSTATION_BATCHED_RATE_FANOUT ?? '').trim());
+}
 const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
 // PS-perf (QA audit 2026-06-23): interactive-priority lane. BACKGROUND rate fetches (the
 // server-side best-rate backfill / Recalculate-All drain) self-throttle to a LOWER budget so
@@ -931,6 +935,7 @@ export type CarrierRateDiagnostic = {
   limiterWaitMs?: number;
   attempts?: number;
   retryable?: boolean;
+  requestMode?: 'batch' | 'fallback';
   error?: string;
   // PS-271 (Layer 4): true when this direct-carrier pass was an accepted-thin partial (Shipp Layer 1
   // returned a non-empty-but-thin set). Additive + display-only; absent today and for every non-thin
@@ -1150,23 +1155,23 @@ type CarrierEstimateResult = {
   diagnostic: CarrierRateDiagnostic;
 };
 
+type BatchedCarrierEstimateResult = {
+  results: CarrierEstimateResult[];
+  missingCarriers: CarrierInfo[];
+};
+
 function publicCarrierRateError(err: unknown): string {
   return sanitizeRateProviderError(err);
 }
 
-// v2-parity: one /v2/rates/estimate call per carrier with v2's flat body.
-// Returns v2-shaped EstimateRate[] plus carrier diagnostics so the UI can
-// distinguish "no service" from "carrier failed".
-async function fetchEstimateForCarrier(
-  carrier: CarrierInfo,
+function buildShipStationEstimateBody(
+  carriers: readonly CarrierInfo[],
   input: RateInput,
   shipFrom: Address,
-  timeoutMs: number,
-): Promise<CarrierEstimateResult> {
-  const startedAt = Date.now();
-  const needsCity = carrier.carrier_code === 'stamps_com';
+): Record<string, unknown> {
+  const needsCity = carriers.some((carrier) => carrier.carrier_code === 'stamps_com');
   const body: Record<string, unknown> = {
-    carrier_ids: [carrier.carrier_id],
+    carrier_ids: carriers.map((carrier) => carrier.carrier_id),
     from_country_code: (shipFrom.country_code ?? 'US').toUpperCase(),
     from_postal_code: shipFromPostalCode(shipFrom),
     to_country_code: (input.toCountry ?? 'US').toUpperCase(),
@@ -1195,6 +1200,27 @@ async function fetchEstimateForCarrier(
     body.insurance_provider = options.insuranceProvider;
     body.insured_value = options.insuredValue;
   }
+  return body;
+}
+
+function stampEstimateRateCarrier(rate: EstimateRate, carrier: CarrierInfo): void {
+  const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
+  if (!rate.carrier_id) rate.carrier_id = carrier.carrier_id;
+  rate.carrier_code = override?.carrier_code ?? rate.carrier_code ?? carrier.carrier_code;
+  rate.carrier_nickname = override?.nickname ?? rate.carrier_nickname ?? carrier.nickname;
+}
+
+// Default path: one /v2/rates/estimate call per carrier. Kept intact behind
+// SHIPSTATION_BATCHED_RATE_FANOUT=false and reused for targeted batch gaps.
+async function fetchEstimateForCarrier(
+  carrier: CarrierInfo,
+  input: RateInput,
+  shipFrom: Address,
+  timeoutMs: number,
+): Promise<CarrierEstimateResult> {
+  const startedAt = Date.now();
+  const body = buildShipStationEstimateBody([carrier], input, shipFrom);
+  const options = normalizeShippingOptions(input);
   try {
     const payload = await withCarrierQuoteTimeout(
       quoteCarrierRates('shipstation', {
@@ -1207,13 +1233,9 @@ async function fetchEstimateForCarrier(
       timeoutMs,
     );
     const rates = payload.rates as EstimateRate[];
-    // Ensure carrier metadata is on every row (ShipStation sometimes omits)
+    // Single-account responses can safely fill carrier_id when ShipStation omits it.
+    for (const r of rates) stampEstimateRateCarrier(r, carrier);
     const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
-    for (const r of rates) {
-      if (!r.carrier_id) r.carrier_id = carrier.carrier_id;
-      r.carrier_code = override?.carrier_code ?? r.carrier_code ?? carrier.carrier_code;
-      r.carrier_nickname = override?.nickname ?? r.carrier_nickname ?? carrier.nickname;
-    }
     return {
       carrier,
       rates,
@@ -1250,6 +1272,71 @@ async function fetchEstimateForCarrier(
       },
     };
   }
+}
+
+async function fetchEstimateForCarriers(
+  carriers: CarrierInfo[],
+  input: RateInput,
+  shipFrom: Address,
+  timeoutMs: number,
+): Promise<BatchedCarrierEstimateResult> {
+  const startedAt = Date.now();
+  const body = buildShipStationEstimateBody(carriers, input, shipFrom);
+  const options = normalizeShippingOptions(input);
+  const carrierSetHash = createHash('sha256')
+    .update(carriers.map((carrier) => carrier.carrier_id).sort().join('\n'))
+    .digest('hex')
+    .slice(0, 16);
+  const payload = await withCarrierQuoteTimeout(
+    quoteCarrierRates('shipstation', {
+      body,
+      shippingOptions: options,
+      apiKeyV2: input.apiKeyV2 ?? undefined,
+      dedupeKey: `rates-estimate:batch:${carrierSetHash}:${rateCacheKey(input)}`,
+    }),
+    'shipstation:batch',
+    timeoutMs,
+  );
+  const rates = payload.rates as EstimateRate[];
+  const partition = partitionShipStationEstimateBatch(
+    carriers.map((carrier) => carrier.carrier_id),
+    rates,
+  );
+  if (partition.rejectedRates.length > 0) {
+    console.warn(
+      `[rates-estimate] rejected ${partition.rejectedRates.length} batched rate row(s) without a requested carrier_id`,
+    );
+  }
+
+  const carrierById = new Map(carriers.map((carrier) => [carrier.carrier_id, carrier]));
+  const results: CarrierEstimateResult[] = [];
+  for (const [carrierId, carrierRates] of partition.ratesByCarrierId) {
+    if (carrierRates.length === 0) continue;
+    const carrier = carrierById.get(carrierId);
+    if (!carrier) continue;
+    for (const rate of carrierRates) stampEstimateRateCarrier(rate, carrier);
+    const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
+    results.push({
+      carrier,
+      rates: carrierRates,
+      diagnostic: {
+        carrierId: carrier.carrier_id,
+        accountId: carrier.carrier_id,
+        carrierCode: override?.carrier_code ?? carrier.carrier_code,
+        nickname: override?.nickname ?? carrier.nickname,
+        status: 'ok',
+        rateCount: carrierRates.length,
+        durationMs: Date.now() - startedAt,
+        requestMode: 'batch',
+      },
+    });
+  }
+
+  const missingSet = new Set(partition.missingCarrierIds);
+  return {
+    results,
+    missingCarriers: carriers.filter((carrier) => missingSet.has(carrier.carrier_id)),
+  };
 }
 
 // RC1: retry a TRANSIENT per-carrier estimate failure (timeout / 429 / 5xx / network) a bounded number
@@ -1292,6 +1379,64 @@ async function fetchEstimateForCarrierWithRetry(
       attempts,
     },
   };
+}
+
+async function fetchBatchedEstimatesWithFallback(
+  carriers: CarrierInfo[],
+  input: RateInput,
+  shipFrom: Address,
+  priority: RateFetchPriority,
+): Promise<CarrierEstimateResult[]> {
+  const policy = resolveRateBrowseProviderExecutionPolicy({
+    priority,
+    defaultTimeoutMs: SHIPSTATION_RATE_ESTIMATE_TIMEOUT_MS,
+    defaultMaxRetries: RATE_ESTIMATE_MAX_RETRIES,
+  });
+  const startedAt = Date.now();
+  let limiterWaitMs = 0;
+  let batchResults: CarrierEstimateResult[] = [];
+  let missingCarriers = carriers;
+
+  try {
+    const waitStartedAt = Date.now();
+    const batch = await runWithGlobalRateLimiter(() => {
+      limiterWaitMs += Date.now() - waitStartedAt;
+      return fetchEstimateForCarriers(carriers, input, shipFrom, policy.timeoutMs);
+    }, priority);
+    const durationMs = Date.now() - startedAt;
+    batchResults = batch.results.map((result) => ({
+      ...result,
+      diagnostic: {
+        ...result.diagnostic,
+        durationMs,
+        limiterWaitMs,
+        attempts: 1,
+      },
+    }));
+    missingCarriers = batch.missingCarriers;
+  } catch (err) {
+    console.warn(
+      `[rates-estimate] batched request failed; falling back to ${carriers.length} single-account request(s):`,
+      publicCarrierRateError(err),
+    );
+  }
+
+  const fallbackResults = await mapWithConcurrency(
+    missingCarriers,
+    RATE_FETCH_CONCURRENCY,
+    (carrier) => fetchEstimateForCarrierWithRetry(carrier, input, shipFrom, priority),
+  );
+  const markedFallbackResults = fallbackResults.map((result) => ({
+    ...result,
+    diagnostic: { ...result.diagnostic, requestMode: 'fallback' as const },
+  }));
+
+  const resultByCarrierId = new Map(
+    [...batchResults, ...markedFallbackResults].map((result) => [result.carrier.carrier_id, result]),
+  );
+  return carriers
+    .map((carrier) => resultByCarrierId.get(carrier.carrier_id))
+    .filter((result): result is CarrierEstimateResult => Boolean(result));
 }
 
 // Lift the EstimateRate shape (flat from ShipStation) into v4's Rate shape
@@ -1341,10 +1486,6 @@ export async function fetchLiveRatesWithDiagnostics(
 ): Promise<FetchLiveRatesResult> {
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
 
-  // v2-parity: /v2/rates/estimate takes ONE carrier_id per call. Issue N
-  // parallel calls (one per allowed carrier) and flatten. Mirrors
-  // apps/api/src/modules/rates/data/shipstation-rate-shopper.ts:fetchRates().
-  //
   // If the caller restricted carriers via input.carrierIds, filter the
   // discovery list to that set. Otherwise use the full cached list.
   const allCarriers = await getAllCarriers(input.apiKeyV2);
@@ -1354,13 +1495,15 @@ export async function fetchLiveRatesWithDiagnostics(
 
   if (!carriers.length) return { rates: [], carrierDiagnostics: [] };
 
-  const batches = await mapWithConcurrency(
-    carriers,
-    RATE_FETCH_CONCURRENCY,
-    // RC1: each carrier's estimate retries a transient timeout/429/5xx (re-acquiring its limiter slot)
-    // before being dropped — a merely-slow ShipStation response no longer becomes "Rate unavailable".
-    (c) => fetchEstimateForCarrierWithRetry(c, input, shipFrom, priority),
-  );
+  const batches = shipStationBatchedRateFanoutEnabled() && carriers.length > 1
+    ? await fetchBatchedEstimatesWithFallback(carriers, input, shipFrom, priority)
+    : await mapWithConcurrency(
+        carriers,
+        RATE_FETCH_CONCURRENCY,
+        // RC1: each carrier's estimate retries a transient timeout/429/5xx (re-acquiring its limiter slot)
+        // before being dropped — a merely-slow ShipStation response no longer becomes "Rate unavailable".
+        (c) => fetchEstimateForCarrierWithRetry(c, input, shipFrom, priority),
+      );
   const lifted: Rate[] = batches.flatMap((batch) => batch.rates).map(toRate);
 
   // v2-parity: filter blocked service codes + package types + names.
