@@ -42,6 +42,13 @@ const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
 
   ['prepship.fees.walmart-sync', 'walmart-fees'],
   ['walmart fees sync', 'walmart-fees'],
+
+  // Per user override unlock shipped data on 2026-07-14: carrier snapshot
+  // refresh performs provider reads plus database cache writes. Production
+  // proof showed it can wedge the transaction-pool client when it starts in
+  // the same second as fulfillment, so it shares the DB-heavy lane too.
+  ['prepship.maintenance.carrier-account-snapshots', 'shipstation-sync'],
+  ['carrier account snapshots', 'shipstation-sync'],
 ]);
 
 export function syncJobLaneFor(name: string): SyncJobLane {

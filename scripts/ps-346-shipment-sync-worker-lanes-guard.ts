@@ -39,6 +39,7 @@ const fulfillmentJob = 'prepship.sync.fulfillment-outbox';
 const trackingJob = 'prepship.tracking.poll';
 const reportingJob = 'prepship.reporting.refresh';
 const rateBackfillJob = 'prepship.sync.rate-backfill';
+const carrierSnapshotsJob = 'prepship.maintenance.carrier-account-snapshots';
 
 const shipmentsLane = syncJobLaneFor(shipmentsJob);
 const activeShipmentSync = new Map([[shipmentsLane, shipmentsJob]]);
@@ -74,6 +75,10 @@ check(
 check(
   'rate backfill shares the DB-heavy lane with shipment sync',
   getSyncJobLaneBlocker(activeShipmentSync, rateBackfillJob) === shipmentsJob
+);
+check(
+  'carrier snapshot refresh shares the DB-heavy lane with shipment sync',
+  getSyncJobLaneBlocker(activeShipmentSync, carrierSnapshotsJob) === shipmentsJob
 );
 
 const schedulerActive = new Map([[syncJobLaneFor('shipments sync'), 'shipments sync']]);
