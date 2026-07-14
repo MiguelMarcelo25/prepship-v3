@@ -29,6 +29,9 @@ jobs:
       - name: ShipStation batched rate fan-out guard
         run: npm run test:shipstation-batched-rate-fanout
 
+      - name: ShipStation live-probe comparison contract
+        run: npm run test:probe-batched-rate-estimate
+
       - name: Typecheck (backend + frontend)
         run: npm run typecheck
 

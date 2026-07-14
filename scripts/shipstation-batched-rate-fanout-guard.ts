@@ -37,6 +37,7 @@ const ratesSource = readFileSync('src/services/rates.ts', 'utf8');
 const envExample = readFileSync('.env.example', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
 const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+const liveProbeSource = readFileSync('scripts/probe-batched-rate-estimate.ts', 'utf8');
 
 assert.match(
   ratesSource,
@@ -89,6 +90,46 @@ assert.match(
   ciWorkflow,
   /run: npm run test:shipstation-batched-rate-fanout/,
   'CI must run batching boundary guard before typecheck',
+);
+assert.match(
+  liveProbeSource,
+  /if \(!options\.live\) throw new Error\('refusing provider calls without --live'\)/,
+  'live comparison probe must fail closed unless the operator passes --live',
+);
+assert.match(
+  liveProbeSource,
+  /loadShipStationCarrierAccountSources/,
+  'live comparison probe must enumerate distinct env and client credential sources',
+);
+assert.match(
+  liveProbeSource,
+  /'\/v2\/carriers'[\s\S]*'\/v2\/rates\/estimate'/,
+  'live comparison probe may discover carriers and request estimates only',
+);
+assert.doesNotMatch(
+  liveProbeSource,
+  /\/v2\/labels|createCarrierLabel|createLabel|orders\.(?:update|insert|delete)|shipments\.(?:update|insert|delete)/,
+  'live comparison probe must not contain label purchase or order/shipment mutation paths',
+);
+assert.match(
+  liveProbeSource,
+  /compareBatchAgainstSingles[\s\S]*missingFromBatch[\s\S]*batchOnly[\s\S]*RESULT \$\{comparison\.go \? 'GO' : 'NO-GO'\}/,
+  'live comparison probe must fail rollout on attributed batch-vs-single drift',
+);
+assert.match(
+  packageJson,
+  /"probe:shipstation-batched-rate-estimate"\s*:\s*"tsx scripts\/probe-batched-rate-estimate\.ts"/,
+  'package.json must expose the operator-only live probe',
+);
+assert.match(
+  packageJson,
+  /"test:probe-batched-rate-estimate"\s*:\s*"tsx scripts\/probe-batched-rate-estimate\.ts --self-test"/,
+  'package.json must expose the offline probe comparison proof',
+);
+assert.match(
+  ciWorkflow,
+  /run: npm run test:probe-batched-rate-estimate/,
+  'CI must keep the live probe comparison contract from rotting without making provider calls',
 );
 
 process.env.CARRIER_TEST_MODE = '1';
