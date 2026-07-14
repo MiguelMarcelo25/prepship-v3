@@ -51,6 +51,9 @@ import type {
 // backend-owned label voidability for the operator Void Label UI.
 import { resolveOrderLabelVoidability } from '../services/label-voidability';
 import { loadOrderTrackingSummary } from '../services/shipment-tracking';
+// Per user override unlock shipped data on 2026-05-23: shipped rows receive a
+// read-only return summary; order/shipments mutation guards remain unchanged.
+import { loadReturnOrderSummaries } from '../services/return-order-read-model';
 import { replaceOrderItemsForOrders } from '../services/order-items';
 import {
   getComboPackageDefaultForOrder,
@@ -1409,6 +1412,9 @@ async function ordersListResponse(
   const pageOrderNumbers = [
     ...new Set(joined.map((r) => r.order.orderNumber).filter(Boolean)),
   ];
+  const returnSummaryByOrderId = await timedOrdersStep(timings, 'returnOrderSummaries', () =>
+    loadReturnOrderSummaries(pageOrderIds),
+  );
   const latestShipByOrderId = new Map<number, LatestShipmentRow>();
   const latestShipByOrderNumber = new Map<string, LatestShipmentRow>();
   const walmartDirectDuplicateByOrderNumber = new Map<string, {
@@ -1785,6 +1791,9 @@ async function ordersListResponse(
     });
     const effectiveOrderStatus = baseOrderLifecycle.effectiveOrderStatus;
     const isShippedBucket = effectiveOrderStatus === 'shipped';
+    const returnSummary = isShippedBucket
+      ? returnSummaryByOrderId.get(r.order.id) ?? null
+      : null;
     const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
     const selectedRateJsonRecord = recordOrNull(ship?.selected_rate_json);
     const selectedRateJsonProviderId = providerIdOrNull(
@@ -2513,6 +2522,16 @@ async function ordersListResponse(
       // PS-309: backend-owned shipped-label display state (active_label / voided_label /
       // external_label / missing_shipment_sync). The shipped table + drawer read THIS.
       shippedLabelDisplayState,
+      // Per user override unlock shipped data on 2026-05-23: display-only
+      // summary from returns; no shipped order or shipment row is modified.
+      returnSummary: returnSummary
+        ? {
+            ...returnSummary,
+            returnCustomerShippingRate: canViewFinancials
+              ? returnSummary.returnCustomerShippingRate
+              : null,
+          }
+        : null,
       label: label
         ? {
             ...label,

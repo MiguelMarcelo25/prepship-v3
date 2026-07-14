@@ -26,6 +26,7 @@ const REQUIRED_RELATIONS = [
   'rate_browse_job_provider_statuses',
   'rate_browse_jobs',
   'rate_limiter_state',
+  'returns',
   'shipment_bundle_members',
   'shipment_bundles',
   'shipment_tracking_status',
@@ -60,6 +61,7 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'idempotency_key',
   ],
   print_queue_orders: ['auto_retired_at'],
+  returns: ['return_customer_shipping_rate'],
   shipments: ['selected_rate_cost'],
 };
 

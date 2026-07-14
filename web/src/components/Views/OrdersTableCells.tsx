@@ -20,7 +20,7 @@
 // (carrier/account/best-rate/margin) stay in the OrdersView shell, which is
 // their natural home (an 18-field context blob incl. render-callbacks would be
 // higher-risk + architecturally worse — see the PS-166 plan W2c note).
-import { Truck } from 'lucide-react'
+import { RotateCcw, Truck } from 'lucide-react'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
 import type { TableColumn } from './orders-table-columns'
 import { isTestOrder } from './orders-items'
@@ -52,6 +52,17 @@ export type OrderNumberCellContext = {
   openDetailDrawer: (orderId: number | null) => void
 }
 
+const RETURN_STATUS_LABELS: Record<string, string> = {
+  requested: 'Return requested',
+  label_created: 'Return label ready',
+  label_failed: 'Return needs attention',
+  in_transit: 'Return in transit',
+  received: 'Return received',
+  inspected: 'Return inspected',
+  closed: 'Return closed',
+  cancelled: 'Return cancelled',
+}
+
 export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellContext) {
   const { orderDetailsById, transitionalShippedIds, isGlobalSearchActive, currentStatus, openDetailDrawer } = ctx
   const testOrder = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
@@ -59,6 +70,17 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
   const fulfillmentConflict = toRecord(order.fulfillmentConflict)
   const fulfillmentConflictLabel = toStringValue(fulfillmentConflict?.label)
   const fulfillmentConflictReason = toStringValue(fulfillmentConflict?.reason)
+  // Per user override unlock shipped data on 2026-05-23: this is a read-only
+  // badge over the backend return summary. Shipped edit/selection locks stay in
+  // OrdersView and all mutations remain protected by assertOrderEditable.
+  const returnSummary = order.orderStatus === 'shipped' ? order.returnSummary : null
+  const returnRate = typeof returnSummary?.returnCustomerShippingRate === 'number'
+    && Number.isFinite(returnSummary.returnCustomerShippingRate)
+    ? returnSummary.returnCustomerShippingRate
+    : null
+  const returnStatusLabel = returnSummary
+    ? RETURN_STATUS_LABELS[returnSummary.status] ?? 'Return'
+    : null
   // PS-210: global search mixes lifecycle statuses into one table. A row
   // whose REAL status differs from the active tab gets an explicit status
   // pill so a Shipped/Cancelled match on the Awaiting tab can never be
@@ -143,6 +165,29 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
           }}
         >
           Conflict
+        </span>
+      )}
+      {returnSummary && (
+        <span
+          title={`${returnStatusLabel}${returnSummary.returnReference ? ` · ${returnSummary.returnReference}` : ''}${returnRate != null ? ` · $${returnRate.toFixed(2)}` : ''}`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            padding: '1px 6px',
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: 0.25,
+            color: 'var(--ss-blue)',
+            background: 'var(--ss-blue-bg)',
+            border: '1px solid var(--ss-blue-border)',
+            borderRadius: 3,
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <RotateCcw size={9} strokeWidth={2.5} />
+          RETURN{returnRate != null ? ` · $${returnRate.toFixed(2)}` : ''}
         </span>
       )}
       <span
