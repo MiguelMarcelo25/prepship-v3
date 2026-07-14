@@ -874,11 +874,10 @@ export async function startQueuedSyncScheduler(): Promise<void> {
       // wake-ups cannot become another long status catch-up that starves labels.
       options.skipStatusPasses = true;
     }
-    const result = await syncOrders({ ...options, runIdentity: identity, signal });
-    if (result.synced > 0 && isRateBackfillSchedulerEnabled()) {
-      runBackfillTick();
-    }
-    return result;
+    // Per user override unlock shipped data on 2026-07-14: order ingestion no
+    // longer starts a detached rate backfill outside its durable queue lane.
+    // The canonical rate-backfill pg-boss cadence owns that workflow.
+    return syncOrders({ ...options, runIdentity: identity, signal });
   });
   // Audit SY-3 (2026-07-13): thread the deadline signal into the shipments and
   // Shopify handlers too (orders already had it) — withDeadline races and
@@ -903,7 +902,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierJob);
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
-  await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());
+  await registerWorker(JOBS.rateBackfill, () => runBackfillTick());
   await registerWorker(JOBS.rateMaintenance, async () => {
     await runReapStaleRateJobsTick();
     await runRateCacheEvictionTick();

@@ -4,6 +4,14 @@ export type RateBackfillConcurrencyInput = {
   dbPoolMax: number;
 };
 
+function availableBackfillDbConnections(dbPoolMax: number): number {
+  const poolSize = Math.max(1, Math.floor(dbPoolMax));
+  // Keep one shared connection available for worker heartbeat, queue closeout,
+  // and the other bounded worker lanes. A one-connection deployment still has
+  // to make forward progress, so its backfill remains serial.
+  return poolSize === 1 ? 1 : poolSize - 1;
+}
+
 export function resolveRateBackfillConcurrency({
   liveRateBudget,
   rateFetchConcurrency,
@@ -15,11 +23,11 @@ export function resolveRateBackfillConcurrency({
     Math.min(
       desiredConcurrency,
       Math.max(1, Math.floor(rateFetchConcurrency)),
-      Math.max(1, Math.floor(dbPoolMax)),
+      availableBackfillDbConnections(dbPoolMax),
     ),
   );
 }
 
 export function resolveRateBackfillDbWriteConcurrency(dbPoolMax: number): number {
-  return Math.max(1, Math.min(4, Math.floor(dbPoolMax)));
+  return Math.max(1, Math.min(4, availableBackfillDbConnections(dbPoolMax)));
 }

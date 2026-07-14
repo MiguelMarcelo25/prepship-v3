@@ -197,6 +197,7 @@ const LIVE_BACKFILL_CONCURRENCY = 2;
 const PENDING_STAMP_HEARTBEAT_MS = 2 * 60 * 1000; // 2 minutes (< 6min reader window)
 
 const jobs = new Map<string, BackfillJob>();
+const backfillExecutionPromises = new Map<string, Promise<void>>();
 let activeJobId: string | null = null;
 let latestJobId: string | null = null;
 const queuedBackfillRequests: QueuedBackfillRequest[] = [];
@@ -362,6 +363,37 @@ function findQueuedManualForceLiveJob(): BackfillJob | null {
   return queued ? (jobs.get(queued.jobId) ?? null) : null;
 }
 
+function launchBackfillExecution(jobId: string, opts: BackfillOptions): Promise<void> {
+  // Per user override unlock shipped data on 2026-07-14: expose the actual
+  // backend rate execution lifetime so the durable worker lane cannot finish
+  // while its database/provider work is still running in the background.
+  let execution: Promise<void>;
+  execution = runBackfill(jobId, opts).finally(() => {
+    if (backfillExecutionPromises.get(jobId) === execution) {
+      backfillExecutionPromises.delete(jobId);
+    }
+  });
+  backfillExecutionPromises.set(jobId, execution);
+  return execution;
+}
+
+export async function waitForBackfillJob(jobId: string): Promise<BackfillJob | null> {
+  let executionJobId = jobId;
+  const awaited = new Set<string>();
+  while (!awaited.has(executionJobId)) {
+    awaited.add(executionJobId);
+    const execution = backfillExecutionPromises.get(executionJobId);
+    if (execution) await execution;
+
+    // runBackfill may start one queued force-live request in its finally block.
+    // Keep the durable lane until that chained execution settles as well.
+    const active = activeJobId ? jobs.get(activeJobId) : null;
+    if (!isActiveJob(active) || awaited.has(active.jobId)) break;
+    executionJobId = active.jobId;
+  }
+  return jobs.get(jobId) ?? null;
+}
+
 function startQueuedBackfillIfIdle(): void {
   const active = activeJobId ? jobs.get(activeJobId) : null;
   if (isActiveJob(active)) return;
@@ -378,7 +410,7 @@ function startQueuedBackfillIfIdle(): void {
   activeJobId = job.jobId;
   job.message = 'Starting queued force-live backfill…';
   void persistBackfillJobSnapshot(job, next.opts);
-  void runBackfill(job.jobId, next.opts);
+  void launchBackfillExecution(job.jobId, next.opts);
 }
 
 export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
@@ -406,7 +438,7 @@ export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
   const job = createBackfillJob(opts, requestedMode);
   activeJobId = job.jobId;
   void persistBackfillJobSnapshot(job, opts);
-  void runBackfill(job.jobId, opts);
+  void launchBackfillExecution(job.jobId, opts);
   return job;
 }
 

@@ -1,7 +1,11 @@
 import { env } from '../lib/env';
 import { sql as pg } from '../db/client';
 import { syncShopifyOrders } from './shopify-order-sync';
-import { startBackfillBestRates, getActiveBackfillJob } from './rates-backfill';
+import {
+  startBackfillBestRates,
+  getActiveBackfillJob,
+  waitForBackfillJob,
+} from './rates-backfill';
 import { reapStaleOrderRateJobs } from './shipping-workflow/reap-stale-rate-jobs';
 import {
   importSkusFromOrders,
@@ -76,7 +80,7 @@ export async function runShopifyOrderSyncTick(signal?: AbortSignal): Promise<voi
   }
 }
 
-export function runBackfillTick(): void {
+export async function runBackfillTick(): Promise<void> {
   // startBackfillBestRates is already idempotent (activeJobId guard).
   // Just trigger it — if a job is running we'll be a no-op. PS-348 keeps this as a
   // cache-friendly backend refresh of visible tuples before proof expiry, never manual force-live.
@@ -85,11 +89,19 @@ export function runBackfillTick(): void {
     console.log(
       `[scheduler] rate backfill already running (job ${active.jobId}, ${active.processed}/${active.total}) — skipping tick`
     );
+    await waitForBackfillJob(active.jobId);
     return;
   }
   const job = startBackfillBestRates({ mode: 'preexpiry_refresh' });
   console.log(
     `[scheduler] rate backfill kicked off (job ${job.jobId}) — stale, missing, or near-expiry rate tuples will be refreshed`
+  );
+  // Per user override unlock shipped data on 2026-07-14: pg-boss is the
+  // canonical worker owner. Hold its rate-backfill lane until the underlying
+  // service settles instead of leaving detached work to starve sync/status IO.
+  await waitForBackfillJob(job.jobId);
+  console.log(
+    `[scheduler] rate backfill finished (job ${job.jobId}, ${job.processed}/${job.total})`
   );
 }
 
