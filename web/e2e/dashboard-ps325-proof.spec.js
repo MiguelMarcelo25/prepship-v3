@@ -19,7 +19,10 @@ import { test, expect } from 'playwright/test'
 //      would show today's date instead. Asserting the past date == honest
 //      provenance, exactly what PS-325 requires.
 //   4. The Top-SKU panel renders (per-SKU units from slice 3b + the heatmap from
-//      slice 3) and the Shipping Margin section renders (PS-296).
+//      slice 3) and the Shipping Margin section renders (PS-296). The SKU
+//      Performance Summary table renders BODY ROWS from the /dashboard/top-skus
+//      payload mapped through reporting-dto.ts — the mock carries the full
+//      backend wire shape, so DTO drift errors the panel and fails the spec.
 //   5. Network allow-list: the FE contacts NO real postage/marketplace host.
 //
 // Determinism / safety: no live calls. EVERY network response is mocked via
@@ -134,15 +137,60 @@ function makeBackend() {
     }
 
     // /dashboard/top-skus (slice 4 provenance) — the SKU performance table.
+    // Rows mirror the REAL wire shape emitted by getSkuBreakdownFromOrderItems
+    // (src/routes/analysis.ts): the snake_case SQL fields, the camelCase
+    // projectAnalysisSkuFinancials fields, and the padded daily_qty array —
+    // plus the totals object from projectAnalysisSkuTotals. The FE mappers
+    // (reportingSkuDtoFromBackend / reportingTotalsFromBackend in
+    // web/src/lib/reporting-dto.ts) THROW on any missing required field, so an
+    // incomplete mock here errors the whole top-skus query and the table panel
+    // renders its error state instead of rows (assertion 4b guards this).
     if (url.pathname === '/dashboard/top-skus') {
       return json({
         data: [
-          { sku: 'SKU-ALPHA', name: 'Alpha Widget', clientId: 1, clientName: 'KF Goods', qty: 200, orders: 40, totalRevenue: 80000, totalShipping: 350, avgSellingPrice: 400, dailyQty: [10, 20, 170] },
-          { sku: 'SKU-BETA', name: 'Beta Gadget', clientId: 1, clientName: 'KF Goods', qty: 80, orders: 20, totalRevenue: 40000, totalShipping: 200, avgSellingPrice: 500, dailyQty: [4, 8, 68] },
+          {
+            sku: 'SKU-ALPHA', name: 'Alpha Widget', image_url: null, inv_sku_id: 11,
+            client_id: 1, client_name: 'KF Goods',
+            orders: 40, pending: 2, ext_shipped: 3,
+            std_orders: 30, std_ship_count: 30, std_total: '250.00', std_qty_total: 150,
+            exp_orders: 5, exp_ship_count: 5, exp_total: '100.00', exp_qty_total: 50,
+            ship_count_with_cost: 35, total_qty: 200,
+            total_shipping: '350.00', total_revenue: '80000.00', total_selling_fee: '0.00',
+            selling_fee_complete: false,
+            financialsState: 'incomplete',
+            standardAvgShipping: 1.67, expeditedAvgShipping: 2, blendedAvgShipping: 10,
+            totalShipping: 350, totalRevenue: 80000, avgSellingPrice: 400,
+            totalSellingFee: null, profit: null,
+            daily_qty: [10, 20, 170],
+          },
+          {
+            sku: 'SKU-BETA', name: 'Beta Gadget', image_url: null, inv_sku_id: 12,
+            client_id: 1, client_name: 'KF Goods',
+            orders: 20, pending: 1, ext_shipped: 1,
+            std_orders: 15, std_ship_count: 15, std_total: '140.00', std_qty_total: 60,
+            exp_orders: 3, exp_ship_count: 3, exp_total: '60.00', exp_qty_total: 20,
+            ship_count_with_cost: 18, total_qty: 80,
+            total_shipping: '200.00', total_revenue: '40000.00', total_selling_fee: '0.00',
+            selling_fee_complete: false,
+            financialsState: 'incomplete',
+            standardAvgShipping: 2.33, expeditedAvgShipping: 3, blendedAvgShipping: 11.11,
+            totalShipping: 200, totalRevenue: 40000, avgSellingPrice: 500,
+            totalSellingFee: null, profit: null,
+            daily_qty: [4, 8, 68],
+          },
         ],
         dateBuckets: ['2026-06-18', '2026-06-19', '2026-06-20'],
         totalSkus: 2,
         totalOrders: 60,
+        totals: {
+          skuCount: 2, totalOrders: 60, totalPending: 3, totalExternal: 4, totalQty: 280,
+          totalStdCount: 45, totalExpCount: 8, totalStdQty: 210, totalExpQty: 70,
+          totalStdShipping: 390, totalExpShipping: 160,
+          standardAvgShipping: 1.86, expeditedAvgShipping: 2.29,
+          totalShipping: 550, totalRevenue: 120000, avgSellingPrice: 428.57,
+          totalSellingFee: null, totalProfit: null, financialsState: 'incomplete',
+        },
+        window: { dateFrom: '2026-05-21T00:00:00.000Z', dateToInclusive: '2026-06-20T23:59:59.999Z' },
         meta: META,
       })
     }
@@ -245,6 +293,21 @@ test.describe('PS-325 Dashboard read-model proof', () => {
     // 4. The Top-SKU panel (slice 3b units + slice 3 heatmap) + Shipping Margin (PS-296).
     await expect(page.getByText('Alpha Widget').first()).toBeVisible()
     await expect(page.getByText('Shipping Margin').first()).toBeVisible()
+
+    // 4b. The SKU Performance Summary table renders BODY ROWS mapped through the
+    //     top-skus DTO (reportingSkuDtoFromBackend + reportingTotalsFromBackend in
+    //     web/src/lib/reporting-dto.ts). Those mappers THROW on any missing required
+    //     field (pending/ext_shipped/std_*/exp_*/ship_count_with_cost + the totals
+    //     object) — a drifted mock or mapper turns the whole panel into its error
+    //     state, so a real row here pins the FE↔backend top-skus contract.
+    //     'Alpha Widget' alone can't prove this (the heatmap renders it from
+    //     sku-trends); the Store cell 'KF Goods' can ONLY come from the top-skus
+    //     row's client_name — neither sku-trends nor inventory-risk carries it.
+    //     (DashboardView renders exactly one <table>: the SKU Performance Summary.)
+    const alphaRow = page.locator('table tbody tr').filter({ hasText: 'SKU-ALPHA' }).first()
+    await expect(alphaRow).toBeVisible()
+    await expect(alphaRow).toContainText('KF Goods')
+    await expect(page.getByText('Failed to load SKU performance summary')).toHaveCount(0)
   })
 
   test('the Dashboard contacts no real postage/marketplace host', async ({ page }) => {
