@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './web/e2e',
+  globalSetup: './web/e2e/global-setup.js',
   // PS-317 (Hermes review-readiness): the dev server compiles the app on-demand on the FIRST
   // navigation, so the first test of a freshly-started (cold) server can exceed a tight timeout and
   // flake — which is exactly what a clean review worktree hits. Give the cold first-compile headroom.
