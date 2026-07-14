@@ -2,9 +2,9 @@
 
 Date: 2026-05-27
 
-Closeout updated: 2026-06-02
+Closeout updated: 2026-07-14
 
-Status: Closeout boundary inventory for PS-032. The provider API call inventory now reflects the connector-first implementation: direct provider calls are allowed only in connector-owned implementations, approved low-level provider wrappers, or the two documented operational backfill exceptions below. The PS-032 guard reports zero unclassified transitional debt and verifies those exceptions keep dry-run/read-only safety markers.
+Status: Closeout boundary inventory for PS-032. The provider API call inventory now reflects the connector-first implementation: direct provider calls are allowed only in connector-owned implementations, approved low-level provider wrappers, or the three documented operational exceptions below. The PS-032 guard reports zero unclassified transitional debt and verifies those exceptions keep dry-run/read-only safety markers.
 
 Safety note: this audit is documentation and static guard coverage only. No real labels, postage, provider mutations, marketplace notifications, shipped/cancelled order edits, or production data updates were performed.
 
@@ -54,11 +54,12 @@ These files currently contain direct provider call markers and are allowed as co
 
 No unclassified transitional direct-provider debt remains at closeout. Compatibility API routes and services may still exist, but they must be thin auth/account/order-context wrappers over StoreConnector or CarrierConnector orchestration.
 
-Two operational scripts are intentionally classified here as temporary backfill/reconciliation exceptions because they repair historical ShipStation sync gaps from read-only provider lookups and are not normal UI/API shipping paths. The guard requires their safety comments to remain in place.
+Three operational scripts are intentionally classified here as temporary exceptions because they either repair historical ShipStation sync gaps from read-only provider lookups or compare raw single-carrier and batched rate-estimate semantics before rollout. They are not normal UI/API shipping paths. The guard requires their safety comments and explicit execution gates to remain in place.
 
 | File | Provider Area | Target Owner | Migration Phase |
 | --- | --- | --- | --- |
 | `scripts/backfill-shipstation-fulfillments.ts` | ShipStation v1 fulfillments lookup | ShipStation StoreConnector fulfillment backfill helper | Dry-run by default; `--apply` is insert-only after operator review; never creates labels/postage, never voids, never notifies marketplaces. Remove when fulfillment backfill is connector-owned end to end. |
+| `scripts/probe-batched-rate-estimate.ts` | ShipStation carriers + rate estimates | ShipStation CarrierConnector after the batching contract is certified | Temporary rollout probe that must compare raw one-ID and batched provider responses. Requires explicit `--live` plus a credential source; performs rate-estimate reads only and never creates labels, postage, order/shipment writes, or marketplace notifications. |
 | `scripts/reconcile-external-shipped-orders.ts` | ShipStation v1 shipments/fulfillments lookup | ShipStation StoreConnector shipped/external reconciliation helper | Dry-run by default; `--apply` only flags externally shipped after operator review; never creates/voids labels, never buys postage, never notifies marketplaces. Remove when shipped/external reconciliation is connector-owned end to end. |
 
 ## Migration Map

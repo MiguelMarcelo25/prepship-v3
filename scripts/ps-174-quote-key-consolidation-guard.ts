@@ -52,8 +52,15 @@ const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 // PS-203 (stage 4): the backfill now persists the COMBINED winner — the
 // fingerprint is the combined request key (SS + direct), not the SS-only one.
 check('rates-backfill persists THROUGH the finalizer (PS-244 single owner; destructured bestRate)',
-  /const \{ bestRate: finalizedBest \} = await finalizeBestRateWithQuote\(\{/.test(backfill) &&
-  /\.\.\.finalizedBest,[\s\S]{0,160}requestFingerprint: combined\.combinedRequestKey/.test(backfill));
+  (() => {
+    const finalizerStart = backfill.indexOf('const { bestRate: finalizedBest } = await finalizeBestRateWithQuote({');
+    const metadataEnd = backfill.indexOf('const stampedBest = await stampHouseTuple', finalizerStart);
+    const block = finalizerStart >= 0 && metadataEnd > finalizerStart
+      ? backfill.slice(finalizerStart, metadataEnd)
+      : '';
+    return /const persistedFinalizedBest[^=]*= \{[\s\S]*?\.\.\.finalizedBest,/.test(block) &&
+      /const bestWithMetadata = \{[\s\S]*?\.\.\.persistedFinalizedBest,[\s\S]*?requestFingerprint: combined\.combinedRequestKey/.test(block);
+  })());
 check('backfill keeps its existing metadata stamps (expiry/eligibility/completeness)',
   /cacheExpiresAt: new Date\(new Date\(result\.fetchedAt\)\.getTime\(\) \+ CACHE_TTL_MS\)/.test(backfill) &&
   /eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION/.test(backfill));

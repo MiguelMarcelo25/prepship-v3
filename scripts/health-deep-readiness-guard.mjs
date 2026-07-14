@@ -29,15 +29,18 @@ assert(
   '/health remains lightweight and does not perform DB/deep dependency checks'
 );
 
-for (const body of [readyHealth, deepHealth]) {
-  assert(
-    body.includes('checkDeepReadiness'),
-    'readiness endpoints use the shared deep readiness checker'
-  );
-}
+assert(
+  readyHealth.includes('checkReadyReadiness') && !readyHealth.includes('checkDeepReadiness'),
+  '/ready uses the lightweight rotation-signal checker'
+);
+assert(
+  deepHealth.includes('checkDeepReadiness'),
+  '/deep uses the full dependency checker'
+);
 
 for (const expected of [
   "checkComponent('db'",
+  "checkComponent('dbWrite'",
   "checkComponent('orders'",
   "checkComponent('printQueue'",
   "checkComponent('eventLoop'",

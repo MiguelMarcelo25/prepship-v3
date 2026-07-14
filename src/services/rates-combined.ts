@@ -238,10 +238,10 @@ export const DIRECT_CARRIER_QUOTE_TIMEOUT_MS = Math.max(
 
 // Audit R-4 (2026-07-13): abort-capable variant. withCarrierQuoteTimeout races
 // and ABANDONS the work — the losing provider call kept running (and, for
-// ShipStation, retrying inside ssRequest) as a budget-burning zombie for up to
+// ShipStation, retrying inside its low-level request helper) as a budget-burning zombie for up to
 // ~7.5 min. This variant hands the caller an AbortSignal and aborts it when the
 // deadline fires, so timeout means STOP THE WORK, not just stop waiting.
-// Note: ssRequest's in-flight dedupe shares one HTTP promise across same-key
+// Note: the low-level request helper's in-flight dedupe shares one HTTP promise across same-key
 // callers, so an abort can cancel a shared request — the survivor's transient
 // retry re-issues it; rare and preferable to zombie retries.
 export function withAbortableCarrierQuoteTimeout<T>(

@@ -1339,7 +1339,7 @@ async function fetchEstimateForCarriers(
 }
 
 // RC1: retry a TRANSIENT per-carrier estimate failure (timeout / 429 / 5xx / network) a bounded number
-// of times, re-acquiring the global concurrency slot each attempt. ssRequest independently admits
+// of times, re-acquiring the global concurrency slot each attempt. The low-level request helper admits
 // every HTTP attempt at the single ShipStation budget gate, and backoff holds no concurrency slot.
 // A TERMINAL failure (4xx / no-service) returns on
 // the first attempt — never retried. By the retry the initial concurrency burst has usually drained, so

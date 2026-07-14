@@ -47,6 +47,7 @@ const approvedConnectorOwned = new Set([
 
 const transitionalDebt = new Set([
   'scripts/backfill-shipstation-fulfillments.ts',
+  'scripts/probe-batched-rate-estimate.ts',
   'scripts/reconcile-external-shipped-orders.ts',
 ]);
 
@@ -57,6 +58,13 @@ const transitionalSafetyRequirements = {
     /never creates labels\/postage/,
     /never\s+notifies marketplaces/,
     /only runs when invoked directly/,
+  ],
+  'scripts/probe-batched-rate-estimate.ts': [
+    /Live, non-purchase go\/no-go probe/,
+    /Calls only GET \/v2\/carriers and POST \/v2\/rates\/estimate/,
+    /Never creates labels, updates orders, writes shipments, or notifies marketplaces/,
+    /Requires both `--live` and an explicit credential source selection/,
+    /refusing provider calls without --live/,
   ],
   'scripts/reconcile-external-shipped-orders.ts': [
     /dry-run by default/,
