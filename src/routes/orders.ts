@@ -39,9 +39,14 @@ import { loadClientIsTest } from '../services/fulfillment/test-label-policy';
 import {
   applyBestRateForOrder,
   applyBoxDimsCoherence,
+  applyEditableOrderPatch,
   applyOrderOverridesPatch,
   saveBestRateForOrder,
 } from '../services/orders-overrides-command';
+import type {
+  OrderEditWriteAuthorization,
+  OrderEditWriteFailure,
+} from '../services/order-editable-write';
 // PS-219 (per user override unlock shipped data on 2026-06-13): read-only,
 // backend-owned label voidability for the operator Void Label UI.
 import { resolveOrderLabelVoidability } from '../services/label-voidability';
@@ -301,7 +306,10 @@ const LOCKED_STATUSES = new Set(['shipped', 'cancelled']);
 async function assertOrderEditable(
   c: Context<any, any, any>,
   orderId: number,
-): Promise<{ ok: true } | { ok: false; response: Response }> {
+): Promise<
+  | { ok: true; writeAuthorization: OrderEditWriteAuthorization }
+  | { ok: false; response: Response }
+> {
   const [row] = await db
     .select({
       id: orders.id,
@@ -340,7 +348,9 @@ async function assertOrderEditable(
   const status = lifecycle.orderLifecycleStatus;
   const rawStatusLocked = LOCKED_STATUSES.has(rawStatus);
   if (!lifecycle.isTerminal) {
-    return { ok: true };
+    // Per user override unlock shipped data on 2026-07-14: carry a fail-closed
+    // authorization into the transaction-time lifecycle guard; this is not a bypass.
+    return { ok: true, writeAuthorization: { allowTerminal: false } };
   }
   // Optional admin override: ?force=1 + admin email lets the operation
   // through with a warning logged. Use sparingly; the standard answer
@@ -412,7 +422,9 @@ async function assertOrderEditable(
         remaining: rl.remaining,
       },
     });
-    return { ok: true };
+    // Per user override unlock shipped data on 2026-07-14: only this audited
+    // admin ?force=1 branch can authorize a terminal-row write at the final boundary.
+    return { ok: true, writeAuthorization: { allowTerminal: true } };
   }
   return {
     ok: false,
@@ -430,6 +442,28 @@ async function assertOrderEditable(
       403,
     ),
   };
+}
+
+function orderEditWriteFailureResponse(
+  c: Context<any, any, any>,
+  failure: OrderEditWriteFailure,
+): Response {
+  if (failure.reason === 'not_found') {
+    return c.json({ error: 'Order not found' }, 404);
+  }
+  const lifecycle = failure.lifecycle;
+  return c.json(
+    {
+      error: `Cannot modify a ${lifecycle.orderLifecycleStatus} order — it became locked before the write.`,
+      code: 'ORDER_LOCKED',
+      status: lifecycle.orderLifecycleStatus,
+      effectiveOrderStatus: lifecycle.effectiveOrderStatus,
+      lifecycleStatus: lifecycle.orderLifecycleStatus,
+      lifecycleReason: lifecycle.orderLifecycleReason,
+      locked: true,
+    },
+    403,
+  );
 }
 
 // Active-client filter (added 2026-05-07): orders belonging to clients
@@ -3501,13 +3535,6 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     }
   }
 
-  if (externallyShipped !== undefined) {
-    await db
-      .update(orders)
-      .set({ externallyShipped, updatedAt: new Date() })
-      .where(eq(orders.id, id));
-  }
-
   // PS-207 (B): keep an explicitly-submitted package and dims coherent
   // (the PATCH body carries selectedPackageId; rateDims* never ride this
   // route today, but the chokepoint covers any future caller).
@@ -3518,22 +3545,14 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     return c.json({ error: coherentBody.error, code: 'BOX_DIMS_MISMATCH' }, 400);
   }
 
-  const bestRateAt = overridesBody.bestRateJson === undefined
-    ? undefined
-    : overridesBody.bestRateJson === null
-      ? null
-      : new Date();
-  await ensureOrderRecipientOverrideSchema();
-  const [row] = await db
-    .insert(orderOverrides)
-    .values({ orderId: id, ...coherentBody.patch, bestRateAt, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: orderOverrides.orderId,
-      set: { ...coherentBody.patch, bestRateAt, updatedAt: new Date() },
-    })
-    .returning();
-
-  return c.json(row);
+  // Per user override unlock shipped data on 2026-07-14: the final lifecycle
+  // check, orders flag update, and override upsert share one row-locked transaction.
+  const result = await applyEditableOrderPatch(id, {
+    externallyShipped,
+    overridesPatch: coherentBody.patch,
+  }, guard.writeAuthorization);
+  if (!result.ok) return orderEditWriteFailureResponse(c, result);
+  return c.json(result.value);
 });
 
 // v2-parity POST aliases. v2's apiClient hits dedicated action endpoints per
@@ -3559,9 +3578,13 @@ app.post(
     const id = Number(c.req.param('id'));
     const guard = await assertOrderEditable(c, id);
     if (!guard.ok) return guard.response;
-    const row = await applyOrderOverridesPatch(id, { residential: c.req.valid('json').residential });
-    if (!row) return c.json({ error: 'Order not found' }, 404);
-    return c.json({ data: row });
+    const result = await applyOrderOverridesPatch(
+      id,
+      { residential: c.req.valid('json').residential },
+      guard.writeAuthorization,
+    );
+    if (!result.ok) return orderEditWriteFailureResponse(c, result);
+    return c.json({ data: result.value });
   }
 );
 
@@ -3572,9 +3595,13 @@ app.post(
     const id = Number(c.req.param('id'));
     const guard = await assertOrderEditable(c, id);
     if (!guard.ok) return guard.response;
-    const row = await applyOrderOverridesPatch(id, { selectedPid: c.req.valid('json').selectedPid });
-    if (!row) return c.json({ error: 'Order not found' }, 404);
-    return c.json({ data: row });
+    const result = await applyOrderOverridesPatch(
+      id,
+      { selectedPid: c.req.valid('json').selectedPid },
+      guard.writeAuthorization,
+    );
+    if (!result.ok) return orderEditWriteFailureResponse(c, result);
+    return c.json({ data: result.value });
   }
 );
 
@@ -3603,12 +3630,16 @@ app.post(
       selectedPid: body.selectedPid,
       weightOz: body.weightOz,
       currentRequestFingerprint: body.currentRequestFingerprint,
-    });
+    }, guard.writeAuthorization);
     if (!result.ok) {
       const payload = result.code
         ? { error: result.error, code: result.code }
         : { error: result.error };
-      return result.status === 404 ? c.json(payload, 404) : c.json(payload, 400);
+      return result.status === 404
+        ? c.json(payload, 404)
+        : result.status === 403
+          ? c.json(payload, 403)
+          : c.json(payload, 400);
     }
     return c.json({ data: result.row });
   }
@@ -3634,9 +3665,9 @@ app.post(
     // PS-207 (B): selecting a known package also persists its dims (lockstep).
     const coherent = await applyBoxDimsCoherence({ selectedPackageId });
     if (!coherent.ok) return c.json({ error: coherent.error, code: 'BOX_DIMS_MISMATCH' }, 400);
-    const row = await applyOrderOverridesPatch(id, coherent.patch);
-    if (!row) return c.json({ error: 'Order not found' }, 404);
-    return c.json({ data: row });
+    const result = await applyOrderOverridesPatch(id, coherent.patch, guard.writeAuthorization);
+    if (!result.ok) return orderEditWriteFailureResponse(c, result);
+    return c.json({ data: result.value });
   }
 );
 
@@ -3683,7 +3714,10 @@ app.post(
         height: body.height ?? null,
         weightOz: body.weightOz ?? null,
       },
-      { recalcGroup: body.recalcGroup === true },
+      {
+        recalcGroup: body.recalcGroup === true,
+        writeAuthorization: guard.writeAuthorization,
+      },
     );
     // PS-121: kick a bounded targeted recalc for the invalidated ids (awaiting only — the primitive
     // keeps the awaiting_shipment lockdown filter). Fire-and-forget; the order already shows
@@ -3715,12 +3749,16 @@ app.post(
     const result = await saveBestRateForOrder(id, {
       bestRateJson: body.bestRateJson,
       bestRateDims: body.bestRateDims,
-    });
+    }, guard.writeAuthorization);
     if (!result.ok) {
       const payload = result.code
         ? { error: result.error, code: result.code }
         : { error: result.error };
-      return result.status === 404 ? c.json(payload, 404) : c.json(payload, 400);
+      return result.status === 404
+        ? c.json(payload, 404)
+        : result.status === 403
+          ? c.json(payload, 403)
+          : c.json(payload, 400);
     }
     return c.json({ data: result.row });
   }
@@ -3764,11 +3802,15 @@ app.post(
     // deduction + optional ShipStation markasshipped notify) is now owned by the canonical
     // service markOrderShippedExternally(). assertOrderEditable (above) STAYS in this route as the
     // shipped/cancelled lockdown guard; the service adds a defense-in-depth forward-only
-    // `WHERE order_status='awaiting_shipment'` guard so the transition can never re-flip a
-    // shipped/cancelled order. The externally_shipped_source override write stays here (it is a
-    // generic order_overrides concern and also assembles the response row). Behavior is preserved
-    // for this route; the only ordering change (source-override write now after deduct/notify) is
-    // immaterial — neither deduction nor the notify reads externally_shipped_source.
+    // final lifecycle predicate so the transition cannot re-flip a shipped/cancelled order.
+    // Per user override unlock shipped data on 2026-07-14: persist the generic source override
+    // through the row-locked command BEFORE the service performs its atomic status transition.
+    // If a concurrent lifecycle transition wins first, no override or status write is applied.
+    const sourceWrite = await applyOrderOverridesPatch(id, {
+      externallyShippedSource: body.source ?? null,
+    }, guard.writeAuthorization);
+    if (!sourceWrite.ok) return orderEditWriteFailureResponse(c, sourceWrite);
+
     const { notify: notifyResult } = await markOrderShippedExternally({
       order: existing,
       flag,
@@ -3777,13 +3819,9 @@ app.post(
       carrierCode: body.carrierCode ?? null,
       notifyCustomer: body.notifyCustomer,
       notifyMarketplace: body.notifyMarketplace,
+      writeAuthorization: guard.writeAuthorization,
     });
-
-    const row = await applyOrderOverridesPatch(id, {
-      externallyShippedSource: body.source ?? null,
-    });
-
-    return c.json({ data: row, notify: notifyResult });
+    return c.json({ data: sourceWrite.value, notify: notifyResult });
   }
 );
 
@@ -3830,15 +3868,10 @@ app.post(
     );
     if (!coherent.ok) return c.json({ error: coherent.error, code: 'BOX_DIMS_MISMATCH' }, 400);
 
-    await ensureOrderRecipientOverrideSchema();
-    const [row] = await db
-      .insert(orderOverrides)
-      .values({ orderId: id, ...coherent.patch, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: orderOverrides.orderId,
-        set: { ...coherent.patch, updatedAt: new Date() },
-      })
-      .returning();
+    // Per user override unlock shipped data on 2026-07-14: save dimensions only
+    // after the transaction-time lifecycle owner re-checks the locked order row.
+    const result = await applyOrderOverridesPatch(id, coherent.patch, guard.writeAuthorization);
+    if (!result.ok) return orderEditWriteFailureResponse(c, result);
 
     // Per user override unlock shipped data on 2026-06-24: a dims/package change invalidates the saved
     // rate (the FE otherwise sits on a perpetual "package changed" / mismatched_request spinner with no
@@ -3849,7 +3882,7 @@ app.post(
     // mutation, no labels/postage.
     startBackfillBestRatesForOrderIds([id]);
 
-    return c.json({ data: row });
+    return c.json({ data: result.value });
   }
 );
 

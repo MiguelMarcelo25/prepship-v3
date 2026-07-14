@@ -20,6 +20,10 @@ import {
 } from './package-facts-policy';
 import { getOrderDimsDefaultsForOrder } from './order-dims-defaults';
 import { orderLifecycleEffectiveStatusSql } from './order-lifecycle-status';
+import {
+  withOrderEditableWrite,
+  type OrderEditWriteAuthorization,
+} from './order-editable-write';
 
 // PS-037 — Service for per-client SKU+qty-combination package defaults.
 //
@@ -180,10 +184,20 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
       ...(invalidate ? { bestRateJson: null, bestRateAt: null, bestRateDims: null } : {}),
     };
 
-    await db
-      .insert(orderOverrides)
-      .values({ orderId: candidate.id, ...set })
-      .onConflictDoUpdate({ target: orderOverrides.orderId, set });
+    // Per user override unlock shipped data on 2026-07-14: the candidate query
+    // is only a prefilter; re-lock and re-check lifecycle in the write transaction.
+    const write = await withOrderEditableWrite(
+      candidate.id,
+      { allowTerminal: false },
+      async (tx) => {
+        await tx
+          .insert(orderOverrides)
+          .values({ orderId: candidate.id, ...set })
+          .onConflictDoUpdate({ target: orderOverrides.orderId, set });
+        return true;
+      },
+    );
+    if (!write.ok) continue;
     appliedMutableOrderCount += 1;
 
     if (invalidate) {
@@ -225,7 +239,10 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
 export async function saveComboPackageDefault(
   orderId: number,
   input: SaveComboDefaultInput,
-  opts?: { recalcGroup?: boolean },
+  opts?: {
+    recalcGroup?: boolean;
+    writeAuthorization?: OrderEditWriteAuthorization;
+  },
 ): Promise<SaveComboDefaultResult> {
   const { clientId, comboKey } = await deriveOrderComboContext(orderId);
   if (clientId == null) return { saved: false, reason: 'order has no client scope' };
@@ -237,31 +254,48 @@ export async function saveComboPackageDefault(
   // transaction advisory lock makes the upsert + apply one serialized unit.
   return withAdvisoryTransactionLock(`combo_default:${clientId}:${comboKey}`, async () => {
     const now = new Date();
-    await db
-      .insert(clientComboPackageDefaults)
-      .values({
-        clientId,
-        comboKey,
-        packageId: input.packageId ?? null,
-        packageCode: input.packageCode ?? null,
-        length: input.length ?? null,
-        width: input.width ?? null,
-        height: input.height ?? null,
-        weightOz: input.weightOz ?? null,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [clientComboPackageDefaults.clientId, clientComboPackageDefaults.comboKey],
-        set: {
-          packageId: input.packageId ?? null,
-          packageCode: input.packageCode ?? null,
-          length: input.length ?? null,
-          width: input.width ?? null,
-          height: input.height ?? null,
-          weightOz: input.weightOz ?? null,
-          updatedAt: now,
-        },
-      });
+    // Per user override unlock shipped data on 2026-07-14: save the source
+    // order's reusable default only while its final lifecycle row lock is held.
+    const defaultWrite = await withOrderEditableWrite(
+      orderId,
+      opts?.writeAuthorization ?? { allowTerminal: false },
+      async (tx) => {
+        await tx
+          .insert(clientComboPackageDefaults)
+          .values({
+            clientId,
+            comboKey,
+            packageId: input.packageId ?? null,
+            packageCode: input.packageCode ?? null,
+            length: input.length ?? null,
+            width: input.width ?? null,
+            height: input.height ?? null,
+            weightOz: input.weightOz ?? null,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [clientComboPackageDefaults.clientId, clientComboPackageDefaults.comboKey],
+            set: {
+              packageId: input.packageId ?? null,
+              packageCode: input.packageCode ?? null,
+              length: input.length ?? null,
+              width: input.width ?? null,
+              height: input.height ?? null,
+              weightOz: input.weightOz ?? null,
+              updatedAt: now,
+            },
+          });
+        return true;
+      },
+    );
+    if (!defaultWrite.ok) {
+      return {
+        saved: false,
+        reason: defaultWrite.reason === 'not_found'
+          ? 'order not found'
+          : 'order became locked before the default write',
+      };
+    }
 
     const { appliedMutableOrderCount, affectedOrderIds } =
       await applyComboPackageDefaultToMatchingMutableOrders(clientId, comboKey, input, {
@@ -466,10 +500,20 @@ async function materializePackageFactsForImportedOrdersWhere(
       // save-defaults flow performs.
       ...(candidate.curBestRateAt != null ? { bestRateJson: null, bestRateAt: null, bestRateDims: null } : {}),
     };
-    await db
-      .insert(orderOverrides)
-      .values({ orderId: candidate.id, ...set })
-      .onConflictDoUpdate({ target: orderOverrides.orderId, set });
+    // Per user override unlock shipped data on 2026-07-14: materialization may
+    // race shipment sync, so the effective lifecycle is re-checked under row lock.
+    const write = await withOrderEditableWrite(
+      candidate.id,
+      { allowTerminal: false },
+      async (tx) => {
+        await tx
+          .insert(orderOverrides)
+          .values({ orderId: candidate.id, ...set })
+          .onConflictDoUpdate({ target: orderOverrides.orderId, set });
+        return true;
+      },
+    );
+    if (!write.ok) continue;
     materialized += 1;
 
     if (candidate.curBestRateAt != null) {

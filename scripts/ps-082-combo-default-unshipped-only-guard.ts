@@ -18,8 +18,13 @@ assert.match(
 );
 assert.match(
   service,
-  /eq\(orders\.orderStatus,\s*'awaiting_shipment'\)/,
-  'matching-order fanout must be restricted to awaiting_shipment orders',
+  /mutableAwaitingOrderLifecyclePredicate\(\)/,
+  'matching-order fanout must prefilter by canonical effective awaiting lifecycle',
+);
+assert.match(
+  service,
+  /withOrderEditableWrite\(\s*candidate\.id,\s*\{ allowTerminal: false \}/,
+  'matching-order fanout must re-check lifecycle under row lock at the write boundary',
 );
 assert.doesNotMatch(
   service,

@@ -28,10 +28,17 @@ import {
 } from './shipping-workflow/house-tuple-save-policy';
 import { stampHouseTuple } from './shipping-workflow/house-tuple-stamp';
 import { loadRateQuoteSnapshot } from './shipping-workflow/rate-quote-snapshot-store';
+import {
+  withOrderEditableWrite,
+  type OrderEditWriteAuthorization,
+  type OrderEditWriteFailure,
+  type OrderEditWriteResult,
+  type OrderEditWriteTransaction,
+} from './order-editable-write';
 
 type OrderCommandFailure = {
   ok: false;
-  status: 400 | 404;
+  status: 400 | 403 | 404;
   error: string;
   code?: string;
 };
@@ -55,6 +62,43 @@ export type SaveBestRateCommandInput = {
   bestRateJson: unknown | null;
   bestRateDims?: string | null;
 };
+
+type OrderOverridesPatch = Partial<typeof orderOverrides.$inferInsert>;
+type OrderOverridesWriteResult = OrderEditWriteResult<typeof orderOverrides.$inferSelect>;
+
+function commandFailureFromWrite(failure: OrderEditWriteFailure): OrderCommandFailure {
+  if (failure.reason === 'not_found') {
+    return { ok: false, status: 404, error: 'Order not found' };
+  }
+  return {
+    ok: false,
+    status: 403,
+    error: `Cannot modify a ${failure.lifecycle.orderLifecycleStatus} order — historical records are locked.`,
+    code: 'ORDER_LOCKED',
+  };
+}
+
+async function persistOrderOverridesPatch(
+  tx: OrderEditWriteTransaction,
+  id: number,
+  patch: OrderOverridesPatch,
+): Promise<typeof orderOverrides.$inferSelect> {
+  const bestRateAt = patch.bestRateJson === undefined
+    ? undefined
+    : patch.bestRateJson === null
+      ? null
+      : new Date();
+  const [row] = await tx
+    .insert(orderOverrides)
+    .values({ orderId: id, ...patch, bestRateAt, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: orderOverrides.orderId,
+      set: { ...patch, bestRateAt, updatedAt: new Date() },
+    })
+    .returning();
+  if (!row) throw new Error(`Order override write returned no row for order ${id}`);
+  return row;
+}
 
 // PS-207 (B): package selection and dimensions are one override command concern.
 export async function applyBoxDimsCoherence(
@@ -141,34 +185,38 @@ export async function applyBoxDimsCoherence(
 
 export async function applyOrderOverridesPatch(
   id: number,
-  patch: Partial<typeof orderOverrides.$inferInsert>,
-): Promise<typeof orderOverrides.$inferSelect | null> {
-  const [existing] = await db
-    .select({ id: orders.id })
-    .from(orders)
-    .where(eq(orders.id, id))
-    .limit(1);
-  if (!existing) return null;
-  const bestRateAt = patch.bestRateJson === undefined
-    ? undefined
-    : patch.bestRateJson === null
-      ? null
-      : new Date();
+  patch: OrderOverridesPatch,
+  authorization: OrderEditWriteAuthorization,
+): Promise<OrderOverridesWriteResult> {
   await ensureOrderRecipientOverrideSchema();
-  const [row] = await db
-    .insert(orderOverrides)
-    .values({ orderId: id, ...patch, bestRateAt, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: orderOverrides.orderId,
-      set: { ...patch, bestRateAt, updatedAt: new Date() },
-    })
-    .returning();
-  return row ?? null;
+  return withOrderEditableWrite(id, authorization, (tx) =>
+    persistOrderOverridesPatch(tx, id, patch));
+}
+
+export async function applyEditableOrderPatch(
+  id: number,
+  input: {
+    externallyShipped?: boolean;
+    overridesPatch: OrderOverridesPatch;
+  },
+  authorization: OrderEditWriteAuthorization,
+): Promise<OrderOverridesWriteResult> {
+  await ensureOrderRecipientOverrideSchema();
+  return withOrderEditableWrite(id, authorization, async (tx) => {
+    if (input.externallyShipped !== undefined) {
+      await tx
+        .update(orders)
+        .set({ externallyShipped: input.externallyShipped, updatedAt: new Date() })
+        .where(eq(orders.id, id));
+    }
+    return persistOrderOverridesPatch(tx, id, input.overridesPatch);
+  });
 }
 
 export async function applyBestRateForOrder(
   id: number,
   body: ApplyBestRateCommandInput,
+  authorization: OrderEditWriteAuthorization,
 ): Promise<OrderCommandResult> {
   const [existing] = await db
     .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
@@ -257,24 +305,21 @@ export async function applyBestRateForOrder(
   const row = await applyOrderOverridesPatch(id, {
     ...built.patch,
     bestRateJson: canonicalBestRate,
-  });
-  return row
-    ? { ok: true, row }
-    : { ok: false, status: 404, error: 'Order not found' };
+  }, authorization);
+  return row.ok ? { ok: true, row: row.value } : commandFailureFromWrite(row);
 }
 
 export async function saveBestRateForOrder(
   id: number,
   body: SaveBestRateCommandInput,
+  authorization: OrderEditWriteAuthorization,
 ): Promise<OrderCommandResult> {
   if (body.bestRateJson === null) {
     const row = await applyOrderOverridesPatch(id, {
       bestRateJson: null,
       bestRateDims: null,
-    });
-    return row
-      ? { ok: true, row }
-      : { ok: false, status: 404, error: 'Order not found' };
+    }, authorization);
+    return row.ok ? { ok: true, row: row.value } : commandFailureFromWrite(row);
   }
 
   const validatedDims = validateBestRateDimsForPersistedRate(
@@ -338,8 +383,6 @@ export async function saveBestRateForOrder(
   const row = await applyOrderOverridesPatch(id, {
     bestRateJson: canonical,
     bestRateDims: validatedDims,
-  });
-  return row
-    ? { ok: true, row }
-    : { ok: false, status: 404, error: 'Order not found' };
+  }, authorization);
+  return row.ok ? { ok: true, row: row.value } : commandFailureFromWrite(row);
 }

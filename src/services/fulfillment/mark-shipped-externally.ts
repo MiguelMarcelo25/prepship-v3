@@ -11,13 +11,15 @@
 //     non-route caller; the route already guarantees awaiting via assertOrderEditable.
 //   - Inventory intent is durable in fulfillment_outbox; its processor calls
 //     deductInventoryForOrder unchanged, so INVENTORY_AUTO_DEDUCT still governs execution.
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { orders } from '../../db/schema/orders';
 import { enqueueInventoryDeduction } from './inventory-deduction-outbox';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../../lib/shipstation/labels';
 import { loadClientCredentials } from '../../lib/shipstation/credentials';
 import { confirmShipmentDirectNow, resolveShipmentConfirmationProvider } from './outbox';
+import { orderLifecycleEffectiveStatusSql } from '../order-lifecycle-status';
+import type { OrderEditWriteAuthorization } from '../order-editable-write';
 
 export type MarkShippedExternallyInput = {
   /** The already-fetched order row (the route SELECTs it after assertOrderEditable). */
@@ -29,6 +31,8 @@ export type MarkShippedExternallyInput = {
   carrierCode?: string | null;
   notifyCustomer?: boolean;
   notifyMarketplace?: boolean;
+  /** Authorization minted by the route's assertOrderEditable preflight. */
+  writeAuthorization: OrderEditWriteAuthorization;
 };
 
 export type MarkShippedExternallyResult = {
@@ -42,6 +46,7 @@ export async function markOrderShippedExternally(
 ): Promise<MarkShippedExternallyResult> {
   const { order, flag } = input;
   const id = order.id;
+  const mutableLifecycle = sql`${orderLifecycleEffectiveStatusSql()} = 'awaiting_shipment'`;
 
   let statusFlipped = false;
   if (flag) {
@@ -50,7 +55,13 @@ export async function markOrderShippedExternally(
     const updated = await db
       .update(orders)
       .set({ externallyShipped: true, orderStatus: 'shipped' as const, updatedAt: new Date() })
-      .where(and(eq(orders.id, id), eq(orders.orderStatus, 'awaiting_shipment')))
+      .where(and(
+        eq(orders.id, id),
+        eq(orders.orderStatus, 'awaiting_shipment'),
+        // Per user override unlock shipped data on 2026-07-14: re-check the
+        // canonical lifecycle in the UPDATE itself unless the audited force path authorized it.
+        input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
+      ))
       .returning({ id: orders.id });
     statusFlipped = updated.length > 0;
   } else {
@@ -58,10 +69,15 @@ export async function markOrderShippedExternally(
     await db
       .update(orders)
       .set({ externallyShipped: false, updatedAt: new Date() })
-      .where(eq(orders.id, id));
+      .where(and(
+        eq(orders.id, id),
+        // Per user override unlock shipped data on 2026-07-14: the early route
+        // guard is carried into the final UPDATE predicate, closing its race window.
+        input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
+      ));
   }
 
-  if (flag) {
+  if (flag && statusFlipped) {
     try {
       // Per user override unlock shipped data on 2026-07-14: enqueue only;
       // outbox retries delegate to the unchanged inventory deduction owner.
@@ -92,7 +108,10 @@ export async function markOrderShippedExternally(
   // The forward-only status flip, assertOrderEditable routing, and the
   // INVENTORY_AUTO_DEDUCT kill switch above are UNCHANGED — this override use
   // touches only the notify routing.
-  const shouldNotify = flag && (input.notifyCustomer === true || input.notifyMarketplace === true);
+  const shouldNotify =
+    flag &&
+    statusFlipped &&
+    (input.notifyCustomer === true || input.notifyMarketplace === true);
   let notify: { ok: boolean; reason?: string } = { ok: false, reason: 'not requested' };
   if (shouldNotify) {
     const provider = resolveShipmentConfirmationProvider({
