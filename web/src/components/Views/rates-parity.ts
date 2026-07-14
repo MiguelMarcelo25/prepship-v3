@@ -53,9 +53,6 @@ export interface RateSourceAccount {
   carrierCode?: string | null
 }
 
-type RateMarkup = { type?: string; value?: number }
-type RateMarkupsMap = Record<string, RateMarkup | undefined>
-
 export function parseRatesNumber(value: string): number {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : 0
@@ -345,56 +342,21 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function providerIdFromCarrierId(value: unknown): string | null {
-  const text = String(value ?? '').trim()
-  if (!text) return null
-  const match = text.match(/^se-(\d+)$/i)
-  return match?.[1] ?? (/^\d+$/.test(text) ? text : null)
-}
-
-function getRateBaseCost(rate: RateDto): number {
-  const raw = (rate as any)?.raw ?? {}
-  const originalShipping = finiteNumber(raw?.original_amount?.amount)
-  const shipmentCost = originalShipping ?? finiteNumber((rate as any)?.shipmentCost) ?? 0
-  return shipmentCost + (finiteNumber((rate as any)?.otherCost) ?? 0)
-}
-
-function getRateMarkup(rate: RateDto, markups: RateMarkupsMap): RateMarkup | null {
-  const raw = (rate as any)?.raw ?? {}
-  const candidateKeys = [
-    (rate as any)?.shippingProviderId,
-    raw?.shippingProviderId,
-    providerIdFromCarrierId(raw?.carrier_id),
-    raw?.carrier_id,
-    (rate as any)?.carrierCode,
-    raw?.carrier_code,
-  ]
-
-  for (const candidate of candidateKeys) {
-    const key = String(candidate ?? '').trim()
-    if (!key) continue
-    const markup = markups[key]
-    if (markup) return markup
-  }
-  return null
-}
-
-function getMarkupAmount(baseCost: number, markup: RateMarkup | null): number {
-  const value = Number(markup?.value ?? 0)
-  if (!Number.isFinite(value) || value <= 0) return 0
-  return markup?.type === 'pct' || markup?.type === 'percent'
-    ? baseCost * (value / 100)
-    : value
+function backendRateIdentity(rate: RateDto | null | undefined): string | null {
+  const selectedRateKey = String((rate as any)?.selectedRateKey ?? '').trim()
+  return selectedRateKey || null
 }
 
 export function buildRateRows(
   rates: RateDto[],
   sourceAccounts: RateSourceAccount[] = [],
-  markups: RateMarkupsMap = {},
+  backendBestRate: RateDto | null = null,
 ): RateRowView[] {
-  const rows = rates.map((rate) => {
-    const baseCost = getRateBaseCost(rate)
-    const profit = getMarkupAmount(baseCost, getRateMarkup(rate, markups))
+  const backendBestIdentity = backendRateIdentity(backendBestRate)
+  return rates.map((rate) => {
+    const baseCost = finiteNumber((rate as any)?.selectedRateCost) ?? 0
+    const yourPrice = finiteNumber((rate as any)?.cShippingRateAmount) ?? baseCost
+    const profit = finiteNumber((rate as any)?.shippingMarginAmount) ?? 0
     const rateSource = getRateSourceLabel(rate, sourceAccounts)
     return {
       carrierLabel: getCarrierLabel(rate),
@@ -406,19 +368,12 @@ export function buildRateRows(
       carrierCode: rate.carrierCode,
       serviceLabel: getServiceLabel(rate),
       baseCost,
-      yourPrice: baseCost + profit,
+      yourPrice,
       profit,
-      isBest: false,
+      isBest: backendBestIdentity != null && backendRateIdentity(rate) === backendBestIdentity,
       rate,
     }
   })
-
-  const cheapest = rows.reduce<number | null>((bestIndex, row, index) => {
-    if (bestIndex == null) return index
-    return row.yourPrice < rows[bestIndex]!.yourPrice ? index : bestIndex
-  }, null)
-  if (cheapest != null) rows[cheapest]!.isBest = true
-  return rows
 }
 
 export function buildRatesSummary(form: RatesFormState, count: number): string {

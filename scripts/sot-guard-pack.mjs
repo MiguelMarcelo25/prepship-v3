@@ -30,6 +30,7 @@ const REQUIRED_GUARDS = [
   'test:audit-print-queue-lifecycle',
   'test:audit-sync-watchdog-lifecycle',
   'test:audit-billing-cross-period-reconciliation',
+  'test:audit-dead-code-cleanup',
 ];
 
 const npmCli = process.env.npm_execpath;

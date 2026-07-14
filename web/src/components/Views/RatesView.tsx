@@ -16,7 +16,6 @@ type RateDto = any
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
-import { useMarkups } from '../../contexts/MarkupsContext'
 // Shared carrier badge — official UPS/USPS SVG logos with fallback pills.
 import CarrierBadge from '../CarrierBadge'
 import { Table, type TableColumn } from '../ui/Table'
@@ -55,7 +54,7 @@ type RatesResultState =
   | { kind: 'loading' }
   | { kind: 'empty'; empty: RatesEmptyState; directCarrierErrors?: DirectCarrierRateError[] }
   | { kind: 'error'; message: string }
-  | { kind: 'table'; rates: RateDto[]; directCarrierErrors?: DirectCarrierRateError[] }
+  | { kind: 'table'; rates: RateDto[]; bestRate: RateDto | null; directCarrierErrors?: DirectCarrierRateError[] }
 
 function formatMoney(amount: number) {
   return `$${amount.toFixed(2)}`
@@ -127,7 +126,6 @@ export default function RatesView() {
   const [form, setForm] = useState<RatesFormState>(DEFAULT_FORM)
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
   const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
-  const { markups } = useMarkups()
 
   // PS-188: seed the origin ZIP from the backend's canonical default ship-from
   // (the SAME getDefaultShipFrom the label + rate paths quote from). Only fills
@@ -146,7 +144,7 @@ export default function RatesView() {
   }, [])
 
   const rows = resultState.kind === 'table'
-    ? buildRateRows(resultState.rates, shippingAccounts, markups)
+    ? buildRateRows(resultState.rates, shippingAccounts, resultState.bestRate)
     : []
   const rateColumns = useMemo<TableColumn<RateRowView>[]>(() => [
     {
@@ -267,12 +265,13 @@ export default function RatesView() {
       const carrierIds = shippingAccounts
         .map((account) => account.carrierId)
         .filter((carrierId): carrierId is string => Boolean(carrierId))
-      const allRates = await apiClient.fetchRates({
+      const response = await apiClient.browseRates({
         ...buildLiveRatesPayload(form),
         includeAllDirectCarriers: true,
         ...(carrierIds.length ? { carrierIds } : {}),
       })
-      const directCarrierErrors = getDirectCarrierErrors(allRates)
+      const allRates = Array.isArray(response?.rates) ? response.rates : []
+      const directCarrierErrors = getDirectCarrierErrors(response)
       if (!Array.isArray(allRates) || allRates.length === 0) {
         setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No rates returned.' }, directCarrierErrors })
         return
@@ -284,7 +283,12 @@ export default function RatesView() {
         return
       }
 
-      setResultState({ kind: 'table', rates: availableRates, directCarrierErrors })
+      setResultState({
+        kind: 'table',
+        rates: availableRates,
+        bestRate: response?.bestRate ?? null,
+        directCarrierErrors,
+      })
     } catch (error) {
       setResultState({ kind: 'error', message: error instanceof Error ? error.message : 'Unknown error' })
     }

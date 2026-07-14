@@ -23,11 +23,7 @@ export type MarkupsMap = Record<string, Markup>
 export interface MarkupsContextValue {
   markups: MarkupsMap
   loading: boolean
-  error: string | null
-  applyMarkup: (basePrice: number, markup: Markup) => number
   saveMarkup: (pidOrCarrier: number | string, type: MarkupType, value: number) => Promise<void>
-  clearRateCache: () => Promise<void>
-  refreshMarkups: () => Promise<void>
 }
 
 const MarkupsContext = createContext<MarkupsContextValue | null>(null)
@@ -67,7 +63,6 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
   const { session, loading: authLoading } = useAuth()
   const [markups, setMarkups] = useState<MarkupsMap>({})
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -77,16 +72,8 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const applyMarkup = useCallback((basePrice: number, markup: Markup): number => {
-    if (!markup || !markup.value) return basePrice
-    return markup.type === 'pct' || markup.type === 'percent'
-      ? basePrice * (1 + markup.value / 100)
-      : basePrice + markup.value
-  }, [])
-
   const refreshMarkups = useCallback(async () => {
     setLoading(true)
-    setError(null)
     try {
       const res = await api.get<any>('/settings/markups')
       const rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
@@ -98,10 +85,8 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
         if (parsed) next[k.slice(MARKUP_PREFIX.length)] = parsed
       }
       if (mountedRef.current) setMarkups(next)
-    } catch (err) {
-      if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : 'Failed to load markups')
-      }
+    } catch {
+      // Preserve the last successfully loaded settings snapshot.
     } finally {
       if (mountedRef.current) setLoading(false)
     }
@@ -140,34 +125,12 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
     async (pidOrCarrier: number | string, type: MarkupType, value: number) => {
       // Optimistic update so the UI stays responsive even if the PUT is slow.
       setMarkups((prev) => ({ ...prev, [pidOrCarrier]: { type, value } }))
-      try {
-        await api.put<any>(`/settings/${encodeURIComponent(keyFor(pidOrCarrier))}`, {
-          value: JSON.stringify({ type, value }),
-        })
-      } catch (err) {
-        if (mountedRef.current) {
-          setError(err instanceof Error ? err.message : 'Failed to save markup')
-        }
-        throw err
-      }
+      await api.put<any>(`/settings/${encodeURIComponent(keyFor(pidOrCarrier))}`, {
+        value: JSON.stringify({ type, value }),
+      })
     },
     []
   )
-
-  const clearRateCache = useCallback(async () => {
-    // Reuse the existing /rates/cache + /orders/sync combo wrapper so Settings
-    // "Clear & refetch" button works regardless of which path the caller uses.
-    //
-    // FE-3 (audit 2026-07-13): dynamic import — this provider mounts in the app
-    // shell, and a static `import { apiClient }` here dragged the 3,191-line
-    // v2-apiClient barrel into the eager entry chunk parsed on /login. The
-    // markup reads/writes above already use the lightweight `api` client;
-    // clearAndRefetchAllRates is only ever user-triggered (Settings button), so
-    // the barrel now loads on first use instead of at boot. Same call, same
-    // behavior — only the load timing of the module changes.
-    const { apiClient } = await import('../lib/v2-apiClient')
-    await apiClient.clearAndRefetchAllRates()
-  }, [])
 
   // Memoize the context value so consumers don't re-render on unrelated
   // parent updates — previously a fresh object was allocated every render.
@@ -175,13 +138,9 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
     () => ({
       markups,
       loading,
-      error,
-      applyMarkup,
       saveMarkup,
-      clearRateCache,
-      refreshMarkups,
     }),
-    [markups, loading, error, applyMarkup, saveMarkup, clearRateCache, refreshMarkups]
+    [markups, loading, saveMarkup]
   )
 
   return <MarkupsContext.Provider value={value}>{children}</MarkupsContext.Provider>

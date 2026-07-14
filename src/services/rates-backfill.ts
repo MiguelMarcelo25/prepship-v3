@@ -4,7 +4,7 @@ import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
 import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getDirectCarrierRatesForRateInput, getRates } from './rates';
-import { combineCarrierUniverses, rateTotal } from './rates-combined';
+import { combineCarrierUniverses } from './rates-combined';
 import {
   buildResidentialEvidenceFromOrder,
   residentialEvidenceRateInput,
@@ -55,39 +55,6 @@ import {
   buildBackfillRateFetchDecision,
   toGetRatesOptions,
 } from './rate-preexpiry-refresh-request';
-
-type ServiceTier = 'overnight' | 'two_day' | 'standard';
-
-function classifyTier(code?: string | null): ServiceTier {
-  if (!code) return 'standard';
-  const c = code.toLowerCase();
-  if (
-    c.includes('next_day') ||
-    c.includes('overnight') ||
-    c.includes('priority_mail_express')
-  ) {
-    return 'overnight';
-  }
-  if (
-    c.includes('2day') ||
-    c.includes('2nd_day') ||
-    c.includes('second_day')
-  ) {
-    return 'two_day';
-  }
-  return 'standard';
-}
-
-function pickBestForTier(rates: Rate[], tier: ServiceTier): Rate | null {
-  const pool = tier === 'standard'
-    ? rates
-    : rates.filter((r) => classifyTier(r.service_code) === tier);
-  // Fall back to all rates if no match in requested tier (customer gets
-  // shipped something — cheapest-available beats nothing).
-  const candidates = pool.length ? pool : rates;
-  if (!candidates.length) return null;
-  return [...candidates].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
-}
 
 function toPositiveNumber(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);

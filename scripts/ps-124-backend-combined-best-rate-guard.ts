@@ -28,10 +28,9 @@ const fetchRatesBlock = fetchRatesStart >= 0 && fetchRatesEnd > fetchRatesStart
   : '';
 
 const browseRatesStart = apiClient.indexOf('browseRates(data: Record<string, unknown>)');
-// PS-170: end-anchor repaired — the method after browseRates was renamed
-// fetchOrdersDailyCounts -> fetchDashboardDailyCounts in a prior change, which left this
-// slice empty (a silently-passing-then-failing guard). Re-anchored so it slices again.
-const browseRatesEnd = apiClient.indexOf('\n  fetchDashboardDailyCounts', browseRatesStart);
+// Audit 4.1: anchor to the immediately following method. The prior dashboard
+// anchor missed its later `async` prefix and silently produced an empty slice.
+const browseRatesEnd = apiClient.indexOf('\n  browseShopifyRates', browseRatesStart);
 const browseRatesBlock = browseRatesStart >= 0 && browseRatesEnd > browseRatesStart
   ? apiClient.slice(browseRatesStart, browseRatesEnd)
   : '';

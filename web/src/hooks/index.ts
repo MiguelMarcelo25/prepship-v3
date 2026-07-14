@@ -38,10 +38,6 @@ export { useOrdersWithDetails } from './useOrdersWithDetails';
 export { useShippedOrdersCache } from './useShippedOrdersCache';
 export { useStoreOrders } from './useStoreOrders';
 export { useStores } from './useStores';
-// useSyncPoller was deleted 2026-07-13 (audit item 4.1 — dead code): zero
-// importers anywhere in web/src; the sync-status polling that superseded it
-// lives in Home.tsx (adaptive, hidden-tab gated — see
-// scripts/orders-startup-requests-guard.mjs).
 // useRates was deleted in commit 04f8216 — it was orphan code that hit
 // /api/rates without auth and used v2's outdated payload shape. v4 callers
 // should use apiClient.fetchRates() instead (same endpoint, authed, with

@@ -48,18 +48,21 @@ ceiling('OrdersView applyCarrierMarkup calls', count(ordersView, /applyCarrierMa
 {
   // The money-math import surface is a fixed allowlist — a NEW file importing
   // the FE markup math is a new money-policy consumer, which Phase 6 forbids.
-  // Only the defining module remains (applyCarrierMarkup has zero importers).
-  const moneyConsumers = execSync(
-    'git grep -l "applyCarrierMarkup" -- web/src',
-    { encoding: 'utf8' },
-  )
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((p) => p.replace(/\\/g, '/'))
-    .sort();
-  const allowlist = [
-    'web/src/utils/markups.ts',
-  ];
+  // Audit 4.1 removes the final defining/tombstone mention, so the allowlist is empty.
+  let moneyConsumers: string[] = [];
+  try {
+    moneyConsumers = execSync(
+      'git grep -l "applyCarrierMarkup" -- web/src',
+      { encoding: 'utf8' },
+    )
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((p) => p.replace(/\\/g, '/'))
+      .sort();
+  } catch (error) {
+    if ((error as { status?: number }).status !== 1) throw error;
+  }
+  const allowlist: string[] = [];
   check(
     'money-math consumer files are exactly the known allowlist',
     JSON.stringify(moneyConsumers) === JSON.stringify(allowlist),

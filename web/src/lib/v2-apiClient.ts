@@ -2853,7 +2853,7 @@ export const apiClient = {
   // ─── Rates ─────────────────────────────────────────────────────────────────
   // Legacy calculator adapter. Transport still goes through the single
   // /rates/browse owner; this method only returns the old array shape consumed
-  // by RatesView/NewOrder preview.
+  // by the New Order preview.
   fetchRates(data: Record<string, unknown>): Promise<any[]> {
     return postRateBrowseTransport(data).then((backendResult) => toLegacyRateArray(backendResult));
   },

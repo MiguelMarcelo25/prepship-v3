@@ -1,17 +1,9 @@
 /**
  * Rate block-list utilities (display-side eligibility guard only).
  *
- * FE money engine DELETED (audit 2026-07-13, items R-6/4.1 — PS-177 Phase 6
- * cleanup): getCarrierMarkup, applyCarrierMarkup, isOrionRate, priceDisplay and
- * formatOrionRateDisplay were dormant deploy-skew fallbacks with ZERO importers
- * (verified: the only live import of this module is rates-parity.ts →
- * isBlockedRate; RateRowItem's priceDisplay comes from RateBrowserModal's own
- * backend-DTO formatter, not from here). Per PS-313/PS-316, markup/rate money
- * math is backend-owned (src/services/shipping-workflow/rate-money.ts +
- * markup-resolver.ts); every row/browser cell renders the backend money tuple.
- * Do NOT reintroduce FE markup math here — the PS-178 FE-authority ratchet pins
- * this file as the only allowed mention of applyCarrierMarkup under web/src,
- * and that mention is now this tombstone.
+ * Per PS-313/PS-316, markup/rate money math is backend-owned
+ * (`src/services/shipping-workflow/rate-money.ts` + `markup-resolver.ts`). Keep
+ * this module limited to the shared display-side block-list check.
  */
 
 import type { Rate } from '../types/orders';
