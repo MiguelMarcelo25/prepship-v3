@@ -25,7 +25,9 @@ import { resolveOrdersStatusScope } from '../services/orders-search-scope';
 // to the backend read-model owner; editability guards and mutation authorization stay in this route.
 import {
   buildCanonicalOrderModel,
+  buildOrderBulkSnapshotDto,
   buildOrderDetailPayload,
+  normalizeOrderBulkSnapshotIds,
   orderShippingEligibilityContext,
   resolveLegacyClientId,
   sanitizeAwaitingOverridesForShippingEligibility,
@@ -1029,6 +1031,10 @@ const listQuery = paginationSchema.extend({
   sku: z.string().optional(),
 });
 
+const bulkSnapshotBody = z.object({
+  orderIds: z.array(z.number().int().positive()).min(1).max(5000),
+});
+
 const orderListSelect = {
   id: orders.id,
   externalOrderId: orders.externalOrderId,
@@ -1080,8 +1086,11 @@ const orderListSelect = {
   updatedAt: orders.updatedAt,
 };
 
-app.get('/', zValidator('query', listQuery), async (c) => {
-  const q = c.req.valid('query');
+async function ordersListResponse(
+  c: Context,
+  q: z.infer<typeof listQuery>,
+  requestedOrderIds: number[] | null = null,
+) {
   const routeStartedAt = performance.now();
   const timings: OrdersListTimings = {};
   const orderScope = ordersScopeFromContext(c);
@@ -1155,6 +1164,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const where = and(
     ...[
       statusPredicate,
+      requestedOrderIds ? inArray(orders.id, requestedOrderIds) : undefined,
       statusScope.mode === 'single_status' && statusScope.status === 'awaiting_shipment'
         ? visibleAwaitingOrdersPredicate('orders')
         : undefined,
@@ -2511,6 +2521,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   };
   response.pagination.totalApproximate = totalApproximate;
   response.pagination.hasNextPage = joined.length >= q.pageSize;
+  if (requestedOrderIds) {
+    return c.json(buildOrderBulkSnapshotDto(requestedOrderIds, rows));
+  }
   return c.json(response);
   } catch (err) {
     const totalMs = msSince(routeStartedAt);
@@ -2533,6 +2546,22 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       isLikelyDbTimeout(err) ? 503 : 500,
     );
   }
+}
+
+app.get('/', zValidator('query', listQuery), (c) =>
+  ordersListResponse(c, c.req.valid('query')),
+);
+
+// Per user override unlock shipped data on 2026-07-14: this read-only endpoint
+// reuses the canonical Orders list DTO; mutation guards and lifecycle locks are unchanged.
+app.post('/bulk-snapshot', zValidator('json', bulkSnapshotBody), (c) => {
+  const orderIds = normalizeOrderBulkSnapshotIds(c.req.valid('json').orderIds);
+  return ordersListResponse(c, {
+    page: 1,
+    pageSize: orderIds.length,
+    includeTotal: false,
+    includeInactiveClients: true,
+  }, orderIds);
 });
 
 type LatestShipmentRow = {

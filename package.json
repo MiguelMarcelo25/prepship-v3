@@ -313,6 +313,7 @@
     "test:audit-imported-handler-boundary": "tsx scripts/audit-imported-handler-boundary-guard.ts",
     "test:audit-print-queue-merge-durability": "tsx scripts/audit-print-queue-merge-durability-guard.ts",
     "test:audit-structured-money-logging": "tsx scripts/audit-structured-money-logging-guard.ts",
+    "test:audit-orders-bulk-snapshot": "tsx scripts/audit-orders-bulk-snapshot-guard.ts",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:ebay-confirmation:mocked": "tsx scripts/ebay-confirmation-mocked-guard.ts",
     "test:walmart-confirmation:payload": "tsx scripts/walmart-confirmation-payload-guard.ts",

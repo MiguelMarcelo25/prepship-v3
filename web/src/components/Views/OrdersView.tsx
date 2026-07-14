@@ -2101,9 +2101,11 @@ export default function OrdersView({
 
     const missingIds = selectedOrderIds.filter((orderId) => !snapshotById.has(orderId))
     if (missingIds.length > 0) {
-      const matchingOrders = await apiClient.fetchMatchingOrdersForSelection(matchingSelectionQuery)
-      for (const order of matchingOrders) {
-        if (selectedIdSet.has(order.orderId)) snapshotById.set(order.orderId, order)
+      // Per user override unlock shipped data on 2026-07-14: read-only hydration only;
+      // isReadOnly, shipped/cancelled selection gates, and batch suppression are unchanged.
+      const missingOrders = await apiClient.fetchOrderSnapshots(missingIds)
+      for (const order of missingOrders) {
+        snapshotById.set(order.orderId, order)
       }
     }
 

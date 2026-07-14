@@ -108,10 +108,15 @@ for (const predicate of [
   'assigneeFilter',
   'eq(orders.clientId, q.clientId)',
   'eq(orders.storeId, q.storeId)',
-  'visibleStorePredicate',
+  'listVisibilityPredicate',
 ]) {
   assert.ok(whereBlock.includes(predicate), `global search must still apply ${predicate}`);
 }
+assert.ok(
+  ordersRoute.includes('const baseVisibilityPredicate = includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate') &&
+    ordersRoute.includes('const listVisibilityPredicate = sql`(${baseVisibilityPredicate} or ${manualOrdersAwaitingVisibilityPredicate})`'),
+  'listVisibilityPredicate must retain visible-store filtering plus the manual-order visibility arm',
+);
 
 // ── (3) Mutation gates untouched (read-only ticket) ─────────────────────────
 assert.ok((ordersRoute.match(/assertOrderEditable\(/g) ?? []).length >= 5,

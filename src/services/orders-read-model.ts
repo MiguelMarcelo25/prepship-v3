@@ -46,6 +46,34 @@ const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
   [12, 11],
 ]);
 
+// Per user override unlock shipped data on 2026-07-14: read-only bulk DTO
+// composition only; this owner performs no order or shipment writes.
+export function normalizeOrderBulkSnapshotIds(orderIds: readonly number[]): number[] {
+  return [...new Set(orderIds.filter((orderId) => Number.isInteger(orderId) && orderId > 0))];
+}
+
+export function buildOrderBulkSnapshotDto<T extends { id?: unknown; orderId?: unknown }>(
+  requestedOrderIds: readonly number[],
+  rows: readonly T[],
+) {
+  const orderIds = normalizeOrderBulkSnapshotIds(requestedOrderIds);
+  const rowsById = new Map<number, T>();
+  for (const row of rows) {
+    const orderId = finiteNumberOrNull(row.orderId ?? row.id);
+    if (orderId != null) rowsById.set(orderId, row);
+  }
+  const data = orderIds
+    .map((orderId) => rowsById.get(orderId))
+    .filter((row): row is T => Boolean(row));
+  return {
+    data,
+    orders: data,
+    requested: orderIds.length,
+    returned: data.length,
+    missingOrderIds: orderIds.filter((orderId) => !rowsById.has(orderId)),
+  };
+}
+
 export function resolveLegacyClientId(
   clientId: number | null | undefined,
   storeId: number | null | undefined,

@@ -24,6 +24,7 @@ const REQUIRED_GUARDS = [
   'test:audit-imported-handler-boundary',
   'test:audit-print-queue-merge-durability',
   'test:audit-structured-money-logging',
+  'test:audit-orders-bulk-snapshot',
 ] as const;
 
 let failures = 0;

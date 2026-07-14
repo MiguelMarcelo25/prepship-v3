@@ -817,16 +817,31 @@ export const apiClient = {
     };
   },
 
-  async fetchMatchingOrdersForSelection(query: Record<string, unknown>): Promise<any[]> {
-    const baseQuery = { ...query };
-    const first = await apiClient.fetchOrders({ ...baseQuery, page: 1, pageSize: 200 });
-    const orders = Array.isArray(first?.orders) ? [...first.orders] : [];
-    const totalPages = Math.max(1, Number(first?.pages ?? 1) || 1);
-    for (let page = 2; page <= totalPages; page += 1) {
-      const next = await apiClient.fetchOrders({ ...baseQuery, page, pageSize: 200 });
-      if (Array.isArray(next?.orders)) orders.push(...next.orders);
+  async fetchOrderSnapshots(orderIds: number[]): Promise<any[]> {
+    const uniqueOrderIds = [...new Set(orderIds.filter((id) => Number.isInteger(id) && id > 0))];
+    if (uniqueOrderIds.length === 0) return [];
+    const res = await api.post<{
+      data?: Array<Record<string, any>>;
+      orders?: Array<Record<string, any>>;
+      missingOrderIds?: number[];
+    }>('/orders/bulk-snapshot', { orderIds: uniqueOrderIds });
+    const rows = Array.isArray(res?.orders) ? res.orders : Array.isArray(res?.data) ? res.data : [];
+    const snapshots = rows.map((row) => ({
+      ...row,
+      orderId: row.orderId ?? row.id,
+    }));
+    if (snapshots.length !== uniqueOrderIds.length) {
+      throw new Error(`Only ${snapshots.length}/${uniqueOrderIds.length} selected orders could be loaded. Clear selection and try again.`);
     }
-    return orders;
+    return snapshots;
+  },
+
+  async fetchMatchingOrdersForSelection(query: Record<string, unknown>): Promise<any[]> {
+    const matching = await apiClient.fetchMatchingOrderIds({ ...query, selectionLimit: 5000 });
+    if (matching.truncated) {
+      throw new Error(`The action is limited to the first ${matching.selectionLimit.toLocaleString()} matching orders.`);
+    }
+    return apiClient.fetchOrderSnapshots(matching.ids);
   },
 
   fetchOrderFull(orderId: number): Promise<any> {
