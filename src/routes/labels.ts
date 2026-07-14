@@ -27,6 +27,7 @@ import { recordLabelOperationLog } from '../lib/label-operation-log';
 // PS-234: durable audit trail for label create/void/return.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { ShopifyRatesError } from '../services/shopify-rates';
+import { logStructured, reportError, runWithLogContext } from '../lib/structured-log';
 
 const app = new Hono();
 
@@ -206,6 +207,25 @@ function handleCreateError(c: Context, err: unknown): Response {
   return c.json({ error: message, ...details }, status);
 }
 
+// Per user override unlock shipped data on 2026-07-14: observability only.
+// Label admission, purchase, persistence, and shipped/cancelled protections are unchanged.
+function handleLoggedCreateError(
+  c: Context,
+  err: unknown,
+  fields: { operation: string; orderId?: number; orderCount?: number },
+): Response {
+  const response = handleCreateError(c, err);
+  const errorCode = typeof (err as { code?: unknown })?.code === 'string'
+    ? (err as { code: string }).code
+    : null;
+  if (response.status >= 500) {
+    reportError('label.purchase.failed', err, { ...fields, status: response.status, errorCode });
+  } else {
+    logStructured('warn', 'label.purchase.rejected', { ...fields, status: response.status, errorCode });
+  }
+  return response;
+}
+
 function createErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
 }
@@ -213,7 +233,10 @@ function createErrorMessage(err: unknown): string {
 async function createShopifyLabelRouteResponse(c: Context, body: ShopifyCreateLabelRouteBody): Promise<Response> {
   const startedAt = Date.now();
   try {
-    const result = await createShopifyShippingLabelForOrder(body, labelsScopeFromContext(c));
+    const result = await runWithLogContext(
+      { orderId: body.orderId },
+      () => createShopifyShippingLabelForOrder(body, labelsScopeFromContext(c)),
+    );
     recordLabelOperationLog({
       action: 'label_create',
       status: 'success',
@@ -249,14 +272,17 @@ async function createShopifyLabelRouteResponse(c: Context, body: ShopifyCreateLa
       cause: createErrorMessage(err),
       timingMs: Date.now() - startedAt,
     });
-    return handleCreateError(c, err);
+    return handleLoggedCreateError(c, err, { operation: 'shopify_label_create', orderId: body.orderId });
   }
 }
 
 async function createLabelRouteResponse(c: Context, body: CreateLabelRouteBody): Promise<Response> {
   const startedAt = Date.now();
   try {
-    const result = await createLabelV2(body, labelsScopeFromContext(c));
+    const result = await runWithLogContext(
+      { orderId: body.orderId },
+      () => createLabelV2(body, labelsScopeFromContext(c)),
+    );
     recordLabelOperationLog({
       action: 'label_create',
       status: 'success',
@@ -285,7 +311,7 @@ async function createLabelRouteResponse(c: Context, body: CreateLabelRouteBody):
       cause: createErrorMessage(err),
       timingMs: Date.now() - startedAt,
     });
-    return handleCreateError(c, err);
+    return handleLoggedCreateError(c, err, { operation: 'label_create', orderId: body.orderId });
   }
 }
 
@@ -314,25 +340,36 @@ app.get('/shopify/:purchaseResultId', requireInternalPermission('print_queue:wri
     const result = await pollShopifyShippingLabelPurchase(c.req.param('purchaseResultId'), labelsScopeFromContext(c));
     return c.json(result, result.pending ? 202 : 200);
   } catch (err) {
-    return handleCreateError(c, err);
+    return handleLoggedCreateError(c, err, { operation: 'shopify_label_poll' });
   }
 });
 
 // POST /labels/create-batch — bulk creation
 app.post('/create-batch', requireInternalPermission('print_queue:write'), zValidator('json', batchBody), async (c) => {
+  const body = c.req.valid('json');
   try {
-    const body = c.req.valid('json');
     const result = await createBatchV2(body, labelsScopeFromContext(c));
     return c.json(result);
   } catch (err) {
     const e = err as Error & { rateLimited?: boolean; retryAfterMs?: number };
     const message = e instanceof Error ? e.message : 'Unknown error';
     if (e.rateLimited) {
+      logStructured('warn', 'label.purchase.rejected', {
+        operation: 'label_create_batch',
+        orderCount: body.orderIds.length,
+        status: 429,
+        errorCode: 'RATE_LIMITED',
+      });
       return c.json(
         { error: message, retryAfter: Math.ceil((e.retryAfterMs ?? 60000) / 1000), rateLimited: true },
         429
       );
     }
+    reportError('label.purchase.failed', err, {
+      operation: 'label_create_batch',
+      orderCount: body.orderIds.length,
+      status: 500,
+    });
     return c.json({ error: message }, 500);
   }
 });

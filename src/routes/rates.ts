@@ -48,6 +48,7 @@ import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display
 import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { getShopifyRatesForOrder, ShopifyRatesError } from '../services/shopify-rates';
+import { logStructured, reportError, runWithLogContext } from '../lib/structured-log';
 
 const app = new Hono();
 
@@ -224,11 +225,16 @@ app.post('/', zValidator('json', rateBody), async (c) => {
   const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
   const { forceRefresh, signature, confirmation, ...input } = body;
-  const result = await getRates(
-    { ...input, confirmation: confirmation ?? signature ?? null },
-    { forceRefresh, priority: 'interactive' }
-  );
-  return c.json(publicRatesResult(result, canViewFinancials));
+  try {
+    const result = await getRates(
+      { ...input, confirmation: confirmation ?? signature ?? null },
+      { forceRefresh, priority: 'interactive' }
+    );
+    return c.json(publicRatesResult(result, canViewFinancials));
+  } catch (error) {
+    reportError('rate.quote.failed', error, { operation: 'rate_quote' });
+    throw error;
+  }
 });
 
 const browseBody = rateBody.extend({
@@ -333,26 +339,37 @@ app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
     if (!inScope) return c.json({ error: 'Order not found' }, 404);
   }
 
-  const snapshot = await startRateBrowseWorkflow({
-    body: body as Record<string, unknown>,
-    canViewFinancials,
-    orderId: body.orderId ?? null,
-    requestKey: null,
-    priority: 'manual',
-    getInitialResult: body.forceLive === true
-      ? () => produceRateBrowsePayload({
-          body: cachedRateBrowsePreviewBody(body),
+  try {
+    const snapshot = await runWithLogContext(
+      { orderId: body.orderId ?? null },
+      () => startRateBrowseWorkflow({
+        body: body as Record<string, unknown>,
+        canViewFinancials,
+        orderId: body.orderId ?? null,
+        requestKey: null,
+        priority: 'manual',
+        getInitialResult: body.forceLive === true
+          ? () => produceRateBrowsePayload({
+              body: cachedRateBrowsePreviewBody(body),
+              canViewFinancials,
+              browseStartedAt: Date.now(),
+            })
+          : undefined,
+        run: () => produceRateBrowsePayload({
+          body,
           canViewFinancials,
           browseStartedAt: Date.now(),
-        })
-      : undefined,
-    run: () => produceRateBrowsePayload({
-      body,
-      canViewFinancials,
-      browseStartedAt: Date.now(),
-    }),
-  });
-  return c.json(publicRateBrowseWorkflowSnapshot(snapshot, canViewFinancials));
+        }),
+      }),
+    );
+    return c.json(publicRateBrowseWorkflowSnapshot(snapshot, canViewFinancials));
+  } catch (error) {
+    reportError('rate.browse_workflow.start_failed', error, {
+      operation: 'rate_browse_workflow',
+      orderId: body.orderId ?? null,
+    });
+    throw error;
+  }
 });
 
 app.get('/browse/workflow/:jobId', async (c) => {
@@ -372,22 +389,36 @@ app.post('/shopify', requireInternalPermission('print_queue:write'), zValidator(
   if (!inScope) return c.json({ error: 'Order not found' }, 404);
 
   try {
-    const result = await getShopifyRatesForOrder({
-      orderId: body.orderId,
-      weightOz: body.weightOz,
-      dims: {
-        length: body.dims?.length ?? body.dimsL,
-        width: body.dims?.width ?? body.dimsW,
-        height: body.dims?.height ?? body.dimsH,
-      },
-      packageName: body.packageName,
-      refresh: body.refresh,
-    });
+    const result = await runWithLogContext(
+      { orderId: body.orderId },
+      () => getShopifyRatesForOrder({
+        orderId: body.orderId,
+        weightOz: body.weightOz,
+        dims: {
+          length: body.dims?.length ?? body.dimsL,
+          width: body.dims?.width ?? body.dimsW,
+          height: body.dims?.height ?? body.dimsH,
+        },
+        packageName: body.packageName,
+        refresh: body.refresh,
+      }),
+    );
     return c.json(result);
   } catch (err) {
     if (err instanceof ShopifyRatesError) {
+      logStructured('warn', 'rate.shopify.rejected', {
+        operation: 'shopify_rate_quote',
+        orderId: body.orderId,
+        status: err.status,
+        errorCode: err.code,
+      });
       return c.json({ error: err.message, code: err.code, ...(err.details ?? {}) }, err.status as 400);
     }
+    reportError('rate.shopify.failed', err, {
+      operation: 'shopify_rate_quote',
+      orderId: body.orderId,
+      status: 500,
+    });
     return c.json({ error: err instanceof Error ? err.message : 'Shopify Rates failed' }, 500);
   }
 });
@@ -468,12 +499,23 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       .limit(1);
     if (!inScope) return c.json({ error: 'Order not found' }, 404);
   }
-  const payload = await produceRateBrowsePayload({
-    body,
-    canViewFinancials,
-    browseStartedAt,
-  });
-  return c.json(publicRatesResult(payload, canViewFinancials));
+  try {
+    const payload = await runWithLogContext(
+      { orderId: body.orderId ?? null },
+      () => produceRateBrowsePayload({
+        body,
+        canViewFinancials,
+        browseStartedAt,
+      }),
+    );
+    return c.json(publicRatesResult(payload, canViewFinancials));
+  } catch (error) {
+    reportError('rate.browse.failed', error, {
+      operation: 'rate_browse',
+      orderId: body.orderId ?? null,
+    });
+    throw error;
+  }
 });
 // v2-parity: supports v2's param aliases (wt, zip, l, w, h) AND the modern
 // names. Adds optional dims + residential + storeId filters so the rate

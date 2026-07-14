@@ -9,6 +9,7 @@ import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 import { buildRateBrowseWorkflowRequestKey } from './rate-browse-workflow-key';
 import { sanitizeRateProviderError } from './rate-browser-timing-diagnostics';
 import { scheduleDetachedRateBrowseJob } from './rate-browse-job-scheduler';
+import { reportError } from '../lib/structured-log';
 
 export type StartRateBrowseWorkflowInput = {
   body: Record<string, unknown>;
@@ -130,7 +131,10 @@ export async function startRateBrowseWorkflow(
   if (reservation.created) {
     scheduleDetachedRateBrowseJob(
       () => runRateBrowseWorkflowJob(reservation.snapshot, input),
-      (err) => console.error('[rate-browse-workflow] detached job failed:', sanitizeRateProviderError(err)),
+      (err) => reportError('rate.browse.detached_failed', err, {
+        operation: 'rate_browse_workflow',
+        orderId: input.orderId,
+      }),
     );
   }
   return reservation.snapshot;

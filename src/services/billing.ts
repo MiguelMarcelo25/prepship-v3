@@ -20,6 +20,7 @@ import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-se
 import { ensureBillingStorageProofSchema } from '../db/ensure-billing-storage-proof';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { roundMoney } from '../lib/money';
+import { logStructured, reportError } from '../lib/structured-log';
 import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 import { decideShippingLineBilling } from './billing-shipping-line';
@@ -1898,11 +1899,11 @@ export async function generateLineItems(input: GenerateInput) {
       if (isBillingFinalizedLockError(storageErr)) {
         skippedFinalizedStorageGroups.add(`${clientId}:${storageShipDate.toISOString()}`);
       }
-      console.warn(
-        '[billing] storage line skipped because proof freeze failed',
-        { clientId },
-        storageErr instanceof Error ? storageErr.message : storageErr
-      );
+      reportError('billing.storage_line.freeze_failed', storageErr, {
+        clientId,
+        dateFrom: input.dateFrom,
+        dateTo: input.dateTo,
+      });
     }
   }
 
@@ -1917,10 +1918,11 @@ export async function generateLineItems(input: GenerateInput) {
       new Date(input.dateTo)
     );
   } catch (err) {
-    console.warn(
-      '[billing] generated line items but failed to refresh summary metrics:',
-      err instanceof Error ? err.message : err
-    );
+    reportError('billing.summary_metrics.refresh_failed', err, {
+      clientId: input.clientId,
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+    });
   }
 
   return {
@@ -1990,10 +1992,11 @@ export async function billingSummary(
     scopeRestricted: input.scopeRestricted,
     maxAgeMinutes: 45,
   }).catch((err) => {
-    console.warn(
-      '[billing] summary reporting metrics unavailable:',
-      err instanceof Error ? err.message : err
-    );
+    reportError('billing.summary_metrics.read_failed', err, {
+      clientId: input.clientId,
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+    });
     return null;
   });
   if (metrics && billingSummaryHasValues(metrics)) return metrics;
@@ -2003,7 +2006,7 @@ export async function billingSummary(
   if (!metrics || !billingSummaryHasValues(metrics)) {
     if (await hasLineItems()) {
       try {
-        console.info('[billing] refreshing stale or incomplete summary metrics from billing_line_items', {
+        logStructured('info', 'billing.summary_metrics.refreshing_stale', {
           dateFrom: input.dateFrom,
           dateTo: input.dateTo,
           clientId: input.clientId ?? null,
@@ -2024,10 +2027,11 @@ export async function billingSummary(
         });
         if (refreshedMetrics) return refreshedMetrics;
       } catch (err) {
-        console.warn(
-          '[billing] failed to refresh stale summary metrics:',
-          err instanceof Error ? err.message : err
-        );
+        reportError('billing.summary_metrics.stale_refresh_failed', err, {
+          clientId: input.clientId,
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+        });
       }
     }
   }

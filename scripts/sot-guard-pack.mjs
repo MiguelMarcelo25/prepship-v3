@@ -24,6 +24,7 @@ const REQUIRED_GUARDS = [
   'test:audit-runtime-schema-readiness',
   'test:audit-imported-handler-boundary',
   'test:audit-print-queue-merge-durability',
+  'test:audit-structured-money-logging',
 ];
 
 const npmCli = process.env.npm_execpath;

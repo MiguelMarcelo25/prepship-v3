@@ -1,13 +1,12 @@
 import type { NodeStyleResponse } from './node-handler.js';
+import { errorMessage, reportError } from './structured-log.js';
+
+export { errorMessage } from './structured-log.js';
 
 export const INTERNAL_SERVER_ERROR = 'Internal server error';
 
-export function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 export function logServerError(scope: string, err: unknown): void {
-  console.error(`[${scope}]`, errorMessage(err));
+  reportError(scope, err);
 }
 
 export function sendInternalServerError(

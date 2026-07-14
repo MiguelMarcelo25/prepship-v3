@@ -28,6 +28,7 @@ import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
+import { logStructured, reportError } from '../lib/structured-log';
 import { requirePermission } from '../middleware/auth';
 // PS-234: durable audit trail for billing generation.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
@@ -108,13 +109,32 @@ import {
 const app = new Hono();
 
 app.use('*', requirePermission('financials:read'));
+
+function billingOrderIdFromPath(path: string): number | null {
+  const match = /\/(?:details|zero-shipping-review)\/(\d+)(?:\/|$)/.exec(path);
+  if (!match) return null;
+  const orderId = Number(match[1]);
+  return Number.isInteger(orderId) && orderId > 0 ? orderId : null;
+}
+
 app.use('*', async (c, next) => {
   try {
     await next();
   } catch (error) {
+    const path = new URL(c.req.url).pathname;
+    const logFields = {
+      method: c.req.method,
+      path,
+      orderId: billingOrderIdFromPath(path),
+    };
     // Per user override unlock shipped data on 2026-07-11: PS-416 exposes the
     // backend block without letting callers proceed with shipped billing.
     if (isBillingRegenerationBlockedError(error)) {
+      logStructured('warn', 'billing.request.rejected', {
+        ...logFields,
+        status: 503,
+        errorCode: error.code,
+      });
       return c.json({
         error: error.message,
         code: error.code,
@@ -124,16 +144,29 @@ app.use('*', async (c, next) => {
     }
     const closeError = asBillingCloseWorkflowError(error);
     if (closeError) {
+      logStructured('warn', 'billing.request.rejected', {
+        ...logFields,
+        status: closeError.status,
+        errorCode: closeError.code,
+      });
       return c.json({
         error: closeError.message,
         code: closeError.code,
         ...closeError.details,
       }, closeError.status);
     }
-    if (!isBillingFinalizedLockError(error)) throw error;
+    if (!isBillingFinalizedLockError(error)) {
+      reportError('billing.request.failed', error, logFields);
+      throw error;
+    }
     const lockError = error instanceof BillingFinalizedLockError
       ? error
       : new BillingFinalizedLockError();
+    logStructured('warn', 'billing.request.rejected', {
+      ...logFields,
+      status: 409,
+      errorCode: lockError.code,
+    });
     return c.json({
       error: lockError.message,
       code: lockError.code,

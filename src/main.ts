@@ -7,6 +7,7 @@ import { env } from './lib/env';
 import { isAllowedCorsOrigin } from './lib/http/cors';
 import { observeApiTiming } from './lib/http/api-metrics';
 import { appendServerTiming, elapsedMs, nowMs } from './lib/http/timing';
+import { logStructured, reportError, runWithLogContext } from './lib/structured-log';
 import { requireAdmin, requireAuth } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
@@ -63,7 +64,7 @@ app.use('*', async (c, next) => {
     randomUUID();
   c.set('requestId', requestId);
   c.header('X-Request-Id', requestId);
-  await next();
+  await runWithLogContext({ requestId }, next);
 });
 app.use('*', logger());
 app.use('*', async (c, next) => {
@@ -96,8 +97,7 @@ app.use('*', async (c, next) => {
     });
 
     if (durationMs >= slowThresholdMs) {
-      console.info('[api:timing]', {
-        requestId: c.get('requestId'),
+      logStructured('info', 'api.request.slow', {
         method: c.req.method,
         path: url.pathname,
         status: c.res.status,
@@ -205,14 +205,12 @@ app.notFound((c) => c.json({ error: 'Not found' }, 404));
 app.onError((err, c) => {
   const status = (err as { status?: number }).status ?? 500;
   const url = new URL(c.req.url);
-  console.error('[api:error]', {
+  reportError('api.request.failed', err, {
     requestId: c.get('requestId'),
     method: c.req.method,
     path: url.pathname,
     status,
-    error: err instanceof Error ? err.message : String(err),
   });
-  if (err instanceof Error && err.stack) console.error(err.stack);
   const isSafeClientError = status >= 400 && status < 500;
   const message =
     isSafeClientError && err.message ? err.message : 'Internal server error';
@@ -232,20 +230,11 @@ app.onError((err, c) => {
 // process truly can't respond — which is what we want. Silent timeouts on
 // a single query should log and continue.
 process.on('unhandledRejection', (reason) => {
-  const msg =
-    reason instanceof Error
-      ? `${reason.name}: ${reason.message}`
-      : String(reason);
-  console.error('[unhandledRejection]', msg);
-  if (reason instanceof Error && reason.stack) console.error(reason.stack);
+  reportError('process.unhandled_rejection', reason);
 });
 
 process.on('uncaughtException', (err) => {
-  console.error(
-    '[uncaughtException]',
-    err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-  );
-  if (err instanceof Error && err.stack) console.error(err.stack);
+  reportError('process.uncaught_exception', err);
 });
 
 async function main(): Promise<void> {
@@ -286,9 +275,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error) => {
-  console.error(
-    '[runtime] boot blocked by schema readiness:',
-    error instanceof Error ? error.message : error,
-  );
+  reportError('runtime.schema_readiness_blocked', error);
   process.exit(1);
 });

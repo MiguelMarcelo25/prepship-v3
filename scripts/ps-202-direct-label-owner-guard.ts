@@ -58,7 +58,7 @@ const labels = readFileSync('src/services/labels.ts', 'utf8');
 check('direct purchases assert the DIRECT carrier family (PS-106 purchase boundary)',
   /carrierFamily: 'direct',\s*\n\s*order,/.test(labels));
 check('direct purchases reuse the SAME deduction tail as ShipStation labels (the legacy gap)',
-  /recordFulfillmentDeductions\(\{\s*\n\s*order,\s*\n\s*shipmentId: localShipmentId/.test(labels));
+  /await enqueueFulfillmentDeductions\(\{\s*\n\s*order,\s*\n\s*shipmentId: localShipmentId,\s*\n\s*source: 'label'/.test(labels));
 check('direct shipments keep the legacy source attribution (shipp/walmart_shipping rows)',
   /source: directProviderKey \?\? 'prepship_v2'/.test(labels));
 check('walmart confirmations get the live-verified PO (the PS-201 failure class)',
