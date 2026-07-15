@@ -41,6 +41,7 @@ const REQUIRED_GUARDS = [
   'test:audit-backfill-diagnostics',
   'test:audit-rate-on-ingest',
   'test:audit-po-box-eligibility',
+  'test:audit-table-virtualization',
 ];
 
 const npmCli = process.env.npm_execpath;

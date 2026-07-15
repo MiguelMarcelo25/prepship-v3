@@ -441,3 +441,54 @@ test('inventory stock table fits desktop viewport and shows active page number',
   await expect(pageOne).toHaveText('1')
   await expect(pageOne).toHaveCSS('color', 'rgb(255, 255, 255)')
 })
+
+test('virtualizes large Inventory pages and reaches the final loaded row', async ({ page }) => {
+  await page.setViewportSize({ width: 1365, height: 768 })
+  await setup(page)
+  await page.addInitScript(() => {
+    window.localStorage.setItem('inventory_page_size', '50')
+  })
+
+  const manyRows = Array.from({ length: 120 }, (_, index) => {
+    const source = inventoryRows[index % 3]
+    return {
+      ...source,
+      id: 2000 + index,
+      sku: `VIRTUAL-SKU-${String(index + 1).padStart(3, '0')}`,
+      name: `${source.name} virtual ${index + 1}`,
+      stockQty: index,
+      soldLast30Days: index % 11,
+    }
+  })
+
+  await page.route((url) => url.pathname === '/inventory' && url.search.length > 0, async (route) => {
+    const url = new URL(route.request().url())
+    const pageNumber = Number(url.searchParams.get('page') || 1)
+    const pageSize = Number(url.searchParams.get('pageSize') || 50)
+    const start = (pageNumber - 1) * pageSize
+    await route.fulfill(json({
+      data: manyRows.slice(start, start + pageSize),
+      pagination: {
+        page: pageNumber,
+        pageSize,
+        total: manyRows.length,
+        totalPages: Math.ceil(manyRows.length / pageSize),
+      },
+    }))
+  })
+
+  await page.goto(`${baseUrl}/inventory/stock-levels`)
+
+  const tableScroll = page.locator('.inventory-stock-table-shell > .ps-data-table-scroll')
+  await expect(tableScroll).toBeVisible()
+  const mountedRows = page.locator('.inventory-stock-table-shell tbody > tr[data-index]')
+  await expect(mountedRows.first()).toBeVisible()
+  expect(await mountedRows.count()).toBeLessThan(40)
+
+  await tableScroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await expect(page.locator('.inventory-stock-table-shell tbody > tr[data-index="49"]')).toBeVisible()
+  await expect(page.getByText('VIRTUAL-SKU-050', { exact: true })).toBeVisible()
+  expect(await mountedRows.count()).toBeLessThan(40)
+})

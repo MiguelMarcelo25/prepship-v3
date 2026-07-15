@@ -418,6 +418,7 @@ for (const tab of [
         { timeout: 12000 },
       )
       .catch(() => {})
+    await expect(page.locator('#ordersTable tbody tr.order-row')).toHaveCount(ordersByStatus[tab.status].length)
     const normalized = normalize(await page.locator('#ordersTable').innerHTML())
     const snapPath = path.join(DOM_PARITY_SNAP_DIR, tab.snap)
     if (UPDATE_DOM_PARITY) {
@@ -428,3 +429,44 @@ for (const tab of [
     expect(normalized).toBe(expected)
   })
 }
+
+test('virtualizes large Orders pages and reaches the final loaded row', async ({ page }) => {
+  await page.setViewportSize({ width: 1680, height: 950 })
+  await setup(page)
+
+  const manyOrders = Array.from({ length: 120 }, (_, index) => {
+    const orderId = 990000 + index
+    return baseRow(orderId, 'awaiting_shipment', 1, {
+      orderNumber: `VIRTUAL-ORDER-${String(index + 1).padStart(3, '0')}`,
+      bestRateWorkflow: {
+        bestRateState: 'fresh',
+        savedRateDisplay: 'fresh',
+        canDisplayFinalRate: true,
+        canUseDisplayedRateForPurchase: true,
+        allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false },
+      },
+    })
+  })
+
+  await page.route((url) => url.pathname === '/orders' && url.searchParams.get('status') === 'awaiting_shipment', async (route) => {
+    await route.fulfill(json({
+      data: manyOrders,
+      pagination: { page: 1, pageSize: 200, total: manyOrders.length, totalPages: 1 },
+    }))
+  })
+
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+
+  const ordersScroll = page.locator('.orders-wrap')
+  await expect(ordersScroll).toBeVisible()
+  const mountedRows = page.locator('#ordersBody > tr.order-row[data-index]')
+  await expect(mountedRows.first()).toBeVisible()
+  expect(await mountedRows.count()).toBeLessThan(50)
+
+  await ordersScroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await expect(page.locator('#row-990119')).toBeVisible()
+  await expect(page.getByText('VIRTUAL-ORDER-120', { exact: true })).toBeVisible()
+  expect(await mountedRows.count()).toBeLessThan(50)
+})

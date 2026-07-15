@@ -34,11 +34,17 @@
 //   isReadOnly flag (which hides the SKU-group select-all checkbox, mirroring
 //   the per-row checkbox gate) is passed in from the OrdersView shell and its
 //   meaning is UNCHANGED.
-import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode, RefObject } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
 import type { GroupedOrdersBySku } from './orders-grouping'
 import type { SortKey, TableColumn, TableColumnKey } from './orders-table-columns'
+import {
+  getVirtualTablePadding,
+  shouldVirtualizeTable,
+  TABLE_VIRTUALIZATION_OVERSCAN,
+} from '../ui/table-virtualization'
 
 // Mirror of the OrdersView-local SortDirection alias (it is declared inline in
 // OrdersView, not exported); kept identical so the sortState prop's `dir` type
@@ -51,6 +57,7 @@ export type OrdersTableProps = {
   visibleColumns: TableColumn[]
   tableWidth: number
   tableDensity: string
+  scrollElementRef: RefObject<HTMLDivElement>
   // ── header state (sort / drag / resize) ──
   sortState: { key: SortKey; dir: SortDirection }
   dragColumnKey: TableColumnKey | null
@@ -98,10 +105,15 @@ export type OrdersTableProps = {
   cellStateEpoch: unknown
 }
 
+type OrdersTableRenderEntry =
+  | { kind: 'group'; key: string; group: GroupedOrdersBySku<OrderSummaryDto> }
+  | { kind: 'order'; key: string; order: OrderSummaryDto; transitioning: boolean }
+
 export function OrdersTable({
   visibleColumns,
   tableWidth,
   tableDensity,
+  scrollElementRef,
   sortState,
   dragColumnKey,
   dragOverColumnKey,
@@ -134,6 +146,56 @@ export function OrdersTable({
   // hover crossing re-renders only this table, and the memoized <OrderRow>
   // bails out every row whose isKbFocus flag did not flip.
   const [kbRowId, setKbRowId] = useState<number | null>(null)
+  const tableRows = useMemo<OrdersTableRenderEntry[]>(() => {
+    if (!skuSortActive) {
+      return orderedFilteredOrders.map((order) => ({
+        kind: 'order',
+        key: `order-${order.orderId}`,
+        order,
+        transitioning: false,
+      }))
+    }
+    return skuOrderGroups.flatMap((group) => [
+      { kind: 'group' as const, key: `sku-group-${group.key}`, group },
+      ...group.orders.map((order) => ({
+        kind: 'order' as const,
+        key: `order-${order.orderId}`,
+        order,
+        transitioning: transitionalShippedIds.has(order.orderId),
+      })),
+    ])
+  }, [orderedFilteredOrders, skuOrderGroups, skuSortActive, transitionalShippedIds])
+  const virtualRowsEnabled = shouldVirtualizeTable(tableRows.length)
+  const getVirtualRowKey = useCallback(
+    (index: number) => tableRows[index]?.key ?? index,
+    [tableRows],
+  )
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
+    count: virtualRowsEnabled ? tableRows.length : 0,
+    enabled: virtualRowsEnabled,
+    getScrollElement: () => scrollElementRef.current,
+    estimateSize: (index) => {
+      if (tableRows[index]?.kind === 'group') return 38
+      if (tableDensity === 'narrow') return 42
+      if (tableDensity === 'wide') return 72
+      return 58
+    },
+    getItemKey: getVirtualRowKey,
+    overscan: TABLE_VIRTUALIZATION_OVERSCAN,
+  })
+  const virtualRows = virtualRowsEnabled ? rowVirtualizer.getVirtualItems() : []
+  const renderedRows = virtualRowsEnabled
+    ? virtualRows.map((item) => ({ index: item.index, entry: tableRows[item.index] }))
+    : tableRows.map((entry, index) => ({ index, entry }))
+  const { paddingTop: virtualPaddingTop, paddingBottom: virtualPaddingBottom } =
+    getVirtualTablePadding(virtualRows, rowVirtualizer.getTotalSize())
+  const rowIndexByOrderId = useMemo(() => {
+    const indexes = new Map<number, number>()
+    tableRows.forEach((entry, index) => {
+      if (entry.kind === 'order') indexes.set(entry.order.orderId, index)
+    })
+    return indexes
+  }, [tableRows])
 
   // Arrow/Enter/Ctrl-C row navigation (moved VERBATIM from the OrdersView
   // keydown listener; the Escape branch — rate-browser close / clear selection
@@ -150,7 +212,12 @@ export function OrdersTable({
         const nextOrder = orderedFilteredOrders[nextIndex]
         if (!nextOrder) return
         setKbRowId(nextOrder.orderId)
-        document.getElementById(`row-${nextOrder.orderId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        const virtualIndex = rowIndexByOrderId.get(nextOrder.orderId)
+        if (virtualRowsEnabled && virtualIndex != null) {
+          rowVirtualizer.scrollToIndex(virtualIndex, { align: 'auto' })
+        } else {
+          document.getElementById(`row-${nextOrder.orderId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        }
         return
       }
 
@@ -170,11 +237,11 @@ export function OrdersTable({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [kbRowId, orderedFilteredOrders])
+  }, [kbRowId, orderedFilteredOrders, rowIndexByOrderId, virtualRowsEnabled, rowVirtualizer])
 
   return (
     <table
-      className={`orders-table density-${tableDensity}`}
+      className={`orders-table density-${tableDensity}${virtualRowsEnabled ? ' is-virtualized' : ''}`}
       id="ordersTable"
       style={{ minWidth: tableWidth, width: tableWidth, tableLayout: 'fixed' }}
     >
@@ -235,7 +302,99 @@ export function OrdersTable({
         </tr>
       </thead>
       <tbody id="ordersBody">
-        {(skuSortActive ? skuOrderGroups.flatMap((group) => {
+        {virtualRowsEnabled && virtualPaddingTop > 0 ? (
+          <tr aria-hidden="true" className="virtual-table-spacer">
+            <td colSpan={visibleColumns.length} style={{ height: virtualPaddingTop, padding: 0, border: 0 }} />
+          </tr>
+        ) : null}
+        {virtualRowsEnabled ? renderedRows.map(({ entry, index }) => {
+          if (!entry) return null
+          if (entry.kind === 'group') {
+            const { group } = entry
+            const groupOrderIds = group.orders.map((order) => order.orderId)
+            const allGroupSelected = groupOrderIds.length > 0 && groupOrderIds.every((orderId) => selectedIdSet.has(orderId))
+            const someGroupSelected = !allGroupSelected && groupOrderIds.some((orderId) => selectedIdSet.has(orderId))
+            return (
+              <tr
+                key={`sku-group-${group.key}`}
+                ref={rowVirtualizer.measureElement}
+                data-index={index}
+                className="sku-group-header"
+              >
+                <td
+                  colSpan={visibleColumns.length}
+                  style={{
+                    padding: '6px 12px',
+                    background: 'var(--ss-blue-bg)',
+                    borderTop: '2px solid var(--ss-blue)',
+                    borderBottom: '1px solid var(--border)',
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: 'var(--ss-blue)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {/* Lockdown: virtualization preserves the existing SKU group select-all gate. */}
+                    {isReadOnly ? null : (
+                      <input
+                        type="checkbox"
+                        checked={allGroupSelected}
+                        aria-label={`Select current page SKU group ${group.label}`}
+                        ref={(node) => {
+                          if (node) node.indeterminate = someGroupSelected
+                        }}
+                        style={{ width: 16, height: 16, accentColor: 'var(--ss-blue)', cursor: 'pointer', flexShrink: 0 }}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => {
+                          event.stopPropagation()
+                          toggleSkuGroupSelection(groupOrderIds, event.target.checked)
+                        }}
+                      />
+                    )}
+                    <span style={{ fontSize: 13 }}>📦</span>
+                    <span className="sku-link" style={{ fontSize: 11.5 }} title={group.label}>{group.label}</span>
+                    {group.quantity != null ? (
+                      <span style={{ fontWeight: 700, color: 'var(--text)' }}>
+                        Qty {group.quantity}
+                      </span>
+                    ) : null}
+                    <span style={{ fontWeight: 400, color: 'var(--text2)' }}>
+                      SKU group current page · {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            )
+          }
+
+          const { order } = entry
+          return (
+            <OrderRow
+              key={order.orderId}
+              order={order}
+              detail={orderDetailsById.get(order.orderId) ?? null}
+              visibleColumns={visibleColumns}
+              isSelected={selectedIdSet.has(order.orderId)}
+              isPanelOpen={panelOrderId === order.orderId}
+              isKbFocus={kbRowId === order.orderId}
+              isTransitioningShipped={entry.transitioning}
+              openOrderDetails={openOrderDetails}
+              openShipStationOrder={openShipStationOrder}
+              setKbRowId={setKbRowId}
+              renderCell={renderCell}
+              cellStateEpoch={cellStateEpoch}
+              virtualIndex={index}
+              measureElement={rowVirtualizer.measureElement}
+              stripeEven={(index + 1) % 2 === 0}
+            />
+          )
+        }) : null}
+        {virtualRowsEnabled && virtualPaddingBottom > 0 ? (
+          <tr aria-hidden="true" className="virtual-table-spacer">
+            <td colSpan={visibleColumns.length} style={{ height: virtualPaddingBottom, padding: 0, border: 0 }} />
+          </tr>
+        ) : null}
+        {!virtualRowsEnabled && (skuSortActive ? skuOrderGroups.flatMap((group) => {
           const groupOrderIds = group.orders.map((order) => order.orderId)
           const allGroupSelected = groupOrderIds.length > 0 && groupOrderIds.every((orderId) => selectedIdSet.has(orderId))
           const someGroupSelected = !allGroupSelected && groupOrderIds.some((orderId) => selectedIdSet.has(orderId))

@@ -39,11 +39,18 @@
 // ──────────────────────────────────────────────────────────────────
 
 import {
+  useCallback,
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { AnalysisPagination } from '../Views/AnalysisPagination'
 import { useTableState } from './useTableState'
+import {
+  getVirtualTablePadding,
+  shouldVirtualizeTable,
+  TABLE_VIRTUALIZATION_OVERSCAN,
+} from './table-virtualization'
 import {
   ArrowDown,
   ArrowUp,
@@ -153,6 +160,11 @@ export interface TableProps<Row> {
    *  is set. Auto-resets to page 1 when data length shrinks or sort
    *  changes (so operators don't land on a now-invalid page). */
   paginated?: boolean
+  /** Window large body row sets with TanStack Virtual. Activates only
+   *  above the shared threshold; short tables keep the legacy DOM.
+   *  Expansion/footer modes stay unvirtualized because they add
+   *  independently-sized sibling rows. */
+  virtualized?: boolean
   /** Page-size options shown in the pagination bar dropdown.
    *  Defaults to [25, 50, 100]. */
   pageSizeOptions?: number[]
@@ -240,6 +252,7 @@ export function Table<Row>({
   showColumnControls = true,
   className,
   paginated,
+  virtualized = false,
   pageSizeOptions,
   defaultPageSize,
   stickyPagination = false,
@@ -311,6 +324,33 @@ export function Table<Row>({
   const padding = density === 'compact' ? 'px-3 py-1.5' : density === 'comfortable' ? 'px-4 py-3.5' : 'px-3 py-2.5'
   const fontSize = density === 'compact' ? 'text-[12px]' : 'text-[13px]'
   const headerPadding = density === 'compact' ? 'px-3 py-2' : 'px-3 py-2.5'
+
+  const virtualRowsEnabled =
+    virtualized &&
+    shouldVirtualizeTable(pagedRows.length) &&
+    renderRowExpansion == null &&
+    footerRow == null
+  const getVirtualRowKey = useCallback(
+    (index: number) => {
+      const row = pagedRows[index]
+      return row == null ? index : rowKey(row)
+    },
+    [pagedRows, rowKey],
+  )
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
+    count: virtualRowsEnabled ? pagedRows.length : 0,
+    enabled: virtualRowsEnabled,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => density === 'compact' ? 44 : density === 'comfortable' ? 64 : 54,
+    getItemKey: getVirtualRowKey,
+    overscan: TABLE_VIRTUALIZATION_OVERSCAN,
+  })
+  const virtualRows = virtualRowsEnabled ? rowVirtualizer.getVirtualItems() : []
+  const renderedRowIndexes = virtualRowsEnabled
+    ? virtualRows.map((item) => item.index)
+    : pagedRows.map((_, index) => index)
+  const { paddingTop: virtualPaddingTop, paddingBottom: virtualPaddingBottom } =
+    getVirtualTablePadding(virtualRows, rowVirtualizer.getTotalSize())
 
   // PS-157: pickerColumns / visibleCount / totalToggleable now come
   // from useTableState (destructured above) — same values, same names.
@@ -470,7 +510,14 @@ export function Table<Row>({
           tables can still hide columns via the Columns picker, or
           rely on `.view-content`'s own horizontal scroll once the
           table overflows the viewport. */}
-      <div ref={tableScrollRef} className={stickyHeader ? 'ps-data-table-scroll overflow-x-clip' : 'ps-data-table-scroll overflow-x-auto'}>
+      <div
+        ref={tableScrollRef}
+        className={virtualRowsEnabled
+          ? 'ps-data-table-scroll max-h-[70vh] overflow-auto'
+          : stickyHeader
+            ? 'ps-data-table-scroll overflow-x-clip'
+            : 'ps-data-table-scroll overflow-x-auto'}
+      >
         <table className="w-full border-collapse table-fixed" style={{ minWidth: tableMinWidth }}>
           <colgroup>
             {orderedColumns.map((col) => (
@@ -618,6 +665,14 @@ export function Table<Row>({
           </thead>
 
           <tbody ref={tbodyRef}>
+            {!loading && sortedRows.length > 0 && virtualRowsEnabled && virtualPaddingTop > 0 ? (
+              <tr aria-hidden="true" className="virtual-table-spacer">
+                <td
+                  colSpan={orderedColumns.length}
+                  style={{ height: virtualPaddingTop, padding: 0, border: 0 }}
+                />
+              </tr>
+            ) : null}
             {loading ? (
               <tr>
                 <td colSpan={orderedColumns.length} className="text-center py-12 text-ink-3">
@@ -633,7 +688,9 @@ export function Table<Row>({
                   {emptyMessage}
                 </td>
               </tr>
-            ) : pagedRows.flatMap((row, rowIndex) => {
+            ) : renderedRowIndexes.flatMap((rowIndex) => {
+              const row = pagedRows[rowIndex]
+              if (!row) return []
               const key = rowKey(row)
               const customRowClass = rowClassName?.(row, rowIndex) ?? ''
               // Expansion content is computed BEFORE rendering so we
@@ -643,7 +700,15 @@ export function Table<Row>({
               const out: ReactNode[] = [
                 <tr
                   key={`row-${key}`}
-                  ref={rowRef ? (el) => rowRef(row, el) : undefined}
+                  ref={virtualRowsEnabled
+                    ? (el) => {
+                        rowVirtualizer.measureElement(el)
+                        rowRef?.(row, el)
+                      }
+                    : rowRef
+                      ? (el) => rowRef(row, el)
+                      : undefined}
+                  data-index={virtualRowsEnabled ? rowIndex : undefined}
                   className={`group border-b border-line/70 last:border-b-0 transition-colors ${onRowClick ? 'cursor-pointer hover:bg-brand-bg/40' : 'hover:bg-surface-2/60'} ${customRowClass}`}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
@@ -682,6 +747,14 @@ export function Table<Row>({
               }
               return out
             })}
+            {!loading && sortedRows.length > 0 && virtualRowsEnabled && virtualPaddingBottom > 0 ? (
+              <tr aria-hidden="true" className="virtual-table-spacer">
+                <td
+                  colSpan={orderedColumns.length}
+                  style={{ height: virtualPaddingBottom, padding: 0, border: 0 }}
+                />
+              </tr>
+            ) : null}
             {/* Footer/totals row — caller-driven via footerRow.
                 Stays attached to the bottom of tbody so it sits with
                 its parent data even as the table scrolls or paginates

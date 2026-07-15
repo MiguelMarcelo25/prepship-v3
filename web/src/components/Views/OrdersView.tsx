@@ -868,6 +868,9 @@ export default function OrdersView({
   // useTableDensityPreference (orders-table-density-prefs.ts) — pure localStorage
   // hook, byte-identical (same key, default 'cozy', validation set).
   const [tableDensity, setTableDensity] = useTableDensityPreference()
+  // Per user override unlock shipped data on 2026-07-15: presentation-only
+  // scroll ownership for row virtualization; isReadOnly and mutation gates stay unchanged.
+  const ordersScrollRef = useRef<HTMLDivElement>(null)
 
   const [singleActionBusy, setSingleActionBusy] = useState(false)
   const singleActionBusyRef = useRef(false)
@@ -6721,12 +6724,14 @@ export default function OrdersView({
               hasNoFilteredOrders={orderedFilteredOrders.length === 0}
               searchQuery={searchQuery}
               isGlobalSearchActive={isGlobalSearchActive}
+              scrollRef={ordersScrollRef}
             >
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
                 <OrdersTable
                   visibleColumns={visibleColumns}
                   tableWidth={tableWidth}
                   tableDensity={tableDensity}
+                  scrollElementRef={ordersScrollRef}
                   sortState={sortState}
                   dragColumnKey={dragColumnKey}
                   dragOverColumnKey={dragOverColumnKey}

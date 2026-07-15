@@ -45,6 +45,9 @@ export type OrderRowProps = {
   // by this component — deliberately NOT destructured below — it participates
   // only in React.memo's default shallow prop compare.
   cellStateEpoch?: unknown
+  virtualIndex?: number
+  measureElement?: (element: HTMLTableRowElement | null) => void
+  stripeEven?: boolean
 }
 
 export const OrderRow = memo(function OrderRow({
@@ -59,6 +62,9 @@ export const OrderRow = memo(function OrderRow({
   openShipStationOrder,
   setKbRowId,
   renderCell,
+  virtualIndex,
+  measureElement,
+  stripeEven,
 }: OrderRowProps) {
   const items = getActiveItems(order, detail)
   const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
@@ -70,6 +76,7 @@ export const OrderRow = memo(function OrderRow({
     isKbFocus ? 'row-kb-focus' : '',
     multiSku ? 'multi-sku-row' : '',
     getIsException(order) ? 'row-exception' : '',
+    stripeEven ? 'row-stripe-even' : '',
     // 30-second continuous fade animation triggered
     // by Print Label success. CSS keyframe is
     // `ps-shipping-fade` in app-shell.css (visible
@@ -85,7 +92,9 @@ export const OrderRow = memo(function OrderRow({
 
   return (
     <tr
+      ref={measureElement}
       id={`row-${order.orderId}`}
+      data-index={virtualIndex}
       className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
       data-expedited={expedited ? expedited.tier : undefined}
       style={{ borderLeft: `3px solid ${clientColor}` }}

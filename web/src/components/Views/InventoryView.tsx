@@ -3277,6 +3277,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
               storageKey="inventory-stock-levels"
               onRowClick={(row) => void openSkuDrawer(row.id)}
               paginated
+              virtualized
               pageSizeOptions={[10, 20, 50, 100, 200]}
               defaultPageSize={50}
               serverPagination={{

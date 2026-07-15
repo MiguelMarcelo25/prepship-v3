@@ -237,7 +237,8 @@
   transition: background .15s ease;
 }
 
-.orders-table tbody tr.order-row:nth-child(even):not(.row-selected):not(.row-panel-open):not(.row-exception) {
+.orders-table:not(.is-virtualized) tbody tr.order-row:nth-child(even):not(.row-selected):not(.row-panel-open):not(.row-exception),
+.orders-table.is-virtualized tbody tr.order-row.row-stripe-even:not(.row-selected):not(.row-panel-open):not(.row-exception) {
   background: #f3f5f8;
 }
 

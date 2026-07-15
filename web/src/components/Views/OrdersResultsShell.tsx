@@ -19,7 +19,7 @@
 // shell and are untouched. The error block's Retry button is the PS-020
 // non-mutating Orders recovery action; it delegates to OrdersView's
 // refetchOrders via the onRetry prop (no data-fetching moves here).
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, Loader2, RefreshCcw } from 'lucide-react'
 import { OrdersResultsEmptyState } from './OrdersResultsEmptyState'
@@ -32,6 +32,7 @@ export type OrdersResultsShellProps = {
   hasNoFilteredOrders: boolean
   searchQuery: string
   isGlobalSearchActive: boolean
+  scrollRef: RefObject<HTMLDivElement>
   children: ReactNode
 }
 
@@ -43,10 +44,11 @@ export function OrdersResultsShell({
   hasNoFilteredOrders,
   searchQuery,
   isGlobalSearchActive,
+  scrollRef,
   children,
 }: OrdersResultsShellProps) {
   return (
-    <div className="orders-wrap">
+    <div ref={scrollRef} className="orders-wrap">
       {loading ? (
         <motion.div
           id="loadingState"
