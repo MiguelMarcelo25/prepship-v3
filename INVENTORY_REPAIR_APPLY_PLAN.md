@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This Phase 6 / Phase 11 control plan defines what an inventory repair/apply workflow may do later. This batch is planning-only: no repair mode is implemented, no stock is changed, and no orders, shipped/cancelled rows, shipments, labels, or billing rows are mutated.
+This Phase 6 / Phase 11 control plan defines the PS-427 inventory cache repair workflow. The implementation is deployed fail-closed: no stock is changed until an exact dry-run plan is reviewed, DJ separately approves the run, and the production gate is enabled. No orders, shipped/cancelled rows, shipments, labels, or billing rows are mutated by this workflow.
 
 Latest read-only dry-run evidence from May 20, 2026:
 
@@ -57,15 +57,15 @@ Interpretation: `inventory.stockQty` and `inventory_ledger` are nearly aligned. 
   - client/SKU collision risk
   - inactive/deactivated SKU
 - [x] Add `classificationCounts`, `recommendedAction`, and `safeToAutoRepair=false` to dry-run output.
-- [ ] Add JSON/CSV artifact capture for dry-run output.
-- [ ] Add owner-approved apply mode in a separate reviewed batch only after dry-run evidence is accepted.
+- [x] Add JSON/CSV artifact capture for dry-run output.
+- [x] Add a ledger-authoritative, cache-only apply owner with atomic append-only audit evidence and a default-off production gate.
 
 ## Allowed Future Apply Scope
 
-A future apply mode may be considered only for narrowly scoped cache repair:
+The PS-427 apply mode is limited to narrowly scoped cache repair:
 
-- It may update `inventory.stockQty` from a reviewed source of truth only after owner approval.
-- It must require explicit flags such as `--apply`, `--client-id`, and either `--sku` or a saved dry-run artifact id.
+- It updates `inventory.stockQty` only from the reviewed ledger-authoritative plan after owner approval.
+- It requires exact client+SKU scope, reviewed plan hash, actor/reason, approval reference, confirmation, and the default-off production environment gate.
 - It must produce before/after evidence for every row.
 - It must run inside a transaction.
 - It must write an audit event.
@@ -77,7 +77,7 @@ A future apply mode may be considered only for narrowly scoped cache repair:
 - No mutation of shipped/cancelled order rows.
 - No mutation of `shipments`.
 - No mutation of label, manifest, billing, or fulfillment side-effect records.
-- No automatic correction from `effectiveStock` into `inventory.stockQty` until mismatch causes are classified.
+- No automatic/background correction from `effectiveStock` into `inventory.stockQty`; only the explicit reviewed PS-427 command boundary may rebuild the cache.
 - No broad all-client apply run without a saved dry-run artifact and owner approval.
 
 ## Test Plan
@@ -103,9 +103,8 @@ Future apply-mode tests before any repair code can ship:
 
 ## Deployment / Rollback Notes
 
-- This plan is safe to deploy because it is documentation and guard-only.
-- No stock repair/apply mode is added yet.
-- Any future apply mode must ship behind an explicit command, not a page load or background worker.
+- PS-427 is safe to deploy because apply is default-off and requires an explicit reviewed command; it never runs from a page load or background worker.
+- The existing dry-run CLI remains read-only and has no apply flag.
 - Rollback for future repair must use the saved before/after artifact from the exact apply run.
 
 ## Recommended Implementation Order

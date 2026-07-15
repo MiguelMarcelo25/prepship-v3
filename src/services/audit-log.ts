@@ -1,12 +1,11 @@
 /**
  * audit-log.ts — PS-234 append-only audit event writer.
  *
- * recordAuditEvent() is the single owner of "write a durable audit row". It is
- * BEST-EFFORT: a failed audit insert is logged and swallowed so it can NEVER break
- * the business mutation it is recording. Every `details` payload is routed through
- * redactAuditDetails() so secret/token/credential values never land in the table —
- * only changed-field names + masked metadata (AUDIT_LOGGING_MATRIX.md control:
- * "never store raw credentials").
+ * recordAuditEvent() is the normal BEST-EFFORT writer: a failed insert is logged
+ * and swallowed so it cannot break the business mutation it records. Mutations
+ * that require atomic evidence use recordRequiredAuditEventInTransaction(), whose
+ * failure intentionally rolls back the caller's transaction. Both writers route
+ * details through redactAuditDetails() so secrets never land in the table.
  *
  * Append-only is enforced at the DB level by migration 0044 (a trigger that blocks
  * UPDATE/DELETE for every role); ensureAuditLogSchema() verifies readiness.
@@ -34,6 +33,8 @@ export type AuditEventInput = AuditActor & {
   details?: Record<string, unknown> | null;
 };
 
+export type AuditLogTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 // Field names whose VALUES must never be persisted to the audit log.
 const SECRET_KEY_RE =
   /(secret|token|api[_-]?key|password|passwd|authorization|bearer|credential|private[_-]?key|client[_-]?secret)/i;
@@ -46,6 +47,29 @@ export function redactAuditDetails(value: unknown): unknown {
     out[key] = SECRET_KEY_RE.test(key) ? '[redacted]' : redactAuditDetails(nested);
   }
   return out;
+}
+
+function auditEventValues(event: AuditEventInput) {
+  return {
+    eventType: event.eventType,
+    actorId: event.actorId ?? null,
+    actorEmail: event.actorEmail ?? null,
+    resourceType: event.resourceType,
+    resourceId: event.resourceId == null ? null : String(event.resourceId),
+    action: event.action,
+    details: event.details
+      ? (redactAuditDetails(event.details) as Record<string, unknown>)
+      : null,
+    ip: event.ip ?? null,
+  };
+}
+
+/** Required audit insert for mutations whose audit evidence must commit atomically. */
+export async function recordRequiredAuditEventInTransaction(
+  tx: AuditLogTransaction,
+  event: AuditEventInput,
+): Promise<void> {
+  await tx.insert(auditLog).values(auditEventValues(event));
 }
 
 /** Pull the actor (verified JWT subject/email) + client IP off a Hono request. */
@@ -67,18 +91,7 @@ export function auditActorFromContext(c: Context): AuditActor {
 export async function recordAuditEvent(event: AuditEventInput): Promise<void> {
   try {
     await ensureAuditLogSchema();
-    await db.insert(auditLog).values({
-      eventType: event.eventType,
-      actorId: event.actorId ?? null,
-      actorEmail: event.actorEmail ?? null,
-      resourceType: event.resourceType,
-      resourceId: event.resourceId == null ? null : String(event.resourceId),
-      action: event.action,
-      details: event.details
-        ? (redactAuditDetails(event.details) as Record<string, unknown>)
-        : null,
-      ip: event.ip ?? null,
-    });
+    await db.insert(auditLog).values(auditEventValues(event));
   } catch (err) {
     // A failed audit write MUST NOT break the business mutation it records.
     console.warn(

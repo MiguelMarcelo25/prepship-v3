@@ -23,6 +23,7 @@ const devTasks = read('DEV_TASKS_README.md');
 const sourceAudit = read('SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md');
 const inventoryPlan = read('INVENTORY_SOURCE_OF_TRUTH_PLAN.md');
 const reconciliationPlan = read('RECONCILIATION_REPORTS_PLAN.md');
+const repairOwner = read('src/services/inventory-reconciliation.ts');
 
 assert(
   packageJson.scripts?.['inventory:reconcile:dry-run'] ===
@@ -105,9 +106,11 @@ for (const [name, contents] of docs) {
 }
 
 assert(
-  inventoryPlan.includes('No stock repair/apply mode is added yet') &&
-    reconciliationPlan.includes('read-only first'),
-  'docs keep inventory reconciliation detection separate from repair',
+  inventoryPlan.includes('production apply remains disabled by default') &&
+    reconciliationPlan.includes('read-only first') &&
+    repairOwner.includes('APPLY_DISABLED') &&
+    repairOwner.includes('reviewedPlanHash'),
+  'read-only detection stays separate from the default-off reviewed repair boundary',
 );
 
 if (process.exitCode) {

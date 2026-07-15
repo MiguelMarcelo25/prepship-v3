@@ -277,9 +277,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   //
   // The cached stockQty stays in the response as `currentStock` for
   // backward-compat; the new `effectiveStock` is what the operator
-  // sees in the STOCK column. A separate admin endpoint
-  // POST /admin/reconcile-inventory-stock can backfill stockQty to
-  // match effectiveStock for every row (see admin.ts).
+  // sees in the STOCK column. The admin reconciliation endpoint can
+  // produce a read-only plan; PS-427 permits only an exact reviewed,
+  // client+SKU-scoped cache rebuild behind a default-off approval gate.
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.

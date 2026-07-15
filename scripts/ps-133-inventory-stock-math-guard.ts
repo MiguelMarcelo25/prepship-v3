@@ -63,7 +63,7 @@ check('includes remove rows', inventoryLedgerBalance([
 // ── Static: one owner, consumers delegate, dashboard drift removed ──
 {
   const math = readFileSync('src/services/inventory-stock-math.ts', 'utf8');
-  check('owner exports computeEffectiveStockForIds', /export async function computeEffectiveStockForIds/.test(math), true);
+  check('owner exports computeEffectiveStockForIds', /export function computeEffectiveStockForIds/.test(math), true);
 
   const inv = readFileSync('src/routes/inventory.ts', 'utf8');
   check('inventory list delegates to the owner', /computeEffectiveStockForIds\(/.test(inv), true);
@@ -79,11 +79,13 @@ check('includes remove rows', inventoryLedgerBalance([
   const script = readFileSync('scripts/reconcile-inventory-stock.ts', 'utf8');
   check('reconcile script cross-references the owner', /inventory-stock-math/.test(script), true);
 
-  // admin /reconcile-inventory-stock is a WRITE path that keeps its ledger_balance CTE inline
-  // (it needs current_stock + received + sold + active/clientId in one transactional query) but
-  // must be cross-referenced as the SQL twin of the canonical owner so it can't silently drift.
+  // PS-427: reconciliation delegates to its canonical service, which consumes this owner inside
+  // the same transaction. The admin route must stay thin and must not duplicate stock math.
   const admin = readFileSync('src/routes/admin.ts', 'utf8');
-  check('admin reconcile cross-references the canonical effective-stock owner', /inventory-stock-math|computeEffectiveStockForIds/.test(admin), true);
+  const reconciliation = readFileSync('src/services/inventory-reconciliation.ts', 'utf8');
+  check('reconciliation delegates to transaction-bound effective-stock owner', /computeEffectiveStockForIdsInTransaction\(/.test(reconciliation), true);
+  check('admin reconcile delegates to reconciliation owner', /buildInventoryReconciliationPlan\(/.test(admin), true);
+  check('admin reconcile does not inline the ledger balance', /ledger_balance as \(/.test(admin), false);
 }
 
 if (failures > 0) {

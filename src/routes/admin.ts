@@ -22,13 +22,17 @@ import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { validateClientRateSourceWrite } from '../services/client-rate-source-policy';
 import { printQueue } from '../db/schema/print-queue';
 import { setClientHouseAccountEnabled, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
-import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
-import { applyInventoryMovementInTransaction } from '../services/inventory-movement';
 import {
   listUnresolvedLabelPurchaseIntents,
   resolveLabelPurchaseIntentByOperator,
 } from '../lib/label-purchase-intent';
 import { auditActorFromContext, recordAuditEvent } from '../services/audit-log';
+import { env } from '../lib/env';
+import {
+  applyInventoryReconciliationPlan,
+  buildInventoryReconciliationPlan,
+  InventoryReconciliationError,
+} from '../services/inventory-reconciliation';
 
 const app = new Hono();
 
@@ -1116,182 +1120,83 @@ app.post('/cleanup-stale-queue-entries', async (c) => {
   });
 });
 
-// One-time reconciliation: walk every active inventory row, compute its
-// canonical effective_stock and write that value into inventory.stockQty so
-// the cached field aligns with what operators see.
-//
-// PS-133: effective_stock here is the SAME value the canonical owner returns
-// (src/services/inventory-stock-math.ts — inventoryLedgerBalance /
-// computeEffectiveStockForIds): SUM of all non-ship ledger rows + SUM of
-// min(qty)-per-order for ship rows. The ledger_balance CTE below is the SQL
-// twin of that owner, kept inline because this WRITE path needs current_stock
-// + received + sold + the active/clientId filter in ONE transactional query;
-// the behavioral guard (test:ps-133-stock-math) pins the shared formula.
-// NOTE: the received/sold figures are used ONLY for the human-readable ledger
-// note + dry-run sample — they do NOT determine the written stockQty.
-// For each row
-// that actually needed adjustment, insert a single `adjust`-type
-// inventory_ledger entry recording the delta so the History panel
-// shows the correction transparently.
-//
-// Idempotent: a second run after a successful first run finds no
-// deltas and writes nothing.
-//
-// Lockdown compliance: this READS shipped orders (allowed under the
-// analytics carve-out in AGENTS.md) and only WRITES to the
-// `inventory` table and `inventory_ledger` (neither is locked). It
-// does NOT call deductInventoryForOrder and is NOT gated by the
-// INVENTORY_AUTO_DEDUCT kill switch — that switch governs the
-// automatic per-shipment deduction path; reconciliation is an
-// explicit human-triggered correction with a distinct ledger note
-// so auditors can tell the two apart.
-//
-// Query params:
-//   ?dryRun=1   — return the diff without writing anything.
-//   ?clientId=N — limit to a single client's SKUs.
-app.post('/reconcile-inventory-stock', async (c) => {
-  const dryRun = c.req.query('dryRun') === '1' || c.req.query('dryRun') === 'true';
-  const clientIdRaw = c.req.query('clientId');
-  const clientIdParsed = clientIdRaw !== undefined ? Number(clientIdRaw) : undefined;
-  const clientIdFilter = Number.isFinite(clientIdParsed as number)
-    ? (clientIdParsed as number)
-    : undefined;
-
-  const rows = await db.execute<{
-    inventory_id: number;
-    sku: string;
-    current_stock_qty: number;
-    total_received: number;
-    total_sold: number;
-    effective_stock: number;
-  }>(sql`
-    with receives as (
-      select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as total_received
-      from ${inventoryLedger} l
-      where l.type = 'receive'
-      group by l.inventory_id
-    ),
-    -- PS-133: SQL twin of the canonical effective-stock owner in
-    -- src/services/inventory-stock-math.ts (computeEffectiveStockForIds). MUST
-    -- stay in sync with it; behavioral parity is pinned by test:ps-133-stock-math.
-    ledger_balance as (
-      select stock_rows.inventory_id as id, coalesce(sum(stock_rows.qty), 0)::int as effective_stock
-      from (
-        select l.inventory_id, l.qty
-        from ${inventoryLedger} l
-        where l.type <> 'ship' or l.order_id is null
-        union all
-        select l.inventory_id, min(l.qty)::int as qty
-        from ${inventoryLedger} l
-        where l.type = 'ship'
-          and l.order_id is not null
-        group by l.inventory_id, l.order_id
-      ) stock_rows
-      group by stock_rows.inventory_id
-    ),
-    sells as (
-      select i.id as id,
-        coalesce(sum(oi.quantity), 0)::int as total_sold
-      from ${inventory} i
-      join order_items oi
-        on lower(oi.sku) = lower(i.sku)
-      join ${orders} o
-        on (
-          o.id = oi.order_id
-          and (
-          (i.client_id is null and o.client_id is null)
-          or i.client_id = o.client_id
-          )
-        )
-      where oi.quantity > 0
-        and o.order_status = 'shipped'
-      group by i.id
-    )
-    select
-      i.id as inventory_id,
-      i.sku as sku,
-      i.stock_qty as current_stock_qty,
-      coalesce(receives.total_received, 0)::int as total_received,
-      coalesce(sells.total_sold, 0)::int as total_sold,
-      coalesce(ledger_balance.effective_stock, i.stock_qty, 0)::int as effective_stock
-    from ${inventory} i
-    left join receives on receives.id = i.id
-    left join ledger_balance on ledger_balance.id = i.id
-    left join sells on sells.id = i.id
-    where i.active = true
-      ${
-        clientIdFilter !== undefined
-          ? sql`and i.client_id = ${clientIdFilter}`
-          : sql``
-      }
-  `);
-
-  const adjustments = rows
-    .map((r) => {
-      const currentStockQty = Number(r.current_stock_qty) || 0;
-      const totalReceived = Number(r.total_received) || 0;
-      const totalSold = Number(r.total_sold) || 0;
-      const effectiveStock = Number(r.effective_stock) || 0;
-      return {
-        inventoryId: r.inventory_id,
-        sku: r.sku,
-        currentStockQty,
-        totalReceived,
-        totalSold,
-        effectiveStock,
-        delta: effectiveStock - currentStockQty,
-      };
-    })
-    .filter((a) => a.delta !== 0);
-
-  if (dryRun) {
-    return c.json({
-      mode: 'dry-run',
-      rowsScanned: rows.length,
-      rowsToAdjust: adjustments.length,
-      totalDelta: adjustments.reduce((sum, a) => sum + a.delta, 0),
-      sampleAdjustments: adjustments.slice(0, 20),
-    });
-  }
-
-  if (adjustments.length === 0) {
-    return c.json({
-      mode: 'apply',
-      rowsScanned: rows.length,
-      rowsAdjusted: 0,
-      totalDelta: 0,
-      message: 'All inventory rows already match effectiveStock — nothing to do.',
-    });
-  }
-
-  const reconciliationEffectiveAt = new Date();
-  const reconciliationNote = `Reconciliation backfill ${reconciliationEffectiveAt.toISOString().slice(0, 10)}`;
-  await ensureInventoryLedgerSchema();
-  await db.transaction(async (tx) => {
-    for (const a of adjustments) {
-      const movement = await applyInventoryMovementInTransaction(tx, {
-        inventoryId: a.inventoryId,
-        type: 'adjust',
-        qty: a.delta,
-        effectiveAt: reconciliationEffectiveAt,
-        note: `${reconciliationNote}: stockQty ${a.currentStockQty} → ${a.effectiveStock} (received ${a.totalReceived} − sold-shipped ${a.totalSold})`,
-        createdBy: 'admin/reconcile-inventory-stock',
-      });
-      if (movement.status !== 'applied') throw new Error('Inventory reconciliation movement was not applied');
-    }
-  });
-
-  console.info(
-    `[admin/reconcile-inventory-stock] adjusted ${adjustments.length} of ${rows.length} active rows`
-  );
-
-  return c.json({
-    mode: 'apply',
-    rowsScanned: rows.length,
-    rowsAdjusted: adjustments.length,
-    totalDelta: adjustments.reduce((sum, a) => sum + a.delta, 0),
-    sampleAdjustments: adjustments.slice(0, 20),
-  });
+const inventoryReconciliationQuerySchema = z.object({
+  dryRun: z.enum(['1', 'true']).optional(),
+  clientId: z.coerce.number().int().positive().optional(),
+  sku: z.string().trim().min(1).max(200).optional(),
 });
+
+const inventoryReconciliationApplySchema = z.object({
+  reviewedPlanHash: z.string().regex(/^[a-f0-9]{64}$/i),
+  confirmation: z.string(),
+  reason: z.string().trim().min(10).max(500),
+  approvalReference: z.string().trim().min(5).max(200),
+});
+
+// PS-427: inventory_ledger is authoritative movement history; stockQty is a
+// cache only. Dry-run stays read-only. Apply delegates to the reconciliation
+// owner, which rebuilds only stockQty and writes append-only audit evidence in
+// the same transaction. The old movement-based path is intentionally removed
+// because adding the same delta to ledger and cache cannot converge.
+app.post(
+  '/reconcile-inventory-stock',
+  zValidator('query', inventoryReconciliationQuerySchema),
+  async (c) => {
+    const query = c.req.valid('query');
+    const scope = { clientId: query.clientId, sku: query.sku };
+    const dryRun = query.dryRun === '1' || query.dryRun === 'true';
+
+    try {
+      if (dryRun) {
+        const plan = await buildInventoryReconciliationPlan(scope);
+        return c.json({
+          mode: 'dry-run',
+          contract: plan.contract,
+          scope: plan.scope,
+          planHash: plan.planHash,
+          rowsScanned: plan.rowsScanned,
+          rowsToAdjust: plan.rowsToAdjust,
+          totalDelta: plan.totalDelta,
+          blocked: plan.blocked,
+          sampleAdjustments: plan.rows.filter((row) => row.delta !== 0).slice(0, 20),
+          ambiguousRows: plan.ambiguousRows.slice(0, 20),
+          message: plan.blocked
+            ? 'Case-variant duplicate SKUs must be resolved before any cache rebuild.'
+            : 'Read-only plan generated; no rows changed.',
+        });
+      }
+
+      const body = inventoryReconciliationApplySchema.safeParse(
+        await c.req.json().catch(() => null),
+      );
+      if (!body.success) {
+        return c.json({
+          error: 'Unsafe legacy apply is disabled. Run dryRun=1, review the exact plan, then submit the required reviewed apply body.',
+          issues: body.error.issues,
+        }, 400);
+      }
+
+      const result = await applyInventoryReconciliationPlan({
+        scope,
+        reviewedPlanHash: body.data.reviewedPlanHash,
+        confirmation: body.data.confirmation,
+        reason: body.data.reason,
+        approvalReference: body.data.approvalReference,
+        actor: auditActorFromContext(c),
+        applyEnabled: env.INVENTORY_RECONCILIATION_APPLY_ENABLED,
+      });
+      console.info('[admin/reconcile-inventory-stock] cache rebuild complete', {
+        runId: result.runId,
+        rowsAdjusted: result.rowsAdjusted,
+      });
+      return c.json(result);
+    } catch (error) {
+      if (error instanceof InventoryReconciliationError) {
+        return c.json({ error: error.message, code: error.code }, error.status);
+      }
+      throw error;
+    }
+  },
+);
 
 export default app;

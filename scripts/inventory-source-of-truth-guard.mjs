@@ -12,6 +12,8 @@ const inventoryMovement = fs.readFileSync(path.join(root, 'src/services/inventor
 const inventoryRoute = fs.readFileSync(path.join(root, 'src/routes/inventory.ts'), 'utf8');
 // PS-133: effective-stock SQL now lives in the canonical owner; the route delegates to it.
 const inventoryStockMath = fs.readFileSync(path.join(root, 'src/services/inventory-stock-math.ts'), 'utf8');
+const inventoryReconciliation = fs.readFileSync(path.join(root, 'src/services/inventory-reconciliation.ts'), 'utf8');
+const adminRoute = fs.readFileSync(path.join(root, 'src/routes/admin.ts'), 'utf8');
 const inventoryView = fs.readFileSync(path.join(root, 'web/src/components/Views/InventoryView.tsx'), 'utf8');
 // PS-154: the pure stock-display helpers (getInventoryDisplayStock + the effectiveStock /
 // cached-stockQty audit-fallback math) were extracted VERBATIM into inventory-stock-helpers.ts;
@@ -72,11 +74,16 @@ assert(
 );
 
 assert(
-  // PS-133: the route delegates to the canonical owner, which holds the ledger_balance SQL.
+  // PS-133/PS-427: reads and repair share the canonical calculation. Reconciliation sets only
+  // the cache; it must never append a movement to make the cache appear consistent.
   inventoryRoute.includes('computeEffectiveStockForIds') &&
     inventoryStockMath.includes('ledger_balance') &&
-    inventoryRoute.includes('POST /admin/reconcile-inventory-stock'),
-  'inventory route uses ledger balance (via the canonical effective-stock owner) for effective stock and keeps existing reconciliation repair path',
+    inventoryReconciliation.includes('computeEffectiveStockForIdsInTransaction') &&
+    inventoryReconciliation.includes('stockQty: row.authoritativeLedgerQty') &&
+    !inventoryReconciliation.includes('applyInventoryMovementInTransaction') &&
+    adminRoute.includes("'/reconcile-inventory-stock'") &&
+    adminRoute.includes('buildInventoryReconciliationPlan'),
+  'inventory reads and cache rebuild delegate to the canonical ledger-derived stock owner',
 );
 
 assert(

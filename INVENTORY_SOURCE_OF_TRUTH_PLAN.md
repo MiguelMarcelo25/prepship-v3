@@ -60,7 +60,7 @@ Canonical rule:
 - [x] Add mismatch classifications, recommended actions, and classification counts to the dry-run report.
 - [x] Add `INVENTORY_REPAIR_APPLY_PLAN.md` before any repair/apply implementation.
 - [x] Add static guard for inventory repair/apply planning.
-- [ ] Add owner-approved cache rebuild path with before/after evidence.
+- [x] Add owner-approved cache rebuild path with before/after evidence (PS-427; default-off production gate).
 - [ ] Move sold/velocity/days-supply/restock to worker-generated reporting metrics.
 - [ ] Add browser smoke evidence for Inventory after reporting metrics rollout.
 
@@ -77,7 +77,7 @@ Canonical rule:
 - [x] Report `classificationCounts`, row-level `classification`, `recommendedAction`, and `safeToAutoRepair=false`.
 - [x] Document owner approval, saved artifacts, rollback, and prohibited mutations in `INVENTORY_REPAIR_APPLY_PLAN.md`.
 - [x] Support saved dry-run artifacts with `--out-json` and `--out-csv`.
-- [ ] Require approval before applying any cache repair.
+- [x] Require an exact reviewed plan, actor/reason, separate approval reference, and default-off production gate before applying any cache repair.
 - [ ] Add worker-generated inventory metrics for velocity/restock.
 
 ## Test Plan
@@ -99,16 +99,15 @@ Future implementation tests:
 - `npm run inventory:reconcile:dry-run -- --sku "ABC-123"`
 - `npm run inventory:reconcile:dry-run -- --limit 100 --out-json artifacts/inventory-reconcile.json`
 - `npm run inventory:reconcile:dry-run -- --limit 100 --out-csv artifacts/inventory-reconcile.csv`
-- apply mode updates only `inventory.stockQty` after approval
+- apply mode updates only `inventory.stockQty` after approval and writes required append-only audit evidence atomically
 - Inventory page uses `effectiveStock` and exposes cached stock only as audit/tooltip fallback
 - shipped/cancelled order rows and `shipments` are not mutated by inventory reconciliation
 
 ## Deployment / Rollback Notes
 
-- This batch is safe to deploy because it adds documentation and a static guard only.
-- No stock repair/apply mode is added yet.
-- Repair/apply implementation is now gated by `INVENTORY_REPAIR_APPLY_PLAN.md`.
-- Future inventory reconciliation apply mode must be deployed separately and reviewed with production dry-run output.
+- PS-427 adds a cache-only repair owner; production apply remains disabled by default.
+- The read-only CLI still has no stock repair/apply mode.
+- Any production run requires an exact reviewed client+SKU plan and separate DJ approval before the environment gate is enabled.
 - Rollback for future cache repairs should be based on a saved before/after reconciliation report.
 - Do not modify shipped/cancelled order rows or the `shipments` table as part of inventory cache repair.
 
@@ -117,6 +116,6 @@ Future implementation tests:
 1. Land this source-of-truth plan and static guard.
 2. Land the read-only dry-run reconciliation report for ledger/cache/effective stock.
 3. Review dry-run output and `INVENTORY_REPAIR_APPLY_PLAN.md` with DJ/OpenClaw and assign an inventory owner.
-4. Add approved cache rebuild/apply mode in a separate reviewed batch only after saved dry-run evidence is accepted.
+4. Use the PS-427 cache rebuild owner only after saved dry-run evidence is accepted and DJ separately enables the production gate.
 5. Move sold/velocity/days-supply/restock into worker-generated reporting metrics.
 6. Browser-audit Inventory and Dashboard after reporting metrics are live.

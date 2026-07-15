@@ -97,6 +97,9 @@ const schema = z.object({
   // off) instead of silently ignoring the operator. Resolved value is logged at
   // first use by fulfillment-deductions.ts.
   INVENTORY_AUTO_DEDUCT: booleanFlag(true),
+  // PS-427: production cache repair remains fail-closed until DJ separately
+  // approves an exact dry-run plan and enables this gate for the reviewed run.
+  INVENTORY_RECONCILIATION_APPLY_ENABLED: booleanFlag(false),
   STRICT_JWT_CLAIMS: booleanFlag(false),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.

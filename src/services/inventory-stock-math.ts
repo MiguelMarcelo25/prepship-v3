@@ -39,6 +39,9 @@ export type EffectiveStockEntry = {
   totalSold: number;
 };
 
+export type InventoryStockTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type InventoryStockExecutor = typeof db | InventoryStockTransaction;
+
 // PS-133: THE canonical backend effective-stock calculation. All consumers (inventory list,
 // dashboard inventory-risk, admin reconcile) delegate here so they can never drift.
 //
@@ -49,19 +52,21 @@ export type EffectiveStockEntry = {
 //
 // READ-ONLY over inventory_ledger / inventory / order_items / orders — not the
 // shipped/cancelled lockdown surface (no order/shipment rows are mutated).
-export async function computeEffectiveStockForIds(
+async function computeEffectiveStockForIdsWithExecutor(
+  executor: InventoryStockExecutor,
   inventoryIds: number[],
 ): Promise<Map<number, EffectiveStockEntry>> {
   const result = new Map<number, EffectiveStockEntry>();
   const ids = [...new Set(inventoryIds.filter((n) => Number.isFinite(n)))];
   if (ids.length === 0) return result;
 
-  const effectiveRows = await db.execute<{
+  type EffectiveRow = {
     inventory_id: number;
     total_received: number;
     total_sold: number;
     effective_stock: number;
-  }>(sql`
+  };
+  const executed = await executor.execute<EffectiveRow>(sql`
     with ids as (
       select unnest(array[${sql.join(ids.map((id) => sql`${id}`), sql`, `)}]::int[]) as id
     ),
@@ -131,6 +136,10 @@ export async function computeEffectiveStockForIds(
     left join ledger_sells on ledger_sells.id = ids.id
     left join sells on sells.id = ids.id
   `);
+  // postgres-js returns a row array; PGlite returns the same rows under `.rows`.
+  const effectiveRows = Array.isArray(executed)
+    ? executed
+    : (executed as unknown as { rows?: EffectiveRow[] }).rows ?? [];
 
   for (const row of effectiveRows) {
     result.set(Number(row.inventory_id), {
@@ -140,4 +149,17 @@ export async function computeEffectiveStockForIds(
     });
   }
   return result;
+}
+
+export function computeEffectiveStockForIds(
+  inventoryIds: number[],
+): Promise<Map<number, EffectiveStockEntry>> {
+  return computeEffectiveStockForIdsWithExecutor(db, inventoryIds);
+}
+
+export function computeEffectiveStockForIdsInTransaction(
+  tx: InventoryStockTransaction,
+  inventoryIds: number[],
+): Promise<Map<number, EffectiveStockEntry>> {
+  return computeEffectiveStockForIdsWithExecutor(tx, inventoryIds);
 }
