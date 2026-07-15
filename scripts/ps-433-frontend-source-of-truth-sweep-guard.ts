@@ -34,6 +34,37 @@ const clientRoutes = `${read('src/routes/clients.ts')}\n${read('src/routes/admin
 const analysisRoute = read('src/routes/analysis.ts');
 const billingRoute = read('src/routes/billing.ts');
 const shipStationCredentials = read('src/lib/shipstation/credentials.ts');
+const confirmedScope = JSON.parse(read('docs/ps-tickets/PS-433/sot-confirmed.json')) as {
+  taskId: string;
+  source: { implementationSha: string };
+  findings: Array<{
+    id: string;
+    severity: 'high' | 'medium';
+    rule: string;
+    unsafeOwner: string;
+    canonicalOwner: string;
+    entryPoint: string;
+    disposition: string;
+    callers: string;
+    proof: string;
+  }>;
+};
+
+assert.equal(confirmedScope.taskId, 'PS-433');
+assert.equal(confirmedScope.source.implementationSha, '49b913fc35b4564571d9bd0f1ce814714a17b0fc');
+assert.equal(confirmedScope.findings.length, 42, 'the repository must carry all 42 reverified findings');
+assert.equal(new Set(confirmedScope.findings.map((finding) => finding.id)).size, 42);
+assert.equal(confirmedScope.findings.filter((finding) => finding.severity === 'high').length, 15);
+assert.equal(confirmedScope.findings.filter((finding) => finding.severity === 'medium').length, 27);
+assert.ok(confirmedScope.findings.every((finding) =>
+  finding.rule.trim() &&
+  finding.unsafeOwner.trim() &&
+  finding.canonicalOwner.trim() &&
+  finding.entryPoint.trim() &&
+  finding.disposition.trim() &&
+  finding.callers.trim() &&
+  finding.proof.startsWith('npm run '),
+));
 
 // Rate list money, official best identity, source labels, and availability are
 // backend DTO facts. UI filtering may express operator display intent only.

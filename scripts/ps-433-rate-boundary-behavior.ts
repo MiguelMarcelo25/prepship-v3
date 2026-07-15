@@ -1,0 +1,127 @@
+/**
+ * PS-433 adversarial rate-authority proof.
+ *
+ * Offline only: exercises the real backend proof/account policy owners with an
+ * injected provider spy. It does not open a database, call a provider, buy
+ * postage, create a label, or mutate shipped/cancelled data.
+ */
+import assert from 'node:assert/strict';
+import { evaluateClientRateSourcePolicy } from '../src/services/client-rate-source-policy.js';
+import {
+  buildApplyBestRatePatch,
+  finalizeAppliedBestRateFromSnapshot,
+} from '../src/services/shipping-workflow/apply-best-rate.js';
+import { assertPurchaseAccountMatchesProof } from '../src/services/shipping-workflow/rate-fingerprint.js';
+
+const fetchedAt = '2026-07-15T08:00:00.000Z';
+const now = Date.parse('2026-07-15T09:00:00.000Z');
+const order101Rate = {
+  carrier_id: 'se-596001',
+  carrier_code: 'ups',
+  service_code: 'ups_ground',
+  service_type: 'UPS Ground',
+  shipping_amount: { amount: 9.65, currency: 'USD' },
+  other_amount: { amount: 0, currency: 'USD' },
+  amount: 9.65,
+  shipmentCost: 9.65,
+  otherCost: 0,
+  selectedRateKey: 'srk-order-101',
+};
+const order101Snapshot = {
+  cacheKey: 'rate:v4|order=101|account=596001|dims=12x10x6|weight=32',
+  rates: [order101Rate],
+  fetchedAt,
+  bestRateKey: order101Rate.selectedRateKey,
+  bestRateComplete: true,
+};
+
+let providerSpyCalls = 0;
+
+function attemptProviderPurchase(input: {
+  selectedRateKey: string;
+  purchaseShippingProviderId: number;
+}): { ok: true } | { ok: false; code: string } {
+  const finalized = finalizeAppliedBestRateFromSnapshot({
+    rateQuoteId: 'rq-order-101',
+    selectedRateKey: input.selectedRateKey,
+    snapshot: order101Snapshot,
+    now,
+  });
+  if (!finalized.ok) return { ok: false, code: finalized.code };
+
+  try {
+    assertPurchaseAccountMatchesProof({
+      purchaseShippingProviderId: input.purchaseShippingProviderId,
+      selectedRate: finalized.bestRateJson,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      code: String((error as Error & { code?: string }).code ?? 'account_mismatch'),
+    };
+  }
+
+  const patch = buildApplyBestRatePatch({
+    bestRateJson: finalized.bestRateJson,
+    dimsLabel: '12x10x6',
+    selectedPid: 44,
+    currentRequestFingerprint: order101Snapshot.cacheKey,
+  });
+  if (!patch.ok) return { ok: false, code: patch.code };
+
+  providerSpyCalls += 1;
+  return { ok: true };
+}
+
+const crossOrder = attemptProviderPurchase({
+  selectedRateKey: 'srk-order-202',
+  purchaseShippingProviderId: 596001,
+});
+assert.deepEqual(crossOrder, { ok: false, code: 'selected_rate_not_found' });
+assert.equal(providerSpyCalls, 0, 'cross-order quote rejection must not reach the provider spy');
+
+const crossAccount = attemptProviderPurchase({
+  selectedRateKey: order101Rate.selectedRateKey,
+  purchaseShippingProviderId: 700002,
+});
+assert.equal(crossAccount.ok, false);
+assert.equal(providerSpyCalls, 0, 'cross-account proof rejection must not reach the provider spy');
+
+const factMismatch = buildApplyBestRatePatch({
+  bestRateJson: {
+    ...order101Rate,
+    requestFingerprint: order101Snapshot.cacheKey,
+  },
+  dimsLabel: '12x10x6',
+  selectedPid: 44,
+  currentRequestFingerprint: 'rate:v4|order=101|account=596001|dims=20x20x20|weight=32',
+});
+assert.deepEqual(factMismatch, {
+  ok: false,
+  code: 'fingerprint_mismatch',
+  error: 'The best rate was quoted against a different request; re-rate before applying.',
+});
+assert.equal(providerSpyCalls, 0, 'fact mismatch must not reach the provider spy');
+
+assert.deepEqual(
+  evaluateClientRateSourcePolicy({
+    clientId: 10,
+    rateSourceClientId: 20,
+    source: { id: 21, active: true, ssApiKeyV2: 'ss-key' },
+  }),
+  {
+    ok: false,
+    code: 'RATE_SOURCE_UNAVAILABLE',
+    error: 'Rate-source client must exist, be active, and have its own ShipStation v2 account.',
+  },
+);
+assert.equal(providerSpyCalls, 0, 'rate-source identity mismatch must not reach the provider spy');
+
+const valid = attemptProviderPurchase({
+  selectedRateKey: order101Rate.selectedRateKey,
+  purchaseShippingProviderId: 596001,
+});
+assert.deepEqual(valid, { ok: true });
+assert.equal(providerSpyCalls, 1, 'one valid backend-issued proof reaches the provider spy exactly once');
+
+console.log('PASS PS-433 adversarial rate boundary behavior');
