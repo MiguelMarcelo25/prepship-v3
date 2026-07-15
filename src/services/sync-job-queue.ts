@@ -64,6 +64,11 @@ import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
 import { parseDurableRateBackfillJobPayload } from './rate-backfill-job-types';
 import { runDurableRateBackfillJob } from './rates-backfill';
 import { runLocalTariffCalibrationTick } from './local-tariff-calibration';
+import {
+  orderSyncQueueBlocker,
+  readOrderSyncQueueTruth,
+  type OrderSyncQueueState,
+} from './order-sync-queue-state';
 
 // PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
 // endpoint). Local aliases keep the rest of this file unchanged.
@@ -155,6 +160,8 @@ const SCHEDULE_CRON = {
 export type ManualOrderSyncEnqueueResult = {
   queued: boolean;
   jobId: string | null;
+  queueState: Exclude<OrderSyncQueueState, 'idle'> | 'already_queued' | 'error';
+  blockerJobId: string | null;
   queueStarted: boolean;
   jobName: typeof JOBS.orders;
   mode: 'incremental' | 'full';
@@ -320,9 +327,14 @@ async function sendOrderSyncJob(
         retentionDays: 7,
       },
     );
+    const blocker = id
+      ? null
+      : orderSyncQueueBlocker(await readOrderSyncQueueTruth());
     return {
       queued: Boolean(id),
-      jobId: id ? String(id) : null,
+      jobId: id ? String(id) : blocker?.jobId ?? null,
+      queueState: id ? 'queued' : blocker?.state ?? 'already_queued',
+      blockerJobId: blocker?.jobId ?? null,
       queueStarted,
       jobName: JOBS.orders,
       mode: payload.mode,
@@ -333,6 +345,8 @@ async function sendOrderSyncJob(
     return {
       queued: false,
       jobId: null,
+      queueState: 'error',
+      blockerJobId: null,
       queueStarted,
       jobName: JOBS.orders,
       mode: payload.mode,
@@ -398,6 +412,8 @@ export async function enqueueManualOrderSyncJob(
     return {
       queued: false,
       jobId: null,
+      queueState: 'error',
+      blockerJobId: null,
       queueStarted: false,
       jobName: JOBS.orders,
       mode: payload.mode,
@@ -437,6 +453,8 @@ export async function enqueueOrderSyncWatchdogJob(): Promise<ManualOrderSyncEnqu
     return {
       queued: false,
       jobId: null,
+      queueState: 'error',
+      blockerJobId: null,
       queueStarted: false,
       jobName: JOBS.orders,
       mode: payload.mode,
@@ -992,8 +1010,9 @@ export async function startQueuedSyncScheduler(): Promise<void> {
       options.skipStatusPasses = true;
     }
     // Per user override unlock shipped data on 2026-07-14: order ingestion no
-    // longer starts a detached rate backfill outside its durable queue lane.
-    // The canonical rate-backfill pg-boss cadence owns that workflow.
+    // longer starts a detached broad rate backfill outside its durable queue
+    // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
+    // owns both that targeted handoff and the separate broad cadence.
     return syncOrders({ ...options, runIdentity: identity, signal });
   });
   // Audit SY-3 (2026-07-13): thread the deadline signal into the shipments and

@@ -286,6 +286,9 @@ export function createShipStationStoreConnector(
         sortBy: 'ModifyDate',
         sortDir: input.sortDir === 'DESC' ? 'DESC' : 'ASC',
       });
+      if (input.untilMs != null) {
+        q.set('modifyDateEnd', formatShipStationV1DateParam(input.untilMs));
+      }
       if (input.storeId !== undefined) q.set('storeId', String(input.storeId));
 
       const res = await listShipStationOrders<SSOrdersList>(q, {

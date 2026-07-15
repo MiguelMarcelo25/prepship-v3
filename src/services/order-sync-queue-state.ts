@@ -15,6 +15,28 @@ export type OrderSyncQueueTruth = {
   queuedJobIds: string[];
 };
 
+export type OrderSyncQueueState = 'idle' | 'queued' | 'running' | 'retrying';
+
+export function orderSyncQueueState(truth: OrderSyncQueueTruth): OrderSyncQueueState {
+  if (truth.activeJobIds.length > 0) return 'running';
+  if (truth.retryingJobIds.length > 0) return 'retrying';
+  if (truth.queuedJobIds.length > 0) return 'queued';
+  return 'idle';
+}
+
+export function orderSyncQueueBlocker(
+  truth: OrderSyncQueueTruth,
+): { state: Exclude<OrderSyncQueueState, 'idle'>; jobId: string } | null {
+  const state = orderSyncQueueState(truth);
+  if (state === 'idle') return null;
+  const jobId = state === 'running'
+    ? truth.activeJobIds[0]
+    : state === 'retrying'
+      ? truth.retryingJobIds[0]
+      : truth.queuedJobIds[0];
+  return jobId ? { state, jobId } : null;
+}
+
 const unavailableQueueTruth = (): OrderSyncQueueTruth => ({
   available: false,
   activeJobIds: [],

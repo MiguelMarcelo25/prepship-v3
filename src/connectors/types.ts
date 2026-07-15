@@ -70,6 +70,7 @@ export type StoreOrderImportInput = {
   cursor?: string | null;
   orderStatus?: string;
   sinceMs?: number;
+  untilMs?: number;
   pageSize?: number;
   page?: number;
   storeId?: number;

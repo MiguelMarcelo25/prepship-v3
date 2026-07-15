@@ -33,12 +33,16 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
   const result = await enqueueManualOrderSyncJob(body);
   const response = {
     ...result,
-    status: result.queued ? 'queued' : result.error ? 'error' : 'already_queued',
+    status: result.queueState,
     message: result.queued
       ? 'Order sync queued'
       : result.error
         ? result.error
-        : 'Order sync is already queued or running',
+        : result.queueState === 'running'
+          ? 'Order sync is already running'
+          : result.queueState === 'retrying'
+            ? 'Order sync is waiting to retry'
+            : 'Order sync is already queued',
   };
   return c.json(response, result.error ? 503 : 202);
 });
@@ -52,17 +56,29 @@ app.get('/status', async (c) => {
   ]);
   const watchdog = await readShipmentSyncWatchdogStatus();
   const queueStatus = queue;
+  const syncState = orders.queueState === 'running'
+    ? 'running'
+    : orders.queueState === 'queued'
+      ? 'queued'
+      : orders.queueState === 'retrying'
+        ? 'retrying'
+        : orders.health === 'error'
+          ? 'error'
+          : orders.latestSyncedAt
+            ? 'completed'
+            : 'idle';
   return c.json({
     // Legacy top-level fields kept for existing frontend callers.
     ...orders,
     status:
-      orders.health === 'running'
+      syncState === 'running' || syncState === 'queued' || syncState === 'retrying'
         ? 'syncing'
-        : orders.health === 'error'
+        : syncState === 'error'
           ? 'error'
-          : orders.latestSyncedAt
+          : syncState === 'completed'
             ? 'done'
             : 'idle',
+    syncState,
     mode: orders.latestSyncedAt ? 'incremental' : 'idle',
     error:
       orders.health === 'error'

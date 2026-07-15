@@ -47,7 +47,9 @@ import {
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
 import {
+  orderSyncQueueState,
   readOrderSyncQueueTruth,
+  type OrderSyncQueueState,
   type OrderSyncQueueTruth,
 } from './order-sync-queue-state';
 import { reconcileDeletedShipStationAwaiting } from './shipstation-deleted-awaiting-reconciliation';
@@ -346,8 +348,29 @@ type StatusCatchupStopReason =
   | 'complete'
   | 'page_budget'
   | 'time_budget'
+  | 'page_count_changed'
   | 'failed'
   | 'not_started_budget_exhausted';
+
+export type AwaitingOrderCursorState = {
+  version: 1;
+  accountId: string;
+  storeId: number | null;
+  sinceMs: number;
+  untilMs: number;
+  sortDir: 'DESC';
+  pageSize: number;
+  nextPage: number;
+  totalPages: number;
+  totalOrders: number;
+  hasBacklog: boolean;
+  backlogPages: number;
+  stoppedBy: Extract<
+    StatusCatchupStopReason,
+    'complete' | 'page_budget' | 'time_budget' | 'page_count_changed'
+  >;
+  checkedAt: string;
+};
 
 export type OrderStatusCatchupEntry = {
   accountLabel: string;
@@ -638,36 +661,45 @@ async function fetchOrdersPage(
   args: {
     orderStatus: string;
     sinceMs: number;
+    untilMs?: number;
     pageSize: number;
     storeId?: number;
     statusOnly?: boolean;
     sortDir?: 'ASC' | 'DESC';
     startPage?: number;
+    expectedTotalOrders?: number;
+    probeFirstPageOnResume?: boolean;
     signal?: AbortSignal;
   },
   budget: SyncRunBudget = createSyncRunBudget(),
 ): Promise<{
   synced: number;
   pages: number;
+  totalOrders: number;
   startPage: number;
   pagesProcessed: number;
   lastPageProcessed: number;
   complete: boolean;
   stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'>;
+  resumePage: number | null;
   liveSourceOrderIds: string[];
 }> {
   const sinceParam = formatShipStationV1DateParam(args.sinceMs);
   const startPage = Math.max(1, Math.floor(Number(args.startPage ?? 1) || 1));
   let page = startPage;
   let pages = 1;
+  let totalOrders = 0;
   let total = 0;
   let pagesThisPass = 0;
   let lastPageProcessed = 0;
   const liveSourceOrderIds = new Set<string>();
   let stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'> =
     'complete';
+  let resumePage: number | null = null;
 
-  const processPage = async (pageToFetch: number): Promise<{ ordersLength: number }> => {
+  const processPage = async (
+    pageToFetch: number,
+  ): Promise<{ ordersLength: number; totalOrders: number }> => {
     throwIfOrderSyncAborted(args.signal);
     const res = await importStoreOrders('shipstation', {
       companyId: 0,
@@ -678,11 +710,12 @@ async function fetchOrdersPage(
       },
       orderStatus: args.orderStatus,
       sinceMs: args.sinceMs,
+      untilMs: args.untilMs,
       pageSize: args.pageSize,
       page: pageToFetch,
       storeId: args.storeId,
       sortDir: args.sortDir,
-      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${pageToFetch}:${args.pageSize}:${args.sortDir ?? 'ASC'}`,
+      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${args.untilMs ?? 'open'}:${pageToFetch}:${args.pageSize}:${args.sortDir ?? 'ASC'}`,
       timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
       signal: args.signal,
     });
@@ -695,6 +728,7 @@ async function fetchOrdersPage(
     }
 
     pages = res.pages ?? 1;
+    totalOrders = Math.max(0, Math.floor(Number(res.total ?? 0) || 0));
     // Per user override unlock shipped data on 2026-05-27: this keeps the
     // existing forward-only shipped/cancelled catch-up behavior while routing
     // ShipStation order import through StoreConnector normalized output.
@@ -720,7 +754,7 @@ async function fetchOrdersPage(
 
     pagesThisPass += 1;
     lastPageProcessed = Math.max(lastPageProcessed, pageToFetch);
-    return { ordersLength: res.orders.length };
+    return { ordersLength: res.orders.length, totalOrders };
   };
 
   // Per user override unlock shipped data on 2026-07-07: resumable status
@@ -728,17 +762,23 @@ async function fetchOrdersPage(
   // ordering means today's terminal changes live there. Older backlog then
   // resumes from the stored page cursor so a large history does not restart
   // page 1 forever.
-  if (startPage > 1 && !syncRunBudgetTimeExhausted(budget)) {
+  if (
+    startPage > 1 &&
+    args.probeFirstPageOnResume !== false &&
+    !syncRunBudgetTimeExhausted(budget)
+  ) {
     const firstPage = await processPage(1);
     if (!firstPage.ordersLength || pages < startPage) {
       return {
         synced: total,
         pages,
+        totalOrders,
         startPage,
         pagesProcessed: pagesThisPass,
         lastPageProcessed,
         complete: true,
         stoppedBy: 'complete',
+        resumePage: null,
         liveSourceOrderIds: [...liveSourceOrderIds],
       };
     }
@@ -746,11 +786,13 @@ async function fetchOrdersPage(
       return {
         synced: total,
         pages,
+        totalOrders,
         startPage,
         pagesProcessed: pagesThisPass,
         lastPageProcessed,
         complete: false,
         stoppedBy: syncRunBudgetTimeExhausted(budget) ? 'time_budget' : 'page_budget',
+        resumePage: null,
         liveSourceOrderIds: [...liveSourceOrderIds],
       };
     }
@@ -758,6 +800,21 @@ async function fetchOrdersPage(
 
   while (!syncRunBudgetTimeExhausted(budget)) {
     const res = await processPage(page);
+    const rebasedPage = awaitingOrderPageCountRebasePage({
+      startPage,
+      previousTotalOrders: args.expectedTotalOrders,
+      currentTotalOrders: res.totalOrders,
+      pageSize: args.pageSize,
+    });
+    if (rebasedPage !== null) {
+      // Per user override unlock shipped data on 2026-05-23: PS-426 only
+      // rewinds Awaiting cursor metadata when the frozen provider window
+      // shrinks. Shipped/cancelled edit protections and status semantics are
+      // unchanged; the overlap avoids silently skipping shifted Awaiting rows.
+      stoppedBy = 'page_count_changed';
+      resumePage = rebasedPage;
+      break;
+    }
     if (!res.ordersLength || page >= pages) {
       stoppedBy = 'complete';
       break;
@@ -782,13 +839,32 @@ async function fetchOrdersPage(
   return {
     synced: total,
     pages,
+    totalOrders,
     startPage,
     pagesProcessed: pagesThisPass,
     lastPageProcessed,
     complete: stoppedBy === 'complete',
     stoppedBy,
+    resumePage,
     liveSourceOrderIds: [...liveSourceOrderIds],
   };
+}
+
+export function awaitingOrderPageCountRebasePage(input: {
+  startPage: number;
+  previousTotalOrders?: number;
+  currentTotalOrders: number;
+  pageSize: number;
+}): number | null {
+  const startPage = Math.max(1, Math.floor(Number(input.startPage) || 1));
+  const previousTotal = Number(input.previousTotalOrders);
+  const currentTotal = Math.max(0, Math.floor(Number(input.currentTotalOrders) || 0));
+  const pageSize = Math.max(1, Math.floor(Number(input.pageSize) || 1));
+  if (startPage <= 1 || !Number.isFinite(previousTotal) || currentTotal >= previousTotal) {
+    return null;
+  }
+  const removedPages = Math.max(1, Math.ceil((previousTotal - currentTotal) / pageSize));
+  return Math.max(1, startPage - removedPages);
 }
 
 export function nextOrderSyncResumePage(input: {
@@ -814,6 +890,129 @@ function awaitingOrderResumeCursorKey(
   storeId: number | undefined,
 ): string {
   return `${AWAITING_RESUME_CURSOR_KEY_PREFIX}:${shipStationSyncAccountId(account)}:${storeId ?? 'all'}`;
+}
+
+export function parseAwaitingOrderCursorState(
+  value: unknown,
+  identity?: { accountId: string; storeId: number | null },
+): AwaitingOrderCursorState | null {
+  if (!value || typeof value !== 'object') return null;
+  const cursor = value as Partial<AwaitingOrderCursorState>;
+  const valid =
+    cursor.version === 1 &&
+    typeof cursor.accountId === 'string' &&
+    (cursor.storeId === null || Number.isInteger(cursor.storeId)) &&
+    Number.isFinite(cursor.sinceMs) &&
+    Number.isFinite(cursor.untilMs) &&
+    cursor.sortDir === 'DESC' &&
+    Number.isInteger(cursor.pageSize) && Number(cursor.pageSize) > 0 &&
+    Number.isInteger(cursor.nextPage) && Number(cursor.nextPage) > 0 &&
+    Number.isInteger(cursor.totalPages) && Number(cursor.totalPages) >= 0 &&
+    Number.isInteger(cursor.totalOrders) && Number(cursor.totalOrders) >= 0 &&
+    typeof cursor.hasBacklog === 'boolean' &&
+    Number.isInteger(cursor.backlogPages) && Number(cursor.backlogPages) >= 0 &&
+    ['complete', 'page_budget', 'time_budget', 'page_count_changed'].includes(
+      String(cursor.stoppedBy),
+    ) &&
+    typeof cursor.checkedAt === 'string';
+  if (!valid) return null;
+  if (
+    identity &&
+    (cursor.accountId !== identity.accountId || cursor.storeId !== identity.storeId)
+  ) {
+    return null;
+  }
+  return cursor as AwaitingOrderCursorState;
+}
+
+export function buildAwaitingOrderCursorState(input: {
+  accountId: string;
+  storeId: number | null;
+  sinceMs: number;
+  untilMs: number;
+  pageSize: number;
+  checkedAtMs: number;
+  result: {
+    pages: number;
+    totalOrders: number;
+    startPage: number;
+    lastPageProcessed: number;
+    complete: boolean;
+    stoppedBy: AwaitingOrderCursorState['stoppedBy'];
+    resumePage: number | null;
+  };
+}): AwaitingOrderCursorState {
+  const totalPages = Math.max(0, Math.floor(Number(input.result.pages) || 0));
+  const hasBacklog = !input.result.complete;
+  const nextPage = hasBacklog
+    ? input.result.resumePage ?? nextOrderSyncResumePage(input.result)
+    : 1;
+  return {
+    version: 1,
+    accountId: input.accountId,
+    storeId: input.storeId,
+    sinceMs: input.sinceMs,
+    untilMs: input.untilMs,
+    sortDir: 'DESC',
+    pageSize: Math.max(1, Math.floor(Number(input.pageSize) || 1)),
+    nextPage,
+    totalPages,
+    totalOrders: Math.max(0, Math.floor(Number(input.result.totalOrders) || 0)),
+    hasBacklog,
+    backlogPages: hasBacklog ? Math.max(0, totalPages - nextPage + 1) : 0,
+    stoppedBy: input.result.stoppedBy,
+    checkedAt: new Date(input.checkedAtMs).toISOString(),
+  };
+}
+
+async function readAwaitingOrderCursor(
+  account: SyncAccount,
+  storeId: number | undefined,
+): Promise<{ state: AwaitingOrderCursorState | null; legacyNextPage: number | null }> {
+  const accountId = shipStationSyncAccountId(account);
+  const raw = await getJsonSetting<unknown>(awaitingOrderResumeCursorKey(account, storeId));
+  const state = parseAwaitingOrderCursorState(raw, {
+    accountId,
+    storeId: storeId ?? null,
+  });
+  if (state) return { state, legacyNextPage: null };
+  const legacyNextPage = typeof raw === 'number' && Number.isFinite(raw)
+    ? Math.max(1, Math.floor(raw))
+    : null;
+  return { state: null, legacyNextPage };
+}
+
+function awaitingStoreTargets(
+  account: SyncAccount,
+  activeShipStationCutoverStoreIds: ReadonlySet<number>,
+): Array<{ storeId?: number }> {
+  const storeIds = filterShipStationStoreIdsForCutover(
+    account.storeIds.filter((sid) => !isExcludedStoreId(sid)),
+    activeShipStationCutoverStoreIds,
+  );
+  return storeIds.length > 0
+    ? storeIds.map((storeId) => ({ storeId }))
+    : [{ storeId: undefined }];
+}
+
+async function readAwaitingOrderBacklogByAccount(
+  accounts: ReadonlyArray<SyncAccount>,
+  activeShipStationCutoverStoreIds: ReadonlySet<number>,
+): Promise<Map<string, AwaitingOrderCursorState[]>> {
+  const byAccount = new Map<string, AwaitingOrderCursorState[]>();
+  await Promise.all(accounts.map(async (account) => {
+    const accountId = shipStationSyncAccountId(account);
+    const states = await Promise.all(
+      awaitingStoreTargets(account, activeShipStationCutoverStoreIds).map(async (target) =>
+        (await readAwaitingOrderCursor(account, target.storeId)).state,
+      ),
+    );
+    byAccount.set(
+      accountId,
+      states.filter((state): state is AwaitingOrderCursorState => Boolean(state?.hasBacklog)),
+    );
+  }));
+  return byAccount;
 }
 
 function statusCatchupEntryKey(args: {
@@ -979,16 +1178,12 @@ async function syncOrdersForAccount(
 
   // PS-265: the awaiting_shipment pass (the new orders operators ship TODAY) runs FIRST so a
   // large historical status catch-up can never starve it under the run budget.
-  const awaitingSinceMs =
+  const defaultAwaitingSinceMs =
     opts.awaitingSinceMs ?? Math.min(lastSync, runStartMs - AWAITING_CATCHUP_LOOKBACK_MS);
-  const awaitingStoreIds = filterShipStationStoreIdsForCutover(
-    account.storeIds.filter((sid) => !isExcludedStoreId(sid)),
+  const awaitingTargets = awaitingStoreTargets(
+    account,
     opts.activeShipStationCutoverStoreIds ?? new Set(),
   );
-  const awaitingTargets =
-    awaitingStoreIds.length > 0
-      ? awaitingStoreIds.map((storeId) => ({ storeId }))
-      : [{ storeId: undefined as number | undefined }];
 
   for (const target of awaitingTargets) {
     throwIfOrderSyncAborted(opts.signal);
@@ -998,23 +1193,50 @@ async function syncOrdersForAccount(
     }
     try {
       const cursorKey = awaitingOrderResumeCursorKey(account, target.storeId);
-      const startPage = Math.max(
-        1,
-        Math.floor(Number((await getSettingNumber(cursorKey)) ?? 1) || 1),
+      const loadedCursor = await readAwaitingOrderCursor(account, target.storeId);
+      const storedCursor = loadedCursor.state?.hasBacklog ? loadedCursor.state : null;
+      const cursorCompatible = Boolean(
+        storedCursor &&
+        (opts.awaitingSinceMs === undefined || storedCursor.sinceMs === defaultAwaitingSinceMs) &&
+        (opts.pageSize === undefined || storedCursor.pageSize === pageSize),
       );
+      const activeCursor = cursorCompatible ? storedCursor : null;
+      // Per user override unlock shipped data on 2026-05-23: PS-426 freezes
+      // only the Awaiting query window/page shape while backlog exists. This
+      // prevents a moving 30-day window from invalidating cursor progress; it
+      // does not weaken shipped/cancelled mutation guards or rewrite history.
+      const awaitingSinceMs = activeCursor?.sinceMs ?? defaultAwaitingSinceMs;
+      const awaitingUntilMs = activeCursor?.untilMs ?? runStartMs;
+      const awaitingPageSize = activeCursor?.pageSize ?? pageSize;
+      const startPage = activeCursor?.nextPage ??
+        (opts.awaitingSinceMs === undefined && opts.pageSize === undefined
+          ? loadedCursor.legacyNextPage ?? 1
+          : 1);
       const result = await fetchOrdersPage(account, storeToClient, {
         orderStatus: 'awaiting_shipment',
         sinceMs: awaitingSinceMs,
-        pageSize,
+        untilMs: awaitingUntilMs,
+        pageSize: awaitingPageSize,
         storeId: target.storeId,
         sortDir: 'DESC',
         startPage,
+        expectedTotalOrders: activeCursor?.totalOrders,
+        probeFirstPageOnResume: false,
         signal: opts.signal,
       }, budget);
       // Audit SY-7: persist only after a successful provider/import pass. A
-      // failed or not-started target retains its old cursor, while every
-      // resumed pass still probes newest-first page 1 before older backlog.
-      await setSetting(cursorKey, String(nextOrderSyncResumePage(result)));
+      // failed or not-started target retains its old cursor. Awaiting resumes
+      // directly at the next frozen-window page; terminal status catch-up keeps
+      // its separate newest-first probe behavior.
+      await setJsonSetting(cursorKey, buildAwaitingOrderCursorState({
+        accountId: shipStationSyncAccountId(account),
+        storeId: target.storeId ?? null,
+        sinceMs: awaitingSinceMs,
+        untilMs: awaitingUntilMs,
+        pageSize: awaitingPageSize,
+        checkedAtMs: runStartMs,
+        result,
+      }));
       total += result.synced;
       if (
         target.storeId !== undefined &&
@@ -1311,10 +1533,13 @@ export type OrderSyncAccountDiagnostic = {
   backlogPages: number | null;
   cursors: Array<{
     storeId: number | null;
-    orderStatus: CatchUpOrderStatus;
+    orderStatus: CatchUpOrderStatus | 'awaiting_shipment';
     nextPage: number | null;
     totalPages: number | null;
     stoppedBy: StatusCatchupStopReason;
+    sinceIso: string | null;
+    untilIso: string | null;
+    pageSize: number | null;
   }>;
 };
 
@@ -1369,6 +1594,7 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
   orderCount: number;
   statusCatchup: OrderStatusCatchupSnapshot;
   laneOwner: 'pg_boss_shipstation_sync';
+  queueState: OrderSyncQueueState;
   health: 'healthy' | 'stale' | 'error' | 'running';
   allAccountsFresh: boolean;
   staleAccountCount: number;
@@ -1377,12 +1603,17 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
   // Account diagnostics use every active watermark. The aggregate timestamp is
   // the oldest completed account so one fresh account cannot hide a stale one.
   const accounts = await loadSyncAccounts();
-  const [statusCatchup, runStates, watermarks, queueTruth] = await Promise.all([
+  const [statusCatchup, runStates, watermarks, queueTruth, activeCutoverStoreIds] = await Promise.all([
     getOrderStatusCatchupSnapshot(),
     readShipStationSyncAccountStates(),
     Promise.all(accounts.map(async (account) => (await readOrderSyncWatermark(account)).value)),
     readOrderSyncQueueTruth(),
+    loadActiveShipStationCutoverStoreIds(),
   ]);
+  const awaitingBacklogByAccount = await readAwaitingOrderBacklogByAccount(
+    accounts,
+    activeCutoverStoreIds,
+  );
   const nowMs = Date.now();
   const configuredFreshSeconds = Number(env.SHIPMENT_SYNC_WATCHDOG_ORDER_FRESH_SECONDS);
   const freshMs =
@@ -1393,9 +1624,10 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
     const accountId = shipStationSyncAccountId(account);
     const runState = runStates[accountId];
     const watermarkMs = watermarks[index] ?? null;
-    const backlogEntries = statusCatchup.entries.filter(
+    const statusBacklogEntries = statusCatchup.entries.filter(
       (entry) => entry.accountLabel === account.label && entry.hasBacklog,
     );
+    const awaitingBacklogEntries = awaitingBacklogByAccount.get(accountId) ?? [];
     const ageMs = watermarkMs === null ? null : Math.max(0, nowMs - watermarkMs);
     const runVerdict = orderSyncRunQueueVerdict(runState, queueTruth, nowMs);
     const failed = runState?.status === 'failed' || runVerdict.abandoned;
@@ -1404,7 +1636,12 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
       failed ||
       watermarkMs === null ||
       (ageMs !== null && ageMs > freshMs) ||
-      backlogEntries.length > 0;
+      statusBacklogEntries.length > 0 ||
+      awaitingBacklogEntries.length > 0;
+    const backlogPageValues = [
+      ...statusBacklogEntries.map((entry) => entry.backlogPages),
+      ...awaitingBacklogEntries.map((entry) => entry.backlogPages),
+    ];
     return {
       accountId,
       displayName: shipStationSyncAccountDisplayName(account),
@@ -1431,17 +1668,32 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
         runState?.lastSuccessAt ?? (watermarkMs ? new Date(watermarkMs).toISOString() : null),
       lastFailureAt: runState?.lastFailureAt ?? null,
       lastError: runVerdict.error ?? runState?.lastError ?? null,
-      backlogPasses: backlogEntries.length,
-      backlogPages: backlogEntries.some((entry) => entry.backlogPages === null)
+      backlogPasses: statusBacklogEntries.length + awaitingBacklogEntries.length,
+      backlogPages: backlogPageValues.some((value) => value === null)
         ? null
-        : backlogEntries.reduce((sum, entry) => sum + (entry.backlogPages ?? 0), 0),
-      cursors: backlogEntries.map((entry) => ({
-        storeId: entry.storeId,
-        orderStatus: entry.orderStatus,
-        nextPage: entry.nextPage,
-        totalPages: entry.totalPages,
-        stoppedBy: entry.stoppedBy,
-      })),
+        : backlogPageValues.reduce<number>((sum, value) => sum + (value ?? 0), 0),
+      cursors: [
+        ...awaitingBacklogEntries.map((entry) => ({
+          storeId: entry.storeId,
+          orderStatus: 'awaiting_shipment' as const,
+          nextPage: entry.nextPage,
+          totalPages: entry.totalPages,
+          stoppedBy: entry.stoppedBy,
+          sinceIso: new Date(entry.sinceMs).toISOString(),
+          untilIso: new Date(entry.untilMs).toISOString(),
+          pageSize: entry.pageSize,
+        })),
+        ...statusBacklogEntries.map((entry) => ({
+          storeId: entry.storeId,
+          orderStatus: entry.orderStatus,
+          nextPage: entry.nextPage,
+          totalPages: entry.totalPages,
+          stoppedBy: entry.stoppedBy,
+          sinceIso: entry.sinceIso,
+          untilIso: null,
+          pageSize: entry.pageSize,
+        })),
+      ],
     } satisfies OrderSyncAccountDiagnostic;
   });
   const { completeThroughMs: oldestMs, latestMs } =
@@ -1461,6 +1713,7 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
     latestSyncedAt: latestMs ? new Date(latestMs).toISOString() : null,
     statusCatchup,
     laneOwner: 'pg_boss_shipstation_sync' as const,
+    queueState: orderSyncQueueState(queueTruth),
     health,
     allAccountsFresh: staleAccountCount === 0 && accounts.length > 0,
     staleAccountCount,

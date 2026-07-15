@@ -26,6 +26,7 @@ const syncRoute = read('src/routes/sync.ts');
 const syncRouteBlock = extractRouteBlock(syncRoute);
 const queue = read('src/services/sync-job-queue.ts');
 const payload = read('src/services/manual-order-sync-job.ts');
+const storeImport = read('src/services/store-order-import.ts');
 const client = read('web/src/lib/v2-apiClient.ts');
 const home = read('web/src/Home.tsx');
 
@@ -48,7 +49,7 @@ check(
 check(
   '/sync/orders returns accepted queued state instead of completed sync totals',
   /return c\.json\(response, result\.error \? 503 : 202\);/.test(syncRouteBlock) &&
-    /already_queued/.test(syncRouteBlock),
+    /status: result\.queueState/.test(syncRouteBlock),
 );
 
 check(
@@ -97,9 +98,11 @@ check(
     /reason: 'superseded_manual_order_sync'/.test(queue),
 );
 check(
-  'queued order worker preserves backend rate backfill handoff after changed orders',
-  /result\.synced > 0 && isRateBackfillSchedulerEnabled\(\)/.test(queue) &&
-    /runBackfillTick\(\);/.test(queue),
+  'order import enqueues targeted durable rate work without a detached broad backfill',
+  /enqueueBackfillBestRatesForOrderIds\(/.test(storeImport) &&
+    /rateOnIngestOrderIds/.test(storeImport) &&
+    /'rate-on-ingest'/.test(storeImport) &&
+    !/result\.synced > 0 && isRateBackfillSchedulerEnabled\(\)/.test(queue),
 );
 
 check(

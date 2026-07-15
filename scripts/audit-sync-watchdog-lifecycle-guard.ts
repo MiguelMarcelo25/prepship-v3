@@ -115,12 +115,12 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /orderStatus: 'awaiting_shipment'[\s\S]*sortDir: 'DESC'[\s\S]*startPage/,
-  'awaiting imports must probe newest-first page 1 before resuming old backlog',
+  /orderStatus: 'awaiting_shipment'[\s\S]*sortDir: 'DESC'[\s\S]*startPage[\s\S]*probeFirstPageOnResume: false/,
+  'awaiting imports must resume the frozen window directly instead of replaying page 1',
 );
 assert.match(
   orderSync,
-  /await setSetting\(cursorKey, String\(nextOrderSyncResumePage\(result\)\)\)/,
+  /await setJsonSetting\(cursorKey, buildAwaitingOrderCursorState\(/,
   'awaiting cursor progress must persist only after a successful pass',
 );
 

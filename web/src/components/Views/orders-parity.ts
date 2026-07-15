@@ -637,6 +637,7 @@ export function buildPicklistPrintHtml(
 
 export function formatSyncPill(sync: {
   status: 'idle' | 'syncing' | 'done' | 'error'
+  syncState?: 'idle' | 'queued' | 'running' | 'retrying' | 'completed' | 'error'
   mode: 'idle' | 'incremental' | 'full'
   page: number
   lastSync: number | null
@@ -685,6 +686,22 @@ export function formatSyncPill(sync: {
     if (account.state !== 'running' || typeof account.runAgeSeconds !== 'number') return oldest
     return oldest === null ? account.runAgeSeconds : Math.max(oldest, account.runAgeSeconds)
   }, null)
+
+  if (sync.syncState === 'queued') {
+    return {
+      className: 'sync-pill syncing',
+      text: 'Sync queuedâ€¦',
+      title: 'Order sync is queued in the backend ShipStation lane and has not completed yet.',
+    }
+  }
+
+  if (sync.syncState === 'retrying') {
+    return {
+      className: 'sync-pill syncing',
+      text: 'Sync retryingâ€¦',
+      title: 'The backend worker will retry order sync; no duplicate browser sync is running.',
+    }
+  }
 
   if (sync.status === 'syncing') {
     const elapsed = runningAgeSeconds === null

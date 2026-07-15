@@ -334,6 +334,7 @@ export default function Home() {
   })
   const [syncStatus, setSyncStatus] = useState<{
     status: 'idle' | 'syncing' | 'done' | 'error'
+    syncState?: 'idle' | 'queued' | 'running' | 'retrying' | 'completed' | 'error'
     mode: 'idle' | 'incremental' | 'full'
     page: number
     total: number
@@ -702,9 +703,14 @@ export default function Home() {
   }
 
   const applyQueuedSync = (mode: 'incremental' | 'full', result: any) => {
+    const backendState = result?.queueState ?? result?.status
+    const syncState = backendState === 'running' || backendState === 'retrying'
+      ? backendState
+      : 'queued'
     setSyncStatus((current) => ({
       ...current,
       status: 'syncing',
+      syncState,
       mode,
       page: 0,
       total: 0,
