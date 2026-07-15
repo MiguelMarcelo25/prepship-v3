@@ -28,8 +28,10 @@ import {
 import { syncOrders } from './order-sync';
 import { syncShipments } from './shipment-sync';
 import {
+  buildOrderSyncWatchdogJobPayload,
   buildManualOrderSyncJobPayload,
   orderSyncOptionsFromJobPayload,
+  type ManualOrderSyncJobPayload,
   type ManualOrderSyncRequest,
 } from './manual-order-sync-job';
 import {
@@ -56,6 +58,7 @@ import {
   resolveSyncJobAdmission,
   SHIPSTATION_SYNC_JOBS,
   syncQueuePolicyForJob,
+  type SyncJobAdmissionIntent,
 } from './sync-job-admission';
 import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
 import { parseDurableRateBackfillJobPayload } from './rate-backfill-job-types';
@@ -288,17 +291,14 @@ async function sendShipmentSyncWatchdogJob(
   }
 }
 
-async function sendManualOrderSyncJob(
+async function sendOrderSyncJob(
   targetBoss: PgBoss,
   queueStarted: boolean,
-  request: ManualOrderSyncRequest,
+  payload: ManualOrderSyncJobPayload,
+  intent: Extract<SyncJobAdmissionIntent, { kind: 'manual-order' | 'watchdog-order' }>,
 ): Promise<ManualOrderSyncEnqueueResult> {
-  const payload = buildManualOrderSyncJobPayload(request);
   try {
-    const admission = resolveSyncJobAdmission(JOBS.orders, {
-      kind: 'manual-order',
-      mode: payload.mode,
-    });
+    const admission = resolveSyncJobAdmission(JOBS.orders, intent);
     // Per user override unlock shipped data on 2026-07-02: this only
     // enqueues the existing backend order-sync worker lane. The request no
     // longer runs ShipStation import inline, buys labels, prints postage, or
@@ -339,6 +339,32 @@ async function sendManualOrderSyncJob(
   }
 }
 
+async function sendManualOrderSyncJob(
+  targetBoss: PgBoss,
+  queueStarted: boolean,
+  request: ManualOrderSyncRequest,
+): Promise<ManualOrderSyncEnqueueResult> {
+  const payload = buildManualOrderSyncJobPayload(request);
+  return sendOrderSyncJob(targetBoss, queueStarted, payload, {
+    kind: 'manual-order',
+    mode: payload.mode,
+  });
+}
+
+async function sendOrderSyncWatchdogJob(
+  targetBoss: PgBoss,
+  queueStarted: boolean,
+): Promise<ManualOrderSyncEnqueueResult> {
+  // Per user override unlock shipped data on 2026-07-15: unlike the manual
+  // refresh payload, this recovery wake-up retains canonical status passes.
+  return sendOrderSyncJob(
+    targetBoss,
+    queueStarted,
+    buildOrderSyncWatchdogJobPayload(),
+    { kind: 'watchdog-order' },
+  );
+}
+
 export async function enqueueManualOrderSyncJob(
   request: ManualOrderSyncRequest = {},
 ): Promise<ManualOrderSyncEnqueueResult> {
@@ -366,6 +392,45 @@ export async function enqueueManualOrderSyncJob(
     return await sendManualOrderSyncJob(transientBoss, false, request);
   } catch (err) {
     const payload = buildManualOrderSyncJobPayload(request);
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted: false,
+      jobName: JOBS.orders,
+      mode: payload.mode,
+      requestedAt: payload.requestedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    await transientBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
+export async function enqueueOrderSyncWatchdogJob(): Promise<ManualOrderSyncEnqueueResult> {
+  if (boss && started) {
+    return sendOrderSyncWatchdogJob(boss, true);
+  }
+
+  const transientBoss = new PgBoss({
+    connectionString: env.DATABASE_URL,
+    schema: env.PG_BOSS_SCHEMA,
+    application_name: 'prepship-api-order-sync-watchdog',
+    max: 1,
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    expireInSeconds: 30 * 60,
+    retentionDays: 7,
+    deleteAfterDays: 7,
+    supervise: false,
+  });
+
+  try {
+    await transientBoss.start();
+    await ensureQueue(transientBoss, JOBS.orders);
+    return await sendOrderSyncWatchdogJob(transientBoss, false);
+  } catch (err) {
+    const payload = buildOrderSyncWatchdogJobPayload();
     return {
       queued: false,
       jobId: null,

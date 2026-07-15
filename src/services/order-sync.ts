@@ -326,12 +326,18 @@ async function upsertMissingShippedOrdersBatch(
 // non-shipped ShipStation states (on_hold / awaiting_payment / pending_fulfillment) in addition to
 // shipped/cancelled, so PrepShip's awaiting list converges to ShipStation's — orders SS puts On Hold /
 // Pending no longer rot in PrepShip's "Awaiting Shipment". Only 'shipped' triggers inventory deduction.
-type CatchUpOrderStatus =
+export type CatchUpOrderStatus =
   | 'shipped'
   | 'cancelled'
   | 'on_hold'
   | 'awaiting_payment'
   | 'pending_fulfillment';
+
+export type OrderStatusCatchupPass = {
+  orderStatus: CatchUpOrderStatus;
+  sinceMs: number;
+  storeId?: number;
+};
 
 const STATUS_CATCHUP_STATUSES: CatchUpOrderStatus[] = [
   'shipped',
@@ -861,6 +867,32 @@ function statusCatchupStoreTargets(account: SyncAccount): Array<{ storeId?: numb
     : [{ storeId: undefined }];
 }
 
+export function prioritizeOrderStatusCatchupPasses(
+  accountLabel: string,
+  passes: ReadonlyArray<OrderStatusCatchupPass>,
+  snapshot: OrderStatusCatchupSnapshot,
+): OrderStatusCatchupPass[] {
+  const backlogKeys = new Set(
+    snapshot.entries
+      .filter((entry) => entry.accountLabel === accountLabel && entry.hasBacklog)
+      .map((entry) => statusCatchupEntryKey(entry)),
+  );
+  return passes
+    .map((pass, index) => ({
+      pass,
+      index,
+      backlog: backlogKeys.has(
+        statusCatchupEntryKey({
+          accountLabel,
+          storeId: pass.storeId,
+          orderStatus: pass.orderStatus,
+        }),
+      ),
+    }))
+    .sort((left, right) => Number(right.backlog) - Number(left.backlog) || left.index - right.index)
+    .map(({ pass }) => pass);
+}
+
 function statusCatchupEntry(args: {
   account: SyncAccount;
   storeId?: number;
@@ -1037,7 +1069,8 @@ async function syncOrdersForAccount(
   // 2026-07-07: scope shipped/cancelled/hold catch-up by known ShipStation
   // store IDs so recent transitions do not hide behind all-store history.
   const statusTargets = statusCatchupStoreTargets(account);
-  const passes: Array<{ orderStatus: CatchUpOrderStatus; sinceMs: number; storeId?: number }> =
+  const passes = prioritizeOrderStatusCatchupPasses(
+    account.label,
     opts.skipStatusPasses
       ? []
       : STATUS_CATCHUP_STATUSES.flatMap((orderStatus) =>
@@ -1046,7 +1079,13 @@ async function syncOrdersForAccount(
             sinceMs: catchupSinceMs,
             storeId: target.storeId,
           })),
-        );
+        ),
+    opts.previousStatusCatchup ?? emptyStatusCatchupSnapshot(),
+  );
+  // Per user override unlock shipped data on 2026-07-15: a saved status
+  // cursor now runs before fresh passes so the same late store/status cannot
+  // be starved by the seven-minute bounded run forever. Existing terminal-row
+  // guards and status update semantics are unchanged.
 
   for (const pass of passes) {
     throwIfOrderSyncAborted(opts.signal);

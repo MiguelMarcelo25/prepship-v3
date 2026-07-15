@@ -20,6 +20,7 @@ const {
   evaluateShipmentSyncWatchdog,
   SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 } = await import('../src/services/shipment-sync-watchdog');
+const { buildOrderSyncWatchdogJobPayload } = await import('../src/services/manual-order-sync-job');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');
@@ -66,6 +67,15 @@ const staleWorkerStillOutranksOrderRecovery = evaluateShipmentSyncWatchdog({
 assert.equal(staleWorkerStillOutranksOrderRecovery.state, 'worker_stale');
 assert.equal(staleWorkerStillOutranksOrderRecovery.recommendedAction, 'restart_worker');
 
+const watchdogRecoveryPayload = buildOrderSyncWatchdogJobPayload();
+assert.equal(watchdogRecoveryPayload.requestedBy, 'watchdog-recovery');
+assert.equal(watchdogRecoveryPayload.mode, 'incremental');
+assert.equal(
+  watchdogRecoveryPayload.skipStatusPasses,
+  undefined,
+  'watchdog recovery must run canonical status catch-up instead of repeating the fast manual refresh',
+);
+
 const watchdog = read('src/services/shipment-sync-watchdog.ts');
 const queue = read('src/services/sync-job-queue.ts');
 const route = read('src/routes/sync.ts');
@@ -77,10 +87,15 @@ assert.ok(
   'watchdog verdict must have an explicit order_stale state and enqueue_order_sync action',
 );
 assert.ok(
-  watchdog.includes('enqueueManualOrderSyncJob') &&
+  watchdog.includes('enqueueOrderSyncWatchdogJob') &&
     watchdog.includes("action === 'enqueue_order_sync'") &&
     watchdog.includes('order sync recovery job enqueued'),
-  'watchdog recovery must target the order-sync job for stale order freshness',
+  'watchdog recovery must target the status-capable order-sync recovery job',
+);
+assert.ok(
+  queue.includes('buildOrderSyncWatchdogJobPayload') &&
+    queue.includes("kind: 'watchdog-order'"),
+  'watchdog order recovery must use its own backend payload and admission intent',
 );
 assert.ok(
   watchdog.includes('orderBlockedBy') &&

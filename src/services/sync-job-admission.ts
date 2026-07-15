@@ -24,6 +24,7 @@ export type SyncQueuePolicy = 'standard' | 'stately';
 export type SyncJobAdmissionIntent =
   | { kind: 'cadence' }
   | { kind: 'manual-order'; mode: 'incremental' | 'full' }
+  | { kind: 'watchdog-order' }
   | { kind: 'manual-shipment' }
   | { kind: 'watchdog-shipment' }
   | { kind: 'busy-defer'; orderStarvation: boolean };
@@ -73,6 +74,19 @@ export function resolveSyncJobAdmission(
       singletonKey:
         intent.mode === 'full' ? MANUAL_FULL_ORDER_SINGLETON_KEY : ORDER_REFRESH_SINGLETON_KEY,
       priority: OPERATOR_SYNC_PRIORITY,
+    };
+  }
+
+  // Per user override unlock shipped data on 2026-07-15: backlog recovery
+  // shares the canonical order-refresh singleton but stays below operator priority.
+  if (intent.kind === 'watchdog-order') {
+    if (name !== SHIPSTATION_SYNC_JOBS.orders) {
+      throw new Error(`Order recovery cannot target ${name}`);
+    }
+    return {
+      policy,
+      singletonKey: ORDER_REFRESH_SINGLETON_KEY,
+      priority: WATCHDOG_SYNC_PRIORITY,
     };
   }
 

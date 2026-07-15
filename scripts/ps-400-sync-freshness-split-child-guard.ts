@@ -53,7 +53,7 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /for \(const target of awaitingTargets\) \{\s*if \(syncRunBudgetTimeExhausted\(budget\)\) \{[\s\S]*complete = false;[\s\S]*break;/,
+  /for \(const target of awaitingTargets\) \{[\s\S]{0,150}if \(syncRunBudgetTimeExhausted\(budget\)\) \{[\s\S]*complete = false;[\s\S]*break;/,
   'awaiting store passes must check the run budget before starting another provider call',
 );
 const shipstationConnector = readFileSync('src/connectors/store/shipstation.ts', 'utf8');
@@ -66,10 +66,13 @@ assert.match(
 const shipmentSync = readFileSync('src/services/shipment-sync.ts', 'utf8');
 assert.match(shipmentSync, /const DEFAULT_SHIPMENT_SYNC_PAGE_SIZE = 100;/);
 assert.match(shipmentSync, /opts\.pageSize \?\? DEFAULT_SHIPMENT_SYNC_PAGE_SIZE/);
-assert.match(shipmentSync, /while \(!syncRunBudgetTimeExhausted\(budget\)\)/);
 assert.match(
   shipmentSync,
-  /for \(const acct of accounts\) \{\s*if \(syncRunBudgetTimeExhausted\(budget\)\) break;/,
+  /while \(!opts\.signal\?\.aborted && !syncRunBudgetTimeExhausted\(budget\)\)/,
+);
+assert.match(
+  shipmentSync,
+  /for \(const acct of accounts\) \{\s*if \(opts\.signal\?\.aborted \|\| syncRunBudgetTimeExhausted\(budget\)\) break;/,
   'shipment sync must check the run budget before starting another account',
 );
 

@@ -10,7 +10,7 @@ export type ManualOrderSyncRequest = {
 
 export type ManualOrderSyncJobPayload = {
   requestedAt: string;
-  requestedBy: 'manual-sync';
+  requestedBy: 'manual-sync' | 'watchdog-recovery';
   mode: ManualOrderSyncMode;
   sinceMs?: number;
   awaitingSinceMs?: number;
@@ -18,6 +18,18 @@ export type ManualOrderSyncJobPayload = {
   fullResync?: boolean;
   skipStatusPasses?: boolean;
 };
+
+export function buildOrderSyncWatchdogJobPayload(): ManualOrderSyncJobPayload {
+  // Per user override unlock shipped data on 2026-07-15: watchdog recovery
+  // must include the canonical status catch-up passes. This payload only
+  // requests the existing order-sync worker; it does not buy labels, create
+  // postage, notify marketplaces, or directly mutate production rows.
+  return {
+    requestedAt: new Date().toISOString(),
+    requestedBy: 'watchdog-recovery',
+    mode: 'incremental',
+  };
+}
 
 export type OrderSyncJobOptions = {
   sinceMs?: number;

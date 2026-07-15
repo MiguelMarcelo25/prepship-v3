@@ -8,7 +8,7 @@ import {
 } from './order-sync';
 import { getShipmentSyncStatus } from './shipment-sync';
 import { getSetting, setSetting } from './settings';
-import { enqueueManualOrderSyncJob, enqueueShipmentSyncWatchdogJob } from './sync-job-queue';
+import { enqueueOrderSyncWatchdogJob, enqueueShipmentSyncWatchdogJob } from './sync-job-queue';
 import {
   reapStaleQueuedCadenceJobs,
   reapStuckActiveJobs,
@@ -880,10 +880,11 @@ async function runRecoveryAction(
   }
 
   if (action === 'enqueue_order_sync') {
-    // Per user override unlock shipped data on 2026-07-06: PS-397 recovery
-    // enqueues the existing order import worker only. It does not buy labels,
-    // create postage, notify marketplaces, or modify shipped/cancelled rows here.
-    const enqueued = await enqueueManualOrderSyncJob({});
+    // Per user override unlock shipped data on 2026-07-15: watchdog recovery
+    // uses the status-capable order-sync payload so a reported catch-up backlog
+    // can converge. It only enqueues the existing worker; it does not buy labels,
+    // create postage, notify marketplaces, or directly modify rows here.
+    const enqueued = await enqueueOrderSyncWatchdogJob();
     return {
       action,
       status: enqueued.error ? 'failed' : 'completed',

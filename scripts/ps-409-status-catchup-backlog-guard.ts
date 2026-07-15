@@ -18,6 +18,49 @@ const {
   evaluateShipmentSyncWatchdog,
   SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 } = await import('../src/services/shipment-sync-watchdog');
+const { prioritizeOrderStatusCatchupPasses } = await import('../src/services/order-sync');
+
+const prioritizedPasses = prioritizeOrderStatusCatchupPasses(
+  'main',
+  [
+    { orderStatus: 'shipped', sinceMs: 1, storeId: 356678 },
+    { orderStatus: 'pending_fulfillment', sinceMs: 1, storeId: 378060 },
+    { orderStatus: 'cancelled', sinceMs: 1, storeId: 376759 },
+  ],
+  {
+    version: 1,
+    updatedAt: '2026-07-15T00:00:00.000Z',
+    hasBacklog: true,
+    backlogCount: 1,
+    entries: [
+      {
+        accountLabel: 'main',
+        storeId: 378060,
+        orderStatus: 'pending_fulfillment',
+        sinceIso: '2026-06-15T00:00:00.000Z',
+        sortDir: 'DESC',
+        pageSize: 100,
+        startPage: 2,
+        totalPages: 3,
+        pagesProcessed: 1,
+        lastPageProcessed: 2,
+        nextPage: 3,
+        updatedRows: 0,
+        hasBacklog: true,
+        backlogPages: 1,
+        stoppedBy: 'time_budget',
+        checkedAt: '2026-07-15T00:00:00.000Z',
+      },
+    ],
+  },
+);
+assert.equal(prioritizedPasses[0]?.storeId, 378060);
+assert.equal(prioritizedPasses[0]?.orderStatus, 'pending_fulfillment');
+assert.deepEqual(
+  prioritizedPasses.slice(1).map((pass) => pass.orderStatus),
+  ['shipped', 'cancelled'],
+  'non-backlogged status passes must retain their canonical relative order',
+);
 
 const healthyExceptStatusBacklog = evaluateShipmentSyncWatchdog(
   {
@@ -77,6 +120,11 @@ assert.match(
   orderSync,
   /mergeOrderStatusCatchupEntries/,
   'bounded runs must retain backlog entries for accounts they did not reach',
+);
+assert.match(
+  orderSync,
+  /prioritizeOrderStatusCatchupPasses/,
+  'durable backlog cursors must run before fresh status passes on the next bounded run',
 );
 assert.match(
   orderSync,

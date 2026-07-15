@@ -89,7 +89,7 @@ check('fetchOrdersPage breaks on the per-pass page/time budget',
   /syncRunBudgetExhausted\(budget, pagesThisPass\)/.test(ord));
 check('the awaiting_shipment pass runs BEFORE the status catch-up passes (no new-order starvation)',
   ord.indexOf("orderStatus: 'awaiting_shipment'") > -1
-  && ord.indexOf("orderStatus: 'awaiting_shipment'") < ord.indexOf('const passes:'));
+  && ord.indexOf("orderStatus: 'awaiting_shipment'") < ord.indexOf('const passes = prioritizeOrderStatusCatchupPasses'));
 check('status catch-up passes stop when the run is out of time budget',
   /if \(syncRunBudgetTimeExhausted\(budget\)\) \{[\s\S]{0,500}stoppedBy: 'not_started_budget_exhausted'[\s\S]{0,100}continue;/.test(ord));
 check('order-sync stops starting new accounts near the deadline',

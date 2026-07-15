@@ -40,6 +40,11 @@ assert.deepEqual(resolveSyncJobAdmission(orders, {
   singletonKey: MANUAL_FULL_ORDER_SINGLETON_KEY,
   priority: OPERATOR_SYNC_PRIORITY,
 });
+assert.deepEqual(resolveSyncJobAdmission(orders, { kind: 'watchdog-order' }), {
+  policy: 'stately',
+  singletonKey: ORDER_REFRESH_SINGLETON_KEY,
+  priority: WATCHDOG_SYNC_PRIORITY,
+});
 assert.deepEqual(resolveSyncJobAdmission(orders, {
   kind: 'busy-defer',
   orderStarvation: true,
@@ -79,6 +84,10 @@ assert.throws(
   () => resolveSyncJobAdmission(orders, { kind: 'manual-shipment' }),
   /Shipment recovery cannot target/,
 );
+assert.throws(
+  () => resolveSyncJobAdmission(shipments, { kind: 'watchdog-order' }),
+  /Order recovery cannot target/,
+);
 
 const read = (path: string): string => readFileSync(path, 'utf8');
 const queue = read('src/services/sync-job-queue.ts');
@@ -90,6 +99,7 @@ assert.match(queue, /policy: syncQueuePolicyForJob\(name\)/);
 assert.match(queue, /await targetBoss\.createQueue\(name, options\)/);
 assert.match(queue, /await targetBoss\.updateQueue\(name, options\)/);
 assert.match(queue, /resolveSyncJobAdmission\(JOBS\.orders,[\s\S]*kind: 'manual-order'/);
+assert.match(queue, /resolveSyncJobAdmission\(JOBS\.orders,[\s\S]*kind: 'watchdog-order'/);
 assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'manual-shipment'/);
 assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'watchdog-shipment'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/);
