@@ -7,6 +7,7 @@ type BillingLineItemsHeaderProps = {
   rows: BillingDetailDto[]
   loading: boolean
   isHugrabClient: boolean
+  readOnlyReason: string | null
   columnsAnchorRef: (instance: HTMLSpanElement | null) => void
   onClose: () => void
   onOpenWarningRow: (row: BillingDetailDto) => void
@@ -18,6 +19,7 @@ export function BillingLineItemsHeader({
   rows,
   loading,
   isHugrabClient,
+  readOnlyReason,
   columnsAnchorRef,
   onClose,
   onOpenWarningRow,
@@ -29,7 +31,10 @@ export function BillingLineItemsHeader({
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
       <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Line Items - {clientName}</h3>
       <button className="btn btn-ghost btn-xs" type="button" onClick={onClose}>x Close</button>
-      <BillingLineItemWarningSummary rows={rows} onOpenWarningRow={onOpenWarningRow} />
+      <BillingLineItemWarningSummary
+        rows={rows}
+        onOpenWarningRow={readOnlyReason ? undefined : onOpenWarningRow}
+      />
       {zeroShippingReviewCount > 0 ? (
         <span
           role="status"
@@ -55,8 +60,8 @@ export function BillingLineItemsHeader({
             data-hugrab-shipping-floor-trigger
             className="btn btn-secondary btn-xs"
             type="button"
-            disabled={loading}
-            title="Preview/apply/revert HUGRAB bulk shipping changes"
+            disabled={loading || Boolean(readOnlyReason)}
+            title={readOnlyReason ?? 'Preview/apply/revert HUGRAB bulk shipping changes'}
             onClick={onOpenHugrabBulk}
           >
             <ShieldCheck size={13} aria-hidden="true" />

@@ -42,6 +42,7 @@ const REQUIRED_GUARDS = [
   'test:audit-rate-on-ingest',
   'test:audit-multi-instance-readiness',
   'test:audit-orders-raw-payload-policy',
+  'test:audit-billing-close-workflow-ux',
   'test:audit-po-box-eligibility',
   'test:audit-table-virtualization',
 ];

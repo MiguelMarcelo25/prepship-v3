@@ -15,9 +15,11 @@ export function hasBillingNoBoxCostAlert(row: BillingDetailDto): boolean {
 export function BillingNoBoxCostAction({
   row,
   onOpenBillingEdit,
+  disabledReason,
 }: {
   row: BillingDetailDto
   onOpenBillingEdit: (row: BillingDetailDto) => void
+  disabledReason?: string | null
 }) {
   if (!hasBillingNoBoxCostAlert(row)) return null
 
@@ -25,12 +27,13 @@ export function BillingNoBoxCostAction({
     <button
       type="button"
       data-billing-badge="NO_BOX_COST"
-      title="No box cost on this row - click to edit the Box Cost"
+      disabled={Boolean(disabledReason)}
+      title={disabledReason ?? 'No box cost on this row - click to edit the Box Cost'}
       onClick={(event) => {
         event.stopPropagation()
         onOpenBillingEdit(row)
       }}
-      className="inline-flex items-center gap-1 whitespace-nowrap rounded border border-amber-300 bg-amber-50 px-1 py-0.5 text-[9px] font-bold leading-tight text-amber-700 hover:bg-amber-100"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded border border-amber-300 bg-amber-50 px-1 py-0.5 text-[9px] font-bold leading-tight text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <AlertTriangle size={10} strokeWidth={2.4} aria-hidden="true" />
       No box cost

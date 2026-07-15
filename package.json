@@ -331,6 +331,8 @@
     "test:audit-rate-on-ingest": "tsx scripts/audit-rate-on-ingest-guard.ts",
     "test:audit-multi-instance-readiness": "tsx scripts/audit-multi-instance-readiness-guard.ts",
     "test:audit-orders-raw-payload-policy": "tsx scripts/audit-orders-raw-payload-policy-guard.ts",
+    "test:audit-billing-close-workflow-ux": "tsx scripts/audit-billing-close-workflow-ux-guard.ts",
+    "test:audit-billing-close-workflow-ux:browser": "playwright test web/e2e/billing-close-workflow.spec.js --reporter=line",
     "test:audit-po-box-eligibility": "tsx scripts/audit-po-box-eligibility-guard.ts",
     "test:audit-table-virtualization": "tsx scripts/audit-table-virtualization-guard.ts",
     "test:audit-table-virtualization:browser": "playwright test web/e2e/orders-dom-parity.spec.js web/e2e/inventory-ux.spec.js --grep \"virtualizes large\" --reporter=line",

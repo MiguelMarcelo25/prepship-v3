@@ -115,6 +115,13 @@
   color:var(--brand);
 }
 
+.billing-detail-edit-button:disabled{
+  border-color:var(--border);
+  color:var(--text3);
+  cursor:not-allowed;
+  opacity:.55;
+}
+
 .billing-edit-backdrop{
   align-items:center;
   background:rgba(15,23,42,.34);

@@ -154,7 +154,7 @@ check('frontend does not re-derive the no-box-cost decision (aggregator deleted,
 
 check('Billing table delegates backend-provided NO_BOX_COST badge copy',
   billingDetailTable.includes('hasBillingNoBoxCostAlert(row)') &&
-  billingDetailTable.includes('<BillingNoBoxCostAction row={row} onOpenBillingEdit={onOpenBillingEdit} />') &&
+  /<BillingNoBoxCostAction[\s\S]*?row=\{row\}[\s\S]*?onOpenBillingEdit=\{onOpenBillingEdit\}[\s\S]*?disabledReason=\{readOnlyReason\}[\s\S]*?\/>/.test(billingDetailTable) &&
   !billingDetailTable.includes('Box Cost required'));
 
 check('row-level NO_BOX_COST badge is a clickable edit action',

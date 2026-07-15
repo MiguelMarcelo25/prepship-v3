@@ -224,6 +224,7 @@ export function BillingDetailTable({
   sortedDetailRows,
   detailTotals,
   columnsAnchorEl,
+  readOnlyReason,
   onOpenBillingEdit,
   onOpenOrderDetail,
   onOpenStorageProof,
@@ -242,6 +243,7 @@ export function BillingDetailTable({
     margin: number
   }
   columnsAnchorEl?: HTMLElement | null
+  readOnlyReason: string | null
   onOpenBillingEdit: (row: BillingDetailDto) => void
   onOpenOrderDetail: (orderId: number) => void
   // PS-373 (slice 2): admin drilldown into the frozen storage proof. Optional —
@@ -332,7 +334,8 @@ export function BillingDetailTable({
                     <button
                       type="button"
                       className="billing-detail-edit-button"
-                      title="Edit billing details"
+                      disabled={Boolean(readOnlyReason)}
+                      title={readOnlyReason ?? 'Edit billing details'}
                       onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
                     >
                       <Pencil size={13} aria-hidden="true" />
@@ -346,7 +349,8 @@ export function BillingDetailTable({
                     {row.shippingZeroNeedsReview && row.feeWaiverDecision == null ? (
                       <button
                         type="button"
-                        title={`${(row.zeroShippingReviewLabel as string) || '$0 shipping'} — review the prep fee (waive or keep). Opens the edit modal.`}
+                        disabled={Boolean(readOnlyReason)}
+                        title={readOnlyReason ?? `${(row.zeroShippingReviewLabel as string) || '$0 shipping'} — review the prep fee (waive or keep). Opens the edit modal.`}
                         onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
                         style={{
                           display: 'inline-flex',
@@ -356,7 +360,8 @@ export function BillingDetailTable({
                           padding: '4px 6px',
                           fontSize: 10.5,
                           fontWeight: 800,
-                          cursor: 'pointer',
+                          cursor: readOnlyReason ? 'not-allowed' : 'pointer',
+                          opacity: readOnlyReason ? 0.55 : 1,
                           color: '#b45309',
                           background: '#fef3c7',
                           border: '1px solid #fde68a',
@@ -488,7 +493,8 @@ export function BillingDetailTable({
                   return (
                     <button
                       type="button"
-                      title={`${row.packageCostReviewReason || 'Shipped box needs review'} — click to resolve`}
+                      disabled={Boolean(readOnlyReason)}
+                      title={readOnlyReason ?? `${row.packageCostReviewReason || 'Shipped box needs review'} — click to resolve`}
                       onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
                       style={{
                         display: 'inline-flex',
@@ -497,7 +503,8 @@ export function BillingDetailTable({
                         background: 'transparent',
                         border: 'none',
                         padding: 0,
-                        cursor: 'pointer',
+                        cursor: readOnlyReason ? 'not-allowed' : 'pointer',
+                        opacity: readOnlyReason ? 0.55 : 1,
                       }}
                     >
                       <span
@@ -518,7 +525,15 @@ export function BillingDetailTable({
                     </button>
                   )
                 }
-                if (hasBillingNoBoxCostAlert(row)) return <BillingNoBoxCostAction row={row} onOpenBillingEdit={onOpenBillingEdit} />
+                if (hasBillingNoBoxCostAlert(row)) {
+                  return (
+                    <BillingNoBoxCostAction
+                      row={row}
+                      onOpenBillingEdit={onOpenBillingEdit}
+                      disabledReason={readOnlyReason}
+                    />
+                  )
+                }
                 // PS-068: badge box charges whose stored price predates the
                 // client's latest package-price/config change, so operators can
                 // see un-repriced rows before exporting (run Update Billing to fix).

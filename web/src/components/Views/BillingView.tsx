@@ -10,7 +10,7 @@ import { apiClient } from '../../api/client'
 // PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
 // (that adapter is out of this ticket's scope); call the shared low-level
 // client directly. Additive, behind the backend shippingZeroNeedsReview flag.
-import { api } from '../../lib/api'
+import { api, qs } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -85,6 +85,12 @@ import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
 import { ConfirmModal } from '../ui/ConfirmModal'
 import { BillingPackagePricingTable } from './BillingPackagePricingTable'
 import { BillingDetailModalStack } from './BillingDetailModalStack'
+import {
+  BillingCloseWorkflowPanel,
+  type BillingCreditDraft,
+  type BillingCreditNoteDto,
+  type BillingFinalizationDto,
+} from './BillingCloseWorkflowPanel'
 import './BillingView.css'
 
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -99,6 +105,13 @@ interface BillingDetailState {
 }
 
 type BillingEditModalState = BillingEditModalViewState | null
+
+type BillingFinalizeIntent = {
+  clientId: number
+  clientName: string
+  dateFrom: string
+  dateTo: string
+}
 
 // PS-296 (FE): the backend carrier/account margin rollup (analytics.carriers[]) — was
 // fetched but discarded; surfaced as the Billing "Margin by carrier / account" breakdown.
@@ -143,6 +156,8 @@ const EMPTY_BILLING_SUMMARY_ROWS: BillingSummaryDto[] = []
 const EMPTY_BILLING_DETAIL_ROWS: BillingDetailDto[] = []
 const EMPTY_SHIPPING_MARGIN_CARRIERS: ShippingMarginCarrierDto[] = []
 const EMPTY_SHIPPING_MARGIN_ROWS: ShippingMarginRowDto[] = []
+const EMPTY_BILLING_FINALIZATIONS: BillingFinalizationDto[] = []
+const EMPTY_BILLING_CREDIT_NOTES: BillingCreditNoteDto[] = []
 
 const SUMMARY_COL_COUNT = 8
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
@@ -318,6 +333,10 @@ export default function BillingView() {
   const [detailColumnsAnchorEl, setDetailColumnsAnchorEl] = useState<HTMLElement | null>(null)
   // Regenerate Range confirmation — a styled modal instead of the native browser confirm().
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
+  const [billingFinalizeIntent, setBillingFinalizeIntent] = useState<BillingFinalizeIntent | null>(null)
+  const [billingFinalizeLoading, setBillingFinalizeLoading] = useState(false)
+  const [billingCreditSubmitting, setBillingCreditSubmitting] = useState(false)
+  const [selectedFinalizationId, setSelectedFinalizationId] = useState<string | null>(null)
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
   const [summarySort, setSummarySort] = useState<SortState<string>>(null)
@@ -600,6 +619,59 @@ export default function BillingView() {
     rows: detailRows,
     error: detailError,
   }), [detailState.open, detailState.clientId, detailState.clientName, detailLoading, detailRows, detailError])
+
+  // Audit 5.7: the backend finalization policy remains the only billing-close
+  // authority. These queries render its immutable DTOs and fail closed while
+  // the selected client's lock status is unknown; the UI never derives invoice
+  // totals, remaining credit, overlap eligibility, or editability itself.
+  const billingFinalizationsQuery = useQuery<BillingFinalizationDto[]>({
+    queryKey: ['billing', 'finalizations', from, to, detailState.clientId],
+    enabled: billingRangeReady && detailState.open && detailState.clientId != null,
+    queryFn: async () => {
+      if (detailState.clientId == null) return EMPTY_BILLING_FINALIZATIONS
+      const response = await api.get<{ data: BillingFinalizationDto[] }>(
+        `/billing/finalizations${qs({ clientId: detailState.clientId, dateFrom: from, dateTo: to })}`,
+      )
+      return response.data
+    },
+  })
+  const billingFinalizations = billingFinalizationsQuery.data ?? EMPTY_BILLING_FINALIZATIONS
+  const billingFinalizationStatusLoading = detailState.open
+    && detailState.clientId != null
+    && billingFinalizationsQuery.isPending
+  const billingFinalizationStatusError = billingFinalizationsQuery.isError
+    ? (billingFinalizationsQuery.error instanceof Error
+        ? billingFinalizationsQuery.error.message
+        : 'Failed to verify finalized-period status')
+    : null
+  const activeFinalizationId = billingFinalizations.some((row) => row.id === selectedFinalizationId)
+    ? selectedFinalizationId
+    : billingFinalizations[0]?.id ?? null
+
+  const billingCreditNotesQuery = useQuery<BillingCreditNoteDto[]>({
+    queryKey: ['billing', 'credit-notes', detailState.clientId, activeFinalizationId],
+    enabled: detailState.open && detailState.clientId != null && activeFinalizationId != null,
+    queryFn: async () => {
+      if (detailState.clientId == null || activeFinalizationId == null) return EMPTY_BILLING_CREDIT_NOTES
+      const response = await api.get<{ data: BillingCreditNoteDto[] }>(
+        `/billing/credit-notes${qs({ clientId: detailState.clientId, finalizationId: activeFinalizationId })}`,
+      )
+      return response.data
+    },
+  })
+  const billingCreditNotes = billingCreditNotesQuery.data ?? EMPTY_BILLING_CREDIT_NOTES
+  const billingCreditNotesError = billingCreditNotesQuery.isError
+    ? (billingCreditNotesQuery.error instanceof Error
+        ? billingCreditNotesQuery.error.message
+        : 'Failed to load credit memos')
+    : null
+  const billingPeriodReadOnlyReason = billingFinalizationStatusLoading
+    ? 'Checking finalized-period lock'
+    : billingFinalizationStatusError
+      ? 'Finalized-period status is unavailable'
+      : billingFinalizations.length > 0
+        ? 'This billing period is finalized'
+        : null
 
   const filteredSummaryRows = useMemo(() => {
     if (!billingClientFilterActive) return summaryRows
@@ -1143,6 +1215,113 @@ export default function BillingView() {
     }
   }
 
+  function handleRequestBillingFinalize() {
+    if (detailState.clientId == null) return
+    setBillingFinalizeIntent({
+      clientId: detailState.clientId,
+      clientName: detailState.clientName,
+      dateFrom: from,
+      dateTo: to,
+    })
+  }
+
+  async function handleFinalizeBillingPeriod() {
+    const intent = billingFinalizeIntent
+    if (!intent || billingFinalizeLoading) return
+
+    setBillingFinalizeLoading(true)
+    try {
+      const response = await api.post<{
+        data: { finalization: BillingFinalizationDto; alreadyFinalized: boolean }
+      }>('/billing/finalize', {
+        clientId: intent.clientId,
+        dateFrom: intent.dateFrom,
+        dateTo: intent.dateTo,
+      })
+      const result = response.data
+      const queryKey = ['billing', 'finalizations', intent.dateFrom, intent.dateTo, intent.clientId] as const
+      queryClient.setQueryData<BillingFinalizationDto[]>(queryKey, (current) => {
+        const rows = current ?? []
+        return rows.some((row) => row.id === result.finalization.id)
+          ? rows.map((row) => row.id === result.finalization.id ? result.finalization : row)
+          : [result.finalization, ...rows]
+      })
+
+      if (
+        detailState.clientId === intent.clientId
+        && from === intent.dateFrom
+        && to === intent.dateTo
+      ) {
+        setSelectedFinalizationId(result.finalization.id)
+        setBillingEditModal(null)
+        setBulkBoxCostOpen(false)
+        setBoxReviewSweepOpen(false)
+        setHugrabShippingFloorOpen(false)
+      }
+      setBillingFinalizeIntent(null)
+      void queryClient.invalidateQueries({ queryKey: ['billing', 'finalizations'] })
+      void queryClient.invalidateQueries({ queryKey: ['billing', 'details', intent.dateFrom, intent.dateTo, intent.clientId] })
+      toastContext?.addToast(
+        result.alreadyFinalized ? 'Billing period was already finalized' : 'Billing period finalized and locked',
+        'success',
+      )
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to finalize billing period', 'error')
+    } finally {
+      setBillingFinalizeLoading(false)
+    }
+  }
+
+  async function handleCreateBillingCredit(draft: BillingCreditDraft): Promise<boolean> {
+    const clientId = detailState.clientId
+    if (clientId == null || billingCreditSubmitting) return false
+
+    setBillingCreditSubmitting(true)
+    try {
+      const response = await api.post<{
+        data: {
+          creditNote: BillingCreditNoteDto
+          finalization: BillingFinalizationDto
+          alreadyCreated: boolean
+        }
+      }>('/billing/credit-notes', {
+        clientId,
+        finalizationId: draft.finalizationId,
+        amount: draft.amount,
+        reason: draft.reason,
+        idempotencyKey: draft.idempotencyKey,
+      })
+      const result = response.data
+      queryClient.setQueryData<BillingFinalizationDto[]>(
+        ['billing', 'finalizations', from, to, clientId],
+        (current) => (current ?? []).map((row) => (
+          row.id === result.finalization.id ? result.finalization : row
+        )),
+      )
+      queryClient.setQueryData<BillingCreditNoteDto[]>(
+        ['billing', 'credit-notes', clientId, draft.finalizationId],
+        (current) => {
+          const rows = current ?? []
+          return rows.some((row) => row.id === result.creditNote.id)
+            ? rows.map((row) => row.id === result.creditNote.id ? result.creditNote : row)
+            : [...rows, result.creditNote]
+        },
+      )
+      void queryClient.invalidateQueries({ queryKey: ['billing', 'finalizations'] })
+      void queryClient.invalidateQueries({ queryKey: ['billing', 'credit-notes', clientId, draft.finalizationId] })
+      toastContext?.addToast(
+        result.alreadyCreated ? 'Credit memo already exists' : 'Credit memo created',
+        'success',
+      )
+      return true
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to create credit memo', 'error')
+      return false
+    } finally {
+      setBillingCreditSubmitting(false)
+    }
+  }
+
   async function refreshBillingAfterHugrabFloor() {
     try {
       // Same refresh set the old manual Promise.all fetched — summary + margin +
@@ -1161,6 +1340,10 @@ export default function BillingView() {
   }
 
   function handleOpenBillingEdit(row: BillingDetailDto) {
+    if (billingPeriodReadOnlyReason) {
+      toastContext?.addToast(`${billingPeriodReadOnlyReason}. Use a credit memo for finalized corrections.`, 'error')
+      return
+    }
     if (!row.orderId || !detailState.clientId) return
     setBillingEditModal((current) => {
       const cache = current
@@ -1569,6 +1752,7 @@ export default function BillingView() {
               rows={sortedDetailRows}
               loading={detailLoading}
               isHugrabClient={isHugrabDetailClient}
+              readOnlyReason={billingPeriodReadOnlyReason}
               columnsAnchorRef={setDetailColumnsAnchorEl}
               onClose={() => setDetailState((current) => ({ ...current, open: false }))}
               onOpenWarningRow={handleOpenBillingEdit}
@@ -1580,6 +1764,23 @@ export default function BillingView() {
               detailState={detailStateForView}
               selectedDetailSummary={selectedDetailSummary}
               onLoadDetails={handleLoadDetails as unknown as (clientId: number, clientName: string | null | undefined) => void}
+            />
+
+            <BillingCloseWorkflowPanel
+              clientName={detailState.clientName}
+              dateFrom={from}
+              dateTo={to}
+              finalizations={billingFinalizations}
+              selectedFinalizationId={activeFinalizationId}
+              creditNotes={billingCreditNotes}
+              statusLoading={billingFinalizationStatusLoading}
+              statusError={billingFinalizationStatusError}
+              creditNotesLoading={Boolean(activeFinalizationId) && billingCreditNotesQuery.isPending}
+              creditNotesError={billingCreditNotesError}
+              creditSubmitting={billingCreditSubmitting}
+              onSelectFinalization={setSelectedFinalizationId}
+              onRequestFinalize={handleRequestBillingFinalize}
+              onCreateCredit={handleCreateBillingCredit}
             />
 
             {/* Detail table — migrated 2026-05-12 to the reusable
@@ -1602,6 +1803,7 @@ export default function BillingView() {
               sortedDetailRows={sortedDetailRows}
               detailTotals={detailTotals as { pickPack: number; additional: number; packageCost: number; shipping: number; total: number; margin: number }}
               columnsAnchorEl={detailColumnsAnchorEl}
+              readOnlyReason={billingPeriodReadOnlyReason}
               onOpenBillingEdit={handleOpenBillingEdit}
               onOpenOrderDetail={setOrderDetailModalId}
               onOpenStorageProof={() => setStorageProofOpen(true)}
@@ -1726,6 +1928,26 @@ export default function BillingView() {
         onCloseHugrabShippingFloor={() => setHugrabShippingFloorOpen(false)}
         onHugrabShippingFloorApplied={() => {
           void refreshBillingAfterHugrabFloor()
+        }}
+      />
+
+      <ConfirmModal
+        open={billingFinalizeIntent != null}
+        title="Finalize this billing period?"
+        description={billingFinalizeIntent ? (
+          <>
+            Close <strong>{billingFinalizeIntent.clientName}</strong> for{' '}
+            <strong>{billingFinalizeIntent.dateFrom} → {billingFinalizeIntent.dateTo}</strong>. The backend will
+            freeze the invoice lines and totals. This cannot be undone; later corrections must be credit memos.
+          </>
+        ) : null}
+        confirmLabel="Finalize and lock"
+        cancelLabel="Keep open"
+        tone="info"
+        loading={billingFinalizeLoading}
+        onConfirm={() => { void handleFinalizeBillingPeriod() }}
+        onCancel={() => {
+          if (!billingFinalizeLoading) setBillingFinalizeIntent(null)
         }}
       />
 
