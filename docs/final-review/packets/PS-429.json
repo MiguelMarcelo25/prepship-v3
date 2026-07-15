@@ -1,0 +1,279 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-429",
+  "title": "Enforce exact-SHA, evidence-tiered Final Review closure packets and false-green score caps",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "cd422aaad8da7aa55f3749542969ed1d0295aa51"
+  },
+  "riskDomains": [
+    "governance"
+  ],
+  "claimedScore": 95,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "A versioned strict packet schema records task, exact target, acceptance-to-evidence links, architecture owners, evidence taxonomy, migration/rollback status, live status, and owned caveats.",
+      "evidenceIds": [
+        "schema-and-unit-fixtures",
+        "ps429-wiring-guard"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "The validator rejects malformed packets, exact-SHA mismatches, target-branch mismatches, missing risk evidence, and non-packet SHA drift after review.",
+      "evidenceIds": [
+        "adversarial-false-green-fixtures",
+        "failure-injection-fixtures",
+        "repository-packet-validation"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Risk profiles encode auth/scope, rate/label, provider durable-job, billing/inventory/lifecycle, timing/live, and governance proof requirements.",
+      "evidenceIds": [
+        "schema-and-unit-fixtures",
+        "ps429-wiring-guard"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "Static or breadcrumb evidence cannot satisfy behavioral assertions or required integration, adversarial, failure-injection, E2E, or live classes.",
+      "evidenceIds": [
+        "adversarial-false-green-fixtures"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "Machine-readable closure outcomes cap Critical/High or source-of-truth bypasses at 74, missing required proof at 88, SHA-invalid packets at 0, and Hermes eligibility to complete claims above 90.",
+      "evidenceIds": [
+        "schema-and-unit-fixtures",
+        "adversarial-false-green-fixtures",
+        "failure-injection-fixtures"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "CI, PR, architecture, contributor, checklist, and task-template workflows link the exact-SHA packet and canonical validator.",
+      "evidenceIds": [
+        "ps429-wiring-guard",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "high",
+      "status": "met",
+      "description": "PS-333/350/351-like static false greens fail, every risk profile has a complete passing fixture, and stale SHA, source-of-truth bypass, score thresholds, and explicit live blocks are covered.",
+      "evidenceIds": [
+        "schema-and-unit-fixtures",
+        "adversarial-false-green-fixtures",
+        "failure-injection-fixtures"
+      ]
+    },
+    {
+      "id": "AC-8",
+      "severity": "high",
+      "status": "met",
+      "description": "The change is offline governance infrastructure only and does not modify product behavior, providers, billing, inventory, labels, shipped/cancelled data, or production state.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "scripts/final-review-closure.mjs#evaluateClosurePacket",
+      "scripts/final-review-closure.mjs#validatePacketAgainstRepository",
+      "docs/final-review/evidence-packet.schema.json"
+    ],
+    "oldOwners": [
+      {
+        "path": "Trello/Hermes prose status and reviewer score",
+        "disposition": "delegated",
+        "delegatesTo": "scripts/final-review-closure.mjs#evaluateClosurePacket"
+      },
+      {
+        "path": "scripts/ps-292-closeout-review-guard.ts",
+        "disposition": "retained-with-caveat",
+        "delegatesTo": null
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "scripts/final-review-closure-fixtures.mjs",
+        "action": "added",
+        "delegatesTo": "scripts/final-review-closure.mjs"
+      },
+      {
+        "path": ".github/workflows/ci.yml",
+        "action": "modified",
+        "delegatesTo": "npm run test:final-review-closure"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Closure policy, risk requirements, score caps, and exact-SHA decisions live only in the canonical validator; CI, docs, Trello, and Hermes are thin consumers."
+    }
+  },
+  "evidence": [
+    {
+      "id": "schema-and-unit-fixtures",
+      "classification": "unit",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "docs/final-review/evidence-packet.schema.json"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "The strict schema, all six complete risk-profile fixtures, and 0/74/88/100 outcomes execute offline and pass."
+    },
+    {
+      "id": "adversarial-false-green-fixtures",
+      "classification": "adversarial",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Static-only PS-333/350/351-like claims, wrong SHA/branch, source-of-truth bypass, unmet High work, score 90, and unverified live fixtures cannot produce a false green."
+    },
+    {
+      "id": "failure-injection-fixtures",
+      "classification": "failure-injection",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Injected malformed structure, stale identity, missing tiers, non-passing live evidence, and unresolved policy ownership are rejected or capped deterministically."
+    },
+    {
+      "id": "repository-packet-validation",
+      "classification": "integration",
+      "command": "npm run test:final-review-closure -- --packet docs/final-review/packets/PS-429.json --repository --branch prepshipv4-stable --sha cd422aaad8da7aa55f3749542969ed1d0295aa51",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-429.json",
+        ".github/workflows/ci.yml"
+      ],
+      "assertions": [
+        "sha_drift_rejected"
+      ],
+      "proves": "The packet matches the exact implementation SHA and target branch, and repository history after that SHA contains packet files only."
+    },
+    {
+      "id": "ps429-wiring-guard",
+      "classification": "static",
+      "command": "npm run test:ps-429-final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-429-final-review-closure-guard.ts",
+        ".github/workflows/ci.yml",
+        ".github/pull_request_template.md",
+        "docs/final-review/README.md"
+      ],
+      "assertions": [],
+      "proves": "Package, CI, schema, docs, risk taxonomy, score-cap tokens, and mandatory guard-pack wiring remain present and offline."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs"
+      ],
+      "assertions": [],
+      "proves": "All 38 mandatory source-of-truth, backend-truth, and offline safety guards passed with PS-429 included."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript compilation passed."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend build completed successfully."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= cd422aaad8da7aa55f3749542969ed1d0295aa51",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/README.md",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [],
+      "proves": "The reviewed commit contains only governance scripts, schema/docs/templates, package wiring, and CI wiring; no product or protected shipped/cancelled surface is present."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "No migrations were added or modified; not applicable.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "Revert the packet commit, then revert cd422aaad8da7aa55f3749542969ed1d0295aa51; no schema or production-data rollback is required."
+  },
+  "rollback": {
+    "strategy": "Revert the closure packet commit and implementation commit; the change is process-only and has no runtime data migration.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "PS-429 is offline governance/CI infrastructure and neither changes nor invokes live product/provider behavior.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
