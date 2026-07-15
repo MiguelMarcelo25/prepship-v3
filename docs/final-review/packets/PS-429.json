@@ -5,7 +5,7 @@
   "title": "Enforce exact-SHA, evidence-tiered Final Review closure packets and false-green score caps",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "cd422aaad8da7aa55f3749542969ed1d0295aa51"
+    "reviewedSha": "26bbc206deb116b5079c613fd9a0ec34990f3b1d"
   },
   "riskDomains": [
     "governance"
@@ -181,7 +181,7 @@
     {
       "id": "repository-packet-validation",
       "classification": "integration",
-      "command": "npm run test:final-review-closure -- --packet docs/final-review/packets/PS-429.json --repository --branch prepshipv4-stable --sha cd422aaad8da7aa55f3749542969ed1d0295aa51",
+      "command": "npm run test:final-review-closure -- --packet docs/final-review/packets/PS-429.json --repository --branch prepshipv4-stable --sha 26bbc206deb116b5079c613fd9a0ec34990f3b1d",
       "result": "pass",
       "artifactPaths": [
         "docs/final-review/packets/PS-429.json",
@@ -251,7 +251,7 @@
         "scripts/final-review-closure.mjs"
       ],
       "assertions": [],
-      "proves": "The reviewed commit contains only governance scripts, schema/docs/templates, package wiring, and CI wiring; no product or protected shipped/cancelled surface is present."
+      "proves": "The PS-429 implementation commit contains only governance scripts, schema/docs/templates, package wiring, and CI wiring; no product or protected shipped/cancelled surface is present."
     }
   ],
   "migrations": {
