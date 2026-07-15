@@ -8,18 +8,36 @@ import {
   claimRecoverableQueueSendJobRecords,
   getQueueSendJobRecord,
   interruptExhaustedQueueSendJobs,
+  markQueueSendJobWorkerClaimed,
   markQueueSendJobInterrupted,
   persistQueueSendJobRecord,
+  readQueueSendJobRecoverySafety,
 } from './print-queue/queue-send-job-store';
 import { QUEUE_SEND_DURABLE_STALE_AFTER_MS } from './print-queue/queue-send-status';
 import {
   planQueueSendWorkerChunks,
   QUEUE_SEND_EXECUTION_CHUNK_SIZE,
 } from './print-queue/queue-send-execution';
+import {
+  canAutomaticallyRecoverQueueSendJob,
+  classifyPrintQueueWorkerFatalError,
+  createPrintQueueWorkerFatalSignalState,
+  evaluateQueueSendWorkerAdmission,
+  PRINT_QUEUE_SEND_JOB_NAME,
+  recordPrintQueueWorkerFatalSignal,
+  resolvePrintQueueWorkerDatabaseUrl,
+  type PrintQueueWorkerFatalSignal,
+} from './print-queue-worker-policy';
+import { readPrintQueueWorkerHealth } from './print-queue-worker-health';
+import {
+  recordWorkerJobFailure,
+  recordWorkerJobStart,
+  recordWorkerJobSuccess,
+} from './worker-status';
 
 export { planQueueSendWorkerChunks } from './print-queue/queue-send-execution';
 
-export const PRINT_QUEUE_SEND_JOB_NAME = 'prepship.print-queue.batch-send';
+export { PRINT_QUEUE_SEND_JOB_NAME } from './print-queue-worker-policy';
 const PRINT_QUEUE_SEND_SINGLETON_SECONDS = jobSingletonSeconds(24 * 60 * 60 * 1000);
 export const PRINT_QUEUE_SEND_CHUNK_SIZE = QUEUE_SEND_EXECUTION_CHUNK_SIZE;
 export const PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS = 3;
@@ -67,23 +85,61 @@ let boss: PgBoss | null = null;
 let enqueueBossPromise: Promise<PgBoss> | null = null;
 let started = false;
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
+let healthTimer: ReturnType<typeof setInterval> | null = null;
 let recoveryPass: Promise<QueueSendWorkerRecoveryResult> | null = null;
+let fatalRestartRequested = false;
+let fatalSignalState = createPrintQueueWorkerFatalSignalState();
+let warningListener: ((warning: Error) => void) | null = null;
 
-function createPrintQueueBoss(applicationName: string, max = 1): PgBoss {
-  return new PgBoss({
-    connectionString: env.DATABASE_URL,
+type PrintQueueBossRole = 'producer' | 'consumer';
+
+type PgBossPoolSafetyOptions = PgBoss.ConstructorOptions & {
+  statement_timeout: number;
+  idle_in_transaction_session_timeout: number;
+  idleTimeoutMillis: number;
+  maxLifetimeSeconds: number;
+};
+
+function createPrintQueueBoss(
+  applicationName: string,
+  max = 1,
+  role: PrintQueueBossRole = 'producer',
+): PgBoss {
+  const consumer = role === 'consumer';
+  const connectionString = consumer
+    ? resolvePrintQueueWorkerDatabaseUrl({
+        databaseUrl: env.DATABASE_URL,
+        dedicatedDatabaseUrl: env.PRINT_QUEUE_PG_BOSS_DATABASE_URL,
+        nodeEnv: env.NODE_ENV,
+        runWorker: env.RUN_PRINT_QUEUE_WORKER,
+      })
+    : env.DATABASE_URL;
+  const options: PgBossPoolSafetyOptions = {
+    connectionString,
     schema: env.PG_BOSS_SCHEMA,
     application_name: applicationName,
     max,
+    // Per user override unlock shipped data on 2026-07-15: PS-430 bounds
+    // pg-boss claim transactions at the connection boundary. These settings
+    // cannot buy postage or change shipped/cancelled records.
+    statement_timeout: env.PRINT_QUEUE_PG_BOSS_STATEMENT_TIMEOUT_MS,
+    idle_in_transaction_session_timeout:
+      env.PRINT_QUEUE_PG_BOSS_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    idleTimeoutMillis: 30_000,
+    maxLifetimeSeconds: 15 * 60,
     retryLimit: 1,
     retryDelay: 30,
     retryBackoff: true,
     expireInSeconds: 30 * 60,
     retentionDays: 7,
     deleteAfterDays: 7,
-    supervise: true,
+    supervise: consumer,
+    schedule: consumer,
+    migrate: consumer,
+    clockMonitorIntervalSeconds: 60,
     maintenanceIntervalSeconds: 60,
-  });
+  };
+  return new PgBoss(options);
 }
 
 async function ensurePrintQueueSendQueue(targetBoss: PgBoss): Promise<void> {
@@ -100,7 +156,9 @@ async function ensurePrintQueueSendQueue(targetBoss: PgBoss): Promise<void> {
 async function getPrintQueueEnqueueBoss(): Promise<PgBoss> {
   if (!enqueueBossPromise) {
     enqueueBossPromise = (async () => {
-      const targetBoss = createPrintQueueBoss('prepship-api-print-queue-enqueue', 1);
+      // Producer-only pg-boss never runs maintenance, scheduling, or a claim
+      // loop on the API's transaction-pooler connection.
+      const targetBoss = createPrintQueueBoss('prepship-api-print-queue-enqueue', 1, 'producer');
       targetBoss.on('error', (err) => {
         console.error('[print-queue-enqueue] pg-boss error:', err.message);
       });
@@ -227,6 +285,33 @@ async function recoverStaleQueueSendJobs(targetBoss: PgBoss): Promise<QueueSendW
   let interrupted = exhausted;
 
   for (const snapshot of snapshots) {
+    let recoverySafety: Awaited<ReturnType<typeof readQueueSendJobRecoverySafety>>;
+    try {
+      recoverySafety = await readQueueSendJobRecoverySafety(snapshot.jobId);
+    } catch (err) {
+      await markQueueSendJobInterrupted(
+        snapshot.jobId,
+        'Recovery safety state could not be read; verify the durable item records before retrying.',
+      ).catch(() => undefined);
+      console.error(
+        `[print-queue-worker] recovery safety read failed jobId=${snapshot.jobId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      interrupted += 1;
+      continue;
+    }
+    if (!canAutomaticallyRecoverQueueSendJob(recoverySafety.providerPendingCount)) {
+      // Per user override unlock shipped data on 2026-07-15: PS-430 blocks
+      // automatic recovery while a provider outcome is unknown. The durable
+      // metadata is interrupted; no provider call, label repurchase, or order
+      // mutation is performed here.
+      await markQueueSendJobInterrupted(
+        snapshot.jobId,
+        `Recovery blocked: ${recoverySafety.providerPendingCount} provider outcome(s) require reconciliation before retrying.`,
+      );
+      interrupted += 1;
+      continue;
+    }
     const orders = recoverableOrders(snapshot.workerOrders);
     if (!orders.length) {
       await markRecoverableJobInterrupted(snapshot);
@@ -330,6 +415,66 @@ function startPeriodicRecovery(targetBoss: PgBoss): void {
   recoveryTimer.unref?.();
 }
 
+function noteFatalSignal(signal: PrintQueueWorkerFatalSignal): void {
+  const recorded = recordPrintQueueWorkerFatalSignal(fatalSignalState, signal);
+  fatalSignalState = recorded.state;
+  if (recorded.fatal) requestFatalWorkerRestart(`repeated_${signal}`);
+}
+
+function requestFatalWorkerRestart(reason: string): void {
+  if (fatalRestartRequested) return;
+  fatalRestartRequested = true;
+  process.exitCode = 1;
+  console.error(`[print-queue-worker] unhealthy; requesting supervisor restart (${reason})`);
+  void (async () => {
+    const forceExit = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 20_000);
+      timer.unref?.();
+    });
+    await Promise.race([
+      stopPrintQueueWorker().catch(() => undefined),
+      forceExit,
+    ]);
+    process.exit(1);
+  })();
+}
+
+function startWorkerHealthMonitor(): void {
+  if (healthTimer) clearInterval(healthTimer);
+  healthTimer = setInterval(() => {
+    void readPrintQueueWorkerHealth()
+      .then((health) => {
+        if (health.status === 'fail') {
+          console.error(
+            `[print-queue-worker] health degraded reasons=${health.reasons.join(',') || 'unknown'} ` +
+            `pgboss=${health.facts.pgBossCreated + health.facts.pgBossRetry}/${health.facts.pgBossActive} ` +
+            `durable=${health.facts.durableCurrent}/${health.facts.durableTotal}`,
+          );
+        }
+        if (health.restartRequired) {
+          requestFatalWorkerRestart(health.reasons.join(',') || 'health_failed');
+        }
+      })
+      .catch(() => requestFatalWorkerRestart('health_probe_failed'));
+  }, env.PRINT_QUEUE_WORKER_HEALTH_INTERVAL_MS);
+  healthTimer.unref?.();
+}
+
+function installPgBossWarningListener(): void {
+  if (warningListener) return;
+  warningListener = (warning: Error) => {
+    const code = (warning as Error & { code?: string }).code;
+    if (code === 'pg-boss-w02') noteFatalSignal('timekeeper_skew');
+  };
+  process.on('warning', warningListener);
+}
+
+function removePgBossWarningListener(): void {
+  if (!warningListener) return;
+  process.off('warning', warningListener);
+  warningListener = null;
+}
+
 async function enqueueNextQueueSendChunk(
   targetBoss: PgBoss,
   payload: QueueSendWorkerPayload,
@@ -367,10 +512,15 @@ export async function startPrintQueueWorker(): Promise<void> {
     return;
   }
   started = true;
+  fatalRestartRequested = false;
+  fatalSignalState = createPrintQueueWorkerFatalSignalState();
+  installPgBossWarningListener();
 
-  boss = createPrintQueueBoss('prepship-print-worker', env.PG_BOSS_POOL_MAX);
+  boss = createPrintQueueBoss('prepship-print-worker', env.PG_BOSS_POOL_MAX, 'consumer');
   boss.on('error', (err) => {
     console.error('[print-queue-worker] pg-boss error:', err.message);
+    const signal = classifyPrintQueueWorkerFatalError(err);
+    if (signal) noteFatalSignal(signal);
   });
 
   try {
@@ -387,6 +537,8 @@ export async function startPrintQueueWorker(): Promise<void> {
       { batchSize: 1, pollingIntervalSeconds: 1 },
       async ([job]) => {
         const payload = parseQueueSendWorkerPayload(job?.data);
+        const workerStatusStartedAt = Date.now();
+        await recordWorkerJobStart(PRINT_QUEUE_SEND_JOB_NAME);
         console.log(
           `[print-queue-worker] started ${payload.jobId} ` +
           `chunk=${payload.chunkSequence} recovery=${payload.recoveryAttempt} (${job?.id ?? 'unknown'})`,
@@ -394,6 +546,43 @@ export async function startPrintQueueWorker(): Promise<void> {
         const startedAt = Date.now();
         const abortController = new AbortController();
         try {
+          const snapshot = await getQueueSendJobRecord(payload.jobId);
+          const admission = evaluateQueueSendWorkerAdmission({
+            snapshotPresent: Boolean(snapshot),
+            snapshotStatus: snapshot?.status ?? null,
+            snapshotRecoveryAttempt: snapshot?.recoveryAttempts ?? null,
+            payloadRecoveryAttempt: payload.recoveryAttempt ?? 0,
+          });
+          if (!admission.admit) {
+            const result = { skipped: true, reason: admission.reason };
+            console.warn(
+              `[print-queue-worker] skipped ${payload.jobId} chunk=${payload.chunkSequence} ` +
+              `recovery=${payload.recoveryAttempt} reason=${admission.reason}`,
+            );
+            await recordWorkerJobSuccess(
+              PRINT_QUEUE_SEND_JOB_NAME,
+              workerStatusStartedAt,
+              result,
+            );
+            return result;
+          }
+          const durableClaimed = await markQueueSendJobWorkerClaimed(
+            payload.jobId,
+            payload.recoveryAttempt ?? 0,
+          );
+          if (!durableClaimed) {
+            const result = { skipped: true, reason: 'durable_generation_write_rejected' };
+            console.warn(
+              `[print-queue-worker] skipped ${payload.jobId} chunk=${payload.chunkSequence} ` +
+              `recovery=${payload.recoveryAttempt} reason=${result.reason}`,
+            );
+            await recordWorkerJobSuccess(
+              PRINT_QUEUE_SEND_JOB_NAME,
+              workerStatusStartedAt,
+              result,
+            );
+            return result;
+          }
           const { runQueueSendJobFromWorker } = await import('./print-queue');
           const result = await withDeadline(
             () => runQueueSendJobFromWorker(payload, { signal: abortController.signal }),
@@ -410,8 +599,15 @@ export async function startPrintQueueWorker(): Promise<void> {
             `[print-queue-worker] completed ${payload.jobId} chunk=${payload.chunkSequence} ` +
             `in ${Date.now() - startedAt}ms`,
           );
+          await recordWorkerJobSuccess(
+            PRINT_QUEUE_SEND_JOB_NAME,
+            workerStatusStartedAt,
+            result,
+          );
           return result;
         } catch (err) {
+          const fatalSignal = classifyPrintQueueWorkerFatalError(err);
+          if (fatalSignal) noteFatalSignal(fatalSignal);
           if (err instanceof DeadlineExceededError) {
             // Per user override unlock shipped data on 2026-07-14: timeout
             // persistence changes durable queue metadata only. It does not
@@ -426,16 +622,23 @@ export async function startPrintQueueWorker(): Promise<void> {
             `[print-queue-worker] failed ${payload.jobId} after ${Date.now() - startedAt}ms:`,
             err instanceof Error ? err.message : err,
           );
+          await recordWorkerJobFailure(
+            PRINT_QUEUE_SEND_JOB_NAME,
+            workerStatusStartedAt,
+            err,
+          ).catch(() => undefined);
           throw err;
         }
       },
     );
     startPeriodicRecovery(boss);
+    startWorkerHealthMonitor();
     console.log('[print-queue-worker] started');
   } catch (err) {
     started = false;
     const targetBoss = boss;
     boss = null;
+    removePgBossWarningListener();
     await targetBoss?.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
     throw err;
   }
@@ -446,6 +649,11 @@ export async function stopPrintQueueWorker(): Promise<void> {
     clearInterval(recoveryTimer);
     recoveryTimer = null;
   }
+  if (healthTimer) {
+    clearInterval(healthTimer);
+    healthTimer = null;
+  }
+  removePgBossWarningListener();
   if (boss) {
     await boss.stop({ graceful: true, timeout: 30_000 });
     boss = null;

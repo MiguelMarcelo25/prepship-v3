@@ -29,6 +29,7 @@ const env = read('src/lib/env.ts');
 const printQueue = read('src/services/print-queue.ts');
 const printWorkerPath = 'src/services/print-queue-worker.ts';
 const printWorker = read(printWorkerPath);
+const printWorkerPolicy = read('src/services/print-queue-worker-policy.ts');
 const worker = read('src/worker.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 
@@ -43,7 +44,8 @@ check('dedicated print queue worker module exists',
   existsSync(printWorkerPath));
 
 check('worker module owns a pg-boss print queue name and enqueue API',
-  /PRINT_QUEUE_SEND_JOB_NAME\s*=\s*'prepship\.print-queue\.batch-send'/.test(printWorker) &&
+  /PRINT_QUEUE_SEND_JOB_NAME\s*=\s*'prepship\.print-queue\.batch-send'/.test(printWorkerPolicy) &&
+    /PRINT_QUEUE_SEND_JOB_NAME/.test(printWorker) &&
     /PRINT_QUEUE_SEND_SINGLETON_SECONDS\s*=\s*jobSingletonSeconds/.test(printWorker) &&
     /export async function enqueueQueueSendWorkerJob/.test(printWorker) &&
     /export async function startPrintQueueWorker/.test(printWorker) &&

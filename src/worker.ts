@@ -75,6 +75,12 @@ async function main(): Promise<void> {
     `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; RUN_PRINT_QUEUE_WORKER=${env.RUN_PRINT_QUEUE_WORKER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}`
   );
 
+  if (env.RUN_PRINT_QUEUE_WORKER && env.RUN_SYNC_SCHEDULER) {
+    throw new Error(
+      'Print Queue consumption requires a dedicated worker: set RUN_SYNC_SCHEDULER=false.',
+    );
+  }
+
   await assertRuntimeSchemaReady();
   console.log('[worker] migration-owned schema ready');
 
@@ -108,6 +114,11 @@ async function main(): Promise<void> {
 
   if (env.RUN_PRINT_QUEUE_WORKER) {
     console.log('[worker] starting print queue worker');
+    // PS-430: publish the dedicated role before pg-boss can claim work, so the
+    // first claim and its last-success/last-error are never written under the
+    // disabled role during startup.
+    await setWorkerMode('print-worker');
+    startKeepAliveHeartbeat();
     await startPrintQueueWorker();
   }
 
@@ -120,7 +131,6 @@ async function main(): Promise<void> {
   } else {
     if (env.RUN_PRINT_QUEUE_WORKER) {
       console.log('[worker] RUN_SYNC_SCHEDULER=false; print queue worker running');
-      await setWorkerMode('print-worker');
     } else {
       console.log('[worker] RUN_SYNC_SCHEDULER=false; worker is idle');
       await setWorkerMode('disabled');
@@ -129,4 +139,10 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+void main().catch((err) => {
+  console.error(
+    '[worker] startup failed; exiting unhealthy so the supervisor can restart:',
+    err instanceof Error ? err.message : err,
+  );
+  process.exit(1);
+});

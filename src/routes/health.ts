@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import postgres from 'postgres';
 import { performance } from 'node:perf_hooks';
 import { env } from '../lib/env';
+import { readPrintQueueWorkerHealth } from '../services/print-queue-worker-health';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
@@ -22,7 +23,13 @@ const healthSql = postgres(env.DATABASE_URL, {
 
 type CancelableQuery<T> = Promise<T> & { cancel?: () => void };
 
-type ReadinessComponentName = 'db' | 'dbWrite' | 'orders' | 'printQueue' | 'eventLoop';
+type ReadinessComponentName =
+  | 'db'
+  | 'dbWrite'
+  | 'orders'
+  | 'printQueue'
+  | 'printQueueWorker'
+  | 'eventLoop';
 
 type ReadinessComponent = {
   name: ReadinessComponentName;
@@ -79,6 +86,44 @@ const checkDb = () =>
   checkComponent('db', async () => {
     await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
   });
+
+async function checkPrintQueueWorker(): Promise<ReadinessComponent> {
+  const startedAt = Date.now();
+  try {
+    const health = await readPrintQueueWorkerHealth();
+    return {
+      name: 'printQueueWorker',
+      status: health.status,
+      latencyMs: Date.now() - startedAt,
+      details: {
+        reasonCodes: health.reasons.join(',') || 'none',
+        heartbeatAgeSeconds: health.facts.heartbeatAgeSeconds ?? -1,
+        pgBossCreated: health.facts.pgBossCreated,
+        pgBossRetry: health.facts.pgBossRetry,
+        pgBossActive: health.facts.pgBossActive,
+        pgBossFailed: health.facts.pgBossFailed,
+        newestFailureAgeSeconds: health.facts.pgBossNewestFailureAgeSeconds ?? -1,
+        oldestPendingAgeSeconds: health.facts.pgBossOldestPendingAgeSeconds ?? -1,
+        oldestActiveAgeSeconds: health.facts.pgBossOldestActiveAgeSeconds ?? -1,
+        durableActive: health.facts.durableActive,
+        durableCurrent: health.facts.durableCurrent,
+        durableTotal: health.facts.durableTotal,
+        durableOldestActiveAgeSeconds:
+          health.facts.durableOldestActiveAgeSeconds ?? -1,
+        providerPending: health.facts.providerPending,
+        lastWorkerJobStatus: health.facts.lastWorkerJobStatus ?? 'none',
+        lastWorkerJobAgeSeconds: health.facts.lastWorkerJobAgeSeconds ?? -1,
+      },
+    };
+  } catch {
+    return {
+      name: 'printQueueWorker',
+      status: 'fail',
+      latencyMs: Date.now() - startedAt,
+      details: { reasonCodes: 'health_probe_failed' },
+    };
+  }
+}
 
 const checkEventLoopDelay = () =>
   checkComponent('eventLoop', async () => {
@@ -144,7 +189,7 @@ async function checkDeepReadiness() {
     checkDbWrite(),
     checkEventLoopDelay(),
   ]);
-  const [orders, printQueue] = await Promise.all([
+  const [orders, printQueue, printQueueWorker] = await Promise.all([
     checkComponent('orders', async () => {
       await withTimeout(healthSql`select 1 from orders limit 1`, DB_HEALTH_TIMEOUT_MS);
     }),
@@ -166,8 +211,9 @@ async function checkDeepReadiness() {
         },
       };
     }),
+    checkPrintQueueWorker(),
   ]);
-  const components = [db, dbWrite, orders, printQueue, eventLoop];
+  const components = [db, dbWrite, orders, printQueue, printQueueWorker, eventLoop];
 
   return {
     ok: components.every((component) => component.status === 'ok'),

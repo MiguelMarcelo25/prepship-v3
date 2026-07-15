@@ -44,6 +44,7 @@ for (const expected of [
   "checkComponent('orders'",
   "checkComponent('printQueue'",
   "checkComponent('eventLoop'",
+  "name: 'printQueueWorker'",
 ]) {
   assert(healthSource.includes(expected), `deep readiness reports ${expected}`);
 }
@@ -67,8 +68,8 @@ assert(
 );
 assert(
   /const \[db, dbWrite, eventLoop\] = await Promise\.all\(\[/.test(healthSource) &&
-    /const \[orders, printQueue\] = await Promise\.all\(\[/.test(healthSource) &&
-    /const components = \[db, dbWrite, orders, printQueue, eventLoop\]/.test(healthSource),
+    /const \[orders, printQueue, printQueueWorker\] = await Promise\.all\(\[/.test(healthSource) &&
+    /const components = \[db, dbWrite, orders, printQueue, printQueueWorker, eventLoop\]/.test(healthSource),
   'deep readiness stages DB probes within the bounded health pool'
 );
 assert(

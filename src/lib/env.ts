@@ -218,6 +218,13 @@ const schema = z.object({
   // changing the operator's Print to Queue workflow.
   PRINT_QUEUE_WORKER_ENABLED: booleanFlag(true),
   RUN_PRINT_QUEUE_WORKER: booleanFlag(false),
+  // PS-430: long-lived pg-boss consumers require a direct or session-mode
+  // connection. Keep this separate from ordinary app SQL on DATABASE_URL,
+  // which may continue using Supabase transaction pooling.
+  PRINT_QUEUE_PG_BOSS_DATABASE_URL: z.string().url().optional(),
+  PRINT_QUEUE_PG_BOSS_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(12_000),
+  PRINT_QUEUE_PG_BOSS_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
+  PRINT_QUEUE_WORKER_HEALTH_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
   PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(10 * 60_000),
   // PS-306 (A1, money path): default-OFF. When ON with backend orchestration, a
   // direct-carrier order that still needs a label routes to the BACKEND create job instead of

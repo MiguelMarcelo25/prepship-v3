@@ -363,6 +363,61 @@ export async function claimRecoverableQueueSendJobRecords(options: {
   }
 }
 
+export async function readQueueSendJobRecoverySafety(jobId: string): Promise<{
+  providerPendingCount: number;
+}> {
+  if (!jobId) return { providerPendingCount: 0 };
+  await ensureQueueSendJobStoreSchema();
+  // Per user override unlock shipped data on 2026-07-15: this is a read-only
+  // recovery fence over Print Queue item sidecars. It does not inspect or
+  // mutate orders, shipments, labels, postage, or marketplace notifications.
+  const [row] = await pg<{ provider_pending_count: number | string }[]>`
+    SELECT count(*) FILTER (
+      WHERE state IN ('provider_pending', 'provider_pending_recovery')
+    )::int AS provider_pending_count
+    FROM print_queue_batch_job_items
+    WHERE job_id = ${jobId}
+  `;
+  return { providerPendingCount: Number(row?.provider_pending_count ?? 0) || 0 };
+}
+
+export async function markQueueSendJobWorkerClaimed(
+  jobId: string,
+  recoveryAttempt: number,
+): Promise<boolean> {
+  if (!jobId) return false;
+  await ensureQueueSendJobStoreSchema();
+  const normalizedAttempt = Math.max(0, Math.floor(recoveryAttempt));
+  // Per user override unlock shipped data on 2026-07-15: PS-430 requires a
+  // successful generation-matched durable metadata WRITE before any
+  // provider-capable module is imported. A read-only/poisoned DB session or a
+  // stale generation therefore fails closed with zero label/provider work.
+  const rows = await pg<{ job_id: string }[]>`
+    UPDATE print_queue_send_jobs
+    SET
+      status = 'running',
+      active = true,
+      message = 'Worker claim admitted',
+      snapshot = snapshot || jsonb_build_object(
+        'status', 'running',
+        'active', true,
+        'message', 'Worker claim admitted',
+        'updatedAt', now(),
+        'persistedAt', now()
+      ),
+      updated_at = now()
+    WHERE job_id = ${jobId}
+      AND status IN ('pending', 'running')
+      AND CASE
+        WHEN coalesce(snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+          THEN (snapshot->>'recoveryAttempts')::integer
+        ELSE 0
+      END = ${normalizedAttempt}
+    RETURNING job_id
+  `;
+  return rows.length === 1;
+}
+
 /** Persist a visible terminal/intermediate interruption without rewriting order data. */
 export async function markQueueSendJobInterrupted(
   jobId: string,
