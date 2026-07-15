@@ -301,6 +301,26 @@ export function createShipStationStoreConnector(): StoreConnector {
         };
       }
 
+      // Per user override unlock shipped data on 2026-07-15: ShipStation's
+      // markasshipped endpoint has no request idempotency key. Re-read the
+      // upstream order immediately before dispatch so a worker retry after a
+      // provider ACK/local-settlement crash treats the already-shipped state as
+      // success and does not notify the marketplace a second time.
+      const upstreamOrder = await ssV1Request<SSOrder>(
+        `/orders/${encodeURIComponent(String(upstreamOrderId))}`,
+        {
+          apiKey: input.credentials?.apiKey ?? undefined,
+          apiSecret: input.credentials?.apiSecret ?? undefined,
+        },
+      );
+      if (String(upstreamOrder.orderStatus ?? '').trim().toLowerCase() === 'shipped') {
+        return {
+          ok: true,
+          provider: 'shipstation',
+          message: 'ShipStation order is already shipped; confirmation retry settled idempotently.',
+        };
+      }
+
       await ssMarkOrderShippedV1(
         {
           orderId: upstreamOrderId,

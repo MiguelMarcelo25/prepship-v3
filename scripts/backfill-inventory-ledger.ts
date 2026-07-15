@@ -10,16 +10,22 @@ type Args = {
   all: boolean;
   dryRun: boolean;
   limit?: number;
+  since?: Date;
 };
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { all: false, dryRun: false };
+  // Per user override unlock shipped data on 2026-07-15: repair is read-only
+  // by default. Production mutation requires the explicit --apply flag in
+  // addition to the separate operator approval documented on PS-432.
+  const args: Args = { all: false, dryRun: true };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--all') {
       args.all = true;
     } else if (arg === '--dry-run') {
       args.dryRun = true;
+    } else if (arg === '--apply') {
+      args.dryRun = false;
     } else if (arg === '--sku') {
       args.sku = argv[index + 1]?.trim();
       index += 1;
@@ -32,6 +38,15 @@ function parseArgs(argv: string[]): Args {
     } else if (arg.startsWith('--limit=')) {
       const parsed = Number.parseInt(arg.slice('--limit='.length), 10);
       if (Number.isFinite(parsed) && parsed > 0) args.limit = parsed;
+    } else if (arg === '--since') {
+      const parsed = new Date(argv[index + 1] ?? '');
+      if (Number.isNaN(parsed.getTime())) throw new Error('--since requires a valid date');
+      args.since = parsed;
+      index += 1;
+    } else if (arg.startsWith('--since=')) {
+      const parsed = new Date(arg.slice('--since='.length));
+      if (Number.isNaN(parsed.getTime())) throw new Error('--since requires a valid date');
+      args.since = parsed;
     }
   }
   return args;
@@ -49,14 +64,17 @@ function skuPredicate(sku: string | undefined) {
     : sql``;
 }
 
-async function getSummary(sku: string | undefined) {
+async function getSummary(sku: string | undefined, since: Date | undefined) {
+  const sinceIso = since?.toISOString();
   const [summary] = await db.execute<{
+    shipped_orders: number;
     shipped_lines: number;
     shipped_units: number;
     lines_with_ledger: number;
     units_with_ledger: number;
     missing_lines: number;
     missing_units: number;
+    missing_orders: number;
   }>(sql`
     with lines as (
       select
@@ -71,6 +89,7 @@ async function getSummary(sku: string | undefined) {
       from ${orders} o
       cross join lateral jsonb_array_elements(o.items) item
       where o.order_status = 'shipped'
+        ${sinceIso ? sql`and o.updated_at >= ${sinceIso}::timestamptz` : sql``}
         and item ? 'sku'
         and coalesce(item->>'sku', '') <> ''
         and coalesce(item->>'adjustment', 'false') <> 'true'
@@ -102,18 +121,21 @@ async function getSummary(sku: string | undefined) {
       ) inv on true
     )
     select
+      count(distinct order_id)::int as shipped_orders,
       count(*)::int as shipped_lines,
       coalesce(sum(qty), 0)::int as shipped_units,
       count(*) filter (where has_line_ledger)::int as lines_with_ledger,
       coalesce(sum(qty) filter (where has_line_ledger), 0)::int as units_with_ledger,
       count(*) filter (where not has_line_ledger)::int as missing_lines,
-      coalesce(sum(qty) filter (where not has_line_ledger), 0)::int as missing_units
+      coalesce(sum(qty) filter (where not has_line_ledger), 0)::int as missing_units,
+      count(distinct order_id) filter (where not has_line_ledger)::int as missing_orders
     from matched
   `);
   return summary;
 }
 
-async function alignExistingLedgerDates(sku: string | undefined) {
+async function alignExistingLedgerDates(sku: string | undefined, since: Date | undefined) {
+  const sinceIso = since?.toISOString();
   const rows = await db.execute<{ id: number }>(sql`
     update ${inventoryLedger} ledger
     set effective_at = ${orders.orderDate}
@@ -123,6 +145,7 @@ async function alignExistingLedgerDates(sku: string | undefined) {
       and ledger.type = 'ship'
       and ${orders.orderDate} is not null
       ${sku ? sql`and lower(${inventory.sku}) = lower(${sku})` : sql``}
+      ${sinceIso ? sql`and ${orders.updatedAt} >= ${sinceIso}::timestamptz` : sql``}
       and ledger.effective_at is distinct from ${orders.orderDate}
     returning ledger.id
   `);
@@ -134,8 +157,15 @@ async function main() {
   if (!args.sku && !args.all) {
     throw new Error('Pass --sku "SKU" for a targeted backfill, or --all for every SKU.');
   }
+  if (!args.dryRun && args.all && !args.since) {
+    throw new Error('Refusing unbounded --all apply. Pass an audited --since date.');
+  }
 
-  const before = await getSummary(args.sku);
+  const before = await getSummary(args.sku, args.since);
+  console.log('Scope:', JSON.stringify({
+    sku: args.sku ?? 'all',
+    since: args.since?.toISOString() ?? null,
+  }));
   console.log('Before:', JSON.stringify(before));
 
   if (args.dryRun) {
@@ -146,6 +176,7 @@ async function main() {
 
   const filters = [
     eq(orders.orderStatus, 'shipped'),
+    args.since ? sql`${orders.updatedAt} >= ${args.since.toISOString()}::timestamptz` : undefined,
     args.sku
       ? sql`exists (
           select 1
@@ -183,8 +214,8 @@ async function main() {
     if ((result.deducted ?? 0) > 0) touchedOrders += 1;
   }
 
-  const normalizedDates = await alignExistingLedgerDates(args.sku);
-  const after = await getSummary(args.sku);
+  const normalizedDates = await alignExistingLedgerDates(args.sku, args.since);
+  const after = await getSummary(args.sku, args.since);
 
   console.log('Backfill:', JSON.stringify({
     scannedOrders: orderRows.length,
@@ -198,6 +229,10 @@ async function main() {
 
 main()
   .catch((err) => {
+    const cause = err && typeof err === 'object' && 'cause' in err
+      ? (err as { cause?: { message?: string } }).cause
+      : null;
+    if (cause?.message) console.error(`Cause: ${cause.message}`);
     console.error(err instanceof Error ? err.stack ?? err.message : err);
     process.exitCode = 1;
   });

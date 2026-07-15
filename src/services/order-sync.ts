@@ -275,7 +275,9 @@ async function upsertMissingShippedOrdersBatch(
   // must be imported so Inventory History can deduct from real order items.
   // This is insert-only for missing shipped rows; existing shipped/cancelled
   // protections and the inventory auto-deduct kill switch remain in force.
-  await upsertNormalizedStoreOrders(missingOrders);
+  await upsertNormalizedStoreOrders(missingOrders, {
+    inventoryDeductionSource: 'order_sync_status',
+  });
 
   const insertedPredicate = orderSourceIdentitiesPredicate(missingEntries.map((entry) => entry.identity));
   if (!insertedPredicate) return 0;
@@ -300,13 +302,6 @@ async function upsertMissingShippedOrdersBatch(
       )
       .returning({ id: shipments.id });
     shipmentsLinked += linked.length;
-    try {
-      // Per user override unlock shipped data on 2026-07-14: persist retryable
-      // deduction intent; the outbox delegates to the unchanged kill-switched owner.
-      await enqueueInventoryDeduction(row, { source: 'order_sync_status' });
-    } catch (err) {
-      console.warn('[order-sync] inventory deduction enqueue failed for imported shipped order:', err);
-    }
   }
 
   // Observability (PS-046): redacted counts only — no order numbers, no PII,
@@ -501,11 +496,16 @@ async function updateExistingOrderStatusesBatch(
       includeUnqualifiedShipStationLegacy: true,
     });
     if (!identityPredicate) continue;
-    const rows = await db
-      .update(orders)
-      .set({ orderStatus, updatedAt: new Date() })
-      .where(
-        and(
+    // Per user override unlock shipped data on 2026-07-15: shipped catch-up
+    // and its durable inventory intent commit atomically. An outbox failure
+    // rolls back the transition instead of creating a shipped-without-intent
+    // gap; other catch-up statuses create no deduction work.
+    const rows = await db.transaction(async (tx) => {
+      const transitioned = await tx
+        .update(orders)
+        .set({ orderStatus, updatedAt: new Date() })
+        .where(
+          and(
           // Per user override unlock shipped data on 2026-07-06: PS-388
           // narrows status catch-up matching to the composite source identity,
           // with external_order_id fallback only for legacy/unqualified rows.
@@ -515,26 +515,18 @@ async function updateExistingOrderStatusesBatch(
           // upsert preserves them too). `ne` skips no-op rewrites (e.g. on_hold -> on_hold). This lets
           // awaiting->on_hold AND a later on_hold->shipped both converge.
           notInArray(orders.orderStatus, ['shipped', 'cancelled']),
-          ne(orders.orderStatus, orderStatus)
+            ne(orders.orderStatus, orderStatus)
+          )
         )
-      )
-      .returning();
-    updated += rows.length;
-
-    if (orderStatus === 'shipped') {
-      for (const row of rows) {
-        try {
-          // Per user override `unlock shipped data` on 2026-05-21: this
-          // catch-up path is a forward-only awaiting -> shipped transition.
-          // It must mirror label/shipment-sync inventory side effects so
-          // orders closed by ShipStation status sync do not skip stock
-          // deduction while still respecting INVENTORY_AUTO_DEDUCT.
-          await enqueueInventoryDeduction(row, { source: 'order_sync_status' });
-        } catch (err) {
-          console.warn('[order-sync] inventory deduction enqueue failed:', err);
+        .returning();
+      if (orderStatus === 'shipped') {
+        for (const row of transitioned) {
+          await enqueueInventoryDeduction(row, { source: 'order_sync_status' }, tx);
         }
       }
-    }
+      return transitioned;
+    });
+    updated += rows.length;
 
     // Print Queue persistence: shipped/cancelled sync status does not mean a
     // warehouse operator physically printed the label. Active entries remain

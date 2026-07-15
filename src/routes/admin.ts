@@ -23,8 +23,65 @@ import { printQueue } from '../db/schema/print-queue';
 import { setClientHouseAccountEnabled, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
 import { applyInventoryMovementInTransaction } from '../services/inventory-movement';
+import {
+  listUnresolvedLabelPurchaseIntents,
+  resolveLabelPurchaseIntentByOperator,
+} from '../lib/label-purchase-intent';
+import { auditActorFromContext, recordAuditEvent } from '../services/audit-log';
 
 const app = new Hono();
+
+// Per user override unlock shipped data on 2026-07-15: admin-only, audited
+// resolution for ambiguous purchase intents. This never buys/voids a label or
+// edits order/shipment history; it only releases a verified fail-closed block.
+app.get(
+  '/label-purchase-intents',
+  zValidator('query', z.object({ orderId: z.coerce.number().int().positive().optional() })),
+  async (c) => {
+    const { orderId } = c.req.valid('query');
+    const intents = await listUnresolvedLabelPurchaseIntents(orderId);
+    return c.json({ intents, count: intents.length });
+  },
+);
+
+app.post(
+  '/label-purchase-intents/:id{[0-9]+}/resolve',
+  zValidator('json', z.discriminatedUnion('outcome', [
+    z.object({
+      outcome: z.literal('linked_shipment'),
+      shipmentId: z.number().int().positive(),
+      note: z.string().trim().min(5).max(500),
+    }),
+    z.object({
+      outcome: z.literal('provider_verified_no_label'),
+      note: z.string().trim().min(5).max(500),
+    }),
+  ])),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    try {
+      const resolution = c.req.valid('json');
+      const resolved = await resolveLabelPurchaseIntentByOperator(id, resolution);
+      await recordAuditEvent({
+        ...auditActorFromContext(c),
+        eventType: 'label_purchase_intent.resolved',
+        resourceType: 'label_purchase_intent',
+        resourceId: id,
+        action: resolution.outcome,
+        details: {
+          orderId: resolved.orderId,
+          shipmentId: resolved.shipmentId,
+          note: resolution.note,
+        },
+      });
+      return c.json(resolved);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = /not found/i.test(message) ? 404 : 409;
+      return c.json({ error: message }, status);
+    }
+  },
+);
 
 app.get('/order-items/backfill-status', async (c) => {
   return c.json(await getOrderItemsBackfillStatus());

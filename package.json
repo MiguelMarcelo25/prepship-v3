@@ -602,6 +602,7 @@
     "test:ps-429-final-review-closure": "tsx scripts/ps-429-final-review-closure-guard.ts",
     "test:ps-430-print-queue-worker-health": "tsx scripts/ps-430-print-queue-worker-health-guard.ts && tsx scripts/ps-430-print-queue-worker-health-integration.ts",
     "test:ps-431-production-self-healing": "tsx scripts/ps-431-production-self-healing-guard.ts",
+    "test:ps-432-sync-fulfillment-resilience": "tsx scripts/ps-432-sync-fulfillment-resilience-guard.ts",
     "test:ps-335-rate-browser-singleflight": "tsx scripts/ps-335-rate-browser-singleflight-guard.ts",
     "test:ps-336-rate-browser-loading-cleanup": "tsx scripts/ps-336-rate-browser-loading-cleanup-guard.ts",
     "test:ps-336-task-sot-gates": "tsx scripts/ps-336-task-sot-gates-guard.ts",

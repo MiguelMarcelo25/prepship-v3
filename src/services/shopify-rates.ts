@@ -86,6 +86,9 @@ export type ShopifyLabelPurchasePendingSnapshot = {
   provider: typeof SHOPIFY_SHIPPING_PROVIDER;
   status: 'pending' | 'resolved' | 'failed';
   orderId: number;
+  // Per user override unlock shipped data on 2026-07-15: carry the durable
+  // fail-closed intent through asynchronous Shopify purchase polling.
+  labelPurchaseIntentId?: number | null;
   shopifyRateQuoteId?: string | null;
   selectedRateKey?: string | null;
   purchaseResultId: string;

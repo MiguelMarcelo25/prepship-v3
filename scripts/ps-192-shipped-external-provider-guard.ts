@@ -76,7 +76,7 @@ assert.ok(svc.includes("eq(orders.orderStatus, 'awaiting_shipment')"),
 assert.ok(/\.set\(\{ externallyShipped: false, updatedAt: new Date\(\) \}\)/.test(svc),
   'unmark must keep flipping only the flag, never order status');
 // Inventory deduction still runs through the kill-switch-governed owner.
-assert.ok(svc.includes('enqueueInventoryDeduction(order'),
+assert.ok(/enqueueInventoryDeduction\(\s*order,[\s\S]*tx,/.test(svc),
   'the shipped-external path must enqueue the durable inventory deduction lane');
 // The route still guards with assertOrderEditable BEFORE the service.
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');

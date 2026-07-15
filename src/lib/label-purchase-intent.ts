@@ -38,11 +38,16 @@ export type LabelPurchaseIntentState =
 
 export type UnresolvedLabelPurchaseIntent = {
   id: number;
+  orderId?: number;
   provider: string;
   state: string;
   error: string | null;
   createdAt: string;
 };
+
+export type LabelPurchaseIntentOperatorResolution =
+  | { outcome: 'linked_shipment'; shipmentId: number; note: string }
+  | { outcome: 'provider_verified_no_label'; shipmentId?: null; note: string };
 
 export class LabelPurchaseReconcileRequiredError extends Error {
   readonly code = 'LABEL_PURCHASE_RECONCILE_REQUIRED' as const;
@@ -154,4 +159,94 @@ export async function assertNoUnresolvedLabelPurchaseIntent(orderId: number): Pr
   if (unresolved.length > 0) {
     throw new LabelPurchaseReconcileRequiredError(orderId, unresolved);
   }
+}
+
+export async function listUnresolvedLabelPurchaseIntents(
+  orderId?: number,
+): Promise<UnresolvedLabelPurchaseIntent[]> {
+  await ensureLabelPurchaseIntentSchema();
+  return sql<UnresolvedLabelPurchaseIntent[]>`
+    SELECT
+      id,
+      order_id AS "orderId",
+      provider,
+      state,
+      error,
+      created_at::text AS "createdAt"
+    FROM label_purchase_intents
+    WHERE state IN ('provider_pending', 'reconcile_required')
+      ${orderId ? sql`AND order_id = ${orderId}` : sql``}
+    ORDER BY created_at ASC, id ASC
+    LIMIT 200
+  `;
+}
+
+export async function resolveLabelPurchaseIntentByOperator(
+  intentId: number,
+  resolution: LabelPurchaseIntentOperatorResolution,
+): Promise<{ id: number; orderId: number; state: 'resolved_by_operator'; shipmentId: number | null }> {
+  await ensureLabelPurchaseIntentSchema();
+  const note = resolution.note.trim();
+  if (!note) throw new Error('Operator resolution note is required');
+
+  // Per user override unlock shipped data on 2026-07-15: this admin-only
+  // resolution changes the additive purchase-intent audit row only. A linked
+  // outcome must prove an active shipment belongs to the same order; a
+  // no-label outcome requires explicit provider verification and no shipment.
+  return sql.begin(async (tx) => {
+    const [intent] = await tx<Array<{
+      id: number;
+      order_id: number;
+      state: string;
+    }>>`
+      SELECT id, order_id, state
+      FROM label_purchase_intents
+      WHERE id = ${intentId}
+      FOR UPDATE
+    `;
+    if (!intent) throw new Error('Label purchase intent not found');
+    if (!['provider_pending', 'reconcile_required'].includes(intent.state)) {
+      throw new Error(`Label purchase intent is already ${intent.state}`);
+    }
+
+    let shipmentId: number | null = null;
+    if (resolution.outcome === 'linked_shipment') {
+      if (!Number.isInteger(resolution.shipmentId) || resolution.shipmentId <= 0) {
+        throw new Error('A positive shipmentId is required for linked_shipment');
+      }
+      const [shipment] = await tx<Array<{ id: number }>>`
+        SELECT id
+        FROM shipments
+        WHERE id = ${resolution.shipmentId}
+          AND order_id = ${intent.order_id}
+          AND voided = false
+        LIMIT 1
+      `;
+      if (!shipment) throw new Error('Active shipment does not belong to the purchase-intent order');
+      shipmentId = shipment.id;
+    }
+
+    const [resolved] = await tx<Array<{
+      id: number;
+      order_id: number;
+      state: 'resolved_by_operator';
+      shipment_id: number | null;
+    }>>`
+      UPDATE label_purchase_intents
+      SET
+        state = 'resolved_by_operator',
+        shipment_id = ${shipmentId},
+        error = ${`operator ${resolution.outcome}: ${note}`},
+        updated_at = NOW()
+      WHERE id = ${intent.id}
+      RETURNING id, order_id, state, shipment_id
+    `;
+    if (!resolved) throw new Error('Label purchase intent resolution failed');
+    return {
+      id: resolved.id,
+      orderId: resolved.order_id,
+      state: resolved.state,
+      shipmentId: resolved.shipment_id,
+    };
+  });
 }

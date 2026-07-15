@@ -17,6 +17,7 @@ import {
   orderSourceIdentityKey,
   orderSourceIdentitiesPredicate,
 } from './order-source-identity';
+import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
 
 export type NormalizedStoreOrder = {
   source: NormalizedOrderSource;
@@ -389,6 +390,7 @@ async function claimLegacyOrderSourceIdentities(rows: Array<typeof orders.$infer
 
 export async function upsertNormalizedStoreOrders(
   ordersIn: NormalizedStoreOrder[],
+  options: { inventoryDeductionSource?: string } = {},
 ): Promise<number> {
   if (!ordersIn.length) return 0;
 
@@ -481,13 +483,14 @@ export async function upsertNormalizedStoreOrders(
     );
   }
 
-  const persistedRows = await db
-    .insert(orders)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: [orders.sourceProvider, orders.sourceAccountId, orders.sourceOrderId],
-      targetWhere: sql`${orders.sourceProvider} is not null and ${orders.sourceAccountId} is not null and ${orders.sourceOrderId} is not null`,
-      set: {
+  const persistedRows = await db.transaction(async (tx) => {
+    const persisted = await tx
+      .insert(orders)
+      .values(rows)
+      .onConflictDoUpdate({
+        target: [orders.sourceProvider, orders.sourceAccountId, orders.sourceOrderId],
+        targetWhere: sql`${orders.sourceProvider} is not null and ${orders.sourceAccountId} is not null and ${orders.sourceOrderId} is not null`,
+        set: {
         externalOrderId: sql`excluded.external_order_id`,
         orderNumber: sql`excluded.order_number`,
         sourceProvider: sql`excluded.source_provider`,
@@ -538,19 +541,36 @@ export async function upsertNormalizedStoreOrders(
           else ${orders.externallyShipped}
         end`,
         updatedAt: sql`excluded.updated_at`,
-      },
-    })
-    .returning({
-      id: orders.id,
-      items: orders.items,
-      clientId: orders.clientId,
-      storeId: orders.storeId,
-      orderStatus: orders.orderStatus,
-      orderDate: orders.orderDate,
-      sourceProvider: orders.sourceProvider,
-      sourceAccountId: orders.sourceAccountId,
-      sourceOrderId: orders.sourceOrderId,
-    });
+        },
+      })
+      .returning({
+        id: orders.id,
+        items: orders.items,
+        clientId: orders.clientId,
+        storeId: orders.storeId,
+        orderStatus: orders.orderStatus,
+        orderDate: orders.orderDate,
+        sourceProvider: orders.sourceProvider,
+        sourceAccountId: orders.sourceAccountId,
+        sourceOrderId: orders.sourceOrderId,
+      });
+
+    if (options.inventoryDeductionSource) {
+      // Per user override unlock shipped data on 2026-07-15: the shipped-only
+      // hydration caller opts into this boundary so a newly imported terminal
+      // row and its durable deduction intent commit atomically. Other import
+      // callers remain unchanged and terminal-status preservation stays intact.
+      for (const row of persisted) {
+        if (row.orderStatus !== 'shipped') continue;
+        await enqueueInventoryDeduction(
+          row,
+          { source: options.inventoryDeductionSource },
+          tx,
+        );
+      }
+    }
+    return persisted;
+  });
 
   await replaceOrderItemsForOrders(persistedRows);
   const persistedOrderIds = persistedRows.map((row) => row.id);

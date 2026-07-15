@@ -88,8 +88,11 @@ assert.ok(
   (externalOwner.match(/input\.writeAuthorization\.allowTerminal \? undefined : mutableLifecycle/g) ?? []).length >= 2,
   'both mark and unmark UPDATE predicates must carry the final lifecycle guard',
 );
-assert.match(externalOwner, /if \(flag && statusFlipped\)/,
-  'a lost transition race must not enqueue inventory work');
+assert.match(
+  externalOwner,
+  /db\.transaction\([\s\S]*?if \(transitioned\.length > 0\) \{[\s\S]*?enqueueInventoryDeduction\([\s\S]*?tx,[\s\S]*?\);[\s\S]*?return transitioned;/,
+  'inventory intent must share the guarded transition transaction and a lost race must enqueue nothing',
+);
 assert.match(externalOwner, /flag &&\s*statusFlipped &&/,
   'a lost transition race must not notify a marketplace');
 

@@ -42,6 +42,8 @@ type OutboxRow = {
   attempts: number;
 };
 
+type SqlExecutor = any;
+
 const MAX_ATTEMPTS = 6;
 const DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS = 72;
 // PS-253 (Card 8): a row is flipped to 'processing' when claimed; the worker is multi-process and
@@ -227,7 +229,13 @@ export async function ensureFulfillmentSchema(): Promise<void> {
     // Per user override unlock shipped data on 2026-05-23: remove
     // request-time shipment/outbox DDL and require migration-owned schema.
     await assertFulfillmentSchemaReady(pg);
-  })();
+  })().catch((error) => {
+    // Per user override unlock shipped data on 2026-07-15: do not retain a
+    // rejected wrapper memo after the canonical readiness owner resets. A
+    // later worker tick can recover without a process restart.
+    schemaEnsured = null;
+    throw error;
+  });
 
   return schemaEnsured;
 }
@@ -255,9 +263,9 @@ export async function markShipmentConfirmationState(args: {
   status: 'not_required' | 'not_supported' | 'pending' | 'processing' | 'succeeded' | 'failed';
   attempts?: number;
   lastError?: string | null;
-}): Promise<void> {
+}, executor: SqlExecutor = pg): Promise<void> {
   await ensureFulfillmentSchema();
-  await pg`
+  await executor`
     UPDATE shipments
     SET
       carrier_provider = ${args.carrierProvider},
@@ -394,44 +402,58 @@ export async function enqueueShipmentConfirmation(
     shipDate: input.shipDate,
   };
   const dedupeKey = `shipment_confirmation_requested:${provider}:${input.order.id}:${input.shipmentId}`;
-  const rows = await pg`
-    INSERT INTO fulfillment_outbox (
-      order_id, shipment_id, event_type, provider, dedupe_key, payload,
-      status, attempts, next_run_at, updated_at
-    )
-    VALUES (
-      ${input.order.id}, ${input.shipmentId}, 'shipment_confirmation_requested',
-      ${provider}, ${dedupeKey}, ${JSON.stringify(payload)}::jsonb, 'pending', 0, NOW(), NOW()
-    )
-    ON CONFLICT (dedupe_key) DO UPDATE SET
-      payload = EXCLUDED.payload,
-      status = CASE
-        WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.status
-        ELSE 'pending'
-      END,
-      next_run_at = CASE
-        WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.next_run_at
-        ELSE NOW()
-      END,
-      updated_at = NOW()
-    RETURNING id
-  ` as Array<{ id: number }>;
+  // Per user override unlock shipped data on 2026-07-15: enqueue and lifecycle
+  // projection are one transaction. Re-enqueue never regresses a succeeded
+  // outbox/shipment/order back to pending; it reconverges all three surfaces
+  // through the same settlement owner used by the worker.
+  return pg.begin(async (tx) => {
+    const rows = await tx`
+      INSERT INTO fulfillment_outbox (
+        order_id, shipment_id, event_type, provider, dedupe_key, payload,
+        status, attempts, next_run_at, updated_at
+      )
+      VALUES (
+        ${input.order.id}, ${input.shipmentId}, 'shipment_confirmation_requested',
+        ${provider}, ${dedupeKey}, ${JSON.stringify(payload)}::jsonb, 'pending', 0, NOW(), NOW()
+      )
+      ON CONFLICT (dedupe_key) DO UPDATE SET
+        payload = CASE
+          WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.payload
+          ELSE EXCLUDED.payload
+        END,
+        status = CASE
+          WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.status
+          ELSE 'pending'
+        END,
+        next_run_at = CASE
+          WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.next_run_at
+          ELSE NOW()
+        END,
+        updated_at = NOW()
+      RETURNING id, order_id, shipment_id, event_type, provider, payload, attempts, status
+    ` as Array<OutboxRow & { status: string }>;
+    const row = rows[0];
+    if (!row) throw new Error('Shipment confirmation enqueue returned no outbox row');
 
-  await markShipmentConfirmationState({
-    shipmentId: input.shipmentId,
-    carrierProvider: String(input.payload?.carrierProvider ?? 'shipstation'),
-    carrierAccountId: input.payload?.carrierAccountId as string | number | null | undefined,
-    confirmationProvider: provider,
-    status: 'pending',
+    if (row.status === 'succeeded') {
+      await settleOutboxRowWithExecutor(row, tx);
+      return { queued: false, provider, outboxId: row.id };
+    }
+
+    await markShipmentConfirmationState({
+      shipmentId: input.shipmentId,
+      carrierProvider: String(input.payload?.carrierProvider ?? 'shipstation'),
+      carrierAccountId: input.payload?.carrierAccountId as string | number | null | undefined,
+      confirmationProvider: provider,
+      status: 'pending',
+    }, tx);
+    await tx`
+      UPDATE orders
+      SET canonical_status = 'shipped_pending_confirmation', updated_at = NOW()
+      WHERE id = ${input.order.id}
+    `;
+    return { queued: true, provider, outboxId: row.id };
   });
-
-  await pg`
-    UPDATE orders
-    SET canonical_status = 'shipped_pending_confirmation', updated_at = NOW()
-    WHERE id = ${input.order.id}
-  `;
-
-  return { queued: true, provider, outboxId: rows[0]?.id };
 }
 
 type MissingShipmentConfirmationRow = {
@@ -912,8 +934,8 @@ function retryDelayMinutes(attempts: number): number {
   return Math.min(60, Math.max(1, 2 ** Math.max(0, attempts - 1)));
 }
 
-async function completeOutboxRow(row: OutboxRow): Promise<void> {
-  await pg`
+async function settleOutboxRowWithExecutor(row: OutboxRow, executor: SqlExecutor): Promise<void> {
+  await executor`
     UPDATE fulfillment_outbox
     SET status = 'succeeded', last_error = NULL, updated_at = NOW()
     WHERE id = ${row.id}
@@ -931,13 +953,63 @@ async function completeOutboxRow(row: OutboxRow): Promise<void> {
       status: 'succeeded',
       attempts: row.attempts + 1,
       lastError: null,
-    });
+    }, executor);
   }
-  await pg`
+  await executor`
     UPDATE orders
     SET canonical_status = 'shipped', updated_at = NOW()
     WHERE id = ${row.order_id}
   `;
+}
+
+async function completeOutboxRow(row: OutboxRow): Promise<void> {
+  // Per user override unlock shipped data on 2026-07-15: the outbox success,
+  // shipment confirmation state, and order canonical state settle atomically.
+  // A crash cannot commit one projection while leaving the others wedged.
+  await pg.begin((tx) => settleOutboxRowWithExecutor(row, tx));
+}
+
+export async function reconvergeSucceededShipmentConfirmations(limit = 25): Promise<number> {
+  await ensureFulfillmentSchema();
+  const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+  // Per user override unlock shipped data on 2026-07-15: repair only derived
+  // confirmation lifecycle fields for already-succeeded outbox rows. This
+  // makes a formerly torn settlement self-heal without re-contacting a
+  // marketplace or changing label/postage/shipment history.
+  const rows = await pg<OutboxRow[]>`
+    SELECT
+      f.id,
+      f.order_id,
+      f.shipment_id,
+      f.event_type,
+      f.provider,
+      f.payload,
+      f.attempts
+    FROM fulfillment_outbox f
+    JOIN orders o ON o.id = f.order_id
+    LEFT JOIN shipments s ON s.id = f.shipment_id
+    WHERE f.event_type = 'shipment_confirmation_requested'
+      AND f.status = 'succeeded'
+      AND (
+        o.canonical_status IS DISTINCT FROM 'shipped'
+        OR (
+          f.shipment_id IS NOT NULL
+          AND (
+            s.confirmation_status IS DISTINCT FROM 'succeeded'
+            OR s.marketplace_confirmed_at IS NULL
+          )
+        )
+      )
+    ORDER BY f.updated_at ASC, f.id ASC
+    LIMIT ${boundedLimit}
+  `;
+  for (const row of rows) await completeOutboxRow(row);
+  if (rows.length > 0) {
+    console.info('[fulfillment-outbox] reconverged succeeded confirmation lifecycle', {
+      count: rows.length,
+    });
+  }
+  return rows.length;
 }
 
 async function failOutboxRow(row: OutboxRow, err: unknown, retryable: boolean): Promise<void> {
@@ -1152,6 +1224,7 @@ export async function processFulfillmentOutboxOnce(options: {
   limit?: number;
   orderId?: number;
 } = {}): Promise<{ processed: number; succeeded: number; failed: number }> {
+  await reconvergeSucceededShipmentConfirmations(options.limit ?? 25);
   const rows = await claimDueOutboxRows(options.limit ?? 25, options.orderId);
   let succeeded = 0;
   let failed = 0;

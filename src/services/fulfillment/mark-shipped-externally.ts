@@ -52,17 +52,30 @@ export async function markOrderShippedExternally(
   if (flag) {
     // Forward-only: only an AWAITING order may transition to shipped + externally_shipped=true.
     // The WHERE guard makes this safe even if a future caller forgets assertOrderEditable.
-    const updated = await db
-      .update(orders)
-      .set({ externallyShipped: true, orderStatus: 'shipped' as const, updatedAt: new Date() })
-      .where(and(
-        eq(orders.id, id),
-        eq(orders.orderStatus, 'awaiting_shipment'),
-        // Per user override unlock shipped data on 2026-07-14: re-check the
-        // canonical lifecycle in the UPDATE itself unless the audited force path authorized it.
-        input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
-      ))
-      .returning({ id: orders.id });
+    // Per user override unlock shipped data on 2026-07-15: the external
+    // shipped transition and durable inventory-deduction intent commit in one
+    // transaction. The forward-only lifecycle predicates remain unchanged.
+    const updated = await db.transaction(async (tx) => {
+      const transitioned = await tx
+        .update(orders)
+        .set({ externallyShipped: true, orderStatus: 'shipped' as const, updatedAt: new Date() })
+        .where(and(
+          eq(orders.id, id),
+          eq(orders.orderStatus, 'awaiting_shipment'),
+          // Per user override unlock shipped data on 2026-07-14: re-check the
+          // canonical lifecycle in the UPDATE itself unless the audited force path authorized it.
+          input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
+        ))
+        .returning({ id: orders.id });
+      if (transitioned.length > 0) {
+        await enqueueInventoryDeduction(
+          order,
+          { source: input.source ? `external:${input.source}` : 'external' },
+          tx,
+        );
+      }
+      return transitioned;
+    });
     statusFlipped = updated.length > 0;
   } else {
     // Unmark: flip the flag only; never change status (we don't know the prior state).
@@ -75,18 +88,6 @@ export async function markOrderShippedExternally(
         // guard is carried into the final UPDATE predicate, closing its race window.
         input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
       ));
-  }
-
-  if (flag && statusFlipped) {
-    try {
-      // Per user override unlock shipped data on 2026-07-14: enqueue only;
-      // outbox retries delegate to the unchanged inventory deduction owner.
-      await enqueueInventoryDeduction(order, {
-        source: input.source ? `external:${input.source}` : 'external',
-      });
-    } catch (err) {
-      console.warn('[mark-shipped-externally] inventory deduction enqueue failed:', err);
-    }
   }
 
   // Optional marketplace notify — only when the operator opted into a notify channel.

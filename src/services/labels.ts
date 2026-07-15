@@ -1180,27 +1180,31 @@ async function enqueueFulfillmentDeductions(args: {
   order: typeof orders.$inferSelect;
   shipmentId: number | null;
   source: string;
+  tx: DbTx;
   timer?: LabelTimer;
 }) {
-  try {
-    const enqueueInventory = () => enqueueInventoryDeduction(args.order, {
-      shipmentId: args.shipmentId,
-      source: args.source,
-    });
+  const enqueueInventory = () =>
+    enqueueInventoryDeduction(
+      args.order,
+      {
+        shipmentId: args.shipmentId,
+        source: args.source,
+      },
+      args.tx,
+    );
 
-    if (args.timer) {
-      await args.timer.task('enqueue inventory deduction', enqueueInventory);
-    } else {
-      await enqueueInventory();
-    }
+  // Per user override unlock shipped data on 2026-07-15: label persistence,
+  // shipped status, and durable inventory intent now share the caller's
+  // transaction. An enqueue error rolls the local persistence back instead of
+  // leaving a shipped row without retryable intent.
+  if (args.timer) {
+    await args.timer.task('enqueue inventory deduction', enqueueInventory);
+  } else {
+    await enqueueInventory();
+  }
     // NOTE: the bundle MEMBER deduct-once fan-out (PS-312 S6) is NOT here — it is chained AFTER the
     // link keystone in createLabelV2Impl, so it can never race the bundle stamp into a silent
     // under-deduct. This event covers only the primary's own inventory.
-  } catch (err) {
-    // Per user override unlock shipped data on 2026-07-14: execution is never
-    // fire-and-forget. The durable outbox recovery scan repairs this insert gap.
-    console.warn('[labels] inventory deduction enqueue failed; recovery scan will retry:', err);
-  }
 }
 
 /**
@@ -1377,13 +1381,14 @@ async function persistShopifyPurchasedLabel(input: {
       isTest: input.mock != null,
     }, tx);
     await input.timer.task('markOrderShipped', () => markOrderShipped(input.order.id, created.trackingNumber, { cleanupQueue: false, tx }));
+    await enqueueFulfillmentDeductions({
+      order: input.order,
+      shipmentId,
+      source: SHOPIFY_SHIPPING_PROVIDER,
+      tx,
+      timer: input.timer,
+    });
     return shipmentId;
-  });
-  await enqueueFulfillmentDeductions({
-    order: input.order,
-    shipmentId: localShipmentId,
-    source: SHOPIFY_SHIPPING_PROVIDER,
-    timer: input.timer,
   });
   try {
     await input.timer.task('enqueue Shopify confirmation state', () => enqueueShipmentConfirmation({
@@ -1436,6 +1441,9 @@ export async function pollShopifyShippingLabelPurchase(
   purchaseResultId: string,
   scope: ClientStoreScope,
 ): Promise<CreateShopifyShippingLabelResponseDto> {
+  // Per user override unlock shipped data on 2026-07-15: pending Shopify
+  // recovery carries the same durable purchase intent through terminal label
+  // persistence; it never purchases again while polling an existing result.
   const pending = await loadShopifyLabelPurchasePendingByResultId(purchaseResultId);
   if (!pending) {
     throw new ShopifyRatesError(
@@ -1453,6 +1461,12 @@ export async function pollShopifyShippingLabelPurchase(
   const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
   if (existing) {
     await markShopifyLabelPurchaseTerminal(pending, 'resolved', 'Existing active label found for order.');
+    if (pending.labelPurchaseIntentId != null) {
+      await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
+        state: 'completed',
+        shipmentId: existing.id,
+      });
+    }
     return {
       provider: SHOPIFY_SHIPPING_PROVIDER,
       shipmentId: existing.id,
@@ -1501,6 +1515,12 @@ export async function pollShopifyShippingLabelPurchase(
     if (typeof code === 'string' && code.startsWith('SHOPIFY_')) {
       await markShopifyLabelPurchaseTerminal(pending, 'failed', error instanceof Error ? error.message : String(error));
     }
+    if (pending.labelPurchaseIntentId != null) {
+      await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
+        state: 'reconcile_required',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     throw error;
   }
 
@@ -1537,23 +1557,40 @@ export async function pollShopifyShippingLabelPurchase(
     width: pending.dims.width,
     height: pending.dims.height,
   });
-  const response = await persistShopifyPurchasedLabel({
-    order,
-    clientId: order.clientId ?? null,
-    fulfillmentOrderId: pending.fulfillmentOrderId,
-    providerAccountId: pending.providerAccountId,
-    providerAccountNickname: pending.providerAccountNickname ?? account.label ?? 'Shopify Shipping',
-    resolvedPackageId,
-    requestedPackageId: pending.customPackageId,
-    effectiveWeightOz: pending.weightOz,
-    length: pending.dims.length,
-    width: pending.dims.width,
-    height: pending.dims.height,
-    purchased: result,
-    mock: null,
-    timer,
-  });
+  let response: CreateShopifyShippingLabelResponseDto;
+  try {
+    response = await persistShopifyPurchasedLabel({
+      order,
+      clientId: order.clientId ?? null,
+      fulfillmentOrderId: pending.fulfillmentOrderId,
+      providerAccountId: pending.providerAccountId,
+      providerAccountNickname: pending.providerAccountNickname ?? account.label ?? 'Shopify Shipping',
+      resolvedPackageId,
+      requestedPackageId: pending.customPackageId,
+      effectiveWeightOz: pending.weightOz,
+      length: pending.dims.length,
+      width: pending.dims.width,
+      height: pending.dims.height,
+      purchased: result,
+      mock: null,
+      timer,
+    });
+  } catch (persistError) {
+    if (pending.labelPurchaseIntentId != null) {
+      await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
+        state: 'reconcile_required',
+        error: `Shopify label purchased but shipment persist failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+      });
+    }
+    throw persistError;
+  }
   await markShopifyLabelPurchaseTerminal(pending, 'resolved', 'Shopify label purchase persisted.');
+  if (pending.labelPurchaseIntentId != null) {
+    await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
+      state: 'completed',
+      shipmentId: response.shipmentId,
+    });
+  }
   return response;
 }
 
@@ -1677,10 +1714,22 @@ async function createShopifyShippingLabelForOrderImpl(
     },
   });
 
-  if (!body.testLabel) await ensurePackageConsumptionSchema();
-  const firstPurchaseResult = body.testLabel
-    ? null
-    : await timer.task('Shopify shippingLabelPurchase connector', () =>
+  let shopifyPurchaseIntentId: number | null = null;
+  let purchased: ShopifyShippingLabelPurchaseResult | null = null;
+  if (!body.testLabel) {
+    await ensurePackageConsumptionSchema();
+    // Per user override unlock shipped data on 2026-07-15: all Shopify
+    // eligibility, scope, account, fulfillment-order, package, and input
+    // preflights run before the durable intent is created. The intent is then
+    // written immediately before the provider call and blocks blind re-buy.
+    await assertNoUnresolvedLabelPurchaseIntent(order.id);
+    shopifyPurchaseIntentId = await createLabelPurchaseIntent({
+      orderId: order.id,
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      requestFingerprint: `fulfillment=${fulfillmentOrder.id}`,
+    });
+    try {
+      const firstPurchaseResult = await timer.task('Shopify shippingLabelPurchase connector', () =>
         purchaseShopifyShippingLabel(account.credentials, {
           env: process.env,
           orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
@@ -1688,16 +1737,22 @@ async function createShopifyShippingLabelForOrderImpl(
           purchaseInput,
         }),
       );
-  const purchased = firstPurchaseResult
-    ? await pollShopifyPurchaseToTerminal({
+      purchased = await pollShopifyPurchaseToTerminal({
         accountCredentials: account.credentials,
         firstResult: firstPurchaseResult,
         fulfillmentOrderId: fulfillmentOrder.id,
         orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
         orderName: order.orderNumber,
         timer,
-      })
-    : null;
+      });
+    } catch (buyError) {
+      await resolveLabelPurchaseIntent(shopifyPurchaseIntentId, {
+        state: classifyBuyErrorForIntent(buyError),
+        error: buyError instanceof Error ? buyError.message : String(buyError),
+      });
+      throw buyError;
+    }
+  }
   const mock = body.testLabel
     ? createShopifyShippingMockLabel({
         fulfillmentOrderId: fulfillmentOrder.id,
@@ -1713,6 +1768,7 @@ async function createShopifyShippingLabelForOrderImpl(
       provider: SHOPIFY_SHIPPING_PROVIDER,
       status: 'pending',
       orderId: order.id,
+      labelPurchaseIntentId: shopifyPurchaseIntentId ?? undefined,
       purchaseResultId: purchased.purchaseResultId,
       fulfillmentOrderId: fulfillmentOrder.id,
       weightOz: effectiveWeightOz,
@@ -1745,22 +1801,39 @@ async function createShopifyShippingLabelForOrderImpl(
     };
   }
 
-  return persistShopifyPurchasedLabel({
-    order,
-    clientId,
-    fulfillmentOrderId: fulfillmentOrder.id,
-    providerAccountId,
-    providerAccountNickname: account.label ?? 'Shopify Shipping',
-    resolvedPackageId,
-    requestedPackageId: body.customPackageId,
-    effectiveWeightOz,
-    length,
-    width,
-    height,
-    purchased,
-    mock,
-    timer,
-  });
+  try {
+    const response = await persistShopifyPurchasedLabel({
+      order,
+      clientId,
+      fulfillmentOrderId: fulfillmentOrder.id,
+      providerAccountId,
+      providerAccountNickname: account.label ?? 'Shopify Shipping',
+      resolvedPackageId,
+      requestedPackageId: body.customPackageId,
+      effectiveWeightOz,
+      length,
+      width,
+      height,
+      purchased,
+      mock,
+      timer,
+    });
+    if (shopifyPurchaseIntentId != null) {
+      await resolveLabelPurchaseIntent(shopifyPurchaseIntentId, {
+        state: 'completed',
+        shipmentId: response.shipmentId,
+      });
+    }
+    return response;
+  } catch (persistError) {
+    if (shopifyPurchaseIntentId != null) {
+      await resolveLabelPurchaseIntent(shopifyPurchaseIntentId, {
+        state: 'reconcile_required',
+        error: `Shopify label purchased but shipment persist failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+      });
+    }
+    throw persistError;
+  }
 }
 
 async function createLabelV2Impl(
@@ -2040,9 +2113,13 @@ async function createLabelV2Impl(
 
     const createdAt = new Date();
     await ensureShipmentsSelectedRateCostColumn();
-    const [localMockShipment] = await db
-      .insert(shipments)
-      .values({
+    // Per user override unlock shipped data on 2026-07-15: even the offline
+    // test-label transition commits shipment, shipped status, and inventory
+    // intent atomically. This path still buys no postage or provider label.
+    const localMockShipment = await db.transaction(async (tx) => {
+      const [persistedShipment] = await tx
+        .insert(shipments)
+        .values({
         orderId: order.id,
         clientId,
         orderNumber: order.orderNumber,
@@ -2072,17 +2149,20 @@ async function createLabelV2Impl(
         source: 'test_offline',
         voided: false,
         isReturn: false,
-      })
-      .returning({ id: shipments.id });
-
-    await timer.task('markOrderShipped', () => markOrderShipped(order.id, fakeTracking, { cleanupQueue: false }));
-    await enqueueFulfillmentDeductions({
-      order,
-      // fulfillment_outbox.shipment_id references the local shipment PK, not
-      // the synthetic provider label_shipment_id returned to the test caller.
-      shipmentId: localMockShipment?.id ?? null,
-      source: 'test_label',
-      timer,
+        })
+        .returning({ id: shipments.id });
+      await timer.task('markOrderShipped', () =>
+        markOrderShipped(order.id, fakeTracking, { cleanupQueue: false, tx }));
+      await enqueueFulfillmentDeductions({
+        order,
+        // fulfillment_outbox.shipment_id references the local shipment PK, not
+        // the synthetic provider label_shipment_id returned to the test caller.
+        shipmentId: persistedShipment?.id ?? null,
+        source: 'test_label',
+        tx,
+        timer,
+      });
+      return persistedShipment;
     });
 
     timer.done('response ready');
@@ -2230,11 +2310,7 @@ async function createLabelV2Impl(
   // attempt is unresolved — a dead predecessor may have bought a label that was
   // never recorded, and only reconciliation (never a blind re-buy) is safe.
   await assertNoUnresolvedLabelPurchaseIntent(order.id);
-  const purchaseIntentId = await createLabelPurchaseIntent({
-    orderId: order.id,
-    provider: directRef ? 'direct' : 'shipstation',
-    requestFingerprint: `pid=${body.shippingProviderId}|svc=${body.serviceCode}`,
-  });
+  let purchaseIntentId: number;
   let created: CreatedExternalLabel;
   let directWalmartContext: Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>['walmartContext'] = null;
   let directProviderKey: string | null = null;
@@ -2252,6 +2328,15 @@ async function createLabelV2Impl(
       sourceAccountId: order.sourceAccountId ?? null,
     });
     directProviderKey = normalizeProviderKey(account.provider);
+    // Per user override unlock shipped data on 2026-07-15: create durable
+    // purchase intent only after account/family preflights have passed and
+    // immediately before the provider-capable owner call. Preflight rejects
+    // can no longer strand provider_pending rows.
+    purchaseIntentId = await createLabelPurchaseIntent({
+      orderId: order.id,
+      provider: directProviderKey || 'direct',
+      requestFingerprint: `pid=${body.shippingProviderId}|svc=${body.serviceCode}`,
+    });
     // Audit C2/1.20: a buy error resolves the intent by classification —
     // provably-pre-purchase -> failed_pre_purchase, anything else ->
     // reconcile_required (the label may exist at the provider).
@@ -2309,6 +2394,11 @@ async function createLabelV2Impl(
     });
     const creds = await loadClientCredentials(clientId);
     const apiKeyV2 = creds.apiKeyV2 ?? undefined;
+    purchaseIntentId = await createLabelPurchaseIntent({
+      orderId: order.id,
+      provider: 'shipstation',
+      requestFingerprint: `pid=${body.shippingProviderId}|svc=${body.serviceCode}`,
+    });
     // Audit C2/1.20: same buy-error intent resolution as the direct branch.
     try {
     created = await timer.task('ShipStation createLabel connector', async () => {
@@ -2414,6 +2504,13 @@ async function createLabelV2Impl(
       dimensions: { length, width, height },
     }, tx);
     await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false, tx }));
+    await enqueueFulfillmentDeductions({
+      order,
+      shipmentId,
+      source: 'label',
+      tx,
+      timer,
+    });
     return shipmentId;
   });
   } catch (persistErr) {
@@ -2426,12 +2523,6 @@ async function createLabelV2Impl(
   await resolveLabelPurchaseIntent(purchaseIntentId, {
     state: 'completed',
     shipmentId: localShipmentId,
-  });
-  await enqueueFulfillmentDeductions({
-    order,
-    shipmentId: localShipmentId,
-    source: 'label',
-    timer,
   });
   // PS-220 (realized house-margin): SHIPP is DRP's house carrier. After the committed ship txn, freeze
   // the captured margin into the order_competitive_rate sidecar — it READS the projected next-best stamp

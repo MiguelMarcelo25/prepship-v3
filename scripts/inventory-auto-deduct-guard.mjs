@@ -34,7 +34,7 @@ assert(
   // PS-136: the deduction lives in the extracted owner (shared kill-switch-governed path,
   // keyed external:<source>); the route delegates via markOrderShippedExternally().
   // Re-anchored to where the logic moved — protection intact, no lockdown logic changed.
-  markShippedExternally.includes('enqueueInventoryDeduction(order') &&
+  /enqueueInventoryDeduction\(\s*order,[\s\S]*tx,/.test(markShippedExternally) &&
     markShippedExternally.includes('external:${input.source}') &&
     ordersRoute.includes('markOrderShippedExternally('),
   'external shipped route must deduct inventory through the shared fulfillment deduction path',

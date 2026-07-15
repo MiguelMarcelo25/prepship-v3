@@ -38,13 +38,14 @@ check('saveComboPackageDefault serializes upsert+apply under a per-(client,combo
 
 // ── (c) idempotent confirmation ──
 const procStart = outbox.indexOf('async function processOutboxRow');
-const proc = outbox.slice(procStart, procStart + 3200);
+const proc = outbox.slice(procStart, procStart + 6000);
 check('processOutboxRow re-checks the shipment confirmation state before dispatch',
   /confirmation_status, marketplace_confirmed_at/.test(proc) &&
   /FROM shipments WHERE id = \$\{idempotencyShipmentId\}/.test(proc));
+const idempotencyBranch = proc.slice(proc.indexOf('const idempotencyShipmentId'));
 check('an already-confirmed shipment settles the row WITHOUT re-confirming (the check precedes dispatch)',
-  proc.indexOf('completeOutboxRow(row)') > 0 &&
-  proc.indexOf('completeOutboxRow(row)') < proc.indexOf('connector.confirmShipment'));
+  idempotencyBranch.indexOf('completeOutboxRow(row)') > 0 &&
+  idempotencyBranch.indexOf('completeOutboxRow(row)') < idempotencyBranch.indexOf('connector.confirmShipment'));
 
 // ── behavioral: the lock key is deterministic per resource ──
 const k = advisoryLockKeyPair('combo_default:4:abc');

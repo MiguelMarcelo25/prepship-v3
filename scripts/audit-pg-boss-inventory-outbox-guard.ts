@@ -63,7 +63,8 @@ assert.doesNotMatch(read('src/services/shipstation-carrier-account-snapshot-work
 assert.match(deductionOwner, /INVENTORY_AUTO_DEDUCT/);
 assert.match(deductionOwner, /inventory:ship:order:/);
 assert.match(deductionOutbox, /await deductInventoryForOrder\(/);
-assert.match(deductionOutbox, /ON CONFLICT \(dedupe_key\) DO NOTHING/);
+assert.match(deductionOutbox, /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
+assert.match(deductionOutbox, /executor: InventoryDeductionOutboxExecutor = db/);
 assert.match(deductionOutbox, /export async function enqueueMissingInventoryDeductions/);
 assert.match(deductionOutbox, /o\.order_status = 'shipped'/);
 assert.doesNotMatch(deductionOutbox, /UPDATE orders|UPDATE shipments|DELETE FROM/);
@@ -84,7 +85,7 @@ assert.doesNotMatch(read('src/services/labels.ts'), /background\('inventory dedu
 assert.match(fulfillmentOutbox, /event_type IN \('shipment_confirmation_requested', \$\{INVENTORY_DEDUCTION_OUTBOX_EVENT\}\)/);
 assert.match(fulfillmentOutbox, /processInventoryDeductionOutboxEvent/);
 const complete = fulfillmentOutbox.slice(
-  fulfillmentOutbox.indexOf('async function completeOutboxRow'),
+  fulfillmentOutbox.indexOf('async function settleOutboxRowWithExecutor'),
   fulfillmentOutbox.indexOf('async function failOutboxRow'),
 );
 const fail = fulfillmentOutbox.slice(

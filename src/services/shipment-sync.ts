@@ -797,27 +797,28 @@ export async function syncShipments(
     const uniqueIds = Array.from(new Set(shippedOrderIds));
     for (let i = 0; i < uniqueIds.length; i += 500) {
       throwIfShipmentSyncAborted(opts.signal);
-      const rows = await db
-        .update(orders)
-        .set({ orderStatus: 'shipped', updatedAt: new Date() })
-        .where(
-          and(
-            inArray(orders.id, uniqueIds.slice(i, i + 500)),
-            eq(orders.orderStatus, 'awaiting_shipment')
+      // Per user override unlock shipped data on 2026-07-15: the canonical
+      // shipment-sync transition and its durable inventory intent commit in
+      // one transaction. An enqueue failure now rolls the status flip back;
+      // it can no longer leave a shipped order without retryable intent.
+      const rows = await db.transaction(async (tx) => {
+        const transitioned = await tx
+          .update(orders)
+          .set({ orderStatus: 'shipped', updatedAt: new Date() })
+          .where(
+            and(
+              inArray(orders.id, uniqueIds.slice(i, i + 500)),
+              eq(orders.orderStatus, 'awaiting_shipment')
+            )
           )
-        )
-        .returning();
-      ordersMarkedShipped += rows.length;
-      for (const row of rows) {
-        throwIfShipmentSyncAborted(opts.signal);
-        try {
-          // Per user override unlock shipped data on 2026-07-14: persist the
-          // retryable event; stock mutation remains in fulfillment-deductions.ts.
-          await enqueueInventoryDeduction(row, { source: 'shipment_sync' });
-        } catch (err) {
-          console.warn('[shipment-sync] inventory deduction enqueue failed:', err);
+          .returning();
+        for (const row of transitioned) {
+          throwIfShipmentSyncAborted(opts.signal);
+          await enqueueInventoryDeduction(row, { source: 'shipment_sync' }, tx);
         }
-      }
+        return transitioned;
+      });
+      ordersMarkedShipped += rows.length;
     }
   }
 

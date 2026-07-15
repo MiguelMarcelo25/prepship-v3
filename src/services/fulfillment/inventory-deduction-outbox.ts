@@ -1,7 +1,8 @@
 // Per user override unlock shipped data on 2026-07-14: durable inventory-deduction
 // lane. This module records/retries intent only and delegates all stock math,
 // kill-switch behavior, and ledger idempotency to fulfillment-deductions.ts.
-import { sql as pg } from '../../db/client.js';
+import { db, sql as pg } from '../../db/client.js';
+import { fulfillmentOutbox } from '../../db/schema/fulfillment-outbox.js';
 import { deductInventoryForOrder } from '../fulfillment-deductions.js';
 
 export const INVENTORY_DEDUCTION_OUTBOX_EVENT = 'inventory_deduction_requested';
@@ -16,6 +17,9 @@ type InventoryDeductionOrderRef = {
   id: number;
 };
 
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type InventoryDeductionOutboxExecutor = typeof db | DbTransaction;
+
 export type InventoryDeductionOutboxInput = {
   shipmentId?: number | null;
   source: string;
@@ -24,6 +28,7 @@ export type InventoryDeductionOutboxInput = {
 export async function enqueueInventoryDeduction(
   order: InventoryDeductionOrderRef,
   input: InventoryDeductionOutboxInput,
+  executor: InventoryDeductionOutboxExecutor = db,
 ): Promise<void> {
   const dedupeKey = `${INVENTORY_DEDUCTION_OUTBOX_EVENT}:${order.id}`;
   const payload = {
@@ -32,18 +37,26 @@ export async function enqueueInventoryDeduction(
     source: input.source,
   };
 
-  await pg`
-    INSERT INTO fulfillment_outbox (
-      order_id, shipment_id, event_type, provider, dedupe_key, payload,
-      status, attempts, next_run_at, updated_at
-    )
-    VALUES (
-      ${order.id}, ${input.shipmentId ?? null}, ${INVENTORY_DEDUCTION_OUTBOX_EVENT},
-      ${INVENTORY_DEDUCTION_PROVIDER}, ${dedupeKey}, ${JSON.stringify(payload)}::jsonb,
-      'pending', 0, NOW(), NOW()
-    )
-    ON CONFLICT (dedupe_key) DO NOTHING
-  `;
+  // Per user override unlock shipped data on 2026-07-15: callers that own a
+  // shipped transition pass their transaction here, so the status change and
+  // durable deduction intent either commit together or both roll back. This
+  // still records intent only; stock math and the kill switch remain in the
+  // canonical fulfillment-deductions owner.
+  await executor
+    .insert(fulfillmentOutbox)
+    .values({
+      orderId: order.id,
+      shipmentId: input.shipmentId ?? null,
+      eventType: INVENTORY_DEDUCTION_OUTBOX_EVENT,
+      provider: INVENTORY_DEDUCTION_PROVIDER,
+      dedupeKey,
+      payload,
+      status: 'pending',
+      attempts: 0,
+      nextRunAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing({ target: fulfillmentOutbox.dedupeKey });
 }
 
 /**

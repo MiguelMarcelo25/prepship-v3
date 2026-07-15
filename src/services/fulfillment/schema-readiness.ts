@@ -51,7 +51,14 @@ export function resetFulfillmentSchemaReadinessForTests(): void {
 }
 
 export async function assertFulfillmentSchemaReady(sql: SqlExecutor): Promise<void> {
-  readinessCheck ??= verifyFulfillmentSchema(sql);
+  // Per user override unlock shipped data on 2026-07-15: a transient
+  // startup/readiness failure must not poison this process
+  // forever. Clear only the rejected memo so a later worker tick can verify the
+  // migration-owned schema again; successful checks remain memoized.
+  readinessCheck ??= verifyFulfillmentSchema(sql).catch((error) => {
+    readinessCheck = null;
+    throw error;
+  });
   return readinessCheck;
 }
 

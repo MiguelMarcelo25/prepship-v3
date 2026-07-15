@@ -74,8 +74,8 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /await enqueueInventoryDeduction\(row, \{ source: 'order_sync_status' \}\)/,
-  'Recovered shipped orders must use the shared durable inventory deduction lane',
+  /inventoryDeductionSource: 'order_sync_status'/,
+  'Recovered shipped orders must atomically use the shared durable inventory deduction lane',
 );
 assert.match(
   orderSync,
