@@ -287,17 +287,11 @@ type RateBrowseReservationLock = {
   release: () => Promise<void>;
 };
 
-async function tryRateBrowseJobReservationLock(requestKey: string): Promise<RateBrowseReservationLock | null> {
+async function acquireRateBrowseJobReservationLock(requestKey: string): Promise<RateBrowseReservationLock> {
   const [classid, objid] = advisoryLockKeyPair(`rate-browse-job:${requestKey}`);
   const reserved = await rateBrowseJobLockSql.reserve();
   try {
-    const rows = await reserved<Array<{ acquired: boolean }>>`
-      SELECT pg_try_advisory_lock(${classid}, ${objid}) AS acquired
-    `;
-    if (rows[0]?.acquired !== true) {
-      reserved.release();
-      return null;
-    }
+    await reserved`SELECT pg_advisory_lock(${classid}, ${objid})`;
     return {
       release: async () => {
         try {
@@ -313,17 +307,6 @@ async function tryRateBrowseJobReservationLock(requestKey: string): Promise<Rate
   }
 }
 
-function lockBusySnapshot(snapshot: RateBrowseWorkflowSnapshot): RateBrowseWorkflowSnapshot {
-  return {
-    ...snapshot,
-    message: 'Rate browse workflow queued; durable duplicate lock was busy',
-    diagnostics: {
-      ...snapshot.diagnostics,
-      durableReservation: 'lock_busy_starting_independent_job',
-    },
-  };
-}
-
 export async function reserveRateBrowseJobRecord(
   snapshot: RateBrowseWorkflowSnapshot,
   options: { priority?: RateBrowseJobPriority } = {},
@@ -337,12 +320,7 @@ export async function reserveRateBrowseJobRecord(
   const existing = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
   if (existing) return { snapshot: existing, created: false };
 
-  const lock = await tryRateBrowseJobReservationLock(requestKey);
-  if (!lock) {
-    const active = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
-    if (active) return { snapshot: active, created: false };
-    return { snapshot: lockBusySnapshot(snapshot), created: true };
-  }
+  const lock = await acquireRateBrowseJobReservationLock(requestKey);
 
   try {
     const active = await getActiveRateBrowseJobRecordByRequestKey(requestKey);

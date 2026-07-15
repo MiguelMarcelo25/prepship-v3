@@ -35,6 +35,21 @@ function durableFallbackSnapshot(
   };
 }
 
+function durableReservationFailureSnapshot(
+  snapshot: RateBrowseWorkflowSnapshot,
+  error: unknown,
+): RateBrowseWorkflowSnapshot {
+  const failedAt = new Date().toISOString();
+  return {
+    ...durableFallbackSnapshot(snapshot, error),
+    phase: 'error',
+    updatedAt: failedAt,
+    finishedAt: failedAt,
+    message: 'Rate browse workflow could not obtain durable admission',
+    error: errorMessage(error),
+  };
+}
+
 export async function persistRateBrowseWorkflowSnapshot(
   snapshot: RateBrowseWorkflowSnapshot,
   options: { priority?: RateBrowseJobPriority } = {},
@@ -63,11 +78,16 @@ export async function reserveRateBrowseWorkflowSnapshot(
   try {
     reservation = await reserveRateBrowseJobRecord(snapshot, options);
   } catch (error) {
-    reservation = { snapshot: durableFallbackSnapshot(snapshot, error), created: true };
+    const failed = durableReservationFailureSnapshot(snapshot, error);
+    reservation = { snapshot: failed, created: false };
     console.warn(
-      '[rate-browse-workflow-store] durable reservation failed; falling back to settings snapshot:',
+      '[rate-browse-workflow-store] durable reservation failed; provider work was not started:',
       errorMessage(error),
     );
+    await setJsonSettings([
+      { key: RATE_BROWSE_WORKFLOW_LATEST_KEY, value: failed },
+      { key: rateBrowseWorkflowJobKey(failed.jobId), value: failed },
+    ]);
   }
   if (reservation.created) {
     await setJsonSettings([

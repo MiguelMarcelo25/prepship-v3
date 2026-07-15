@@ -570,7 +570,11 @@ export async function upsertNormalizedStoreOrders(
       return identity ? newSourceIdentityKeys.has(orderSourceIdentityKey(identity)) : false;
     })
     .map((row) => row.id);
-  enqueueBackfillBestRatesForOrderIds(rateOnIngestOrderIds);
+  await enqueueBackfillBestRatesForOrderIds(
+    rateOnIngestOrderIds,
+    undefined,
+    'rate-on-ingest',
+  );
 
   return rows.length;
 }

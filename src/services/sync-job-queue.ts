@@ -57,6 +57,9 @@ import {
   SHIPSTATION_SYNC_JOBS,
   syncQueuePolicyForJob,
 } from './sync-job-admission';
+import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
+import { parseDurableRateBackfillJobPayload } from './rate-backfill-job-types';
+import { runDurableRateBackfillJob } from './rates-backfill';
 
 // PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
 // endpoint). Local aliases keep the rest of this file unchanged.
@@ -74,7 +77,7 @@ const JOBS = {
   orders: SHIPSTATION_SYNC_JOBS.orders,
   shopifyOrders: 'prepship.sync.shopify-orders',
   shipments: SHIPSTATION_SYNC_JOBS.shipments,
-  rateBackfill: 'prepship.sync.rate-backfill',
+  rateBackfill: RATE_BACKFILL_JOB_NAME,
   inventoryImport: 'prepship.sync.inventory-import',
   syncProducts: 'prepship.sync.products',
   fulfillmentOutbox: 'prepship.sync.fulfillment-outbox',
@@ -108,7 +111,7 @@ const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
-const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
+const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS.rateBackfill]);
 
 function queueOptionsFor(name: JobName): PgBoss.Queue {
   return {
@@ -499,6 +502,7 @@ async function deferBusySyncJob(
   blockedBy: string,
   lane: SyncJobLane,
   priorDeferCount = 0,
+  jobData?: unknown,
 ): Promise<string | null> {
   if (!boss || !BUSY_DEFER_JOB_NAMES.has(name)) return null;
   try {
@@ -506,26 +510,40 @@ async function deferBusySyncJob(
     const orderStarvation =
       name === JOBS.orders && deferCount >= ORDER_STARVATION_DEFER_THRESHOLD;
     const delaySeconds = orderStarvation ? ORDER_STARVATION_DEFER_SECONDS : BUSY_DEFER_SECONDS;
-    const admission = resolveSyncJobAdmission(name, {
-      kind: 'busy-defer',
+    const isRateBackfill = name === JOBS.rateBackfill;
+    const ratePayload = isRateBackfill
+      ? parseDurableRateBackfillJobPayload(jobData)
+      : null;
+    const admission = isRateBackfill
+      ? {
+          singletonKey: `rate-backfill-request:${ratePayload?.jobId ?? 'cadence'}`,
+          priority: ratePayload?.requestedBy === 'manual' ? 1_000 : ratePayload ? 100 : 0,
+        }
+      : resolveSyncJobAdmission(name, {
+          kind: 'busy-defer',
+          orderStarvation,
+        });
+    const deferredMetadata = {
+      requestedAt: new Date().toISOString(),
+      deferredBecause: blockedBy,
+      deferredLane: lane,
+      deferCount,
       orderStarvation,
-    });
-    // Per user override unlock shipped data on 2026-07-01: this only creates a
-    // replacement pg-boss sync tick for order/shipment import when the shared
-    // ShipStation lane is busy. It does not touch orders, shipments, labels,
-    // postage, or marketplace notifications.
+    };
+    // Per user override unlock shipped data on 2026-07-15: this only creates a
+    // replacement pg-boss wake-up when the shared database lane is busy. Rate
+    // payloads retain their exact awaiting-only target IDs. This does not touch
+    // orders, shipments, labels, postage, or marketplace notifications.
     const id = await boss.sendAfter(
       name,
+      ratePayload ? { ...ratePayload, ...deferredMetadata } : deferredMetadata,
       {
-        requestedAt: new Date().toISOString(),
-        deferredBecause: blockedBy,
-        deferredLane: lane,
-        deferCount,
-        orderStarvation,
-      },
-      {
-        singletonKey: admission.singletonKey,
-        singletonSeconds: delaySeconds,
+        ...(isRateBackfill
+          ? {}
+          : {
+              singletonKey: admission.singletonKey,
+              singletonSeconds: delaySeconds,
+            }),
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
@@ -723,7 +741,16 @@ async function registerWorker(
           `[job-queue] ${name} skipped because ${blockedBy} is already running in ${lane} lane`
         );
         await recordWorkerJobSkipped(name, `${blockedBy} already running in ${lane} lane`);
-        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane, busyDeferCount(job?.data));
+        const deferredJobId = await deferBusySyncJob(
+          name,
+          blockedBy,
+          lane,
+          busyDeferCount(job?.data),
+          job?.data,
+        );
+        if (name === JOBS.rateBackfill && !deferredJobId) {
+          throw new Error('durable rate-backfill deferral failed; retrying original queue job');
+        }
         return {
           ok: true,
           skipped: true,
@@ -800,7 +827,16 @@ async function registerWorker(
         const blockedBy = `cross-process ${lane} lane lock`;
         console.log(`[job-queue] ${name} skipped because ${blockedBy} is held`);
         await recordWorkerJobSkipped(name, `${blockedBy} held`);
-        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane, busyDeferCount(job?.data));
+        const deferredJobId = await deferBusySyncJob(
+          name,
+          blockedBy,
+          lane,
+          busyDeferCount(job?.data),
+          job?.data,
+        );
+        if (name === JOBS.rateBackfill && !deferredJobId) {
+          throw new Error('durable rate-backfill deferral failed; retrying original queue job');
+        }
         return {
           ok: true,
           skipped: true,
@@ -902,7 +938,12 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierJob);
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
-  await registerWorker(JOBS.rateBackfill, () => runBackfillTick());
+  await registerWorker(JOBS.rateBackfill, (jobData) => {
+    const explicitRequest = parseDurableRateBackfillJobPayload(jobData);
+    return explicitRequest
+      ? runDurableRateBackfillJob(explicitRequest)
+      : runBackfillTick();
+  });
   await registerWorker(JOBS.rateMaintenance, async () => {
     await runReapStaleRateJobsTick();
     await runRateCacheEvictionTick();

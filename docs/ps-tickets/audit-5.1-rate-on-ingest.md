@@ -32,7 +32,7 @@
   frontend changes. Existing Orders DTOs continue to display backend rating
   state and backend-issued Best Rate proof.
 - **Backend boundary tests required:** The focused guard behaviorally proves
-  queue deduplication and 100-order drip batches; it also proves exact cache
+  durable payload identity/provenance; it also proves exact cache
   identity changes for ZIP, weight, dimensions, options, residential state, and
   eligible account set while remaining order-independent.
 - **Workflow/UI proof required:** Store-import, targeted backfill, PS-348,
@@ -50,9 +50,9 @@ residential state, ship-date/version policy, and eligible account identity. It
 provides every requested isolation axis with stricter granularity. A new order
 can reuse a complete current cache row only when those exact facts match.
 
-The process-local ingest queue is an admission optimization, not durable job
-truth; the existing scheduled backfill remains the crash/restart safety net.
-Fleet-wide admission remains Phase 5.5.
+Audit 5.5 moved ingest admission into the durable pg-boss rate-backfill lane.
+The scheduled backfill remains the recovery sweep, while each immediate ingest
+request now preserves its exact targeted IDs across process exit and lane delay.
 
 Per the user's current-conversation override `unlock shipped data`, the shared
 import owner reads the terminal-preserved post-upsert status and admits only

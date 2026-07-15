@@ -17,7 +17,7 @@ import {
   finalizeBestRateWithQuote,
   selectedRateOpaqueKey,
 } from './shipping-workflow/rate-quote-snapshot-store';
-import { isPersistedBestDowngrade } from './best-rate-ratchet-db';
+import { persistBestRateWithRatchet } from './best-rate-ratchet-db';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 import {
@@ -66,10 +66,12 @@ import {
   normalizeRateBackfillDiagnosticSamples,
   recordRateBackfillDiagnostic,
 } from './rate-backfill-diagnostics';
-import {
-  addRateOnIngestOrderIds,
-  takeRateOnIngestBatch,
-} from './rate-on-ingest-queue';
+import { enqueueDurableRateBackfillJob } from './rate-backfill-job-producer';
+import type {
+  DurableRateBackfillJobPayload,
+  RateBackfillOptions,
+  RateBackfillRequestSource,
+} from './rate-backfill-job-types';
 
 async function runBackfillDbWrites<T>(
   items: readonly T[],
@@ -160,7 +162,7 @@ export type BackfillJob = {
 
 export type BackfillJobMode = 'manual_force_live' | 'cache_friendly';
 
-type BackfillOptions = {
+export type BackfillOptions = RateBackfillOptions & {
   mode?: 'cache_first' | 'full_live_audit' | 'preexpiry_refresh';
   clientId?: number;
   limit?: number;
@@ -170,12 +172,6 @@ type BackfillOptions = {
   // save). The awaiting_shipment lockdown filter is ALWAYS kept, so shipped/cancelled ids
   // passed here are silently dropped — never re-rated.
   orderIds?: number[];
-};
-
-type QueuedBackfillRequest = {
-  jobId: string;
-  opts: BackfillOptions;
-  mode: BackfillJobMode;
 };
 
 export const RATE_BACKFILL_STATUS_KEY = 'rate_backfill_best_rates.last_run';
@@ -222,14 +218,7 @@ const jobs = new Map<string, BackfillJob>();
 const backfillExecutionPromises = new Map<string, Promise<void>>();
 let activeJobId: string | null = null;
 let latestJobId: string | null = null;
-const queuedBackfillRequests: QueuedBackfillRequest[] = [];
-const queuedRateOnIngestOrderIds = new Set<number>();
-
-export function enqueueBackfillBestRatesForOrderIds(orderIds: readonly number[]): number {
-  const added = addRateOnIngestOrderIds(queuedRateOnIngestOrderIds, orderIds);
-  if (added > 0) startQueuedBackfillIfIdle();
-  return added;
-}
+const MAX_COMPLETED_JOBS_IN_MEMORY = 25;
 
 export function backfillJobModeForOptions(opts: BackfillOptions): BackfillJobMode {
   if (opts.mode === 'full_live_audit') return 'manual_force_live';
@@ -260,7 +249,7 @@ function toBackfillSnapshot(
     jobId: job.jobId,
     status: job.status,
     mode: job.mode,
-    active: activeJobId === job.jobId && job.status === 'running',
+    active: job.status === 'pending' || job.status === 'running',
     total: job.total,
     processed: job.processed,
     updated: job.updated,
@@ -366,8 +355,13 @@ export async function getBackfillJobSnapshot(jobId: string): Promise<BackfillJob
   return readBackfillJobSnapshot(backfillJobStatusKey(trimmed));
 }
 
-function createBackfillJob(opts: BackfillOptions, mode: BackfillJobMode, message = 'Starting…'): BackfillJob {
-  const jobId = randomUUID();
+function createBackfillJob(
+  opts: BackfillOptions,
+  mode: BackfillJobMode,
+  message = 'Starting…',
+  jobId: string = randomUUID(),
+  registerInProcess = true,
+): BackfillJob {
   const job: BackfillJob = {
     jobId,
     status: 'pending',
@@ -384,18 +378,24 @@ function createBackfillJob(opts: BackfillOptions, mode: BackfillJobMode, message
     startedAt: Date.now(),
     finishedAt: null,
   };
-  jobs.set(jobId, job);
-  latestJobId = jobId;
+  if (registerInProcess) {
+    jobs.set(jobId, job);
+    latestJobId = jobId;
+  }
   return job;
+}
+
+function pruneCompletedBackfillJobs(): void {
+  const completed = [...jobs.values()]
+    .filter((job) => job.status === 'done' || job.status === 'error')
+    .sort((left, right) => right.startedAt - left.startedAt);
+  for (const job of completed.slice(MAX_COMPLETED_JOBS_IN_MEMORY)) {
+    if (job.jobId !== latestJobId) jobs.delete(job.jobId);
+  }
 }
 
 function isActiveJob(job: BackfillJob | null | undefined): job is BackfillJob {
   return !!job && (job.status === 'pending' || job.status === 'running');
-}
-
-function findQueuedManualForceLiveJob(): BackfillJob | null {
-  const queued = queuedBackfillRequests.find((request) => request.mode === 'manual_force_live');
-  return queued ? (jobs.get(queued.jobId) ?? null) : null;
 }
 
 function launchBackfillExecution(jobId: string, opts: BackfillOptions): Promise<void> {
@@ -413,86 +413,62 @@ function launchBackfillExecution(jobId: string, opts: BackfillOptions): Promise<
 }
 
 export async function waitForBackfillJob(jobId: string): Promise<BackfillJob | null> {
-  let executionJobId = jobId;
-  const awaited = new Set<string>();
-  while (!awaited.has(executionJobId)) {
-    awaited.add(executionJobId);
-    const execution = backfillExecutionPromises.get(executionJobId);
-    if (execution) await execution;
-
-    // runBackfill may start a queued force-live or rate-on-ingest request in its
-    // finally block. Keep the durable lane until that chained execution settles.
-    const active = activeJobId ? jobs.get(activeJobId) : null;
-    if (!isActiveJob(active) || awaited.has(active.jobId)) break;
-    executionJobId = active.jobId;
-  }
+  const execution = backfillExecutionPromises.get(jobId);
+  if (execution) await execution;
   return jobs.get(jobId) ?? null;
 }
 
-function startQueuedBackfillIfIdle(): void {
-  const active = activeJobId ? jobs.get(activeJobId) : null;
-  if (isActiveJob(active)) return;
-
-  const next = queuedBackfillRequests.shift();
-  if (next) {
-    const job = jobs.get(next.jobId);
-    if (!job) {
-      startQueuedBackfillIfIdle();
-      return;
-    }
-
-    activeJobId = job.jobId;
-    job.message = 'Starting queued force-live backfill…';
-    void persistBackfillJobSnapshot(job, next.opts);
-    void launchBackfillExecution(job.jobId, next.opts);
-    return;
-  }
-
-  const ingestOrderIds = takeRateOnIngestBatch(queuedRateOnIngestOrderIds);
-  if (!ingestOrderIds.length) return;
-
-  const opts: BackfillOptions = {
-    mode: 'cache_first',
-    orderIds: ingestOrderIds,
-    limit: ingestOrderIds.length,
-  };
-  const job = createBackfillJob(
-    opts,
-    backfillJobModeForOptions(opts),
-    'Starting rate-on-ingest backfill…',
-  );
-  activeJobId = job.jobId;
-  void persistBackfillJobSnapshot(job, opts);
-  void launchBackfillExecution(job.jobId, opts);
-}
-
-export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
+/** Worker-only execution entrypoint. External callers must use durable admission below. */
+export function startBackfillBestRates(opts: BackfillOptions, jobId: string = randomUUID()): BackfillJob {
   const requestedMode = backfillJobModeForOptions(opts);
   const active = activeJobId ? jobs.get(activeJobId) : null;
-  if (isActiveJob(active)) {
-    const activeMode = active.mode;
-    if (requestedMode === 'manual_force_live' && activeMode === 'cache_friendly') {
-      const existingQueued = findQueuedManualForceLiveJob();
-      if (existingQueued) return existingQueued;
+  if (isActiveJob(active)) return active;
 
-      const queuedJob = createBackfillJob(
-        opts,
-        requestedMode,
-        'Manual force-live Recalculate All queued behind active cache-friendly backfill',
-      );
-      queuedBackfillRequests.push({ jobId: queuedJob.jobId, opts, mode: requestedMode });
-      void persistBackfillJobSnapshot(queuedJob, opts);
-      return queuedJob;
-    }
-
-    return active;
-  }
-
-  const job = createBackfillJob(opts, requestedMode);
+  const job = createBackfillJob(opts, requestedMode, 'Starting…', jobId);
   activeJobId = job.jobId;
   void persistBackfillJobSnapshot(job, opts);
   void launchBackfillExecution(job.jobId, opts);
   return job;
+}
+
+export async function enqueueBackfillBestRates(
+  opts: BackfillOptions,
+  requestedBy: RateBackfillRequestSource = 'manual',
+): Promise<BackfillJob> {
+  const job = createBackfillJob(
+    opts,
+    backfillJobModeForOptions(opts),
+    'Queued in durable rate-backfill lane',
+    randomUUID(),
+    false,
+  );
+  await persistBackfillJobSnapshot(job, opts);
+  const payload: DurableRateBackfillJobPayload = {
+    version: 1,
+    jobId: job.jobId,
+    requestedAt: new Date().toISOString(),
+    requestedBy,
+    options: opts,
+  };
+  const admission = await enqueueDurableRateBackfillJob(payload);
+  if (!admission.queued) {
+    job.status = 'error';
+    job.error = admission.error ?? 'durable rate-backfill admission failed';
+    job.message = `Queue error: ${job.error}`;
+    job.finishedAt = Date.now();
+    await persistBackfillJobSnapshot(job, opts);
+  }
+  return job;
+}
+
+export async function runDurableRateBackfillJob(
+  payload: DurableRateBackfillJobPayload,
+): Promise<BackfillJob | null> {
+  const active = getActiveBackfillJob();
+  if (active) await waitForBackfillJob(active.jobId);
+  const job = startBackfillBestRates(payload.options, payload.jobId);
+  await waitForBackfillJob(job.jobId);
+  return getBackfillJob(job.jobId);
 }
 
 /**
@@ -503,13 +479,17 @@ export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
  * selection to `inArray(orders.id, …)`. The awaiting_shipment lockdown filter is retained,
  * so any shipped/cancelled/labelled ids are silently excluded (never re-rated).
  */
-export function startBackfillBestRatesForOrderIds(
-  orderIds: number[],
+export async function enqueueBackfillBestRatesForOrderIds(
+  orderIds: readonly number[],
   opts?: { maxAgeHours?: number },
-): BackfillJob | null {
+  requestedBy: Exclude<RateBackfillRequestSource, 'manual'> = 'targeted-order-change',
+): Promise<BackfillJob | null> {
   const ids = Array.from(new Set((orderIds ?? []).filter((n) => Number.isFinite(n) && n > 0)));
   if (!ids.length) return null;
-  return startBackfillBestRates({ orderIds: ids, limit: ids.length, maxAgeHours: opts?.maxAgeHours });
+  return enqueueBackfillBestRates(
+    { mode: 'cache_first', orderIds: ids, limit: ids.length, maxAgeHours: opts?.maxAgeHours },
+    requestedBy,
+  );
 }
 
 async function runBackfill(
@@ -994,7 +974,13 @@ async function runBackfill(
           // SAME shipment inputs (same requestFingerprint) instead of overwriting it with a thin Shipp
           // re-quote that dropped UPS/USPS; a different fingerprint (inputs changed) or a cheaper-or-
           // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
-          if (await isPersistedBestDowngrade(row.id, stampedBest)) {
+          const persisted = await persistBestRateWithRatchet(row.id, {
+            bestRateJson: stampedBest,
+            bestRateDims: dimsLabel,
+            bestRateAt: now,
+            updatedAt: now,
+          });
+          if (persisted.blocked) {
             job.skipped++;
             recordPreExpiryOutcome(stampedBest, false, {
               forceRefresh: rateFetchDecision.forceRefresh,
@@ -1006,24 +992,6 @@ async function runBackfill(
               `order ${row.id} (${row.orderNumber}): kept cheaper fresh best (PS-271 no-downgrade) — re-quote was more expensive for the same inputs`,
             );
           } else {
-            await db
-              .insert(orderOverrides)
-              .values({
-                orderId: row.id,
-                bestRateJson: stampedBest as unknown,
-                bestRateDims: dimsLabel,
-                bestRateAt: now,
-                updatedAt: now,
-              })
-              .onConflictDoUpdate({
-                target: orderOverrides.orderId,
-                set: {
-                  bestRateJson: stampedBest as unknown,
-                  bestRateDims: dimsLabel,
-                  bestRateAt: now,
-                  updatedAt: now,
-                },
-              });
             job.updated++;
             recordPreExpiryOutcome(stampedBest, true, {
               forceRefresh: rateFetchDecision.forceRefresh,
@@ -1100,6 +1068,6 @@ async function runBackfill(
     } catch (err) {
       console.warn('[rates-backfill] finalize sweep failed:', err instanceof Error ? err.message : err);
     }
-    startQueuedBackfillIfIdle();
+    pruneCompletedBackfillJobs();
   }
 }

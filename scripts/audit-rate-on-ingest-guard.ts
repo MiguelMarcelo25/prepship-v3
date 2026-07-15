@@ -1,30 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import {
-  addRateOnIngestOrderIds,
-  RATE_ON_INGEST_BATCH_SIZE,
-  takeRateOnIngestBatch,
-} from '../src/services/rate-on-ingest-queue';
+import { parseDurableRateBackfillJobPayload } from '../src/services/rate-backfill-job-types';
 import { buildShippingRateRequestFingerprint } from '../src/services/shipping-workflow/rate-fingerprint';
 
 function read(path: string): string {
   return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 }
 
-const queue = new Set<number>();
-assert.equal(
-  addRateOnIngestOrderIds(queue, [3, 2, 3, -1, 0, Number.NaN, 1.5, 1]),
-  3,
-  'only unique positive integer order IDs are admitted',
-);
-addRateOnIngestOrderIds(
-  queue,
-  Array.from({ length: RATE_ON_INGEST_BATCH_SIZE + 5 }, (_, index) => index + 4),
-);
-const firstBatch = takeRateOnIngestBatch(queue);
-assert.equal(firstBatch.length, RATE_ON_INGEST_BATCH_SIZE, 'ingest rating drains in bounded batches');
-assert.equal(queue.size, 8, 'overflow remains queued for the next drip');
-assert.equal(new Set(firstBatch).size, firstBatch.length, 'one batch contains no duplicate order IDs');
+const durablePayload = parseDurableRateBackfillJobPayload({
+  version: 1,
+  jobId: 'audit-5.1-job',
+  requestedAt: '2026-07-15T00:00:00.000Z',
+  requestedBy: 'rate-on-ingest',
+  options: { mode: 'cache_first', orderIds: [3, 2, 1], limit: 3 },
+});
+assert.deepEqual(durablePayload?.options.orderIds, [3, 2, 1], 'durable admission preserves targeted IDs');
+assert.equal(durablePayload?.requestedBy, 'rate-on-ingest', 'durable admission records ingest provenance');
 
 const baseFingerprintInput = {
   version: 'audit-5.1',
@@ -78,9 +69,9 @@ assert.ok(
   'rate admission happens only after package-fact materialization',
 );
 assert.doesNotMatch(importOwner, /\bgetRates\b|getDirectCarrierRatesForRateInput|quoteCarrierRates/);
-assert.match(backfillOwner, /queuedRateOnIngestOrderIds = new Set<number>\(\)/);
-assert.match(backfillOwner, /export function enqueueBackfillBestRatesForOrderIds/);
-assert.match(backfillOwner, /takeRateOnIngestBatch\(queuedRateOnIngestOrderIds\)/);
+assert.match(backfillOwner, /export async function enqueueBackfillBestRatesForOrderIds/);
+assert.match(backfillOwner, /enqueueDurableRateBackfillJob\(payload\)/);
+assert.doesNotMatch(backfillOwner, /queuedRateOnIngestOrderIds|takeRateOnIngestBatch/);
 assert.match(backfillOwner, /mode: 'cache_first'/);
 assert.match(rateOwner, /buildShippingRateRequestFingerprint\(\{/);
 assert.match(rateOwner, /carrierIds: input\.carrierIds/);

@@ -22,6 +22,9 @@ function check(name: string, condition: boolean, detail?: string) {
 }
 
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
+const producer = readFileSync('src/services/rate-backfill-job-producer.ts', 'utf8');
+const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
+const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
   scripts?: Record<string, string>;
@@ -40,17 +43,17 @@ check(
 );
 
 check(
-  'manual force-live queues behind an active passive cache-friendly job',
-  /queuedBackfillRequests/.test(backfill) &&
-    /requestedMode === 'manual_force_live'/.test(backfill) &&
-    /activeMode === 'cache_friendly'/.test(backfill) &&
-    /queued behind active cache-friendly backfill/i.test(backfill),
+  'manual force-live enters the durable worker queue at operator priority',
+  /enqueueBackfillBestRates\(body, 'manual'\)/.test(ratesRoute) &&
+    /payload\.requestedBy === 'manual' \? 1_000 : 100/.test(producer) &&
+    /id: payload\.jobId/.test(producer),
 );
 
 check(
-  'finished active job starts the queued force-live backfill',
-  /startQueuedBackfillIfIdle/.test(backfill) &&
-    /finally[\s\S]*startQueuedBackfillIfIdle/.test(backfill),
+  'durable worker executes explicit payloads and awaits their full lifetime',
+  /parseDurableRateBackfillJobPayload\(jobData\)/.test(queue) &&
+    /runDurableRateBackfillJob\(explicitRequest\)/.test(queue) &&
+    /await waitForBackfillJob\(job\.jobId\)/.test(backfill),
 );
 
 check(

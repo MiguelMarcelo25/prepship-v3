@@ -19,12 +19,10 @@ import {
 import { redactRateBrowserMoney } from '../services/rate-browser-money-redaction';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
-  getActiveBackfillJob,
   getBackfillJob,
   getBackfillJobSnapshot,
-  getLatestBackfillJob,
   getLatestBackfillJobSnapshot,
-  startBackfillBestRates,
+  enqueueBackfillBestRates,
 } from '../services/rates-backfill';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
@@ -919,7 +917,7 @@ app.post(
   ),
   async (c) => {
     const body = c.req.valid('json') ?? {};
-    const job = startBackfillBestRates(body);
+    const job = await enqueueBackfillBestRates(body, 'manual');
     return c.json({ job_id: job.jobId, status: job.status });
   }
 );
@@ -953,14 +951,16 @@ app.get('/backfill-best/status/:jobId', async (c) => {
   return c.json(job);
 });
 
-app.get('/backfill-best/active', (c) => {
-  return c.json({ job: getActiveBackfillJob() });
+app.get('/backfill-best/active', async (c) => {
+  const durableJob = await getLatestBackfillJobSnapshot();
+  return c.json({ job: durableJob?.active ? durableJob : null });
 });
 
 app.get('/backfill-best/latest', async (c) => {
+  const durableJob = await getLatestBackfillJobSnapshot();
   return c.json({
-    job: getLatestBackfillJob(),
-    durableJob: await getLatestBackfillJobSnapshot(),
+    job: durableJob,
+    durableJob,
   });
 });
 
@@ -981,8 +981,7 @@ app.post('/cache-clear-and-refetch', requireInternalPermission('scope:global'), 
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
   await db.delete(rateCache);
-  const { startBackfillBestRates } = await import('../services/rates-backfill');
-  const job = startBackfillBestRates({ maxAgeHours: 0 });
+  const job = await enqueueBackfillBestRates({ maxAgeHours: 0 }, 'manual');
   return c.json({
     cleared: counts[0]?.count ?? 0,
     refetchStarted: true,

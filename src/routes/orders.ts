@@ -16,7 +16,10 @@ import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus } from '../services/order-sync';
 import { enqueueManualOrderSyncJob } from '../services/sync-job-queue';
-import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
+import {
+  enqueueBackfillBestRatesForOrderIds,
+  getLatestBackfillJobSnapshot,
+} from '../services/rates-backfill';
 // PS-136: the manual mark-shipped-externally transition (status flip + inventory deduction +
 // ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
 import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
@@ -664,14 +667,14 @@ export function resolveV2CarrierAccountRef(
 // status truth while `lastSyncAt` remains an alias for back-compat.
 app.get('/sync/status', async (c) => {
   const status = await getSyncStatus();
-  const activeRateJob = getActiveBackfillJob();
-  const latestRateJob = getLatestBackfillJob();
-  const rateJob =
-    activeRateJob ??
-    (latestRateJob?.finishedAt &&
-    Date.now() - latestRateJob.finishedAt < 5 * 60 * 1000
-      ? latestRateJob
-      : null);
+  const latestRateJob = await getLatestBackfillJobSnapshot();
+  const latestRateFinishedAt = latestRateJob?.finishedAt
+    ? Date.parse(latestRateJob.finishedAt)
+    : null;
+  const rateJob = latestRateJob?.active
+    || (latestRateFinishedAt != null && Date.now() - latestRateFinishedAt < 5 * 60 * 1000)
+    ? latestRateJob
+    : null;
   const [rateCount] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
@@ -727,7 +730,7 @@ app.get('/sync/status', async (c) => {
     lastSync,
     latestSync,
     ratesCached: rateCount?.count ?? 0,
-    ratePrefetchRunning: rateJob?.status === 'running',
+    ratePrefetchRunning: rateJob?.active === true,
     ratePrefetchJob: rateJob
       ? {
           jobId: rateJob.jobId,
@@ -3769,15 +3772,17 @@ app.post(
         writeAuthorization: guard.writeAuthorization,
       },
     );
-    // PS-121: kick a bounded targeted recalc for the invalidated ids (awaiting only — the primitive
-    // keeps the awaiting_shipment lockdown filter). Fire-and-forget; the order already shows
+    // PS-121: durably enqueue a bounded targeted recalc for the invalidated ids (awaiting only —
+    // the worker keeps the awaiting_shipment lockdown filter). The order already shows
     // "refreshing" via the pending stamp the service wrote.
     // Per user override unlock shipped data on 2026-06-24: re-rate the changed order even for a SINGLE
     // package change (not just recalcGroup) — a package change invalidates the saved rate, so without a
     // re-rate the row sits on a mismatched_request spinner forever. Fall back to [id] when the service
     // reported no sibling ids. No shipped/cancelled mutation (assertOrderEditable + the awaiting filter).
     const rerateIds = result.affectedOrderIds && result.affectedOrderIds.length ? result.affectedOrderIds : [id];
-    startBackfillBestRatesForOrderIds(rerateIds);
+    // Per user override unlock shipped data on 2026-07-15: enqueue only the
+    // awaiting-only rate worker; editability guards and label paths are unchanged.
+    await enqueueBackfillBestRatesForOrderIds(rerateIds);
     return c.json({ data: result });
   }
 );
@@ -3925,12 +3930,14 @@ app.post(
 
     // Per user override unlock shipped data on 2026-06-24: a dims/package change invalidates the saved
     // rate (the FE otherwise sits on a perpetual "package changed" / mismatched_request spinner with no
-    // watchdog). Fire a bounded TARGETED re-rate so the row re-rates to the new dims. awaiting-only —
-    // assertOrderEditable blocked shipped/cancelled above AND the backfill itself filters
-    // order_status = 'awaiting_shipment'. Fire-and-forget; the targeted backfill stamps `pending` (bounded
-    // by the reader watchdog + finalize-sweep) and resolves to the fresh rate. No shipped/cancelled
-    // mutation, no labels/postage.
-    startBackfillBestRatesForOrderIds([id]);
+    // watchdog). Durably enqueue a bounded TARGETED re-rate so the row re-rates to the new dims.
+    // awaiting-only — assertOrderEditable blocked shipped/cancelled above AND the backfill itself filters
+    // order_status = 'awaiting_shipment'. The targeted backfill stamps `pending` (bounded by the reader
+    // watchdog + finalize-sweep) and resolves to the fresh rate. No shipped/cancelled mutation,
+    // labels, or postage.
+    // Per user override unlock shipped data on 2026-07-15: durable admission
+    // changes coordination only; runBackfill still filters awaiting_shipment.
+    await enqueueBackfillBestRatesForOrderIds([id]);
 
     return c.json({ data: result.value });
   }

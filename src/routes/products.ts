@@ -16,7 +16,7 @@ import {
   computeOrderRateJobFingerprint,
   setOrderRatePending,
 } from '../services/shipping-workflow/order-rate-job-status';
-import { startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
+import { enqueueBackfillBestRatesForOrderIds } from '../services/rates-backfill';
 import { findProductDefaultsBySku } from '../services/order-dims-defaults';
 
 const app = new Hono();
@@ -383,7 +383,7 @@ app.post('/save-defaults', requireInternalPermission('settings:write'), zValidat
 
   // PS-121: explicit save → targeted recalc of exactly the invalidated siblings (awaiting only).
   if (v.recalcGroup === true && affectedOrderIds.length) {
-    startBackfillBestRatesForOrderIds(affectedOrderIds);
+    await enqueueBackfillBestRatesForOrderIds(affectedOrderIds);
   }
 
   return c.json({ ...row, appliedMutableOrderCount, affectedOrderIds });

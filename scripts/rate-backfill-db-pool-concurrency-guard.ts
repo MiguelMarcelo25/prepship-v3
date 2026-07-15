@@ -74,8 +74,8 @@ assert.match(
 );
 assert.match(
   queueSource,
-  /registerWorker\(JOBS\.rateBackfill, \(\) => runBackfillTick\(\)\)/,
-  'the durable rate worker must return the awaited scheduler promise',
+  /registerWorker\(JOBS\.rateBackfill,[\s\S]{0,350}runDurableRateBackfillJob\(explicitRequest\)[\s\S]{0,150}runBackfillTick\(\)/,
+  'the durable rate worker must await explicit requests or the scheduled tick',
 );
 assert.doesNotMatch(
   queueSource,

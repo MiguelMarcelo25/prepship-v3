@@ -5,7 +5,7 @@
  * no postage/label/marketplace calls.
  *
  * Proves the architecture-first contract:
- *   1. A backend-owned TARGETED recalc primitive exists (startBackfillBestRatesForOrderIds) and
+ *   1. A backend-owned TARGETED recalc primitive exists (enqueueBackfillBestRatesForOrderIds) and
  *      keeps the awaiting_shipment lockdown filter + restricts to the given order ids (inArray).
  *   2. Both default-save owners (combo + single-SKU) INVALIDATE stale best rates (bestRateJson/
  *      bestRateAt/bestRateDims -> null) ONLY when recalcGroup is set, stamp PS-120 `pending`, and
@@ -33,7 +33,7 @@ const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 // ── 1. Targeted recalc primitive (backend-owned, lockdown-safe) ───────────────
 assert.match(
   backfill,
-  /export function startBackfillBestRatesForOrderIds\(/,
+  /export async function enqueueBackfillBestRatesForOrderIds\(/,
   'a backend-owned targeted recalc primitive must exist',
 );
 assert.match(
@@ -86,7 +86,7 @@ assert.match(
 for (const [name, src] of [['combo', ordersRoute], ['single-SKU', products]] as const) {
   assert.match(
     src,
-    /recalcGroup === true[\s\S]*startBackfillBestRatesForOrderIds\(/,
+    /recalcGroup === true[\s\S]*enqueueBackfillBestRatesForOrderIds\(/,
     `${name} route must kick the targeted recalc ONLY when recalcGroup is true`,
   );
 }

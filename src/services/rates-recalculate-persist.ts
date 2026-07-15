@@ -15,7 +15,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { normalizeOrderBestRateDto, type OrderBestRateDto } from './order-rate-dto';
-import { isPersistedBestDowngrade } from './best-rate-ratchet-db';
+import { persistBestRateWithRatchet } from './best-rate-ratchet-db';
 import {
   describeShippingService,
   evaluateShippingServiceEligibility,
@@ -125,10 +125,6 @@ export async function persistStrictRecalculateOutcome(input: {
   // overwrite a CHEAPER fresh best for the SAME shipment inputs (same requestFingerprint); a different
   // fingerprint means the inputs changed -> the prior is stale -> replace it. The operator's
   // deliberate FE PATCH save is a separate path and is exempt.
-  if (await isPersistedBestDowngrade(input.orderId, canonical)) {
-    return { persisted: false, reason: 'no-downgrade: kept the cheaper fresh best for the same shipment inputs' };
-  }
-
   const bestRateDims = `${input.dimsL}x${input.dimsW}x${input.dimsH}`;
   const persistedSet = {
     ...dimsPatch,
@@ -138,9 +134,9 @@ export async function persistStrictRecalculateOutcome(input: {
     bestRateAt: new Date(),
     updatedAt: new Date(),
   };
-  await db
-    .insert(orderOverrides)
-    .values({ orderId: input.orderId, ...persistedSet })
-    .onConflictDoUpdate({ target: orderOverrides.orderId, set: persistedSet });
+  const persisted = await persistBestRateWithRatchet(input.orderId, persistedSet);
+  if (persisted.blocked) {
+    return { persisted: false, reason: 'no-downgrade: kept the cheaper fresh best for the same shipment inputs' };
+  }
   return { persisted: true };
 }

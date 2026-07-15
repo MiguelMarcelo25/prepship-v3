@@ -83,13 +83,12 @@ check(
 );
 
 check(
-  'job store attaches duplicate live workflows by request key without blocking the Rate Browser POST',
+  'job store serializes duplicate live workflow reservation by durable request key',
   /import \{ advisoryLockKeyPair \} from ['"]\.\.\/lib\/advisory-lock['"]/.test(jobStore) &&
     /export async function reserveRateBrowseJobRecord/.test(jobStore) &&
-    /tryRateBrowseJobReservationLock/.test(jobStore) &&
-    /pg_try_advisory_lock/.test(jobStore) &&
-    /lockBusySnapshot/.test(jobStore) &&
-    /durableReservation: 'lock_busy_starting_independent_job'/.test(jobStore) &&
+    /acquireRateBrowseJobReservationLock/.test(jobStore) &&
+    /pg_advisory_lock/.test(jobStore) &&
+    !/pg_try_advisory_lock|lock_busy_starting_independent_job/.test(jobStore) &&
     /getActiveRateBrowseJobRecordByRequestKey/.test(jobStore) &&
     /created: false/.test(jobStore) &&
     /created: true/.test(jobStore),
@@ -126,10 +125,12 @@ check(
 );
 
 check(
-  'workflow store falls back to legacy settings snapshots if the durable job store is temporarily busy',
+  'workflow store fails reservation closed while retaining legacy status diagnostics',
   /durableFallbackSnapshot/.test(workflowStore) &&
+    /durableReservationFailureSnapshot/.test(workflowStore) &&
     /durableStore: 'fallback'/.test(workflowStore) &&
-    /durable reservation failed; falling back to settings snapshot/.test(workflowStore) &&
+    /provider work was not started/.test(workflowStore) &&
+    /created: false/.test(workflowStore) &&
     /durable persist failed; falling back to settings snapshot/.test(workflowStore),
 );
 

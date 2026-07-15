@@ -127,13 +127,15 @@ check('any carrier ERROR -> NOT complete',
 // ── 5) Backend pre-rates NEW awaiting orders after sync (no browser needed) ──
 {
   const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
-  check('order sync triggers the rate backfill when new orders land (enqueue-on-sync)',
-    /result\.synced > 0 && isRateBackfillSchedulerEnabled\(\)/.test(scheduler)
-    && /runBackfillTick\(\)/.test(scheduler), true);
+  const importOwner = readFileSync('src/services/store-order-import.ts', 'utf8');
+  const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
+  check('new awaiting imports durably enqueue targeted backend rate work',
+    /await enqueueBackfillBestRatesForOrderIds\([\s\S]{0,120}'rate-on-ingest'/.test(importOwner), true);
   check('rate backfill is idempotent (skips when a job is already running)',
     /getActiveBackfillJob\(\)/.test(scheduler) && /startBackfillBestRates\(/.test(scheduler), true);
-  check('enqueue-on-sync is gated by ENABLE_RATE_BACKFILL_SCHEDULER (opt-in, bounded)',
-    /env\.ENABLE_RATE_BACKFILL_SCHEDULER && !env\.DISABLE_RATE_BACKFILL_SCHEDULER/.test(scheduler), true);
+  check('scheduled sweep remains gated by ENABLE_RATE_BACKFILL_SCHEDULER (opt-in, bounded)',
+    /env\.ENABLE_RATE_BACKFILL_SCHEDULER && !env\.DISABLE_RATE_BACKFILL_SCHEDULER/.test(queue)
+    && /isRateBackfillSchedulerEnabled\(\)/.test(queue), true);
 
   // The backend backfill stamps completeness from carrier diagnostics — same rule as
   // /browse — so backend-pre-rated orders are never marked complete while a carrier
