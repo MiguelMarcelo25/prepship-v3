@@ -80,6 +80,9 @@ const sourcePinOnlyFiles = new Set([
   'scripts/ps-265-sync-run-budget-guard.ts',
   'scripts/ps-339-ebay-api-testing-certification-guard.ts',
   'scripts/ps-406-duplicate-label-audit-guard.ts',
+  // PS-432 reads connector source to pin the upstream pre-read boundary; it
+  // imports no provider function and executes no network request.
+  'scripts/ps-432-sync-fulfillment-resilience-guard.ts',
 ]);
 
 const ignoredFiles = new Set([

@@ -25,7 +25,7 @@ assert(
 );
 
 assert(
-  labels.includes('enqueueInventoryDeduction(args.order') &&
+  /enqueueInventoryDeduction\(\s*args\.order/.test(labels) &&
     labels.includes('enqueue inventory deduction'),
   'label creation must enqueue the shared durable inventory deduction path',
 );

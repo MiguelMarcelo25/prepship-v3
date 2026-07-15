@@ -65,6 +65,14 @@ type ShipStationV1RequestOptions = {
   signal?: AbortSignal;
 };
 
+export type ShipStationConfirmationDependencies = {
+  loadOrder?: (
+    orderId: number,
+    credentials: { apiKey?: string; apiSecret?: string },
+  ) => Promise<{ orderStatus?: string | null }>;
+  markOrderShipped?: typeof ssMarkOrderShippedV1;
+};
+
 type ShipStationStore = {
   storeId: number;
   storeName: string;
@@ -253,7 +261,15 @@ export function normalizeShipStationOrder(raw: unknown): NormalizedOrder {
   };
 }
 
-export function createShipStationStoreConnector(): StoreConnector {
+export function createShipStationStoreConnector(
+  confirmationDependencies: ShipStationConfirmationDependencies = {},
+): StoreConnector {
+  if (
+    (confirmationDependencies.loadOrder || confirmationDependencies.markOrderShipped) &&
+    process.env.NODE_ENV !== 'test'
+  ) {
+    throw new Error('ShipStation confirmation dependencies may only be injected in tests');
+  }
   return {
     provider: 'shipstation',
     capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'products.import'],
@@ -306,13 +322,19 @@ export function createShipStationStoreConnector(): StoreConnector {
       // upstream order immediately before dispatch so a worker retry after a
       // provider ACK/local-settlement crash treats the already-shipped state as
       // success and does not notify the marketplace a second time.
-      const upstreamOrder = await ssV1Request<SSOrder>(
-        `/orders/${encodeURIComponent(String(upstreamOrderId))}`,
-        {
-          apiKey: input.credentials?.apiKey ?? undefined,
-          apiSecret: input.credentials?.apiSecret ?? undefined,
-        },
-      );
+      const credentials = {
+        apiKey: input.credentials?.apiKey ?? undefined,
+        apiSecret: input.credentials?.apiSecret ?? undefined,
+      };
+      // Per user override unlock shipped data on 2026-07-15: injected provider
+      // calls let the offline retry test simulate an ACK/local-crash boundary.
+      // The default production path remains the same ShipStation functions.
+      const upstreamOrder = confirmationDependencies.loadOrder
+        ? await confirmationDependencies.loadOrder(upstreamOrderId, credentials)
+        : await ssV1Request<SSOrder>(
+            `/orders/${encodeURIComponent(String(upstreamOrderId))}`,
+            credentials,
+          );
       if (String(upstreamOrder.orderStatus ?? '').trim().toLowerCase() === 'shipped') {
         return {
           ok: true,
@@ -321,7 +343,7 @@ export function createShipStationStoreConnector(): StoreConnector {
         };
       }
 
-      await ssMarkOrderShippedV1(
+      await (confirmationDependencies.markOrderShipped ?? ssMarkOrderShippedV1)(
         {
           orderId: upstreamOrderId,
           carrierCode: input.carrierCode,
@@ -330,10 +352,7 @@ export function createShipStationStoreConnector(): StoreConnector {
           notifyCustomer: input.notifyCustomer ?? false,
           notifySalesChannel: input.notifyMarketplace ?? true,
         },
-        {
-          apiKey: input.credentials?.apiKey ?? undefined,
-          apiSecret: input.credentials?.apiSecret ?? undefined,
-        },
+        credentials,
       );
 
       return { ok: true, provider: 'shipstation' };

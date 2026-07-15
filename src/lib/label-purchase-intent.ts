@@ -49,6 +49,22 @@ export type LabelPurchaseIntentOperatorResolution =
   | { outcome: 'linked_shipment'; shipmentId: number; note: string }
   | { outcome: 'provider_verified_no_label'; shipmentId?: null; note: string };
 
+export type LabelPurchaseIntentDependencies = {
+  executor?: typeof sql;
+  ensureSchema?: () => Promise<void>;
+};
+
+function assertTestDependenciesAllowed(
+  dependencies: LabelPurchaseIntentDependencies,
+): void {
+  if (
+    (dependencies.executor || dependencies.ensureSchema) &&
+    process.env.NODE_ENV !== 'test'
+  ) {
+    throw new Error('Label purchase intent dependencies may only be injected in tests');
+  }
+}
+
 export class LabelPurchaseReconcileRequiredError extends Error {
   readonly code = 'LABEL_PURCHASE_RECONCILE_REQUIRED' as const;
   constructor(
@@ -76,19 +92,26 @@ export function isLabelPurchaseReconcileRequiredError(
   );
 }
 
-async function ensureLabelPurchaseIntentSchema(): Promise<void> {
+async function ensureLabelPurchaseIntentSchema(
+  dependencies: LabelPurchaseIntentDependencies = {},
+): Promise<void> {
+  assertTestDependenciesAllowed(dependencies);
   // Per user override unlock shipped data on 2026-07-14: migration 0062 owns
   // purchase-intent schema; purchase flow only verifies readiness before use.
-  await assertRuntimeSchemaReady();
+  await (dependencies.ensureSchema ?? assertRuntimeSchemaReady)();
 }
 
 export async function createLabelPurchaseIntent(input: {
   orderId: number;
   provider: string;
   requestFingerprint?: string | null;
-}): Promise<number> {
-  await ensureLabelPurchaseIntentSchema();
-  const rows = await sql<Array<{ id: number }>>`
+}, dependencies: LabelPurchaseIntentDependencies = {}): Promise<number> {
+  // Per user override unlock shipped data on 2026-07-15: the injectable
+  // executor is an offline fault-test seam; production callers keep using the
+  // runtime-schema check and canonical database singleton.
+  await ensureLabelPurchaseIntentSchema(dependencies);
+  const executor = dependencies.executor ?? sql;
+  const rows = await executor<Array<{ id: number }>>`
     INSERT INTO label_purchase_intents (order_id, provider, request_fingerprint, state)
     VALUES (${input.orderId}, ${input.provider}, ${input.requestFingerprint ?? null}, 'provider_pending')
     RETURNING id
@@ -139,9 +162,13 @@ export function classifyBuyErrorForIntent(err: unknown): 'failed_pre_purchase' |
  * 'provider_pending' row belongs to a DEAD predecessor (crashed before
  * resolution) and is flipped to 'reconcile_required' here.
  */
-export async function assertNoUnresolvedLabelPurchaseIntent(orderId: number): Promise<void> {
-  await ensureLabelPurchaseIntentSchema();
-  await sql`
+export async function assertNoUnresolvedLabelPurchaseIntent(
+  orderId: number,
+  dependencies: LabelPurchaseIntentDependencies = {},
+): Promise<void> {
+  await ensureLabelPurchaseIntentSchema(dependencies);
+  const executor = dependencies.executor ?? sql;
+  await executor`
     UPDATE label_purchase_intents
     SET state = 'reconcile_required',
         error = coalesce(error, 'process died between provider purchase and shipment persist'),
@@ -149,7 +176,7 @@ export async function assertNoUnresolvedLabelPurchaseIntent(orderId: number): Pr
     WHERE order_id = ${orderId}
       AND state = 'provider_pending'
   `;
-  const unresolved = await sql<UnresolvedLabelPurchaseIntent[]>`
+  const unresolved = await executor<UnresolvedLabelPurchaseIntent[]>`
     SELECT id, provider, state, error, created_at::text AS "createdAt"
     FROM label_purchase_intents
     WHERE order_id = ${orderId}
@@ -184,8 +211,9 @@ export async function listUnresolvedLabelPurchaseIntents(
 export async function resolveLabelPurchaseIntentByOperator(
   intentId: number,
   resolution: LabelPurchaseIntentOperatorResolution,
+  dependencies: LabelPurchaseIntentDependencies = {},
 ): Promise<{ id: number; orderId: number; state: 'resolved_by_operator'; shipmentId: number | null }> {
-  await ensureLabelPurchaseIntentSchema();
+  await ensureLabelPurchaseIntentSchema(dependencies);
   const note = resolution.note.trim();
   if (!note) throw new Error('Operator resolution note is required');
 
@@ -193,7 +221,8 @@ export async function resolveLabelPurchaseIntentByOperator(
   // resolution changes the additive purchase-intent audit row only. A linked
   // outcome must prove an active shipment belongs to the same order; a
   // no-label outcome requires explicit provider verification and no shipment.
-  return sql.begin(async (tx) => {
+  const executor = dependencies.executor ?? sql;
+  return executor.begin(async (tx) => {
     const [intent] = await tx<Array<{
       id: number;
       order_id: number;
@@ -224,6 +253,19 @@ export async function resolveLabelPurchaseIntentByOperator(
       `;
       if (!shipment) throw new Error('Active shipment does not belong to the purchase-intent order');
       shipmentId = shipment.id;
+    } else {
+      const [activeShipment] = await tx<Array<{ id: number }>>`
+        SELECT id
+        FROM shipments
+        WHERE order_id = ${intent.order_id}
+          AND voided = false
+        LIMIT 1
+      `;
+      if (activeShipment) {
+        throw new Error(
+          'An active shipment exists for the purchase-intent order; link that shipment instead',
+        );
+      }
     }
 
     const [resolved] = await tx<Array<{

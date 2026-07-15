@@ -962,21 +962,27 @@ async function settleOutboxRowWithExecutor(row: OutboxRow, executor: SqlExecutor
   `;
 }
 
-async function completeOutboxRow(row: OutboxRow): Promise<void> {
+async function completeOutboxRow(row: OutboxRow, executor: SqlExecutor = pg): Promise<void> {
   // Per user override unlock shipped data on 2026-07-15: the outbox success,
   // shipment confirmation state, and order canonical state settle atomically.
   // A crash cannot commit one projection while leaving the others wedged.
-  await pg.begin((tx) => settleOutboxRowWithExecutor(row, tx));
+  await executor.begin((tx: SqlExecutor) => settleOutboxRowWithExecutor(row, tx));
 }
 
-export async function reconvergeSucceededShipmentConfirmations(limit = 25): Promise<number> {
+export async function reconvergeSucceededShipmentConfirmations(
+  limit = 25,
+  executor: SqlExecutor = pg,
+): Promise<number> {
+  if (executor !== pg && process.env.NODE_ENV !== 'test') {
+    throw new Error('Fulfillment outbox executor may only be injected in tests');
+  }
   await ensureFulfillmentSchema();
   const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
   // Per user override unlock shipped data on 2026-07-15: repair only derived
   // confirmation lifecycle fields for already-succeeded outbox rows. This
   // makes a formerly torn settlement self-heal without re-contacting a
   // marketplace or changing label/postage/shipment history.
-  const rows = await pg<OutboxRow[]>`
+  const rows = await executor<OutboxRow[]>`
     SELECT
       f.id,
       f.order_id,
@@ -1003,7 +1009,7 @@ export async function reconvergeSucceededShipmentConfirmations(limit = 25): Prom
     ORDER BY f.updated_at ASC, f.id ASC
     LIMIT ${boundedLimit}
   `;
-  for (const row of rows) await completeOutboxRow(row);
+  for (const row of rows) await completeOutboxRow(row, executor);
   if (rows.length > 0) {
     console.info('[fulfillment-outbox] reconverged succeeded confirmation lifecycle', {
       count: rows.length,

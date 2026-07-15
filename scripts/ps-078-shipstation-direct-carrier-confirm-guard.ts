@@ -29,6 +29,9 @@ async function withMockFetch<T>(
   globalThis.fetch = (async (url: URL | RequestInfo, init?: RequestInit) => {
     const textUrl = typeof url === 'string' ? url : url instanceof URL ? url.toString() : String(url);
     capture.push({ url: textUrl, body: typeof init?.body === 'string' ? init.body : undefined });
+    if (textUrl.includes('/orders/987654')) {
+      return jsonResponse(200, { orderId: 987654, orderStatus: 'awaiting_shipment' });
+    }
     if (textUrl.includes('/orders/markasshipped')) return jsonResponse(200, { orderId: 1 });
     return jsonResponse(404, { error: 'unexpected mock call' });
   }) as typeof fetch;

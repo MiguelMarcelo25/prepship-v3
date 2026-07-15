@@ -27,6 +27,7 @@ const inventoryDeductions = read('src/services/fulfillment-deductions.ts');
 const inventorySchema = read('src/db/schema/inventory.ts');
 const billingGuard = read('scripts/audit-billing-cross-period-reconciliation-guard.ts');
 const backfill = read('scripts/backfill-inventory-ledger.ts');
+const integration = read('scripts/ps-432-sync-fulfillment-resilience-integration.ts');
 const packageJson = read('package.json');
 const guardPack = read('scripts/sot-guard-pack.mjs');
 
@@ -47,7 +48,7 @@ assert.ok(settlementStart >= 0 && settlementEnd > settlementStart);
 assert.match(settlement, /UPDATE fulfillment_outbox[\s\S]*status = 'succeeded'/);
 assert.match(settlement, /markShipmentConfirmationState\([\s\S]*status: 'succeeded'[\s\S]*executor\)/);
 assert.match(settlement, /UPDATE orders[\s\S]*canonical_status = 'shipped'/);
-assert.match(settlement, /completeOutboxRow[\s\S]*pg\.begin\(\(tx\) => settleOutboxRowWithExecutor\(row, tx\)\)/);
+assert.match(settlement, /completeOutboxRow[\s\S]*executor\.begin\(\(tx: SqlExecutor\) => settleOutboxRowWithExecutor\(row, tx\)\)/);
 assert.match(fulfillmentOutbox, /export async function reconvergeSucceededShipmentConfirmations/);
 assert.match(fulfillmentOutbox, /f\.status = 'succeeded'[\s\S]*s\.confirmation_status IS DISTINCT FROM 'succeeded'/);
 assert.match(fulfillmentOutbox, /processFulfillmentOutboxOnce[\s\S]*await reconvergeSucceededShipmentConfirmations/);
@@ -79,6 +80,7 @@ assert.match(labels, /pending\.labelPurchaseIntentId[\s\S]*state: 'completed'/);
 assert.match(labelIntent, /export async function resolveLabelPurchaseIntentByOperator/);
 assert.match(labelIntent, /outcome: 'provider_verified_no_label'/);
 assert.match(labelIntent, /AND order_id = \$\{intent\.order_id\}[\s\S]*AND voided = false/);
+assert.match(labelIntent, /An active shipment exists for the purchase-intent order/);
 assert.match(adminRoute, /label-purchase-intents\/:id\{\[0-9\]\+\}\/resolve/);
 assert.match(adminRoute, /recordAuditEvent/);
 
@@ -94,8 +96,11 @@ assert.match(backfill, /arg === '--apply'[\s\S]*args\.dryRun = false/);
 assert.match(backfill, /Refusing unbounded --all apply\. Pass an audited --since date/);
 assert.match(backfill, /o\.updated_at >= \$\{sinceIso\}::timestamptz/);
 
-assert.match(packageJson, /"test:ps-432-sync-fulfillment-resilience"/);
+assert.match(packageJson, /"test:ps-432-sync-fulfillment-resilience"[\s\S]*ps-432-sync-fulfillment-resilience-integration/);
 assert.match(guardPack, /'test:ps-432-sync-fulfillment-resilience'/);
+assert.match(integration, /forced process failure before commit/);
+assert.match(integration, /Shopify retry must not repurchase/);
+assert.match(integration, /ShipStation retry must not notify the marketplace twice/);
 
 const requiredColumns: Record<string, string[]> = {
   orders: ['source_provider', 'source_account_id', 'source_order_id', 'source_order_number', 'source_status', 'canonical_status'],

@@ -1,6 +1,7 @@
 # PS-432 — Sync and fulfillment resilience
 
-Status: implementation complete; deployment and Final Review handoff pending.
+Status: executable failure-injection closure complete locally; push, deployment,
+and operator review of unresolved production purchase intents remain pending.
 
 ## Architecture placement
 
@@ -81,6 +82,35 @@ deployed idempotent recovery lane, so an apply would be a no-op and was not run.
 A separate unbounded diagnostic found substantial legacy history outside the
 PS-432 window; it is explicitly out of scope and must not be applied as part of
 this ticket.
+
+## Executable failure-injection evidence
+
+`npm run test:ps-432-sync-fulfillment-resilience` now runs both the original
+placement guard and an offline PGlite integration suite against the real
+canonical owners. The integration suite proves:
+
+- a forced failure before transaction commit rolls back both the shipped status
+  and `enqueueInventoryDeduction` insert; a successful retry commits exactly one
+  intent with the shipped transition;
+- an already-succeeded confirmation row with torn order/shipment projections
+  reconverges once, and a second pass returns zero without a provider dispatch;
+- a Shopify purchase ACK followed by simulated process death leaves a durable
+  intent that blocks the retry before the provider spy can buy again;
+- operator resolution rejects a shipment belonging to another order, rejects a
+  `provider_verified_no_label` outcome when an active shipment exists, and
+  stores the scoped linked-shipment outcome plus operator note;
+- a ShipStation `markasshipped` ACK followed by simulated local-settlement death
+  causes the retry to re-read upstream `shipped` and keeps the marketplace
+  notification spy at exactly one call.
+
+The test uses inert environment values and an in-memory PGlite database. No
+configured database, carrier, marketplace, label, postage, customer, inventory,
+or production order/shipment state is contacted or changed.
+
+The last production review reported nine unresolved purchase intents. This
+implementation does not auto-resolve them: each requires provider-side evidence
+and the admin-only audited operator workflow. No production intent row was read,
+resolved, retried, or mutated during this completion pass.
 
 ## Safety statement
 
