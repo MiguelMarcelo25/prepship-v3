@@ -9,7 +9,10 @@ import {
   syncShipStationProducts,
 } from '../services/inventory-enrichment';
 import { processFulfillmentOutboxOnce } from '../services/fulfillment/outbox';
-import { runShipmentSyncWatchdogTick } from '../services/shipment-sync-watchdog';
+import {
+  readShipmentSyncWatchdogStatus,
+  runShipmentSyncWatchdogTick,
+} from '../services/shipment-sync-watchdog';
 
 const app = new Hono();
 
@@ -125,6 +128,12 @@ app.post('/shipment-sync-watchdog', async (c) => {
 app.get('/shipment-sync-watchdog', async (c) => {
   const result = await runShipmentSyncWatchdogTick({ recover: true, source: 'cron' });
   return c.json(result);
+});
+
+app.get('/shipment-sync-watchdog/status', async (c) => {
+  // PS-431 external monitoring consumes canonical sync freshness without
+  // enqueue, restart, recovery, or snapshot-write side effects.
+  return c.json(await readShipmentSyncWatchdogStatus());
 });
 
 app.post('/fulfillment-outbox', async (c) => {

@@ -6,6 +6,7 @@ const watchdogPath = 'scripts/production-watchdog.mjs';
 const operationalRunbookPath = 'OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md';
 const observabilityPlanPath = 'OBSERVABILITY_ALERTING_PLAN.md';
 const healthRoutePath = 'src/routes/health.ts';
+const workflowPath = '.github/workflows/production-watchdog.yml';
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const operationalRunbook = fs.readFileSync(path.join(root, operationalRunbookPath), 'utf8');
@@ -15,6 +16,9 @@ const watchdog = fs.existsSync(path.join(root, watchdogPath))
   : '';
 const healthRoute = fs.existsSync(path.join(root, healthRoutePath))
   ? fs.readFileSync(path.join(root, healthRoutePath), 'utf8')
+  : '';
+const workflow = fs.existsSync(path.join(root, workflowPath))
+  ? fs.readFileSync(path.join(root, workflowPath), 'utf8')
   : '';
 
 function assert(condition, message) {
@@ -36,6 +40,9 @@ const requiredWatchdogTokens = [
   '/health/ready',
   '/health/deep',
   'WATCHDOG_ALERT_WEBHOOK_URL',
+  'WATCHDOG_ALERT_COOLDOWN_MS',
+  'WATCHDOG_SYNC_STATUS_URL',
+  'WATCHDOG_CRON_SECRET',
   'WATCHDOG_FAILURE_THRESHOLD',
   'WATCHDOG_RESTART_COOLDOWN_MS',
   'WATCHDOG_MAX_RESTARTS_PER_HOUR',
@@ -48,6 +55,8 @@ const requiredWatchdogTokens = [
   'cooldown',
   'maxRestartsPerHour',
   'redact',
+  'lastAlertsByState',
+  'Shipment sync freshness',
 ];
 
 for (const token of requiredWatchdogTokens) {
@@ -62,6 +71,18 @@ assert(
 assert(
   /const DEFAULT_TIMEOUT_MS = 15_000/.test(watchdog),
   `${watchdogPath} default timeout must exceed the 12s deep-health component timeout`
+);
+
+assert(
+  /check\.name !== 'Render \/health\/deep'/.test(watchdog),
+  `${watchdogPath} requires /health/ready while keeping /health/deep diagnostic`
+);
+
+assert(
+  /cron: '\*\/5 \* \* \* \*'/.test(workflow) &&
+    workflow.includes('actions/cache/restore@v4') &&
+    workflow.includes('actions/cache/save@v4'),
+  `${workflowPath} runs every five minutes with persistent cooldown state`
 );
 
 assert(

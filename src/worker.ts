@@ -15,9 +15,20 @@ import { ensureOrdersPerformanceIndexes } from './services/orders-performance-ma
 import { ensureReportingMetricsTables } from './services/reporting-metrics';
 import { startSyncStalenessWatchdog } from './services/sync-staleness-watchdog';
 import { assertRuntimeSchemaReady } from './services/runtime-schema-readiness.js';
+import { createWorkerFailureBreaker } from './services/worker-failure-breaker';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
 let stopSyncWatchdog: (() => void) | null = null;
+const recordEscapedWorkerFailure = createWorkerFailureBreaker(
+  env.WORKER_UNCAUGHT_FAILURE_LIMIT,
+  () => {
+    // Per user override unlock shipped data on 2026-07-15: PS-431 asks the
+    // Render supervisor to replace a repeatedly unhealthy sync worker. This
+    // lifecycle action does not mutate order/shipment history or issue labels.
+    console.error('[worker] escaped failure limit reached; exiting unhealthy');
+    process.exit(1);
+  },
+);
 
 function startKeepAliveHeartbeat(): void {
   if (keepAliveTimer) return;
@@ -56,6 +67,7 @@ process.on('unhandledRejection', (reason) => {
   if (reason instanceof Error && reason.stack && process.env.WORKER_DEBUG_STACKS === '1') {
     console.error(reason.stack);
   }
+  recordEscapedWorkerFailure('unhandled_rejection');
 });
 
 process.on('uncaughtException', (err) => {
@@ -67,6 +79,7 @@ process.on('uncaughtException', (err) => {
   if (err instanceof Error && err.stack && process.env.WORKER_DEBUG_STACKS === '1') {
     console.error(err.stack);
   }
+  recordEscapedWorkerFailure('uncaught_exception');
 });
 
 async function main(): Promise<void> {

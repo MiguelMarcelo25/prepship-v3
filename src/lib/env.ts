@@ -20,6 +20,11 @@ const optionalBooleanFlag = z
     return normalized === 'true' || normalized === '1' || normalized === 'yes';
   });
 
+const optionalUrl = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().url().optional(),
+);
+
 // On Vercel/Lambda serverless functions (e.g. /api/carriers/*) the Render-only
 // Supabase ADMIN secrets are not provisioned — those functions only need
 // DATABASE_URL (+ their own request-time auth). Hard-requiring them there made
@@ -45,6 +50,7 @@ const schema = z.object({
   // A single escaped background failure remains observable and survivable, but
   // repeated escapes indicate poisoned process state and request a supervisor restart.
   API_UNCAUGHT_FAILURE_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
+  WORKER_UNCAUGHT_FAILURE_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
   WEB_ORIGIN: z.string().optional(),
   // Public base URL of this API. Used when we need to emit an absolute link
   // back to the frontend (e.g. mock label PDFs opened via window.open).
@@ -203,6 +209,10 @@ const schema = z.object({
   SHIPMENT_SYNC_WATCHDOG_RESTART_COOLDOWN_MS: z.coerce.number().int().positive().default(15 * 60_000),
   SHIPMENT_SYNC_WATCHDOG_MAX_RESTARTS_PER_HOUR: z.coerce.number().int().nonnegative().default(2),
   SHIPMENT_SYNC_WATCHDOG_ALLOW_RESTARTS: booleanFlag(false),
+  SHIPMENT_SYNC_WATCHDOG_ALERT_WEBHOOK_URL: optionalUrl,
+  WATCHDOG_ALERT_WEBHOOK_URL: optionalUrl,
+  SHIPMENT_SYNC_WATCHDOG_ALERT_COOLDOWN_MS: z.coerce.number().int().min(30 * 60_000).default(30 * 60_000),
+  SHIPMENT_SYNC_WATCHDOG_ALERT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
   SHIPMENT_SYNC_WATCHDOG_RENDER_SERVICE_ID: z.string().optional(),
   RENDER_WORKER_SERVICE_ID: z.string().optional(),
   RENDER_SERVICE_ID: z.string().optional(),

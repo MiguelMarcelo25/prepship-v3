@@ -15,6 +15,7 @@ const REQUIRED_GUARDS = [
   'test:ps-336-task-sot-gates',
   'test:ps-429-final-review-closure',
   'test:ps-430-print-queue-worker-health',
+  'test:ps-431-production-self-healing',
   'test:ps-320-v2-api-client-transport',
   'test:ps-321-ratebrowsermodal-thin-ui',
   'test:ps-329-orders-wrapper-sot-cleanup',

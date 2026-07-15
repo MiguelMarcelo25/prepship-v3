@@ -15,6 +15,10 @@ import {
   type ReapResult,
 } from './sync-stuck-job-reaper';
 import { getPersistedWorkerStatus, type WorkerStatusSnapshot } from './worker-status';
+import {
+  notifyShipmentSyncWatchdogEscalation,
+  type ShipmentSyncWatchdogAlertNotification,
+} from './shipment-sync-watchdog-alert';
 
 export const ORDER_SYNC_JOB_NAME = 'prepship.sync.orders';
 export const SHIPMENT_SYNC_JOB_NAME = 'prepship.sync.shipments';
@@ -170,6 +174,7 @@ export type ShipmentSyncWatchdogStatus = {
   verdict: ShipmentSyncWatchdogVerdict;
   lastAction: ShipmentSyncWatchdogAction | null;
   recovery: ShipmentSyncWatchdogAction | null;
+  alertNotification: ShipmentSyncWatchdogAlertNotification | null;
 };
 
 type WatchdogSnapshot = {
@@ -703,6 +708,7 @@ async function buildShipmentSyncWatchdogStatus(
     verdict,
     lastAction,
     recovery: null,
+    alertNotification: null,
   };
 }
 
@@ -983,7 +989,19 @@ export async function runShipmentSyncWatchdogTick(
       }
     }
 
-    const finalStatus = { ...status, recovery };
+    // Per user override unlock shipped data on 2026-07-15: PS-431 emits only
+    // sanitized watchdog lifecycle metadata. It does not include order,
+    // shipment, account, label, customer, or provider payloads and performs no
+    // shipped/cancelled mutation.
+    const alertNotification = await notifyShipmentSyncWatchdogEscalation({
+      checkedAt: status.checkedAt,
+      state: status.verdict.state,
+      verdictReason: status.verdict.reason,
+      recovery,
+      source: options.source ?? 'timer',
+      nowMs,
+    });
+    const finalStatus = { ...status, recovery, alertNotification };
     await persistWatchdogSnapshot(finalStatus);
     return finalStatus;
   });

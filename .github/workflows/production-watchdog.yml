@@ -1,0 +1,60 @@
+name: Production Watchdog
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: production-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore watchdog cooldown state
+        uses: actions/cache/restore@v4
+        with:
+          path: outputs/production-watchdog-state.json
+          key: production-watchdog-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            production-watchdog-${{ runner.os }}-
+
+      - name: Check production readiness and sync freshness
+        run: |
+          if [ -z "$WATCHDOG_CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET is required for the read-only sync freshness probe."
+            exit 1
+          fi
+          if [ -z "$WATCHDOG_ALERT_WEBHOOK_URL" ]; then
+            echo "::error::WATCHDOG_ALERT_WEBHOOK_URL is required for phone-reachable escalation."
+            exit 1
+          fi
+          node scripts/production-watchdog.mjs
+        env:
+          VERCEL_SHELL_URL: ${{ vars.PRODUCTION_VERCEL_SHELL_URL || 'https://prepshipv4.vercel.app' }}
+          RENDER_BASE_URL: ${{ vars.SYNC_API_URL || 'https://prepshipv4-api-l5xc.onrender.com' }}
+          WATCHDOG_SYNC_STATUS_URL: ${{ vars.WATCHDOG_SYNC_STATUS_URL }}
+          WATCHDOG_CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          WATCHDOG_ALERT_WEBHOOK_URL: ${{ secrets.WATCHDOG_ALERT_WEBHOOK_URL }}
+          WATCHDOG_STATE_FILE: outputs/production-watchdog-state.json
+          WATCHDOG_ALERT_COOLDOWN_MS: '1800000'
+          WATCHDOG_ALLOW_RESTARTS: ${{ vars.WATCHDOG_ALLOW_RESTARTS || 'false' }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+
+      - name: Save watchdog cooldown state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: outputs/production-watchdog-state.json
+          key: production-watchdog-${{ runner.os }}-${{ github.run_id }}

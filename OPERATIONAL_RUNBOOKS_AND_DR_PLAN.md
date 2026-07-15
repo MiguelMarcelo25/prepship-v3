@@ -67,7 +67,7 @@ This is a planning/control batch only. It does not change runtime code, deployme
 
 ## Production Watchdog
 
-The production watchdog is a one-shot, read-first safety script for external uptime checks and controlled Render recovery. Run it from an approved scheduler or Render Shell with `npm run watchdog:production`. It checks the Vercel shell URL, Render `/health`, and Render `/health/ready` plus `/health/deep`; readiness is considered acceptable when either deep readiness endpoint passes after `/health` passes.
+The production watchdog is a one-shot, read-first safety script for external uptime checks and controlled Render recovery. Run it with `npm run watchdog:production`; `.github/workflows/production-watchdog.yml` schedules the same command every five minutes. It checks the Vercel shell URL, Render `/health`, required Render `/health/ready`, diagnostic `/health/deep`, and the cron-authenticated canonical shipment-sync watchdog status. `/health/deep` can never mask failed readiness.
 
 Required read-only env vars:
 
@@ -75,8 +75,11 @@ Required read-only env vars:
 |---|---|
 | `VERCEL_SHELL_URL` | Public Vercel app shell URL to fetch. 5xx/network failures count as unhealthy; 3xx/4xx auth gates are acceptable for the shell. |
 | `RENDER_BASE_URL` | Render API base URL. The watchdog appends `/health`, `/health/ready`, and `/health/deep`. |
+| `WATCHDOG_SYNC_STATUS_URL` | Optional explicit canonical sync-status URL. Defaults to `/cron/shipment-sync-watchdog/status` on `RENDER_BASE_URL`. |
+| `WATCHDOG_CRON_SECRET` | Required header credential for the read-only canonical sync-status check. It is never logged or included in alerts. |
 | `WATCHDOG_ALERT_WEBHOOK_URL` | Optional alert destination. If missing, the sanitized alert is written to process logs only. |
-| `WATCHDOG_STATE_FILE` | Optional persistent JSON state path for consecutive failure and restart counters. Defaults under `outputs/`. |
+| `WATCHDOG_ALERT_COOLDOWN_MS` | Per-state alert cooldown. Production default/configuration: `1800000` ms (30 minutes). |
+| `WATCHDOG_STATE_FILE` | Persistent JSON state path for failure, restart, and successful-alert timestamps. GitHub Actions restores/saves this file through cache entries. |
 
 Restart/redeploy is disabled unless explicitly enabled. With no restart credentials, or without `WATCHDOG_ALLOW_RESTARTS=true`, the script stays in alert-only mode and never calls Render recovery APIs.
 
@@ -106,6 +109,8 @@ Manual fallback:
 3. Use Render dashboard restart first when credentials or deploy hook/API env vars are unavailable.
 4. If dashboard recovery fails, rollback the Render deploy or pause noisy workers according to the Deployment / Rollback Matrix.
 5. No secrets, deploy hook URLs, API keys, customer data, labels, or raw provider credentials should be pasted into incident notes or alerts.
+
+The operational source of truth for PS-431, including external uptime setup, ownership, controlled acceptance, and the three manual recovery levers, is `docs/runbooks/ps-431-production-self-healing.md`.
 
 ## Disaster Recovery Matrix
 
