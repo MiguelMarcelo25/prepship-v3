@@ -1,0 +1,354 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-426",
+  "title": "Durable Awaiting-order cursor and queued manual ShipStation order sync",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "e9b83931f94d7fc4919548faaaebcc136fd4ba80"
+  },
+  "riskDomains": [
+    "provider_durable_job",
+    "timing_live"
+  ],
+  "claimedScore": 88,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Awaiting-order progress is persisted per canonical ShipStation account and store, and a 25-page backlog with a 10-page budget advances 1-10, 11-20, then 21-25 instead of replaying page 1.",
+      "evidenceIds": [
+        "cursor-resume-integration"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "The frozen Awaiting window survives serialization/restart, rewinds safely when the provider page count shrinks, and persists new progress only after a successful pass.",
+      "evidenceIds": [
+        "cursor-resume-integration",
+        "cursor-page-change-adversarial"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Normal POST /sync/orders delegates to the existing pg-boss prepship.sync.orders job and shipstation-sync lane; it does not run syncOrders or a broad rate backfill inline.",
+      "evidenceIds": [
+        "manual-queue-ownership-static",
+        "focused-ps426-suite"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Active, queued, retrying, and admission-error outcomes return honest backend state, while singleton admission and held-lane deadline behavior prevent competing provider execution.",
+      "evidenceIds": [
+        "queue-contention-adversarial",
+        "noncooperative-deadline-failure-injection",
+        "foreground-response-integration"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "PS-417 remains the backend freshness/backlog read model, and the frontend renders queued or retrying truth without declaring the sync completed.",
+      "evidenceIds": [
+        "focused-ps426-suite",
+        "ps417-owner-guard"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "One hundred provider-free executions of the exact manual-sync response owner complete below the 500 ms foreground target and make exactly one injected admission call each.",
+      "evidenceIds": [
+        "foreground-response-integration"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "high",
+      "status": "met",
+      "description": "The focused and dependent sync guards, all mandatory source-of-truth guards, strict TypeScript checks, and the production frontend build pass at the reviewed SHA.",
+      "evidenceIds": [
+        "focused-ps426-suite",
+        "dependent-sync-guards",
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    },
+    {
+      "id": "AC-8",
+      "severity": "critical",
+      "status": "met",
+      "description": "Verification is offline and provider-free: it creates no label or postage, sends no marketplace notification, performs no production provider call, and mutates no production order or shipment.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "foreground-response-integration"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/order-sync.ts Awaiting-order cursor construction, parsing, checkpoint persistence, and account/store backlog progress",
+      "src/services/sync-job-queue.ts enqueueManualOrderSyncJob and the existing prepship.sync.orders pg-boss worker/lane",
+      "src/services/order-sync-queue-state.ts backend queue-state and blocker truth",
+      "src/services/shipstation-sync-account-status.ts PS-417 per-account freshness and backlog read model"
+    ],
+    "oldOwners": [
+      {
+        "path": "src/routes/sync.ts inline syncOrders and broad rate-backfill execution",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/sync-job-queue.ts enqueueManualOrderSyncJob"
+      },
+      {
+        "path": "src/services/order-sync.ts page-1-only bounded Awaiting pass",
+        "disposition": "deleted",
+        "delegatesTo": "src/services/order-sync.ts durable account/store Awaiting cursor"
+      },
+      {
+        "path": "frontend-local completed-sync inference",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/order-sync-queue-state.ts and PS-417 backend status DTOs"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/sync.ts runManualOrderSyncRoute",
+        "action": "added",
+        "delegatesTo": "src/services/sync-job-queue.ts enqueueManualOrderSyncJob; the helper only maps the owner result to HTTP status/body"
+      },
+      {
+        "path": "web/src/Home.tsx",
+        "action": "modified",
+        "delegatesTo": "backend-issued queued/running/retrying/completed truth"
+      },
+      {
+        "path": "src/connectors/store/shipstation.ts",
+        "action": "modified",
+        "delegatesTo": "provider request translation for the owner-supplied frozen modifyDateEnd window"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The route performs validation, queue admission delegation, and DTO mapping only. Cursor progress, queue blockers, worker execution, freshness, and targeted rate enqueueing remain in named backend owners; React does not calculate authoritative sync state."
+    }
+  },
+  "evidence": [
+    {
+      "id": "cursor-resume-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "src/services/order-sync.ts",
+        "src/connectors/store/shipstation.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency"
+      ],
+      "proves": "A serialized account/store cursor resumes after a simulated worker/client boundary at pages 11 and 21, reaches completion without replaying earlier pages, and remains independent of the foreground HTTP response."
+    },
+    {
+      "id": "cursor-page-change-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "src/services/order-sync.ts"
+      ],
+      "assertions": [
+        "cursor_shrink_rebase",
+        "cursor_growth_resume"
+      ],
+      "proves": "A shrinking provider result rewinds by the removed page count so shifted Awaiting rows are not skipped, while growth continues from the durable cursor instead of restarting page 1."
+    },
+    {
+      "id": "queue-contention-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:sync-job-admission && npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sync-job-admission-guard.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "src/services/sync-job-admission.ts",
+        "src/services/order-sync-queue-state.ts"
+      ],
+      "assertions": [
+        "concurrency_single_effect"
+      ],
+      "proves": "Manual incremental order refresh uses the canonical stately singleton, and an active row remains the backend blocker when active and queued candidates coexist."
+    },
+    {
+      "id": "noncooperative-deadline-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-265-job-handler-deadline && npm run test:ps-272-reaper-onpath",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-265-job-handler-deadline-guard.ts",
+        "src/lib/with-deadline.ts",
+        "src/services/sync-job-queue.ts",
+        "src/services/sync-stuck-job-reaper.ts"
+      ],
+      "assertions": [
+        "fencing_stale_worker_rejected",
+        "concurrency_single_effect"
+      ],
+      "proves": "A deliberately non-cooperative handler times out without releasing the advisory lane while its original promise is still running, and the on-path reaper does not create an overlapping successor across a held live lane."
+    },
+    {
+      "id": "foreground-response-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-426-manual-sync-timing-guard.ts",
+        "src/routes/sync.ts"
+      ],
+      "assertions": [
+        "offline_foreground_under_500ms",
+        "single_queue_admission",
+        "zero_provider_calls"
+      ],
+      "proves": "One hundred injected-admission samples passed with p50 about 0.001 ms, p95 about 0.005 ms, and max about 0.067 ms against a 500 ms target; the harness records 100 admission calls, zero database connections, and zero provider calls. This is integration evidence, not staging/live evidence."
+    },
+    {
+      "id": "manual-queue-ownership-static",
+      "classification": "static",
+      "command": "npm run test:ps-356-manual-order-sync-job-lane",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-356-manual-order-sync-job-lane-guard.ts",
+        "src/routes/sync.ts",
+        "src/services/sync-job-queue.ts",
+        "src/services/manual-order-sync-job.ts"
+      ],
+      "assertions": [],
+      "proves": "The normal route imports and delegates to the backend queue owner, contains no inline syncOrders or broad rate backfill, and returns the queue owner's accepted or error response."
+    },
+    {
+      "id": "focused-ps426-suite",
+      "classification": "static",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "scripts/ps-426-manual-sync-timing-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The cursor, frozen window, backend queue ownership, frontend status pass-through, and provider-free foreground timing checks run together as the focused PS-426 command."
+    },
+    {
+      "id": "ps417-owner-guard",
+      "classification": "static",
+      "command": "npm run test:ps-417-shipstation-sync-account-state",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-417-shipstation-sync-account-state-guard.ts",
+        "src/services/shipstation-sync-account-status.ts"
+      ],
+      "assertions": [],
+      "proves": "The existing PS-417 per-account freshness/backlog owner remains intact and PS-426 does not introduce a competing status table or resolver."
+    },
+    {
+      "id": "dependent-sync-guards",
+      "classification": "static",
+      "command": "npm run test:ps-265-sync-run-budget && npm run test:ps-272-reaper-onpath && npm run test:ps-356-manual-order-sync-job-lane && npm run test:ps-397-order-sync-freshness && npm run test:ps-417-shipstation-sync-account-state && npm run test:sync-job-admission && npm run test:audit-sync-watchdog-lifecycle && npm run test:shipstation-sync-window",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-265-sync-run-budget-guard.ts",
+        "scripts/ps-356-manual-order-sync-job-lane-guard.ts",
+        "scripts/ps-397-order-sync-freshness-guard.ts",
+        "scripts/ps-417-shipstation-sync-account-state-guard.ts",
+        "scripts/sync-job-admission-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The bounded-run, reaper, manual-lane, freshness, account-state, admission, watchdog, and frozen-window compatibility guards all pass."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 45 mandatory source-of-truth and lifecycle guard commands pass with the PS-426 focused guard wired into the canonical pack."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= 95487dfa277dbbcf8e21bf8359bfa80f6fdd8a0e && git show --name-only --format= e9b83931f94d7fc4919548faaaebcc136fd4ba80",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/order-sync.ts",
+        "src/services/sync-job-queue.ts",
+        "src/routes/sync.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "scripts/ps-426-manual-sync-timing-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed PS-426 commits change Awaiting cursor/queue orchestration and offline proof only. The only shipped-data-adjacent owner touched is order-sync.ts, where the override comments explicitly constrain the change to Awaiting query metadata; no real labels, postage, marketplace notifications, or production order/shipments mutations occurred."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git show --name-only --format= 95487dfa277dbbcf8e21bf8359bfa80f6fdd8a0e e9b83931f94d7fc4919548faaaebcc136fd4ba80",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No database migration is involved. Revert the PS-426 implementation and timing-proof commits together; persisted JSON cursor settings are ignored by the prior application and may remain harmlessly in place."
+  },
+  "rollback": {
+    "strategy": "Revert e9b83931f94d7fc4919548faaaebcc136fd4ba80 and 95487dfa277dbbcf8e21bf8359bfa80f6fdd8a0e in that order, then redeploy prepshipv4-stable. No schema rollback or production-data edit is required.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "unverified",
+    "reason": "The exact reviewed SHA is live and health/ready are green, but no post-deploy normal POST /sync/orders request exists from which to capture a staging/live under-500-ms request artifact. Triggering that authenticated production action solely for evidence would enqueue real ShipStation provider work, so it was not invoked without separate operator approval.",
+    "followUpOwner": "Lawrence",
+    "artifactPaths": []
+  },
+  "caveats": []
+}
