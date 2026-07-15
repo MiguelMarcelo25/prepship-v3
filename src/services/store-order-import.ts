@@ -7,6 +7,10 @@ import { materializePackageFactsForImportedOrderIds } from './combo-package-defa
 import { enqueueBackfillBestRatesForOrderIds } from './rates-backfill';
 import type { NormalizedOrderSource } from './normalized-order-persistence';
 import {
+  retainOrderRawForPersistence,
+  retainOrderRawSourcePayloadForPersistence,
+} from './order-raw-payload-policy';
+import {
   legacyExternalOrderIdForSource,
   buildOrderSourceIdentity,
   legacyOrderSourceCompatibilityPredicate,
@@ -395,13 +399,18 @@ export async function upsertNormalizedStoreOrders(
   const importOrders = dedupeNormalizedStoreOrdersForImport(ordersIn);
 
   type Row = typeof orders.$inferInsert;
+  // Per user override unlock shipped data on 2026-07-15: Audit 5.6 makes
+  // this shared importer delegate raw JSONB retention to one bounded policy.
+  // Full provider data remains available above for normalization/total
+  // resolution, while persistence keeps one operational copy and does not
+  // change terminal-status preservation, shipment history, or side effects.
   const rows: Row[] = importOrders.map((order) => ({
     externalOrderId: compatibilityExternalOrderId(order),
     sourceProvider: order.source.sourceProvider,
     sourceAccountId: order.source.sourceAccountId,
     sourceOrderId: order.source.sourceOrderId,
     sourceOrderNumber: order.source.sourceOrderNumber,
-    rawSourcePayload: order.source.rawSourcePayload,
+    rawSourcePayload: retainOrderRawSourcePayloadForPersistence(order.source.rawSourcePayload),
     orderNumber: order.orderNumber,
     orderStatus: order.orderStatus,
     orderDate: order.orderDate,
@@ -418,7 +427,10 @@ export async function upsertNormalizedStoreOrders(
     orderTotal: order.orderTotal ?? '0',
     shippingAmount: order.shippingAmount ?? '0',
     items: order.items ?? [],
-    raw: order.raw,
+    raw: retainOrderRawForPersistence({
+      sourceProvider: order.source.sourceProvider,
+      raw: order.raw,
+    }),
     externallyShipped: order.externallyShipped === true,
     updatedAt: new Date(),
   }));
