@@ -77,6 +77,7 @@ const transitionalSafetyRequirements = {
 
 const sourcePinOnlyFiles = new Set([
   'scripts/ps-200-walmart-fees-worker-cron-cutover-guard.ts',
+  'scripts/ps-265-sync-run-budget-guard.ts',
   'scripts/ps-339-ebay-api-testing-certification-guard.ts',
   'scripts/ps-406-duplicate-label-audit-guard.ts',
 ]);
