@@ -327,6 +327,16 @@ coding. Do not infer a backend-critical owner from the nearest UI symptom.
 - **Duplicate logic removed** (or explicitly left as follow-up debt): …
 - **Boundary tests added** at the owner: …
 
+## Exact-SHA Final Review closure
+
+For Final Review, the process source of truth is
+`scripts/final-review-closure.mjs`, not a Trello/Hermes score or prose breadcrumb. A
+versioned packet under `docs/final-review/packets/` must name the exact reviewed SHA,
+map acceptance criteria to risk-appropriate evidence, and pass
+`npm run test:final-review-closure`. See
+[docs/final-review/README.md](docs/final-review/README.md). Any non-packet change after
+that SHA invalidates the packet and requires a new review target.
+
 ## Definition of done
 
 - The change lives at the canonical owner; callers delegate to it.

@@ -45,6 +45,17 @@ or Shipped-rate display change:
 Rate Source-of-Truth proof must name the backend canonical rate authority and explain how
 selected/purchased shipment rate truth is preserved when those paths are touched.
 
+## Final Review closure packet
+
+- **Packet path:** `docs/final-review/packets/<TASK-ID>.json` / N/A - explain
+- **Exact reviewed SHA** (40 characters):
+- **Selected risk profiles:**
+- **Closure validator:** `npm run test:final-review-closure` pass / N/A - explain
+- **Hermes eligibility:** complete + score cap 100 + claimed score above 90 / not eligible
+
+The packet must be committed after the reviewed implementation SHA, with no non-packet
+changes after that SHA. See [docs/final-review/README.md](../docs/final-review/README.md).
+
 For any source-of-truth, backend-truth, no-wrapper, rate, Rate Browser, Orders shell,
 label, queue, marketplace, billing, inventory, auth/scope, or shipped/cancelled-adjacent
 change, run the mandatory Hermes/CI guard pack:

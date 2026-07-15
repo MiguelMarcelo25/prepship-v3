@@ -40,6 +40,13 @@ AI coding agents must also follow [AGENTS.md](AGENTS.md) (mirrored to `CLAUDE.md
    the wrapper delegate (see [ARCHITECTURE.md](ARCHITECTURE.md) →
    *Backend Truth & No Source-of-Truth Bypass Law*).
 
+5. **Exact-SHA Final Review evidence.** Before a task is closed or scored above 90, add a
+   versioned closure packet for the exact reviewed implementation SHA and run
+   `npm run test:final-review-closure`. Follow
+   [docs/final-review/README.md](docs/final-review/README.md); prose/static breadcrumbs do
+   not substitute for the behavioral and failure evidence required by the selected risk
+   profiles.
+
 ## Safety rules (do not weaken)
 
 - Never expose secrets, tokens, credentials, customer PII, raw provider payloads, full

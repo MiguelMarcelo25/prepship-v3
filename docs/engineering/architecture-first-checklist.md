@@ -41,6 +41,9 @@ The task/PR architecture block must also name the Wrapper/resolver/helper logic 
 - [ ] Safety boundaries intact (auth/scope, proof, redaction, billing/inventory,
       shipped/cancelled lockdown).
 - [ ] Commands run are reported with pass/fail evidence.
+- [ ] Final Review links a versioned packet and exact reviewed SHA; the packet passes
+      `npm run test:final-review-closure` under
+      [the closure-packet rules](../final-review/README.md).
 
 ## Fast rejection signals (send it back)
 

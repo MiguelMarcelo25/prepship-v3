@@ -64,6 +64,7 @@ existing guards/tests. -->
 
 ```
 npm run test:sot-guard-pack
+npm run test:final-review-closure
 npm run typecheck
 # focused guards for the canonical owner
 # build:web / browser / workflow checks if UI or workflow is touched
@@ -78,6 +79,8 @@ npm run typecheck
 - Boundary test at the owner passes; operator-symptom test passes.
 - Duplicate logic removed or recorded as follow-up debt.
 - Verification commands run with pass/fail evidence; no safety boundary weakened.
+- Final Review packet names the exact reviewed SHA and passes the risk-aware closure
+  validator; see [the closure-packet rules](../final-review/README.md).
 
 ## Return format
 
