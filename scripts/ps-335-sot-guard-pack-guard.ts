@@ -13,6 +13,7 @@ const REQUIRED_GUARDS = [
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
   'test:ps-336-task-sot-gates',
+  'test:ps-428-durable-worker-execution',
   'test:ps-429-final-review-closure',
   'test:ps-430-print-queue-worker-health',
   'test:ps-431-production-self-healing',

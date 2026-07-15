@@ -29,6 +29,8 @@ async function main(): Promise<void> {
   const ratesRoute = read('src/routes/rates.ts');
   const browseStore = read('src/services/rate-browse-job-store.ts');
   const browseWorkflowStore = read('src/services/rate-browse-workflow-store.ts');
+  const browseWorker = read('src/services/rate-browse-worker.ts');
+  const workerFenceMigration = read('drizzle/0067_durable_worker_execution_fences.sql');
   const ratchet = read('src/services/best-rate-ratchet-db.ts');
   const doc = read('docs/ps-tickets/audit-5.5-multi-instance-readiness.md');
   const audit = read('AUDIT-2026-07-13.md');
@@ -47,8 +49,12 @@ async function main(): Promise<void> {
   assert.match(backfill, /MAX_COMPLETED_JOBS_IN_MEMORY = 25/);
   assert.match(backfill, /pruneCompletedBackfillJobs\(\)/);
 
-  assert.match(browseStore, /SELECT pg_advisory_lock/);
-  assert.doesNotMatch(browseStore, /pg_try_advisory_lock|lock_busy_starting_independent_job/);
+  assert.doesNotMatch(browseStore, /SELECT pg_advisory_lock|queueMicrotask/);
+  assert.match(workerFenceMigration, /rate_browse_jobs_request_active_unq/);
+  assert.match(browseStore, /generation = generation \+ 1/);
+  assert.match(browseStore, /heartbeatRateBrowseJobRecord/);
+  assert.match(browseWorker, /RATE_BROWSE_JOB_NAME/);
+  assert.match(browseWorker, /runDurableWorkerAttempt/);
   assert.match(browseWorkflowStore, /durableReservationFailureSnapshot/);
   assert.match(browseWorkflowStore, /created: false/);
   assert.match(browseWorkflowStore, /provider work was not started/);

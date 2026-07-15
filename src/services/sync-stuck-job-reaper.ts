@@ -21,6 +21,7 @@
 // order-state mutation) are EXCLUDED on purpose.
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
+import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline.js';
 import { syncJobLaneFor, type SyncJobLane } from './sync-job-lanes';
 import { isSyncLaneAdvisoryLockHeld } from './sync-lane-lock';
 import {
@@ -59,7 +60,7 @@ export const REAPER_SAFE_JOB_NAMES: readonly string[] = [
  * JOB_HANDLER_TIMEOUT (10 min default, capped 25 min) and pg-boss expireInMinutes (30), so a
  * legitimately-running long tick is never reaped — only orphans whose worker process is gone.
  */
-export const REAPER_MIN_ACTIVE_AGE_MS = 15 * 60_000;
+export const REAPER_MIN_ACTIVE_AGE_MS = SYNC_JOB_RUNNING_LEASE_MS;
 // Per user override unlock shipped data on 2026-07-07: deploy handoffs can leave a young pg-boss
 // row in state='active' after the worker transaction died. The ShipStation lane advisory lock is
 // the source of truth for whether a job still owns the lane; if it is free after this grace window,
@@ -128,9 +129,11 @@ export function selectStuckActiveJobs(
       job.started_on instanceof Date ? job.started_on.getTime() : Date.parse(String(job.started_on));
     if (!Number.isFinite(startedMs)) continue;
     const ageMs = opts.nowMs - startedMs;
-    const pastAgeThreshold = ageMs >= opts.minActiveAgeMs;
     const lane = syncJobLaneFor(job.name);
-    const laneIsFree = opts.activeLanesHeld != null && !opts.activeLanesHeld.has(lane);
+    const laneIsHeld = opts.activeLanesHeld?.has(lane) === true;
+    if (laneIsHeld) continue;
+    const pastAgeThreshold = ageMs >= opts.minActiveAgeMs;
+    const laneIsFree = opts.activeLanesHeld != null;
     const orphanedActiveRow = laneIsFree && ageMs >= orphanActiveGraceMs;
     if (!pastAgeThreshold && !orphanedActiveRow) continue;
     out.push({ id: job.id, name: job.name });

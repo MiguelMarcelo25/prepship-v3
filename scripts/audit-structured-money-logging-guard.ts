@@ -70,6 +70,7 @@ const billingRouteSource = readFileSync('src/routes/billing.ts', 'utf8');
 const billingServiceSource = readFileSync('src/services/billing.ts', 'utf8');
 const ratesRouteSource = readFileSync('src/routes/rates.ts', 'utf8');
 const rateWorkflowSource = readFileSync('src/services/rate-browse-workflow.ts', 'utf8');
+const rateWorkerSource = readFileSync('src/services/rate-browse-worker.ts', 'utf8');
 const labelsRouteSource = readFileSync('src/routes/labels.ts', 'utf8');
 
 assert.match(mainSource, /runWithLogContext\(\{ requestId \}, next\)/, 'request middleware must own async request context');
@@ -84,7 +85,8 @@ assert.match(billingServiceSource, /reportError\('billing\.summary_metrics\.refr
 assert.match(ratesRouteSource, /runWithLogContext\([\s\S]*?orderId: body\.orderId/);
 assert.match(ratesRouteSource, /reportError\('rate\.browse\.failed'/);
 assert.match(ratesRouteSource, /reportError\('rate\.shopify\.failed'/);
-assert.match(rateWorkflowSource, /reportError\('rate\.browse\.detached_failed'/);
+assert.match(rateWorkflowSource, /enqueueRateBrowseWorkerJob/);
+assert.match(rateWorkerSource, /recordWorkerJobFailure\(RATE_BROWSE_JOB_NAME/);
 
 assert.match(labelsRouteSource, /Per user override unlock shipped data on 2026-07-14: observability only/);
 assert.match(labelsRouteSource, /runWithLogContext\([\s\S]*?orderId: body\.orderId/);

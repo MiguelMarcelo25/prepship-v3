@@ -55,11 +55,13 @@ check('terminal done snapshot is never reclassified stale', () => {
 });
 
 const migration = read('drizzle/0064_print_queue_merge_jobs.sql');
+const fenceMigration = read('drizzle/0067_durable_worker_execution_fences.sql');
 const store = read('src/services/print-queue/merge-job-store.ts');
 const service = read('src/services/print-queue.ts');
+const worker = read('src/services/print-queue-worker.ts');
 const route = read('src/routes/print-queue.ts');
 const readiness = read('src/services/runtime-schema-readiness.ts');
-const env = read('src/lib/env.ts');
+const pdfStore = read('src/services/print-queue-pdf-store.ts');
 
 check('migration owns per-job merge snapshots and their lookup index', () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS print_queue_merge_jobs/);
@@ -77,32 +79,39 @@ check('migration never mutates protected order or shipment data', () => {
 check('merge store persists and reads snapshots by job id with monotonic writes', () => {
   assert.match(store, /export async function persistMergeJobRecord/);
   assert.match(store, /ON CONFLICT \(job_id\) DO UPDATE/);
-  assert.match(store, /WHERE print_queue_merge_jobs\.updated_at <= \$\{snapshot\.persistedAt\}/);
+  assert.match(store, /AND print_queue_merge_jobs\.snapshot_updated_at <= \$\{snapshot\.persistedAt\}/);
   assert.match(store, /export async function getMergeJobRecord\(jobId: string\)/);
   assert.match(store, /WHERE job_id = \$\{jobId\}/);
   assert.match(store, /export async function getLatestMergeJobRecord/);
 });
 
-check('boot readiness keeps the 0064 per-job objects at the latest migration frontier', () => {
+check('boot readiness keeps worker-fence objects at the latest migration frontier', () => {
   assert.match(readiness, /'print_queue_merge_jobs'/);
   assert.match(readiness, /'print_queue_merge_jobs_updated_at_idx'/);
-  assert.match(readiness, /0066_billing_ref_rate_identity\.sql/);
+  assert.match(readiness, /0067_durable_worker_execution_fences\.sql/);
+  assert.match(fenceMigration, /input_payload jsonb/);
+  assert.match(fenceMigration, /generation integer/);
+  assert.match(fenceMigration, /print_queue_merge_jobs_recovery_idx/);
 });
 
 check('merge lifecycle requires initial status persistence before returning a job id', () => {
   const startBlock = service.slice(service.indexOf('export async function startPrintJob'), service.indexOf('export function getMergeJobStatus'));
-  assert.match(startBlock, /await persistMergeJobSnapshot\(job, \{ required: true \}\)/);
-  assert.ok(startBlock.indexOf('await persistMergeJobSnapshot') < startBlock.indexOf('void runMergeJob'));
+  assert.match(startBlock, /await persistMergeJobSnapshot\(job, \{[\s\S]{0,120}required: true/);
+  assert.ok(startBlock.indexOf('await persistMergeJobSnapshot') < startBlock.indexOf('await enqueuePrintMergeWorkerJob'));
+  assert.doesNotMatch(startBlock, /runMergeJob\(/);
+  assert.match(worker, /claimPrintMergeJobRecord/);
+  assert.match(worker, /runPrintMergeJobFromWorker/);
 });
 
 check('chunk artifacts and terminal merge state are awaited', () => {
   assert.doesNotMatch(service, /void persistMergedPdfChunk/);
   assert.doesNotMatch(service, /void persistMergedPdf\(/);
   assert.match(service, /const durableChunk = await persistMergedPdfChunk/);
-  assert.match(service, /durablePrintQueuePdfEnabled\(\) && !durableChunk/);
+  assert.match(service, /if \(!durableChunk\)/);
   const terminalBlock = service.slice(service.indexOf('const doneMessage ='), service.indexOf('} catch (err)', service.indexOf('const doneMessage =')));
-  assert.ok(terminalBlock.indexOf('await persistMergedPdf(') < terminalBlock.indexOf("job.status = 'done'"));
+  assert.doesNotMatch(terminalBlock, /persistMergedPdf\(/);
   assert.match(terminalBlock, /await persistMergeJobSnapshot\(job, \{ required: true \}\)/);
+  assert.match(pdfStore, /WHERE print_queue_pdf_chunks\.generation <= \$\{input\.generation\}/);
 });
 
 check('status route reads the requested job and derives staleness in the backend', () => {
@@ -112,8 +121,9 @@ check('status route reads the requested job and derives staleness in the backend
   assert.match(route, /Per user override unlock shipped data on 2026-07-14/);
 });
 
-check('durable PDF flag remains default off pending runtime canary', () => {
-  assert.match(env, /DURABLE_PRINT_QUEUE_PDF: booleanFlag\(false\)/);
+check('durable PDF chunks are mandatory for worker-owned merge completion', () => {
+  assert.match(pdfStore, /durablePrintQueuePdfEnabled\(\): boolean \{\s*return true/);
+  assert.doesNotMatch(pdfStore, /if \(!durablePrintQueuePdfEnabled\(\)\)/);
 });
 
 console.log('\nPASS Audit 3.5 print-queue merge durability guard');

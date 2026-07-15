@@ -1,27 +1,25 @@
-import postgres from 'postgres';
 import { sql as pg } from '../db/client.js';
-import { advisoryLockKeyPair } from '../lib/advisory-lock';
-import { env } from '../lib/env';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
-
-// Per user override unlock shipped data on 2026-07-14: reservation locking is
-// rate-workflow coordination only. Keep its session lock off the application
-// pool so DB_POOL_MAX=1 can still recheck and persist the canonical rate job.
-const rateBrowseJobLockSql = postgres(env.DATABASE_URL, {
-  prepare: false,
-  max: 1,
-  idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
-  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
-  connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
-  connection: { statement_timeout: env.DB_STATEMENT_TIMEOUT_MS },
-});
 
 export type RateBrowseJobPriority = 'manual' | 'preflight' | 'backfill';
 
 export type RateBrowseJobReservation = {
   snapshot: RateBrowseWorkflowSnapshot;
   created: boolean;
+};
+
+export type RateBrowseWorkerInput = {
+  body: Record<string, unknown>;
+  canViewFinancials: boolean;
+  includeCachedPartial: boolean;
+  priority: RateBrowseJobPriority;
+};
+
+export type RateBrowseJobClaim = {
+  snapshot: RateBrowseWorkflowSnapshot;
+  input: RateBrowseWorkerInput;
+  generation: number;
 };
 
 type ProviderStatusRow = {
@@ -91,6 +89,40 @@ export async function ensureRateBrowseJobStoreSchema(): Promise<void> {
   await assertRuntimeSchemaReady();
 }
 
+function snapshotWithGeneration(
+  value: unknown,
+  generation: unknown,
+  durableUpdatedAt?: unknown,
+): RateBrowseWorkflowSnapshot | null {
+  const snapshot = parseRateBrowseWorkflowSnapshot(value);
+  if (!snapshot) return null;
+  return {
+    ...snapshot,
+    generation: Math.max(0, Math.trunc(num(generation) ?? snapshot.generation ?? 0)),
+    updatedAt: typeof durableUpdatedAt === 'string'
+      ? durableUpdatedAt
+      : durableUpdatedAt instanceof Date
+        ? durableUpdatedAt.toISOString()
+        : snapshot.updatedAt,
+  };
+}
+
+function parseWorkerInput(value: unknown): RateBrowseWorkerInput | null {
+  const parsed = typeof value === 'string'
+    ? (() => { try { return JSON.parse(value) as unknown; } catch { return null; } })()
+    : value;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const input = parsed as Partial<RateBrowseWorkerInput>;
+  if (!input.body || typeof input.body !== 'object' || Array.isArray(input.body)) return null;
+  if (typeof input.canViewFinancials !== 'boolean') return null;
+  return {
+    body: input.body as Record<string, unknown>,
+    canViewFinancials: input.canViewFinancials,
+    includeCachedPartial: input.includeCachedPartial === true,
+    priority: input.priority === 'preflight' || input.priority === 'backfill' ? input.priority : 'manual',
+  };
+}
+
 export function extractRateBrowseProviderStatuses(snapshot: RateBrowseWorkflowSnapshot): ProviderStatusRow[] {
   const result = resultFromSnapshot(snapshot);
   const carrierStatuses = Array.isArray(result.carrierStatuses) ? result.carrierStatuses : [];
@@ -148,7 +180,7 @@ async function persistRateBrowseProviderStatuses(snapshot: RateBrowseWorkflowSna
         diagnostics,
         updated_at
       )
-      VALUES (
+      SELECT
         ${snapshot.jobId},
         ${row.providerKey},
         ${row.carrierId},
@@ -162,7 +194,9 @@ async function persistRateBrowseProviderStatuses(snapshot: RateBrowseWorkflowSna
         ${row.limiterWaitMs},
         ${diagnosticsJson}::jsonb,
         ${snapshot.updatedAt}
-      )
+      FROM rate_browse_jobs
+      WHERE job_id = ${snapshot.jobId}
+        AND generation = ${snapshot.generation}
       ON CONFLICT (job_id, provider_key) DO UPDATE SET
         carrier_id = ${row.carrierId},
         account_id = ${row.accountId},
@@ -175,20 +209,22 @@ async function persistRateBrowseProviderStatuses(snapshot: RateBrowseWorkflowSna
         limiter_wait_ms = ${row.limiterWaitMs},
         diagnostics = ${diagnosticsJson}::jsonb,
         updated_at = ${snapshot.updatedAt}
+      WHERE rate_browse_job_provider_statuses.updated_at <= ${snapshot.updatedAt}
     `;
   }
 }
 
 export async function persistRateBrowseJobRecord(
   snapshot: RateBrowseWorkflowSnapshot,
-  options: { priority?: RateBrowseJobPriority } = {},
-): Promise<void> {
+  options: { priority?: RateBrowseJobPriority; workerInput?: RateBrowseWorkerInput } = {},
+): Promise<boolean> {
   await ensureRateBrowseJobStoreSchema();
   const active = activeForSnapshot(snapshot);
   const priority = options.priority ?? 'manual';
   const diagnosticsJson = JSON.stringify(snapshot.diagnostics ?? {});
   const snapshotJson = JSON.stringify(snapshot);
-  await pg`
+  const requestPayloadJson = JSON.stringify(options.workerInput ?? {});
+  const rows = await pg<Array<{ jobId: string }>>`
     INSERT INTO rate_browse_jobs (
       job_id,
       request_key,
@@ -204,6 +240,9 @@ export async function persistRateBrowseJobRecord(
       message,
       diagnostics,
       snapshot,
+      request_payload,
+      generation,
+      snapshot_updated_at,
       created_at,
       updated_at,
       finished_at
@@ -223,6 +262,9 @@ export async function persistRateBrowseJobRecord(
       ${snapshot.message},
       ${diagnosticsJson}::jsonb,
       ${snapshotJson}::jsonb,
+      ${requestPayloadJson}::jsonb,
+      ${snapshot.generation},
+      ${snapshot.updatedAt},
       ${snapshot.startedAt},
       ${snapshot.updatedAt},
       ${snapshot.finishedAt}
@@ -241,23 +283,32 @@ export async function persistRateBrowseJobRecord(
       message = ${snapshot.message},
       diagnostics = ${diagnosticsJson}::jsonb,
       snapshot = ${snapshotJson}::jsonb,
+      request_payload = CASE
+        WHEN ${requestPayloadJson}::jsonb = '{}'::jsonb THEN rate_browse_jobs.request_payload
+        ELSE ${requestPayloadJson}::jsonb
+      END,
+      snapshot_updated_at = ${snapshot.updatedAt},
       updated_at = ${snapshot.updatedAt},
       finished_at = ${snapshot.finishedAt}
+    WHERE rate_browse_jobs.generation = ${snapshot.generation}
+      AND rate_browse_jobs.snapshot_updated_at <= ${snapshot.updatedAt}
+    RETURNING job_id AS "jobId"
   `;
-  await persistRateBrowseProviderStatuses(snapshot);
+  if (rows.length > 0) await persistRateBrowseProviderStatuses(snapshot);
+  return rows.length > 0;
 }
 
 export async function getRateBrowseJobRecord(jobId: string): Promise<RateBrowseWorkflowSnapshot | null> {
   if (!jobId) return null;
   try {
     await ensureRateBrowseJobStoreSchema();
-    const rows = await pg<Array<{ snapshot: unknown }>>`
-      SELECT snapshot
+    const rows = await pg<Array<{ snapshot: unknown; generation: number; updatedAt: string }>>`
+      SELECT snapshot, generation, updated_at::text AS "updatedAt"
       FROM rate_browse_jobs
       WHERE job_id = ${jobId}
       LIMIT 1
     `;
-    return parseRateBrowseWorkflowSnapshot(rows[0]?.snapshot);
+    return snapshotWithGeneration(rows[0]?.snapshot, rows[0]?.generation, rows[0]?.updatedAt);
   } catch (err) {
     console.warn(
       '[rate-browse-job-store] failed to read rate browse job:',
@@ -272,44 +323,20 @@ export async function getActiveRateBrowseJobRecordByRequestKey(
 ): Promise<RateBrowseWorkflowSnapshot | null> {
   if (!requestKey) return null;
   await ensureRateBrowseJobStoreSchema();
-  const rows = await pg<Array<{ snapshot: unknown }>>`
-    SELECT snapshot
+  const rows = await pg<Array<{ snapshot: unknown; generation: number; updatedAt: string }>>`
+    SELECT snapshot, generation, updated_at::text AS "updatedAt"
     FROM rate_browse_jobs
     WHERE request_key = ${requestKey}
       AND active = true
     ORDER BY updated_at DESC
     LIMIT 1
   `;
-  return parseRateBrowseWorkflowSnapshot(rows[0]?.snapshot);
-}
-
-type RateBrowseReservationLock = {
-  release: () => Promise<void>;
-};
-
-async function acquireRateBrowseJobReservationLock(requestKey: string): Promise<RateBrowseReservationLock> {
-  const [classid, objid] = advisoryLockKeyPair(`rate-browse-job:${requestKey}`);
-  const reserved = await rateBrowseJobLockSql.reserve();
-  try {
-    await reserved`SELECT pg_advisory_lock(${classid}, ${objid})`;
-    return {
-      release: async () => {
-        try {
-          await reserved`SELECT pg_advisory_unlock(${classid}, ${objid})`;
-        } finally {
-          reserved.release();
-        }
-      },
-    };
-  } catch (err) {
-    reserved.release();
-    throw err;
-  }
+  return snapshotWithGeneration(rows[0]?.snapshot, rows[0]?.generation, rows[0]?.updatedAt);
 }
 
 export async function reserveRateBrowseJobRecord(
   snapshot: RateBrowseWorkflowSnapshot,
-  options: { priority?: RateBrowseJobPriority } = {},
+  options: { priority?: RateBrowseJobPriority; workerInput: RateBrowseWorkerInput },
 ): Promise<RateBrowseJobReservation> {
   const requestKey = snapshot.requestKey;
   if (!requestKey) {
@@ -319,15 +346,110 @@ export async function reserveRateBrowseJobRecord(
 
   const existing = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
   if (existing) return { snapshot: existing, created: false };
-
-  const lock = await acquireRateBrowseJobReservationLock(requestKey);
-
   try {
-    const active = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
-    if (active) return { snapshot: active, created: false };
     await persistRateBrowseJobRecord(snapshot, options);
     return { snapshot, created: true };
-  } finally {
-    await lock.release();
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code !== '23505') throw error;
+    const active = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
+    if (active) return { snapshot: active, created: false };
+    throw error;
   }
+}
+
+export async function claimRateBrowseJobRecord(
+  jobId: string,
+  options: { staleAfterMs: number; now?: Date } = { staleAfterMs: 60_000 },
+): Promise<RateBrowseJobClaim | null> {
+  await ensureRateBrowseJobStoreSchema();
+  const now = options.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - Math.max(1, options.staleAfterMs)).toISOString();
+  const rows = await pg<Array<{
+    snapshot: unknown;
+    requestPayload: unknown;
+    generation: number;
+  }>>`
+    UPDATE rate_browse_jobs
+    SET status = 'running',
+        generation = generation + 1,
+        claimed_at = ${now.toISOString()},
+        heartbeat_at = ${now.toISOString()},
+        cancel_requested_at = NULL,
+        cancel_acknowledged_at = NULL,
+        updated_at = ${now.toISOString()}
+    WHERE job_id = ${jobId}
+      AND active = true
+      AND (
+        status = 'queued'
+        OR heartbeat_at IS NULL
+        OR heartbeat_at < ${staleBefore}
+      )
+    RETURNING
+      snapshot,
+      request_payload AS "requestPayload",
+      generation
+  `;
+  const row = rows[0];
+  if (!row) return null;
+  const snapshot = snapshotWithGeneration(row.snapshot, row.generation);
+  const input = parseWorkerInput(row.requestPayload);
+  if (!snapshot || !input) return null;
+  return { snapshot, input, generation: row.generation };
+}
+
+export async function heartbeatRateBrowseJobRecord(
+  jobId: string,
+  generation: number,
+): Promise<boolean> {
+  const rows = await pg<Array<{ jobId: string }>>`
+    UPDATE rate_browse_jobs
+    SET heartbeat_at = now(), updated_at = now()
+    WHERE job_id = ${jobId}
+      AND generation = ${generation}
+      AND active = true
+    RETURNING job_id AS "jobId"
+  `;
+  return rows.length === 1;
+}
+
+export async function requestRateBrowseJobCancellation(
+  jobId: string,
+  generation: number,
+): Promise<void> {
+  await pg`
+    UPDATE rate_browse_jobs
+    SET cancel_requested_at = now(), updated_at = now()
+    WHERE job_id = ${jobId} AND generation = ${generation} AND active = true
+  `;
+}
+
+export async function acknowledgeRateBrowseJobCancellation(
+  jobId: string,
+  generation: number,
+): Promise<void> {
+  await pg`
+    UPDATE rate_browse_jobs
+    SET cancel_acknowledged_at = now(), updated_at = now()
+    WHERE job_id = ${jobId} AND generation = ${generation}
+  `;
+}
+
+export async function listRecoverableRateBrowseJobIds(input: {
+  staleAfterMs: number;
+  limit?: number;
+}): Promise<string[]> {
+  const staleBefore = new Date(Date.now() - Math.max(1, input.staleAfterMs)).toISOString();
+  const rows = await pg<Array<{ jobId: string }>>`
+    SELECT job_id AS "jobId"
+    FROM rate_browse_jobs
+    WHERE active = true
+      AND (
+        status = 'queued'
+        OR heartbeat_at IS NULL
+        OR heartbeat_at < ${staleBefore}
+      )
+    ORDER BY created_at ASC
+    LIMIT ${Math.max(1, Math.min(100, input.limit ?? 25))}
+  `;
+  return rows.map((row) => row.jobId);
 }

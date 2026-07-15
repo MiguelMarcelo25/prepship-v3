@@ -106,6 +106,15 @@ const migrationOwnership = [
     'drizzle/0066_billing_ref_rate_identity.sql',
     ['billing_ref_rates_identity_unq'],
   ],
+  [
+    'drizzle/0067_durable_worker_execution_fences.sql',
+    [
+      'rate_browse_jobs_request_active_unq',
+      'rate_browse_jobs_recovery_idx',
+      'print_queue_merge_jobs_recovery_idx',
+      'generation',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -139,6 +148,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingRefRateMigration),
   '0066 only deduplicates billing_ref_rates and never mutates orders/shipments',
 );
+const durableWorkerMigration = read('drizzle/0067_durable_worker_execution_fences.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(durableWorkerMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(durableWorkerMigration),
+  '0067 changes only durable job/artifact sidecars and never mutates orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -148,7 +163,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0066_billing_ref_rate_identity.sql',
+  '0067_durable_worker_execution_fences.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

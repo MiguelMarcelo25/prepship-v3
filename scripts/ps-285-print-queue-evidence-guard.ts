@@ -93,10 +93,10 @@ check('PS-053 guard pins create/recover-and-queue atomicity',
 check('PS-253 guard pins stale processing outbox reclaim',
   /OUTBOX_PROCESSING_LEASE_MINUTES/.test(ps253) &&
     /reclaims orphaned processing rows past the lease/.test(ps253));
-check('PS-256 guard pins durable merged PDF store and default-off no-op',
-  /DURABLE_PRINT_QUEUE_PDF/.test(ps256) &&
-    /persistMergedPdf resolves without throwing when OFF/.test(ps256) &&
-    /getMergedPdfBase64 returns null when OFF/.test(ps256));
+check('PS-256 guard pins mandatory generation-fenced PDF chunks',
+  /PS-428 mandatory/.test(ps256) &&
+    /persistMergedPdfChunk/.test(ps256) &&
+    /generation/.test(ps256));
 check('PS-303 guard pins backend print queue route authority',
   /processQueueSendOrder/.test(ps303) &&
     /createLabelV2/.test(ps303) &&
@@ -125,11 +125,11 @@ check('print queue service normalizes label URLs before queue persistence',
 check('print queue route delegates batch-send to backend job owner',
   /app\.post\('\/batch-send'/.test(printQueueRoute) &&
     /startQueueSendJob/.test(printQueueRoute));
-check('durable PDF side-store is additive and flag-gated',
+check('durable PDF side-store is additive and mandatory',
   /CREATE TABLE IF NOT EXISTS print_queue_merged_pdfs/.test(runtimeSchemaMigration) &&
     /assertRuntimeSchemaReady/.test(pdfStore) &&
-    /DURABLE_PRINT_QUEUE_PDF/.test(pdfStore) &&
-    /if \(!durablePrintQueuePdfEnabled\(\)\) return/.test(pdfStore));
+    /durablePrintQueuePdfEnabled\(\): boolean \{\s*return true/.test(pdfStore) &&
+    !/if \(!durablePrintQueuePdfEnabled\(\)\) return/.test(pdfStore));
 
 check('phase 5 is complete in checklist and matrix',
   /\|\s*5\s*\|\s*Print queue durability and idempotency\s*\|\s*Complete\s*\|/i.test(checklist) &&

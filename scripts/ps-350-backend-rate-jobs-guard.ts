@@ -29,6 +29,7 @@ const workflowKeyPath = 'src/services/rate-browse-workflow-key.ts';
 const jobStorePath = 'src/services/rate-browse-job-store.ts';
 const workflowStorePath = 'src/services/rate-browse-workflow-store.ts';
 const workflowServicePath = 'src/services/rate-browse-workflow.ts';
+const workflowWorkerPath = 'src/services/rate-browse-worker.ts';
 const producerPath = 'src/services/rate-browse-response-producer.ts';
 const routesPath = 'src/routes/rates.ts';
 const backfillPath = 'src/services/rates-backfill.ts';
@@ -42,6 +43,7 @@ const workflowKey = read(workflowKeyPath);
 const jobStore = read(jobStorePath);
 const workflowStore = read(workflowStorePath);
 const workflowService = read(workflowServicePath);
+const workflowWorker = read(workflowWorkerPath);
 const producer = read(producerPath);
 const routes = read(routesPath);
 const backfill = read(backfillPath);
@@ -51,6 +53,7 @@ const runtimeDdlAudit = read(runtimeDdlAuditPath);
 const doc = read(docPath);
 const ps352 = read(ps352Path);
 const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
+const workerFenceMigration = read('drizzle/0067_durable_worker_execution_fences.sql');
 
 check(
   'PS-350 package guard is wired',
@@ -84,11 +87,11 @@ check(
 
 check(
   'job store serializes duplicate live workflow reservation by durable request key',
-  /import \{ advisoryLockKeyPair \} from ['"]\.\.\/lib\/advisory-lock['"]/.test(jobStore) &&
+  /rate_browse_jobs_request_active_unq/.test(workerFenceMigration) &&
+    /WHERE active = true AND request_key IS NOT NULL/.test(workerFenceMigration) &&
     /export async function reserveRateBrowseJobRecord/.test(jobStore) &&
-    /acquireRateBrowseJobReservationLock/.test(jobStore) &&
-    /pg_advisory_lock/.test(jobStore) &&
-    !/pg_try_advisory_lock|lock_busy_starting_independent_job/.test(jobStore) &&
+    /code !== '23505'/.test(jobStore) &&
+    !/pg_advisory_lock|queueMicrotask/.test(jobStore) &&
     /getActiveRateBrowseJobRecordByRequestKey/.test(jobStore) &&
     /created: false/.test(jobStore) &&
     /created: true/.test(jobStore),
@@ -139,14 +142,16 @@ check(
   /buildRateBrowseWorkflowRequestKey/.test(workflowService) &&
     /priority\?: 'manual' \| 'preflight' \| 'backfill'/.test(workflowService) &&
     /reserveRateBrowseWorkflowSnapshot/.test(workflowService) &&
-    /if \(reservation\.created\) \{[\s\S]{0,300}scheduleDetachedRateBrowseJob/.test(workflowService) &&
+    /if \(reservation\.created\) \{[\s\S]{0,300}enqueueRateBrowseWorkerJob/.test(workflowService) &&
+    /runDurableWorkerAttempt/.test(workflowWorker) &&
+    /produceRateBrowsePayload/.test(workflowWorker) &&
     /return reservation\.snapshot/.test(workflowService),
 );
 
 check(
   'routes mark explicit Rate Browser work as manual priority while keeping frontend as a thin renderer',
   /priority: 'manual'/.test(routes) &&
-    /startRateBrowseWorkflow\(\{[\s\S]{0,600}run: \(\) => produceRateBrowsePayload/.test(routes) &&
+    /startRateBrowseWorkflow\(\{[\s\S]{0,600}includeCachedPartial: body\.forceLive === true/.test(routes) &&
     /publicRateBrowseWorkflowSnapshot/.test(routes),
 );
 

@@ -5,6 +5,7 @@ import {
   reserveRateBrowseJobRecord,
   type RateBrowseJobPriority,
   type RateBrowseJobReservation,
+  type RateBrowseWorkerInput,
 } from './rate-browse-job-store';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 
@@ -72,7 +73,7 @@ export async function persistRateBrowseWorkflowSnapshot(
 
 export async function reserveRateBrowseWorkflowSnapshot(
   snapshot: RateBrowseWorkflowSnapshot,
-  options: { priority?: RateBrowseJobPriority } = {},
+  options: { priority?: RateBrowseJobPriority; workerInput: RateBrowseWorkerInput },
 ): Promise<RateBrowseJobReservation> {
   let reservation: RateBrowseJobReservation;
   try {

@@ -16,6 +16,10 @@ import { ensureReportingMetricsTables } from './services/reporting-metrics';
 import { startSyncStalenessWatchdog } from './services/sync-staleness-watchdog';
 import { assertRuntimeSchemaReady } from './services/runtime-schema-readiness.js';
 import { createWorkerFailureBreaker } from './services/worker-failure-breaker';
+import {
+  startRateBrowseWorker,
+  stopRateBrowseWorker,
+} from './services/rate-browse-worker';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
 let stopSyncWatchdog: (() => void) | null = null;
@@ -41,6 +45,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[worker] received ${signal}; shutting down`);
   await stopPrintQueueWorker();
   if (env.RUN_SYNC_SCHEDULER) {
+    await stopRateBrowseWorker();
     await stopQueuedSyncScheduler();
     stopSyncWatchdog?.();
     stopSyncWatchdog = null;
@@ -140,6 +145,7 @@ async function main(): Promise<void> {
     // process-local by design, while all work cadence is durable in pg-boss.
     console.log('[worker] starting durable pg-boss sync scheduler');
     await startQueuedSyncScheduler();
+    await startRateBrowseWorker();
     stopSyncWatchdog = startSyncStalenessWatchdog();
   } else {
     if (env.RUN_PRINT_QUEUE_WORKER) {

@@ -35,6 +35,7 @@ const helperPath = 'src/services/settings-json.ts';
 const workflowTypesPath = 'src/services/rate-browse-workflow-types.ts';
 const workflowStorePath = 'src/services/rate-browse-workflow-store.ts';
 const workflowServicePath = 'src/services/rate-browse-workflow.ts';
+const workflowWorkerPath = 'src/services/rate-browse-worker.ts';
 const workflowSnapshotsPath = 'src/services/rate-browse-workflow-snapshots.ts';
 const browseDisplayPath = 'src/services/rate-browser-display-fields.ts';
 const browseProducerPath = 'src/services/rate-browse-response-producer.ts';
@@ -53,6 +54,7 @@ const helper = fileText(helperPath);
 const workflowTypes = fileText(workflowTypesPath);
 const workflowStore = fileText(workflowStorePath);
 const workflowService = fileText(workflowServicePath);
+const workflowWorker = fileText(workflowWorkerPath);
 const workflowSnapshots = fileText(workflowSnapshotsPath);
 const browseDisplay = fileText(browseDisplayPath);
 const browseProducer = fileText(browseProducerPath);
@@ -192,22 +194,21 @@ check(
   'backend rate browse workflow service owns durable job lifecycle without rate-ranking business rules',
   existsSync(workflowServicePath) &&
     /export type StartRateBrowseWorkflowInput = \{/.test(workflowService) &&
-    /getInitialResult\?: \(\) => Promise<Record<string, unknown> \| null>/.test(workflowService) &&
-    /run: \(\) => Promise<Record<string, unknown>>/.test(workflowService) &&
+    /includeCachedPartial\?: boolean/.test(workflowService) &&
     /export async function startRateBrowseWorkflow\(/.test(workflowService) &&
     /export async function getRateBrowseWorkflow\(jobId: string\): Promise<RateBrowseWorkflowSnapshot \| null>/.test(workflowService) &&
-    /persistRateBrowseWorkflowSnapshot/.test(workflowService) &&
+    /enqueueRateBrowseWorkerJob/.test(workflowService) &&
     !/combineCarrierUniverses|rateTotal|loadCarrierMarkups|withSelectedRateKeys|selectedRateOpaqueKey/.test(workflowService),
 );
 
 check(
   'backend rate browse workflow service records queued, running, partial, complete, and error snapshots',
   /phase: 'queued'/.test(workflowService) &&
-    /phase: 'running'/.test(workflowService) &&
-    /phase: 'partial'/.test(workflowService) &&
-    /phase: 'complete'/.test(workflowService) &&
-    /phase: 'error'/.test(workflowService) &&
-    /scheduleDetachedRateBrowseJob/.test(workflowService),
+    /phase: 'running'/.test(workflowWorker) &&
+    /phase: 'partial'/.test(workflowWorker) &&
+    /phase: 'complete'/.test(workflowWorker) &&
+    /phase: 'error'/.test(workflowWorker) &&
+    /runDurableWorkerAttempt/.test(workflowWorker),
 );
 
 check(
@@ -252,24 +253,26 @@ check(
 check(
   'workflow endpoint delegates to the real backend browse producer, not a placeholder payload',
   /import \{\s*produceRateBrowsePayload\s*\} from ['"]\.\.\/services\/rate-browse-response-producer['"]/.test(ratesRoute) &&
-    /run: \(\) => produceRateBrowsePayload\(\{/.test(ratesRoute) &&
+    /includeCachedPartial: body\.forceLive === true/.test(ratesRoute) &&
+    /produceRateBrowsePayload/.test(workflowWorker) &&
     !/workflow-lifecycle|final browse producer remains \/rates\/browse until the next slice/.test(ratesRoute),
 );
 
 check(
   'workflow endpoint emits a cache-first partial preview before the live browse finishes',
-  /function cachedRateBrowsePreviewBody<T extends Record<string, unknown>>\(body: T\): T/.test(ratesRoute) &&
-    /cachedOnly: true/.test(ratesRoute) &&
-    /forceLive: false/.test(ratesRoute) &&
-    /forceRefresh: false/.test(ratesRoute) &&
-    /strictRecalculate: false/.test(ratesRoute) &&
-    /manualEstimate: false/.test(ratesRoute) &&
-    /getInitialResult: body\.forceLive === true\s*\?\s*\(\) => produceRateBrowsePayload\(\{[\s\S]*cachedRateBrowsePreviewBody\(body\)/.test(ratesRoute),
+  /function cachedPreviewBody\(body: Record<string, unknown>\)/.test(workflowWorker) &&
+    /cachedOnly: true/.test(workflowWorker) &&
+    /forceLive: false/.test(workflowWorker) &&
+    /forceRefresh: false/.test(workflowWorker) &&
+    /strictRecalculate: false/.test(workflowWorker) &&
+    /manualEstimate: false/.test(workflowWorker) &&
+    /if \(claim\.input\.includeCachedPartial\)/.test(workflowWorker) &&
+    /cachedPreviewBody\(claim\.input\.body\)/.test(workflowWorker),
 );
 
 check(
   'normal /rates/browse route returns the same backend producer payload',
-  /const payload = await produceRateBrowsePayload\(\{/.test(ratesRoute) &&
+  /const payload = await runWithLogContext\([\s\S]{0,180}produceRateBrowsePayload\(\{/.test(ratesRoute) &&
     /return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute),
 );
 

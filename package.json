@@ -599,6 +599,7 @@
     "test:best-rate-final-column": "tsx scripts/best-rate-final-column-guard.ts",
     "test:ps-335-sot-guard-pack": "tsx scripts/ps-335-sot-guard-pack-guard.ts",
     "test:final-review-closure": "node scripts/final-review-closure-fixtures.mjs",
+    "test:ps-428-durable-worker-execution": "tsx scripts/ps-428-durable-worker-execution-guard.ts && tsx scripts/ps-428-durable-worker-execution-integration.ts",
     "test:ps-429-final-review-closure": "tsx scripts/ps-429-final-review-closure-guard.ts",
     "test:ps-430-print-queue-worker-health": "tsx scripts/ps-430-print-queue-worker-health-guard.ts && tsx scripts/ps-430-print-queue-worker-health-integration.ts",
     "test:ps-431-production-self-healing": "tsx scripts/ps-431-production-self-healing-guard.ts",

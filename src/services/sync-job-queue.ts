@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import PgBoss from 'pg-boss';
 import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
-import { withDeadline } from '../lib/with-deadline';
+import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
 import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
@@ -877,6 +877,13 @@ async function registerWorker(
           await recordWorkerJobSuccess(name, startedAt, result);
           return { ok: true, durationMs };
         } catch (err) {
+          if (err instanceof DeadlineExceededError) {
+            // Per user override unlock shipped data on 2026-07-15: PS-428 keeps
+            // the cross-process lane fence until the timed-out handler has
+            // acknowledged cancellation by settling. No successor generation
+            // can overlap abandoned shipment/order work.
+            await handlerPromise.catch(() => undefined);
+          }
           const durationMs = Date.now() - startedAt;
           if (name === JOBS.orders) {
             // Per user override unlock shipped data on 2026-07-10: timeout

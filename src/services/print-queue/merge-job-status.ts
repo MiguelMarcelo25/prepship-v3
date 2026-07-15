@@ -1,9 +1,10 @@
+import { PRINT_QUEUE_WORKER_RUNNING_LEASE_MS } from '../../lib/print-queue-worker-deadline';
+
 export type MergeJobStatusName = 'pending' | 'running' | 'done' | 'error';
 
-// Progress snapshots are written every ten labels. At the 15-second label-fetch
-// timeout, five minutes leaves two full progress windows plus buffer before a
-// missing in-process worker is classified as interrupted.
-export const MERGE_JOB_DURABLE_STALE_AFTER_MS = 5 * 60 * 1000;
+// Never classify a worker generation as stale before its configured execution
+// deadline and cancellation-acknowledgement grace have elapsed.
+export const MERGE_JOB_DURABLE_STALE_AFTER_MS = PRINT_QUEUE_WORKER_RUNNING_LEASE_MS;
 
 type MergeJobSnapshotLike = {
   status: string;

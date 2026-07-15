@@ -337,11 +337,12 @@ check('obsolete frontend route-plan bridge remains deleted',
   !ordersViewCode.includes('classifyQueueOrderRoute'));
 
 const envText = read('src/lib/env.ts');
-checkIncludesAll('Print Queue cutover flags default off', envText, [
-  'DURABLE_PRINT_QUEUE_PDF: booleanFlag(false)',
+checkIncludesAll('remaining Print Queue cutover flags default off', envText, [
   'PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)',
   'PRINT_QUEUE_DIRECT_VIA_BACKEND: booleanFlag(false)',
 ]);
+check('legacy durable-PDF env setting cannot disable mandatory PS-428 chunks',
+  /durablePrintQueuePdfEnabled\(\): boolean \{\s*return true/.test(read('src/services/print-queue-pdf-store.ts')));
 check('Print Queue FE delegation flag is removed', !envText.includes('PRINT_QUEUE_FE_DELEGATION'));
 
 const ps303 = read('scripts/ps-303-print-queue-authority-guard.ts');

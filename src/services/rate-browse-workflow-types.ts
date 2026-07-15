@@ -2,6 +2,7 @@ export type RateBrowseWorkflowPhase = 'queued' | 'cached' | 'running' | 'partial
 
 export type RateBrowseWorkflowSnapshot = {
   jobId: string;
+  generation: number;
   phase: RateBrowseWorkflowPhase;
   requestKey: string | null;
   orderId: number | null;

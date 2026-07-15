@@ -40,17 +40,14 @@ import {
   NO_SKU_PICK_NOTE,
   type CollapsedQueueLine,
 } from './print-queue-identity';
-// PS-256 (restart-safe print-queue merged PDF): durable side-store for the immutable merged PDF
-// artifact so the view/download/signed-url routes survive a server restart. Env-gated default OFF
-// (DURABLE_PRINT_QUEUE_PDF) â€” the OFF path is a true no-op, so existing behavior is unchanged.
+// PS-256/PS-428 (restart-safe print-queue merged PDF): the durable side-store owns immutable
+// completed chunks so view/download/signed-url routes and worker retries survive process restarts.
 import {
-  persistMergedPdf,
   getMergedPdfBase64,
   getMergedPdfChunkBase64,
   getMergedPdfChunks,
   persistMergedPdfChunk,
   cleanupOldMergedPdfs,
-  durablePrintQueuePdfEnabled,
   type MergedPdfChunkMetadata,
 } from './print-queue-pdf-store';
 import { type QueueSendStatusName } from './print-queue/queue-send-status';
@@ -67,9 +64,12 @@ import {
   type QueueSendJobItemState,
 } from './print-queue/queue-send-job-store';
 import {
+  getActivePrintMergeEntryIds,
   getLatestMergeJobRecord,
   getMergeJobRecord,
   persistMergeJobRecord,
+  type PrintMergeJobClaim,
+  type PrintMergeWorkerInput,
 } from './print-queue/merge-job-store';
 // Per user override unlock shipped data on 2026-06-30: durable batch-send
 // snapshots now delegate to a focused backend module that preserves every
@@ -83,7 +83,10 @@ import {
   type QueueSendItemSnapshot,
 } from './print-queue/queue-send-snapshot';
 import { preflightQueueSendOrders } from './print-queue/queue-send-preflight';
-import { enqueueQueueSendWorkerJob } from './print-queue-worker';
+import {
+  enqueuePrintMergeWorkerJob,
+  enqueueQueueSendWorkerJob,
+} from './print-queue-worker';
 import {
   QueueSendJobInterruptedError,
   runQueueSendPool,
@@ -159,6 +162,7 @@ export type MergeJobChunk = {
 
 export type MergeJob = {
   jobId: string;
+  generation: number;
   status: 'pending' | 'running' | 'done' | 'error';
   clientIds: number[];
   progress: number;
@@ -277,6 +281,7 @@ export type MergeJobSnapshot = {
   version: 1;
   durableKey: typeof PRINT_QUEUE_MERGE_STATUS_KEY;
   jobId: string;
+  generation: number;
   status: MergeJob['status'];
   active: boolean;
   clientIds: number[];
@@ -291,6 +296,7 @@ export type MergeJobSnapshot = {
   // PS-194: optional for back-compat with snapshots persisted before the
   // field existed â€” readers default to [].
   successfulEntryIds?: string[];
+  entryIds?: string[];
   createdAt: string;
   persistedAt: string;
 };
@@ -522,6 +528,7 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
     version: 1,
     durableKey: PRINT_QUEUE_MERGE_STATUS_KEY,
     jobId: job.jobId,
+    generation: job.generation,
     status: job.status,
     active: job.status === 'pending' || job.status === 'running',
     clientIds: [...job.clientIds],
@@ -536,6 +543,7 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
     // PS-194: capped well above the 200-entry batch limit; the durable
     // snapshot is what lets Confirm-Printed survive a page refresh.
     successfulEntryIds: (job.successfulEntryIds ?? []).slice(0, 5000),
+    entryIds: (job.entryIds ?? []).slice(0, 5000),
     createdAt: new Date(job.createdAt).toISOString(),
     persistedAt: new Date(job.updatedAt).toISOString(),
   };
@@ -646,20 +654,33 @@ export async function getQueueSendJobSnapshot(jobId: string): Promise<QueueSendJ
 // shipments, postage, marketplace state, or the shipped/cancelled lock policy.
 export async function persistMergeJobSnapshot(
   job: MergeJob,
-  options: { required?: boolean; persistLegacy?: boolean } = {},
-): Promise<void> {
+  options: {
+    required?: boolean;
+    persistLegacy?: boolean;
+    workerInput?: PrintMergeWorkerInput;
+  } = {},
+): Promise<boolean> {
   const snapshot = toMergeSnapshot(job);
+  let persisted = false;
   try {
-    await persistMergeJobRecord(snapshot);
+    persisted = await persistMergeJobRecord(snapshot, { input: options.workerInput });
+    if (!persisted && options.required) {
+      throw new PrintQueueDurableStatusError(
+        `PDF merge generation ${job.generation} is stale and cannot write durable state.`,
+      );
+    }
   } catch (err) {
     console.warn(
       '[print-queue] failed to persist per-job PDF-merge status:',
       err instanceof Error ? err.message : err,
     );
-    if (options.required) throw new PrintQueueDurableStatusError();
+    if (options.required) {
+      if (err instanceof PrintQueueDurableStatusError) throw err;
+      throw new PrintQueueDurableStatusError();
+    }
   }
 
-  if (options.persistLegacy === false) return;
+  if (!persisted || options.persistLegacy === false) return persisted;
   try {
     const value = JSON.stringify(snapshot);
     await db
@@ -675,6 +696,7 @@ export async function persistMergeJobSnapshot(
       err instanceof Error ? err.message : err
     );
   }
+  return persisted;
 }
 
 export async function getLatestQueueSendJobSnapshot(): Promise<QueueSendJobSnapshot | null> {
@@ -743,7 +765,7 @@ function shouldPersistMergeProgress(current: number, total: number): boolean {
 // PS-256: durable merged PDFs are retained LONGER than the 30-min in-memory job retention so a
 // download still works through a restart window (an operator who reopens the batch after the
 // process recycled). 4h is well past the in-memory eviction yet bounded so old binaries don't
-// accumulate. Best-effort + env-gated default OFF (no-op when OFF).
+// accumulate. Best-effort cleanup affects durable PDF artifacts only.
 const DURABLE_PDF_RETENTION_MS = 4 * 60 * 60 * 1000;
 
 function cleanOldJobs() {
@@ -756,7 +778,7 @@ function cleanOldJobs() {
   }
   // Per user override unlock shipped data on 2026-06-16: PS-256 â€” prune old rows from the durable
   // merged-PDF side-store (the NEW print_queue_merged_pdfs table only). DELETEs nothing from
-  // orders/shipments; best-effort + env-gated default OFF.
+  // orders/shipments; best-effort artifact cleanup only.
   void cleanupOldMergedPdfs(DURABLE_PDF_RETENTION_MS);
 }
 
@@ -1828,12 +1850,13 @@ export async function removeFromQueue(
 // PS-195: entry ids currently inside a PENDING/RUNNING merge job. Clearing
 // one of these mid-merge would yank a label out from under an operator's
 // in-flight print â€” those entries are refused, not deleted.
-function inFlightMergeEntryIds(): Set<string> {
+async function inFlightMergeEntryIds(): Promise<Set<string>> {
   const ids = new Set<string>();
   for (const job of mergeJobs.values()) {
     if (job.status !== 'pending' && job.status !== 'running') continue;
     for (const entryId of job.entryIds ?? []) ids.add(entryId);
   }
+  for (const entryId of await getActivePrintMergeEntryIds()) ids.add(entryId);
   return ids;
 }
 
@@ -1847,7 +1870,7 @@ export async function clearQueue(input: {
   scope?: PrintQueueListScope;
 }): Promise<{ cleared: number; blockedInFlight: number }> {
   if (!input.entryIds.length) return { cleared: 0, blockedInFlight: 0 };
-  const inFlight = inFlightMergeEntryIds();
+  const inFlight = await inFlightMergeEntryIds();
   const clearable = input.entryIds.filter((id) => !inFlight.has(id));
   const blockedInFlight = input.entryIds.length - clearable.length;
   if (!clearable.length) return { cleared: 0, blockedInFlight };
@@ -1986,6 +2009,7 @@ export async function startPrintJob(input: {
   const jobId = randomUUID();
   const job: MergeJob = {
     jobId,
+    generation: 0,
     status: 'pending',
     clientIds: normalizeClientIds(entries.map((entry) => entry.clientId)),
     progress: 0,
@@ -1999,20 +2023,25 @@ export async function startPrintJob(input: {
     entryIds: entries.map((entry) => entry.id),
     updatedAt: Date.now(),
   };
-  mergeJobs.set(jobId, job);
-
   try {
-    await persistMergeJobSnapshot(job, { required: true });
+    await persistMergeJobSnapshot(job, {
+      required: true,
+      workerInput: {
+        entries,
+        mergeHeaders: input.mergeHeaders !== false,
+        requestOrigin: input.requestOrigin,
+      },
+    });
   } catch (err) {
-    mergeJobs.delete(jobId);
     throw err;
   }
-  void runMergeJob(jobId, entries, input.mergeHeaders !== false, input.requestOrigin).catch((err) => {
-    console.error(
-      `[print-queue] merge job ${jobId} failed after status persistence:`,
-      err instanceof Error ? err.message : err,
+  const queued = await enqueuePrintMergeWorkerJob(jobId);
+  if (!queued.queued) {
+    console.warn(
+      `[print-queue] durable merge ${jobId} awaits worker recovery: ` +
+      `${queued.error ?? 'pg-boss enqueue was deduplicated'}`,
     );
-  });
+  }
   return { jobId, total: entries.length };
 }
 
@@ -2020,15 +2049,10 @@ export function getMergeJobStatus(jobId: string): MergeJob | null {
   return mergeJobs.get(jobId) ?? null;
 }
 
-// Per user override unlock shipped data on 2026-06-16: PS-256 â€” the PDF-serving routes
-// (view / download / signed-url) obtain the merged batch PDF here. The in-memory mergeJobs Map
-// is the fast default; on a MISS (job evicted/never in this process, OR present but with empty
-// bytes) we fall back to the durable snapshot + side-store: if the snapshot says the merge
-// completed, we rehydrate the bytes from print_queue_merged_pdfs so the batch survives a server
-// restart instead of 404ing. Env-gated default OFF â€” when the flag is OFF this returns exactly
-// the in-memory job (current behavior), since getMergedPdfBase64 is a no-op returning null. This
-// only RE-READS the already-generated PDF artifact; it never re-generates labels, buys postage,
-// notifies a marketplace, or mutates any shipped/cancelled order or shipment.
+// Per user override unlock shipped data on 2026-07-15: PS-428 makes the durable artifact store
+// authoritative for completed PDF chunks. Rehydration only reads already-generated artifacts;
+// it never regenerates labels, buys postage, notifies a marketplace, or mutates an order or
+// shipment. The in-process map remains only a short-lived fast path while a worker is active.
 export async function getMergeJobForServe(jobId: string): Promise<MergeJob | null> {
   const inMemory = mergeJobs.get(jobId) ?? null;
   if (
@@ -2074,6 +2098,7 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
     }
     return {
       jobId: snapshot.jobId,
+      generation: snapshot.generation ?? 0,
       status: 'done',
       clientIds: [...snapshot.clientIds],
       progress: snapshot.progress,
@@ -2093,10 +2118,11 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
   }
 
   const base64 = await getMergedPdfBase64(jobId);
-  if (!base64) return inMemory; // flag OFF or no durable bytes - unchanged behavior
+  if (!base64) return inMemory; // No legacy aggregate; chunked jobs use the branch above.
 
   return {
     jobId: snapshot.jobId,
+    generation: snapshot.generation ?? 0,
     status: 'done',
     clientIds: [...snapshot.clientIds],
     progress: snapshot.progress,
@@ -2109,7 +2135,7 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
     errorMessage: snapshot.errorMessage ?? undefined,
     labelErrors: snapshot.labelErrors,
     successfulEntryIds: snapshot.successfulEntryIds ?? [],
-    entryIds: [],
+    entryIds: snapshot.entryIds ?? [],
     createdAt: Date.parse(snapshot.createdAt) || Date.now(),
     updatedAt: Date.parse(snapshot.persistedAt) || Date.now(),
   };
@@ -2203,13 +2229,59 @@ async function enrichEntriesWithCanonicalItemNames(entries: PrintQueueEntry[]): 
   }
 }
 
+export async function runPrintMergeJobFromWorker(
+  claim: PrintMergeJobClaim,
+  options: { signal: AbortSignal },
+): Promise<{ jobId: string; generation: number; chunks: number; merged: number }> {
+  const snapshot = claim.snapshot;
+  const job: MergeJob = {
+    jobId: snapshot.jobId,
+    generation: claim.generation,
+    status: snapshot.status,
+    clientIds: [...snapshot.clientIds],
+    progress: snapshot.progress,
+    total: snapshot.total,
+    current: snapshot.current,
+    message: snapshot.message,
+    fileName: snapshot.fileName ?? undefined,
+    chunks: (snapshot.chunks ?? []).map(mergeChunkFromSnapshot),
+    errorMessage: snapshot.errorMessage ?? undefined,
+    labelErrors: snapshot.labelErrors ?? [],
+    successfulEntryIds: snapshot.successfulEntryIds ?? [],
+    entryIds: snapshot.entryIds ?? claim.input.entries.map((entry) => entry.id),
+    createdAt: Date.parse(snapshot.createdAt) || Date.now(),
+    updatedAt: Date.now(),
+  };
+  mergeJobs.set(job.jobId, job);
+  try {
+    await runMergeJob(
+      job,
+      claim.input.entries,
+      claim.input.mergeHeaders,
+      claim.input.requestOrigin,
+      options.signal,
+    );
+    return {
+      jobId: job.jobId,
+      generation: job.generation,
+      chunks: job.chunks.filter((chunk) => chunk.status === 'done').length,
+      merged: job.successfulEntryIds.length,
+    };
+  } finally {
+    for (const chunk of job.chunks) delete chunk.mergedPdfBase64;
+    delete job.mergedPdfBase64;
+    mergeJobs.delete(job.jobId);
+  }
+}
+
 async function runMergeJob(
-  jobId: string,
+  job: MergeJob,
   entries: PrintQueueEntry[],
   mergeHeaders: boolean,
-  requestOrigin?: string
+  requestOrigin?: string,
+  signal?: AbortSignal,
 ) {
-  const job = mergeJobs.get(jobId)!;
+  const jobId = job.jobId;
   job.status = 'running';
   job.message = 'Initializing PDF merge...';
   try {
@@ -2231,27 +2303,30 @@ async function runMergeJob(
     const recipientsByGroup = await loadBatchRecipientsByGroup(entriesByGroup);
     const packageDimsByOrderId = await loadPackageDimsByOrderId(entriesByGroup);
     const shippingHoldsByOrderId = await loadShippingHoldsByOrderId(entriesByGroup);
-    // Per user override unlock shipped data on 2026-07-07 (batch-print pipeline): prefetch the
-    // label PDFs through a bounded pool instead of fetching inline one-at-a-time. Held entries
-    // and unresolvable URLs are excluded here — the loop below still reports them through its
-    // existing branches. Read-only label fetches — no postage, no shipped/cancelled mutation.
-    const prefetchItems: Array<{ id: string; url: string }> = [];
-    for (const entry of sorted) {
-      if (shippingHoldsByOrderId.get(Number(entry.orderId))) continue;
-      try {
-        prefetchItems.push({ id: entry.id, url: resolveLabelFetchUrl(entry.labelUrl, requestOrigin) });
-      } catch {
-        // Unresolvable URL — the loop below reports it via formatLabelUrlError.
+    // Resume from already-durable chunks after a worker restart. A chunk is
+    // published as done only after its bytes are stored, so it never needs to
+    // be fetched or assembled twice.
+    const storedChunks = await getMergedPdfChunks(jobId);
+    const completedChunks = new Map<number, MergeJobChunk>();
+    for (const chunk of job.chunks ?? []) {
+      if (chunk.status === 'done') completedChunks.set(chunk.chunkNumber, chunk);
+    }
+    for (const chunk of storedChunks) {
+      if (chunk.status !== 'done' || chunk.generation > job.generation) continue;
+      completedChunks.set(chunk.chunkNumber, mergeChunkFromMetadata(chunk));
+    }
+    const successfulEntryIds = [...new Set(
+      [...completedChunks.values()].flatMap((chunk) => chunk.successfulEntryIds),
+    )];
+    const failedEntryIds = new Set<string>();
+    for (const chunk of completedChunks.values()) {
+      const successfulIds = new Set(chunk.successfulEntryIds);
+      for (const entryId of chunk.entryIds) {
+        if (!successfulIds.has(entryId)) failedEntryIds.add(entryId);
       }
     }
-    const prefetch = startLabelPrefetch(prefetchItems, {
-      concurrency: env.PRINT_QUEUE_MERGE_FETCH_CONCURRENCY,
-      timeoutMs: 15_000,
-    });
-    const successfulEntryIds: string[] = [];
     job.successfulEntryIds = successfulEntryIds;
-    job.chunks = [];
-    const failedEntryIds = new Set<string>();
+    job.chunks = [...completedChunks.values()].sort((a, b) => a.chunkNumber - b.chunkNumber);
     const chunkPlans = planPrintQueuePdfChunks(sorted);
     const totalChunks = Math.max(1, chunkPlans.length);
     const now = new Date();
@@ -2277,6 +2352,7 @@ async function runMergeJob(
         successfulEntryIds: [],
         createdAt: Date.now(),
       };
+      job.chunks = job.chunks.filter((candidate) => candidate.chunkNumber !== plan.chunkNumber);
       job.chunks.push(chunk);
       await persistMergeJobSnapshot(job);
       return {
@@ -2291,6 +2367,7 @@ async function runMergeJob(
     const finalizeChunk = async (
       context: Awaited<ReturnType<typeof createChunkContext>>,
     ): Promise<boolean> => {
+      signal?.throwIfAborted();
       if (context.document.getPageCount() === 0 || context.chunk.successfulEntryIds.length === 0) {
         context.chunk.status = 'error';
         context.chunk.errorMessage = 'No labels merged in this PDF chunk.';
@@ -2300,6 +2377,7 @@ async function runMergeJob(
 
       context.chunk.labelCount = context.chunk.successfulEntryIds.length;
       const bytes = await context.document.save();
+      signal?.throwIfAborted();
       const base64 = Buffer.from(bytes).toString('base64');
       context.chunk.mergedPdfBase64 = base64;
       context.chunk.fileSize = bytes.byteLength;
@@ -2312,23 +2390,53 @@ async function runMergeJob(
         entryIds: context.chunk.entryIds,
         successfulEntryIds: context.chunk.successfulEntryIds,
         base64,
+        generation: job.generation,
       });
-      if (durablePrintQueuePdfEnabled() && !durableChunk) {
+      if (!durableChunk) {
         throw new PrintQueueDurableStatusError(
           'The merged PDF chunk could not be saved durably. Please retry the merge.',
         );
       }
+      // The artifact store owns completed bytes. Do not retain every completed
+      // chunk as base64 in worker memory.
+      delete context.chunk.mergedPdfBase64;
       await persistMergeJobSnapshot(job, { required: true });
       return true;
     };
 
     let processed = 0;
-    let producedChunkCount = 0;
+    let producedChunkCount = completedChunks.size;
 
     for (const plan of chunkPlans) {
+      signal?.throwIfAborted();
+      const completed = completedChunks.get(plan.chunkNumber);
+      if (
+        completed &&
+        completed.entryIds.length === plan.items.length &&
+        completed.entryIds.every((entryId, index) => entryId === plan.items[index]?.id)
+      ) {
+        processed += plan.items.length;
+        continue;
+      }
+      // Prefetch is scoped to one bounded PDF chunk. At most one chunk's label
+      // bytes can be resident in the worker, rather than all selected labels.
+      const prefetchItems: Array<{ id: string; url: string }> = [];
+      for (const entry of plan.items) {
+        if (shippingHoldsByOrderId.get(Number(entry.orderId))) continue;
+        try {
+          prefetchItems.push({ id: entry.id, url: resolveLabelFetchUrl(entry.labelUrl, requestOrigin) });
+        } catch {
+          // The per-entry branch below reports invalid URLs.
+        }
+      }
+      const prefetch = startLabelPrefetch(prefetchItems, {
+        concurrency: env.PRINT_QUEUE_MERGE_FETCH_CONCURRENCY,
+        timeoutMs: 15_000,
+      });
       const context = await createChunkContext(plan);
 
       for (const e of plan.items) {
+        signal?.throwIfAborted();
         processed += 1;
         job.current = processed - 1;
         job.progress = Math.round(((processed - 1) / sorted.length) * 90);
@@ -2408,6 +2516,7 @@ async function runMergeJob(
         // prefetched result. Every branch below maps 1:1 onto the previous inline-fetch branches —
         // same messages, same mock fallbacks, same failedEntryIds bookkeeping.
         const fetched: PrefetchResult = await prefetch(e.id);
+        signal?.throwIfAborted();
         if (!fetched.ok && fetched.kind === 'http' && (fetched.status === 404 || fetched.status === 410)) {
           if (isMockLabel) {
             addMockFallback(`Mock label not found (HTTP ${fetched.status})`);
@@ -2480,7 +2589,7 @@ async function runMergeJob(
     job.progress = 95;
     void persistMergeJobSnapshot(job);
     const doneChunks = job.chunks.filter((chunk) => chunk.status === 'done');
-    job.mergedPdfBase64 = doneChunks.length === 1 ? doneChunks[0]?.mergedPdfBase64 : undefined;
+    delete job.mergedPdfBase64;
     job.fileName =
       doneChunks.length === 1
         ? doneChunks[0]?.fileName
@@ -2493,9 +2602,6 @@ async function runMergeJob(
         ? `Done - ${success} merged in ${doneChunks.length} PDF chunk${doneChunks.length === 1 ? '' : 's'} (${failed} failed - re-create those labels and re-queue).`
         : `Done - ${success} label${success === 1 ? '' : 's'} merged in ${doneChunks.length} PDF chunk${doneChunks.length === 1 ? '' : 's'}.`;
 
-    if (job.mergedPdfBase64) {
-      await persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
-    }
     job.status = 'done';
     job.progress = 100;
     job.current = success;
@@ -2506,6 +2612,7 @@ async function runMergeJob(
     job.errorMessage = (err as Error).message;
     job.message = `Error: ${job.errorMessage}`;
     await persistMergeJobSnapshot(job, { required: true });
+    throw err;
   }
 }
 

@@ -4,7 +4,6 @@ import {
   estimateRateBrowseFanoutBudgetMs,
   resolveRateBrowseProviderExecutionPolicy,
 } from '../src/services/rate-browse-execution-policy';
-import { scheduleDetachedRateBrowseJob } from '../src/services/rate-browse-job-scheduler';
 import {
   buildRateBrowseFailureDiagnostic,
   buildRateBrowseTimingDiagnostics,
@@ -55,14 +54,6 @@ await assert.rejects(
   'provider timeout must reject the caller',
 );
 assert.equal(abortReachedProvider, true, 'provider timeout must abort the underlying work');
-
-let detachedStarted = false;
-scheduleDetachedRateBrowseJob(async () => {
-  detachedStarted = true;
-});
-assert.equal(detachedStarted, false, 'workflow POST scheduling must return before provider work starts');
-await Promise.resolve();
-assert.equal(detachedStarted, true, 'detached provider work starts on the next microtask');
 
 const partial = combineCarrierUniverses({
   ssRates: [{
@@ -144,12 +135,14 @@ assert.equal(
 );
 
 const workflowSource = readFileSync('src/services/rate-browse-workflow.ts', 'utf8');
+const workflowWorkerSource = readFileSync('src/services/rate-browse-worker.ts', 'utf8');
 const producerSource = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const jobStoreSource = readFileSync('src/services/rate-browse-job-store.ts', 'utf8');
 const ratesRouteSource = readFileSync('src/routes/rates.ts', 'utf8');
 const ratesSource = readFileSync('src/services/rates.ts', 'utf8');
 const modalSource = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
-assert.match(workflowSource, /scheduleDetachedRateBrowseJob/, 'workflow must delegate to detached scheduling');
+assert.match(workflowSource, /enqueueRateBrowseWorkerJob/, 'workflow must delegate to durable worker scheduling');
+assert.match(workflowWorkerSource, /runDurableWorkerAttempt/, 'worker must own the provider-work deadline');
 assert.match(producerSource, /rateBrowseFailure/, 'workflow result must expose actionable all-failed diagnostics');
 assert.ok(
   producerSource.indexOf('evaluateOrderCarrierEligibility') < producerSource.indexOf('runRateBrowseSingleFlight'),

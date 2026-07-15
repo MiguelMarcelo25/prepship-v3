@@ -9,16 +9,11 @@
 // routes can still serve the batch after a restart. We never re-generate, re-fetch labels, buy
 // postage, notify a marketplace, or mutate any shipped/cancelled order or shipment row.
 //
-// ENV-GATED, default OFF (DURABLE_PRINT_QUEUE_PDF). The OFF path is a TRUE no-op: persist is a
-// no-op and get returns null with NO DB call, NO schema ensure, zero cost — so merging this
-// changes nothing until DJ flips it on Render after a canary.
-//
-// Store operations remain best-effort at this boundary. The merge lifecycle awaits
-// chunk writes and refuses to publish a terminal done snapshot when the flag is ON
-// and a required chunk was not stored. Migration 0062 owns the artifact sidecars;
-// boot readiness blocks work when they are absent. Bytes are stored as bytea.
+// PS-428 makes durable chunks mandatory. The merge lifecycle awaits every chunk
+// write and refuses to publish a terminal done snapshot when required bytes were
+// not stored. Migration 0067 adds the generation fence; migration readiness blocks
+// work when the sidecars are absent. Bytes are stored as bytea.
 import { sql as pg } from '../db/client.js';
-import { env } from '../lib/env.js';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export type MergedPdfChunkMetadata = {
@@ -32,11 +27,12 @@ export type MergedPdfChunkMetadata = {
   status: string;
   errorMessage: string | null;
   createdAt: string | null;
+  generation: number;
 };
 
-/** True only when DJ has flipped the canary on Render. Default OFF. */
+/** Back-compatible capability probe. Durable chunk storage is always enabled. */
 export function durablePrintQueuePdfEnabled(): boolean {
-  return env.DURABLE_PRINT_QUEUE_PDF;
+  return true;
 }
 
 /** Migration readiness for durable print artifacts. */
@@ -47,17 +43,14 @@ export async function ensurePrintQueuePdfSchema(): Promise<void> {
 }
 
 /**
- * Persist the immutable merged PDF for a done merge job. NO-OP when the flag is OFF (no DB, no
- * schema ensure). The PDF is immutable once done, so the UPSERT just keeps the latest bytes if
- * the same jobId is somehow persisted twice. Best-effort: never throws into the merge hot path —
- * a failed write is logged at most.
+ * Persist the legacy single-file artifact for old callers. New worker execution
+ * persists generation-fenced chunks with persistMergedPdfChunk.
  */
 export async function persistMergedPdf(
   jobId: string,
   fileName: string | null,
   base64: string,
 ): Promise<void> {
-  if (!durablePrintQueuePdfEnabled()) return;
   if (!jobId || !base64) return;
   try {
     await ensurePrintQueuePdfSchema();
@@ -85,10 +78,10 @@ export async function persistMergedPdfChunk(input: {
   entryIds: string[];
   successfulEntryIds: string[];
   base64: string;
+  generation: number;
   status?: string;
   errorMessage?: string | null;
 }): Promise<MergedPdfChunkMetadata | null> {
-  if (!durablePrintQueuePdfEnabled()) return null;
   if (!input.jobId || !input.base64 || input.chunkNumber <= 0) return null;
   try {
     await ensurePrintQueuePdfSchema();
@@ -107,9 +100,10 @@ export async function persistMergedPdfChunk(input: {
         status,
         error_message,
         pdf_bytes,
+        generation,
         created_at
       )
-      VALUES (
+      SELECT
         ${input.jobId},
         ${input.chunkNumber},
         ${input.fileName ?? null},
@@ -120,8 +114,12 @@ export async function persistMergedPdfChunk(input: {
         ${input.status ?? 'done'},
         ${input.errorMessage ?? null},
         ${bytes},
+        ${input.generation},
         now()
-      )
+      FROM print_queue_merge_jobs
+      WHERE job_id = ${input.jobId}
+        AND generation = ${input.generation}
+        AND active = true
       ON CONFLICT (job_id, chunk_number) DO UPDATE
         SET file_name = ${input.fileName ?? null},
             label_count = ${Math.max(0, Math.trunc(input.labelCount))},
@@ -131,7 +129,9 @@ export async function persistMergedPdfChunk(input: {
             status = ${input.status ?? 'done'},
             error_message = ${input.errorMessage ?? null},
             pdf_bytes = ${bytes},
+            generation = ${input.generation},
             created_at = now()
+      WHERE print_queue_pdf_chunks.generation <= ${input.generation}
       RETURNING
         job_id AS "jobId",
         chunk_number AS "chunkNumber",
@@ -142,6 +142,7 @@ export async function persistMergedPdfChunk(input: {
         successful_entry_ids AS "successfulEntryIds",
         status,
         error_message AS "errorMessage",
+        generation,
         created_at::text AS "createdAt"
     `;
     return rows[0] ?? null;
@@ -156,11 +157,10 @@ export async function persistMergedPdfChunk(input: {
 
 /**
  * Read the merged PDF bytes for a job and return them as a base64 string (the in-memory
- * MergeJob.mergedPdfBase64 shape). Returns null when the flag is OFF (no DB touched) or when no
- * row exists. Best-effort: never throws into the status/serve hot path.
+ * MergeJob.mergedPdfBase64 shape). Returns null when no legacy aggregate row
+ * exists. Best-effort: never throws into the status/serve hot path.
  */
 export async function getMergedPdfBase64(jobId: string): Promise<string | null> {
-  if (!durablePrintQueuePdfEnabled()) return null;
   if (!jobId) return null;
   try {
     await ensurePrintQueuePdfSchema();
@@ -187,7 +187,6 @@ export async function getMergedPdfChunkBase64(
   jobId: string,
   chunkNumber: number,
 ): Promise<string | null> {
-  if (!durablePrintQueuePdfEnabled()) return null;
   if (!jobId || chunkNumber <= 0) return null;
   try {
     await ensurePrintQueuePdfSchema();
@@ -211,7 +210,6 @@ export async function getMergedPdfChunkBase64(
 }
 
 export async function getMergedPdfChunks(jobId: string): Promise<MergedPdfChunkMetadata[]> {
-  if (!durablePrintQueuePdfEnabled()) return [];
   if (!jobId) return [];
   try {
     await ensurePrintQueuePdfSchema();
@@ -226,6 +224,7 @@ export async function getMergedPdfChunks(jobId: string): Promise<MergedPdfChunkM
         successful_entry_ids AS "successfulEntryIds",
         status,
         error_message AS "errorMessage",
+        generation,
         created_at::text AS "createdAt"
       FROM print_queue_pdf_chunks
       WHERE job_id = ${jobId}
@@ -241,12 +240,10 @@ export async function getMergedPdfChunks(jobId: string): Promise<MergedPdfChunkM
 }
 
 /**
- * Delete merged-PDF rows older than maxAgeMs. NO-OP when the flag is OFF. Best-effort; never
- * throws. Retention is intentionally longer than the 30-min in-memory job retention so a download
- * survives a restart window (the caller passes a few hours).
+ * Delete merged-PDF rows older than maxAgeMs. Best-effort; never throws.
+ * Retention is intentionally longer than the short in-memory worker window.
  */
 export async function cleanupOldMergedPdfs(maxAgeMs: number): Promise<void> {
-  if (!durablePrintQueuePdfEnabled()) return;
   if (!(maxAgeMs > 0)) return;
   try {
     await ensurePrintQueuePdfSchema();

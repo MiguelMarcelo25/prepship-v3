@@ -172,7 +172,7 @@ check('worker wiring checks generation before importing the provider-capable ser
   const worker = read('src/services/print-queue-worker.ts');
   const admissionIndex = worker.indexOf('evaluateQueueSendWorkerAdmission({');
   const durableWriteIndex = worker.indexOf('await markQueueSendJobWorkerClaimed(');
-  const providerServiceIndex = worker.indexOf("await import('./print-queue')");
+  const providerServiceIndex = worker.lastIndexOf("await import('./print-queue')");
   assert.ok(
     admissionIndex >= 0 &&
       durableWriteIndex > admissionIndex &&

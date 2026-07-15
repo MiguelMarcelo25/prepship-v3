@@ -61,6 +61,25 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'idempotency_key',
   ],
   print_queue_orders: ['auto_retired_at'],
+  print_queue_merge_jobs: [
+    'input_payload',
+    'generation',
+    'snapshot_updated_at',
+    'claimed_at',
+    'heartbeat_at',
+    'cancel_requested_at',
+    'cancel_acknowledged_at',
+  ],
+  print_queue_pdf_chunks: ['generation'],
+  rate_browse_jobs: [
+    'request_payload',
+    'generation',
+    'snapshot_updated_at',
+    'claimed_at',
+    'heartbeat_at',
+    'cancel_requested_at',
+    'cancel_acknowledged_at',
+  ],
   returns: ['return_customer_shipping_rate'],
   shipments: ['selected_rate_cost'],
 };
@@ -99,10 +118,13 @@ const REQUIRED_INDEXES = [
   'print_queue_batch_job_items_job_idx',
   'print_queue_batch_job_items_state_idx',
   'print_queue_merge_jobs_updated_at_idx',
+  'print_queue_merge_jobs_recovery_idx',
   'print_queue_send_jobs_updated_at_idx',
   'rate_browse_job_provider_statuses_status_idx',
   'rate_browse_jobs_order_updated_idx',
   'rate_browse_jobs_request_active_idx',
+  'rate_browse_jobs_request_active_unq',
+  'rate_browse_jobs_recovery_idx',
   'shipment_bundle_members_bundle_idx',
   'shipment_bundles_client_idx',
   'shipment_tracking_status_order_idx',
@@ -233,7 +255,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0066_billing_ref_rate_identity.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0067_durable_worker_execution_fences.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

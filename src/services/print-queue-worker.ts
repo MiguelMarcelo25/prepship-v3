@@ -2,8 +2,17 @@ import PgBoss from 'pg-boss';
 import { z } from 'zod';
 import { env } from '../lib/env';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
+import { PRINT_QUEUE_WORKER_HANDLER_TIMEOUT_MS } from '../lib/print-queue-worker-deadline';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
 import type { PrintQueueListScope, QueueSendOrderInput } from './print-queue';
+import { runDurableWorkerAttempt } from './durable-worker-attempt';
+import {
+  acknowledgePrintMergeJobCancellation,
+  claimPrintMergeJobRecord,
+  heartbeatPrintMergeJobRecord,
+  listRecoverablePrintMergeJobIds,
+  requestPrintMergeJobCancellation,
+} from './print-queue/merge-job-store';
 import {
   claimRecoverableQueueSendJobRecords,
   getQueueSendJobRecord,
@@ -42,6 +51,9 @@ const PRINT_QUEUE_SEND_SINGLETON_SECONDS = jobSingletonSeconds(24 * 60 * 60 * 10
 export const PRINT_QUEUE_SEND_CHUNK_SIZE = QUEUE_SEND_EXECUTION_CHUNK_SIZE;
 export const PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS = 3;
 export const PRINT_QUEUE_SEND_RECOVERY_INTERVAL_MS = 60_000;
+export const PRINT_QUEUE_MERGE_JOB_NAME = 'prepship.print-queue.merge';
+export const PRINT_QUEUE_MERGE_HEARTBEAT_INTERVAL_MS = 15_000;
+export const PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS = 60_000;
 
 const scopeSchema = z.object({
   scopeClientIds: z.array(z.number().int().positive()).optional(),
@@ -57,6 +69,11 @@ const payloadSchema = z.object({
   requestedAt: z.string().optional(),
   chunkSequence: z.number().int().positive().default(1),
   recoveryAttempt: z.number().int().nonnegative().default(0),
+});
+
+const mergePayloadSchema = z.object({
+  jobId: z.string().uuid(),
+  recovery: z.boolean().optional().default(false),
 });
 
 export type QueueSendWorkerPayload = {
@@ -87,6 +104,7 @@ let started = false;
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 let healthTimer: ReturnType<typeof setInterval> | null = null;
 let recoveryPass: Promise<QueueSendWorkerRecoveryResult> | null = null;
+let mergeRecoveryPass: Promise<number> | null = null;
 let fatalRestartRequested = false;
 let fatalSignalState = createPrintQueueWorkerFatalSignalState();
 let warningListener: ((warning: Error) => void) | null = null;
@@ -142,15 +160,25 @@ function createPrintQueueBoss(
   return new PgBoss(options);
 }
 
-async function ensurePrintQueueSendQueue(targetBoss: PgBoss): Promise<void> {
-  await targetBoss.createQueue(PRINT_QUEUE_SEND_JOB_NAME, {
-    name: PRINT_QUEUE_SEND_JOB_NAME,
-    retryLimit: 1,
-    retryDelay: 30,
-    retryBackoff: true,
-    expireInSeconds: 30 * 60,
-    retentionDays: 7,
-  });
+async function ensurePrintQueueQueues(targetBoss: PgBoss): Promise<void> {
+  await Promise.all([
+    targetBoss.createQueue(PRINT_QUEUE_SEND_JOB_NAME, {
+      name: PRINT_QUEUE_SEND_JOB_NAME,
+      retryLimit: 1,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInSeconds: 30 * 60,
+      retentionDays: 7,
+    }),
+    targetBoss.createQueue(PRINT_QUEUE_MERGE_JOB_NAME, {
+      name: PRINT_QUEUE_MERGE_JOB_NAME,
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInSeconds: 30 * 60,
+      retentionDays: 7,
+    }),
+  ]);
 }
 
 async function getPrintQueueEnqueueBoss(): Promise<PgBoss> {
@@ -164,7 +192,7 @@ async function getPrintQueueEnqueueBoss(): Promise<PgBoss> {
       });
       try {
         await targetBoss.start();
-        await ensurePrintQueueSendQueue(targetBoss);
+        await ensurePrintQueueQueues(targetBoss);
         return targetBoss;
       } catch (error) {
         await targetBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
@@ -258,6 +286,50 @@ export async function enqueueQueueSendWorkerJob(
       queued: false,
       pgBossJobId: null,
       error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function sendPrintMergeJob(
+  targetBoss: PgBoss,
+  jobId: string,
+  recovery: boolean,
+): Promise<string | null> {
+  const singletonKey = recovery
+    ? `${jobId}:recovery:${Math.floor(Date.now() / PRINT_QUEUE_SEND_RECOVERY_INTERVAL_MS)}`
+    : jobId;
+  const pgBossJobId = await targetBoss.send(
+    PRINT_QUEUE_MERGE_JOB_NAME,
+    { jobId, recovery },
+    {
+      singletonKey,
+      singletonSeconds: jobSingletonSeconds(PRINT_QUEUE_SEND_RECOVERY_INTERVAL_MS),
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInMinutes: 30,
+      retentionDays: 7,
+    },
+  );
+  return pgBossJobId ? String(pgBossJobId) : null;
+}
+
+export async function enqueuePrintMergeWorkerJob(
+  jobId: string,
+  options: { recovery?: boolean } = {},
+): Promise<QueueSendWorkerEnqueueResult> {
+  try {
+    const pgBossJobId = await sendPrintMergeJob(
+      await getPrintQueueEnqueueBoss(),
+      jobId,
+      options.recovery === true,
+    );
+    return { queued: Boolean(pgBossJobId), pgBossJobId, error: null };
+  } catch (error) {
+    return {
+      queued: false,
+      pgBossJobId: null,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -394,15 +466,36 @@ async function runRecoveryPass(targetBoss: PgBoss): Promise<QueueSendWorkerRecov
   return recoveryPass;
 }
 
+async function recoverStalePrintMergeJobs(targetBoss: PgBoss): Promise<number> {
+  if (mergeRecoveryPass) return mergeRecoveryPass;
+  mergeRecoveryPass = (async () => {
+    const jobIds = await listRecoverablePrintMergeJobIds({
+      staleAfterMs: PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
+      limit: 25,
+    });
+    let requeued = 0;
+    for (const jobId of jobIds) {
+      if (await sendPrintMergeJob(targetBoss, jobId, true)) requeued += 1;
+    }
+    return requeued;
+  })().finally(() => {
+    mergeRecoveryPass = null;
+  });
+  return mergeRecoveryPass;
+}
+
 function startPeriodicRecovery(targetBoss: PgBoss): void {
   if (recoveryTimer) clearInterval(recoveryTimer);
   recoveryTimer = setInterval(() => {
-    void runRecoveryPass(targetBoss)
-      .then((recovery) => {
+    void Promise.all([runRecoveryPass(targetBoss), recoverStalePrintMergeJobs(targetBoss)])
+      .then(([recovery, mergeRequeued]) => {
         if (recovery.scanned > 0 || recovery.interrupted > 0) {
           console.log(
             `[print-queue-worker] recovery scanned=${recovery.scanned} requeued=${recovery.requeued} interrupted=${recovery.interrupted}`,
           );
+        }
+        if (mergeRequeued > 0) {
+          console.log(`[print-queue-worker] merge recovery requeued=${mergeRequeued}`);
         }
       })
       .catch((err) => {
@@ -525,13 +618,61 @@ export async function startPrintQueueWorker(): Promise<void> {
 
   try {
     await boss.start();
-    await ensurePrintQueueSendQueue(boss);
+    await ensurePrintQueueQueues(boss);
     const recovery = await runRecoveryPass(boss);
+    const mergeRecovery = await recoverStalePrintMergeJobs(boss);
     if (recovery.scanned > 0) {
       console.log(
         `[print-queue-worker] recovery scanned=${recovery.scanned} requeued=${recovery.requeued} interrupted=${recovery.interrupted}`,
       );
     }
+    if (mergeRecovery > 0) {
+      console.log(`[print-queue-worker] merge recovery requeued=${mergeRecovery}`);
+    }
+    await boss.work(
+      PRINT_QUEUE_MERGE_JOB_NAME,
+      { batchSize: 1, pollingIntervalSeconds: 1 },
+      async ([job]) => {
+        const payload = mergePayloadSchema.parse(job?.data);
+        const workerStatusStartedAt = Date.now();
+        await recordWorkerJobStart(PRINT_QUEUE_MERGE_JOB_NAME);
+        const claim = await claimPrintMergeJobRecord(payload.jobId, {
+          staleAfterMs: PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
+        });
+        if (!claim) {
+          const result = { skipped: true, reason: 'active_generation_exists_or_job_terminal' };
+          await recordWorkerJobSuccess(PRINT_QUEUE_MERGE_JOB_NAME, workerStatusStartedAt, result);
+          return result;
+        }
+        try {
+          // Per user override unlock shipped data on 2026-07-15: PS-428 executes only
+          // an already-requested merge. Generation fences prevent an expired worker
+          // from publishing over its successor; no label purchase or order mutation occurs.
+          const { runPrintMergeJobFromWorker } = await import('./print-queue');
+          const attempt = await runDurableWorkerAttempt({
+            label: `${PRINT_QUEUE_MERGE_JOB_NAME}:${payload.jobId}:${claim.generation}`,
+            timeoutMs: PRINT_QUEUE_WORKER_HANDLER_TIMEOUT_MS,
+            heartbeatIntervalMs: PRINT_QUEUE_MERGE_HEARTBEAT_INTERVAL_MS,
+            hooks: {
+              heartbeat: () => heartbeatPrintMergeJobRecord(payload.jobId, claim.generation),
+              requestCancellation: () => requestPrintMergeJobCancellation(payload.jobId, claim.generation),
+              acknowledgeCancellation: () => acknowledgePrintMergeJobCancellation(payload.jobId, claim.generation),
+            },
+            execute: (signal) => runPrintMergeJobFromWorker(claim, { signal }),
+          });
+          const result = { ...attempt.value, cancellationAcknowledged: attempt.timedOut };
+          await recordWorkerJobSuccess(PRINT_QUEUE_MERGE_JOB_NAME, workerStatusStartedAt, result);
+          return result;
+        } catch (error) {
+          await recordWorkerJobFailure(
+            PRINT_QUEUE_MERGE_JOB_NAME,
+            workerStatusStartedAt,
+            error,
+          ).catch(() => undefined);
+          throw error;
+        }
+      },
+    );
     await boss.work(
       PRINT_QUEUE_SEND_JOB_NAME,
       { batchSize: 1, pollingIntervalSeconds: 1 },
@@ -584,16 +725,30 @@ export async function startPrintQueueWorker(): Promise<void> {
             return result;
           }
           const { runQueueSendJobFromWorker } = await import('./print-queue');
-          const result = await withDeadline(
-            () => runQueueSendJobFromWorker(payload, { signal: abortController.signal }),
-            env.PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS,
-            `${PRINT_QUEUE_SEND_JOB_NAME}:${payload.jobId}`,
-            {
-              // Audit PQ-1: stop admitting new orders. In-flight label work is
-              // allowed to settle through its idempotent purchase boundary.
-              onTimeout: () => abortController.abort(),
-            },
-          );
+          const handlerPromise = runQueueSendJobFromWorker(payload, {
+            signal: abortController.signal,
+          });
+          let result: Awaited<typeof handlerPromise>;
+          try {
+            result = await withDeadline(
+              () => handlerPromise,
+              env.PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS,
+              `${PRINT_QUEUE_SEND_JOB_NAME}:${payload.jobId}`,
+              {
+                // Audit PQ-1: stop admitting new orders. In-flight label work is
+                // allowed to settle through its idempotent purchase boundary.
+                onTimeout: () => abortController.abort(),
+              },
+            );
+          } catch (error) {
+            if (error instanceof DeadlineExceededError) {
+              // Per user override unlock shipped data on 2026-07-15: PS-428
+              // keeps the pg-boss attempt claimed until every admitted label
+              // operation settles. Recovery cannot overlap unknown postage work.
+              await handlerPromise.catch(() => undefined);
+            }
+            throw error;
+          }
           await enqueueNextQueueSendChunk(boss!, payload);
           console.log(
             `[print-queue-worker] completed ${payload.jobId} chunk=${payload.chunkSequence} ` +
