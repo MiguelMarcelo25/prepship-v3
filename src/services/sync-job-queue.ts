@@ -63,6 +63,7 @@ import {
 import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
 import { parseDurableRateBackfillJobPayload } from './rate-backfill-job-types';
 import { runDurableRateBackfillJob } from './rates-backfill';
+import { runLocalTariffCalibrationTick } from './local-tariff-calibration';
 
 // PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
 // endpoint). Local aliases keep the rest of this file unchanged.
@@ -91,6 +92,7 @@ const JOBS = {
   rateMaintenance: 'prepship.maintenance.rate-cache',
   queueMaintenance: 'prepship.maintenance.job-queue',
   carrierAccountSnapshots: 'prepship.maintenance.carrier-account-snapshots',
+  localTariffCalibration: 'prepship.rates.local-tariff-calibration',
 } as const;
 
 type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -146,6 +148,7 @@ const SCHEDULE_CRON = {
   everyFifteenMinutes: '*/15 * * * *',
   everyThirtyMinutes: '*/30 * * * *',
   hourly: '0 * * * *',
+  dailyAtEightUtc: '0 8 * * *',
   dailyAtNineUtc: '0 9 * * *',
 } as const;
 
@@ -734,6 +737,12 @@ async function reconcileDurableSchedules(): Promise<void> {
     env.ENABLE_WALMART_FEES_SCHEDULER,
   );
   await reconcileDurableSchedule(
+    JOBS.localTariffCalibration,
+    SCHEDULE_CRON.dailyAtEightUtc,
+    24 * 60 * 60_000,
+    env.ENABLE_LOCAL_TARIFF_CALIBRATION_SCHEDULER && Boolean(env.SHIPSTATION_API_KEY_V2),
+  );
+  await reconcileDurableSchedule(
     JOBS.orders,
     SCHEDULE_CRON.everyThreeMinutes,
     ORDER_SYNC_INTERVAL_MS,
@@ -1021,6 +1030,9 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(
     JOBS.carrierAccountSnapshots,
     runShipStationCarrierAccountSnapshotTick,
+  );
+  await registerWorker(JOBS.localTariffCalibration, (_jobData, { signal }) =>
+    runLocalTariffCalibrationTick(signal),
   );
 
   heartbeatTimer = setInterval(() => {

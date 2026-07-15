@@ -153,6 +153,13 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => value === 'true' || value === '1'),
+  // Audit 5.2: optional advisory-only local tariff calibration. The durable
+  // worker schedule is OFF by default because enabling it performs bounded,
+  // read-only live quote calls. It never participates in official Best Rate.
+  ENABLE_LOCAL_TARIFF_CALIBRATION_SCHEDULER: booleanFlag(false),
+  LOCAL_TARIFF_CALIBRATION_DESTINATIONS: z.string().default('94105,80202,60601,10001'),
+  LOCAL_TARIFF_CALIBRATION_WEIGHTS_OZ: z.string().default('16,32,80'),
+  LOCAL_TARIFF_CALIBRATION_MAX_PROBES: z.coerce.number().int().min(1).max(40).default(20),
   // PS-271 (Layer 2): 60s per-carrier union cache for direct-carrier rates (the additive
   // backstop for Shipp's non-deterministic thin response — see #1502/HUGRAB). When ON, live
   // direct-carrier rates are unioned with fresh-cached rows (live-wins-per-carrier) so a thin

@@ -49,6 +49,11 @@ const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
   // the same second as fulfillment, so it shares the DB-heavy lane too.
   ['prepship.maintenance.carrier-account-snapshots', 'shipstation-sync'],
   ['carrier account snapshots', 'shipstation-sync'],
+
+  // Audit 5.2: live quote probes consume the shared provider budget and write
+  // one derived cache row, so they stay serialized with the DB-heavy lane.
+  ['prepship.rates.local-tariff-calibration', 'shipstation-sync'],
+  ['local tariff calibration', 'shipstation-sync'],
 ]);
 
 export function syncJobLaneFor(name: string): SyncJobLane {

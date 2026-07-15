@@ -40,6 +40,7 @@ const REQUIRED_GUARDS = [
   'test:audit-print-queue-small-fixes',
   'test:audit-backfill-diagnostics',
   'test:audit-rate-on-ingest',
+  'test:audit-local-tariff-calibration',
   'test:audit-multi-instance-readiness',
   'test:audit-orders-raw-payload-policy',
   'test:audit-billing-close-workflow-ux',

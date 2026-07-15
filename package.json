@@ -329,6 +329,7 @@
     "test:audit-print-queue-small-fixes": "tsx scripts/audit-print-queue-small-fixes-guard.ts",
     "test:audit-backfill-diagnostics": "tsx scripts/audit-backfill-diagnostics-guard.ts",
     "test:audit-rate-on-ingest": "tsx scripts/audit-rate-on-ingest-guard.ts",
+    "test:audit-local-tariff-calibration": "tsx scripts/audit-local-tariff-calibration-guard.ts",
     "test:audit-multi-instance-readiness": "tsx scripts/audit-multi-instance-readiness-guard.ts",
     "test:audit-orders-raw-payload-policy": "tsx scripts/audit-orders-raw-payload-policy-guard.ts",
     "test:audit-billing-close-workflow-ux": "tsx scripts/audit-billing-close-workflow-ux-guard.ts",
