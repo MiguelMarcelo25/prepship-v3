@@ -1,0 +1,319 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-433",
+  "title": "Close the frontend source-of-truth sweep with committed scope and behavioral rate/billing proof",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "55a3440f8baa68f339ef81f20c4510e5aee10b1b"
+  },
+  "riskDomains": [
+    "rate_label",
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 95,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "All 42 reverified findings are committed with severity, rule, unsafe owner, canonical owner, imperfect-data entry point, disposition, caller, and executable proof.",
+      "evidenceIds": [
+        "confirmed-scope-map",
+        "focused-ps433-suite"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Rate selection, eligibility, selected-rate proof, and client rate-source identity remain backend-owned; cross-order, cross-account, and stale-fact attempts fail before provider activity.",
+      "evidenceIds": [
+        "rate-boundary-integration",
+        "rate-boundary-adversarial",
+        "rate-source-of-truth-pack"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Invoice header totals and cancelled/return treatment remain owned by the backend billing read model and are proven for cardinality, idempotency, and repeat runs on PostgreSQL-compatible fixtures.",
+      "evidenceIds": [
+        "billing-pglite-integration",
+        "billing-pglite-adversarial",
+        "billing-formula-pack"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "The three missing owners called out during the sweep—client rate-source policy, billing invoice totals, and reporting-window presets—are canonical backend services consumed by thin routes or UI.",
+      "evidenceIds": [
+        "confirmed-scope-map",
+        "focused-ps433-suite"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "PS-433 is mandatory in the source-of-truth guard pack, and the full pack, strict typecheck, and production web build pass at the reviewed implementation SHA.",
+      "evidenceIds": [
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "Verification is offline and non-mutating: no live provider request, label purchase, postage charge, marketplace notification, production database write, or shipped/cancelled data mutation occurred.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "rate-boundary-adversarial",
+        "billing-pglite-integration"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/rates.ts#pickBestRate",
+      "src/services/shipping-workflow/apply-best-rate.ts#finalizeAppliedBestRateFromSnapshot",
+      "src/services/billing-invoice-totals.ts#billingInvoiceHeaderTotals",
+      "src/services/client-rate-source-policy.ts#evaluateClientRateSourcePolicy",
+      "src/services/reporting-window-presets.ts"
+    ],
+    "oldOwners": [
+      {
+        "path": "web/src/components/RateBrowserModal.tsx local ranking/eligibility decisions",
+        "disposition": "delegated",
+        "delegatesTo": "backend-issued rate DTO, selected-rate proof, and eligibility facts"
+      },
+      {
+        "path": "web/src/components/Views/BillingView.tsx local invoice/header totals",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/billing-invoice-totals.ts#billingInvoiceHeaderTotals"
+      },
+      {
+        "path": "web/src/components/Views/ClientManagementView.tsx local client rate-source validity",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/client-rate-source-policy.ts#evaluateClientRateSourcePolicy"
+      },
+      {
+        "path": "web/src/components/Views/AnalysisView.tsx and BillingView.tsx local reporting-window presets",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/reporting-window-presets.ts"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "web/src/lib/v2-apiClient.ts",
+        "action": "modified",
+        "delegatesTo": "backend API DTOs and commands without ranking, minting proof, or recomputing authoritative totals"
+      },
+      {
+        "path": "web/src/components/Views/OrdersView.tsx",
+        "action": "modified",
+        "delegatesTo": "backend row workflow, rate proof, and display facts"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The frontend remains a display/action consumer. Rate, label, billing, client rate-source, reporting-window, and shipped/cancelled safety truth remains in named backend owners; no wrapper selects or persists alternate truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "confirmed-scope-map",
+      "classification": "static",
+      "command": "npm run test:ps-433-frontend-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-433/sot-confirmed.json",
+        "scripts/ps-433-frontend-source-of-truth-sweep-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The committed replacement for the missing transient artifact contains exactly 42 unique findings, split 15 High and 27 Medium, with every required placement and proof field populated."
+    },
+    {
+      "id": "rate-boundary-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-rate-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "src/services/shipping-workflow/apply-best-rate.ts",
+        "src/services/shipping-workflow/rate-fingerprint.ts",
+        "src/services/client-rate-source-policy.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Real backend snapshot, fingerprint, purchase-account, and client rate-source owners integrate with an injected provider boundary; valid backend proof reaches it exactly once."
+    },
+    {
+      "id": "rate-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-rate-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Cross-order selected-rate keys, cross-account purchase identity, mismatched request facts, and cross-client rate-source identity are rejected before the provider spy is touched."
+    },
+    {
+      "id": "billing-pglite-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts",
+        "src/services/billing-invoice-totals.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "The real invoice-totals owner runs against a current-column PostgreSQL-compatible fixture and returns stable totals without changing line cardinality."
+    },
+    {
+      "id": "billing-pglite-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Cancelled non-return charges, retained return charges, out-of-window rows, another client's rows, duplicate order lines, and repeat reads cannot corrupt invoice cardinality or totals."
+    },
+    {
+      "id": "focused-ps433-suite",
+      "classification": "static",
+      "command": "npm run test:ps-433-frontend-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-frontend-source-of-truth-sweep-guard.ts",
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "scripts/ps-433-billing-source-of-truth-integration.ts"
+      ],
+      "assertions": [],
+      "proves": "The static ownership sweep and both behavioral boundary suites execute as one focused PS-433 command."
+    },
+    {
+      "id": "rate-source-of-truth-pack",
+      "classification": "static",
+      "command": "npm run test:rate-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-313-rate-source-of-truth-guard.ts",
+        "src/services/rates.ts"
+      ],
+      "assertions": [],
+      "proves": "Best-rate ranking, proof issuance, and client consumption remain bound to the canonical backend rate authority."
+    },
+    {
+      "id": "billing-formula-pack",
+      "classification": "static",
+      "command": "npm run test:billing-formula",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/billing-formula-guard.ts",
+        "src/services/billing-invoice-totals.ts"
+      ],
+      "assertions": [],
+      "proves": "Billing formula callers continue to delegate authoritative invoice totals to the backend owner."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The complete mandatory source-of-truth pack passes with PS-433 wired into both the runner and its guard-of-guard."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully with 2,989 modules transformed."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= 55a3440f8baa68f339ef81f20c4510e5aee10b1b",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-433.md",
+        "docs/ps-tickets/PS-433/sot-confirmed.json",
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "scripts/ps-433-billing-source-of-truth-integration.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed evidence commit contains only PS-433 documentation, offline tests, and guard/package wiring. It touches no product runtime, provider adapter, migration, or protected shipped/cancelled surface."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "No migrations were added or modified; not applicable.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "Revert the packet-only commit, then revert 55a3440f8baa68f339ef81f20c4510e5aee10b1b; no schema or production-data rollback is required."
+  },
+  "rollback": {
+    "strategy": "Revert the packet-only commit and PS-433 evidence commit. This removes only the committed scope matrix, offline proofs, documentation, and guard wiring; the already-deployed product implementation remains unchanged.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "This closure pass adds offline review evidence only. It intentionally does not invoke live rate providers, purchase labels or postage, notify marketplaces, or mutate production billing or shipped/cancelled records; deployment health is verified separately after push.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
