@@ -20,6 +20,7 @@ import { requireInternalPermission } from '../middleware/auth';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { orderLifecycleEffectiveStatusAliasSql } from '../services/order-lifecycle-status';
 import { manualOrdersOrderPredicateSql } from '../lib/manual-orders-visibility';
+import { validateClientRateSourceWrite } from '../services/client-rate-source-policy';
 
 const app = new Hono();
 
@@ -133,6 +134,13 @@ app.get('/:id{[0-9]+}', async (c) => {
 
 app.post('/', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
   const v = c.req.valid('json');
+  const rateSourcePolicy = await validateClientRateSourceWrite({
+    clientId: null,
+    rateSourceClientId: v.rateSourceClientId ?? null,
+  });
+  if (!rateSourcePolicy.ok) {
+    return c.json({ error: rateSourcePolicy.error, code: rateSourcePolicy.code }, 400);
+  }
   const [row] = await db.insert(clients).values(v).returning();
   if (!row) return c.json({ error: 'Client create failed' }, 500);
   return c.json(publicClient(row), 201);
@@ -146,6 +154,15 @@ app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidato
   if (!existing) return c.json({ error: 'Client not found' }, 404);
   if (!isClientVisibleToScope(publicClient(existing), scopeFromContext(c))) {
     return c.json({ error: 'Client not found' }, 404);
+  }
+  if (v.rateSourceClientId !== undefined) {
+    const rateSourcePolicy = await validateClientRateSourceWrite({
+      clientId: id,
+      rateSourceClientId: v.rateSourceClientId,
+    });
+    if (!rateSourcePolicy.ok) {
+      return c.json({ error: rateSourcePolicy.error, code: rateSourcePolicy.code }, 400);
+    }
   }
   const [row] = await db
     .update(clients)

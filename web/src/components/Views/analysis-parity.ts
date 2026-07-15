@@ -282,46 +282,10 @@ export function computeUnitsTrend(series: number[] | null | undefined): UnitsTre
   return { direction, strength, firstAvg, lastAvg, total }
 }
 
-export function formatAnalysisDate(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-export function getAnalysisPresetRange(days: number, now = new Date()) {
-  const today = new Date(now)
-  const to = formatAnalysisDate(today)
-  if (days === 0) {
-    return { from: '', to }
-  }
-
-  // 2026-05-14: was `setDate(getDate() - days)` which produced a 31-day
-  // window for "30d" (Apr 14 .. May 14 when today = May 14). The
-  // Dashboard's RangeToggle has always used `(days - 1)` → 30 days
-  // inclusive of today (Apr 15 .. May 14), and SQL filters in
-  // /analysis/sku-breakdown apply `o.order_date >= from AND <= to`,
-  // so the extra day on the Analysis side leaked one extra calendar
-  // day into the aggregate. Operator-reported gap: Top SKUs panel on
-  // Dashboard showed 70 units for B0OOOBYO3K, click-through to
-  // Analysis with the same "30d" preset showed 72 — the missing 2
-  // were sales on Apr 14 that only Analysis's wider window captured.
-  // Aligning to the Dashboard convention (and the universal analytics
-  // "last N days" meaning of "N days ending today") makes both screens
-  // agree and the cross-screen click-through stay consistent. The
-  // Dashboard now imports this same helper instead of recomputing —
-  // single source of truth so the 7/90/180/1yr presets can't drift
-  // again the next time one side adds a preset the other doesn't have.
-  const fromDate = new Date(today)
-  fromDate.setDate(fromDate.getDate() - (days - 1))
-  return { from: formatAnalysisDate(fromDate), to }
-}
-
-export function getInitialAnalysisFilters(storage?: Pick<Storage, 'getItem'> | null, now = new Date()): AnalysisFiltersState {
-  const fallback = {
-    ...getAnalysisPresetRange(30, now),
-    presetDays: 30,
-  }
+export function getInitialAnalysisFilters(storage?: Pick<Storage, 'getItem'> | null): AnalysisFiltersState {
+  // Presets are resolved by /analysis/preset-window. Empty dates prevent
+  // analytics reads until the backend returns its California calendar window.
+  const fallback = { from: '', to: '', presetDays: 30 }
 
   if (!storage) return fallback
 
@@ -330,7 +294,8 @@ export function getInitialAnalysisFilters(storage?: Pick<Storage, 'getItem'> | n
     const days = Number.parseInt(savedPreset, 10)
     if (!Number.isNaN(days)) {
       return {
-        ...getAnalysisPresetRange(days, now),
+        from: '',
+        to: '',
         presetDays: days,
       }
     }

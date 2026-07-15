@@ -76,8 +76,8 @@ check('auto-apply consumes the backend winner and never falls back to a local ch
   /const canonicalBest = findCanonicalBestRate\(canonicalBackendBest, available\)/.test(modal) &&
     /const decision = decideBestRateEmission\(canonicalBest\)/.test(modal) &&
     !/const best =\s*canonicalBest \?\?\s*\[\.\.\.available\]\.sort\(\(a, b\) => rateDisplayTotal\(a, markups\) - rateDisplayTotal\(b, markups\)\)\[0\]/.test(modal));
-check('the eligible set still applies the service-class filter + blocked rules before selection',
-  /const available = filterBySvcClass\(ratesToRank\)\.filter\(\(r\) => !isBlockedRate\(r, order, currentRateShippingOptions\)\)/.test(modal));
+check('the candidate set applies display intent plus backend availability facts before selection',
+  /const available = filterBySvcClass\(ratesToRank\)\.filter\(\(r\) => !isBackendUnavailableRate\(r, order, currentRateShippingOptions\)\)/.test(modal));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-135 rate-browser re-rank guard (${failures} failing)`);

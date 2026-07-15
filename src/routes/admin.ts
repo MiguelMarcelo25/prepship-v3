@@ -19,6 +19,7 @@ import {
 import { backfillMissingOrderItems, getOrderItemsBackfillStatus, syncOrderItemOrderFields } from '../services/order-items';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
+import { validateClientRateSourceWrite } from '../services/client-rate-source-policy';
 import { printQueue } from '../db/schema/print-queue';
 import { setClientHouseAccountEnabled, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
@@ -702,6 +703,14 @@ app.post(
       .from(clients)
       .where(sql`lower(${clients.name}) = lower(${body.name})`)
       .limit(1);
+
+    const rateSourcePolicy = await validateClientRateSourceWrite({
+      clientId: existing?.id ?? null,
+      rateSourceClientId: body.rateSourceClientId ?? null,
+    });
+    if (!rateSourcePolicy.ok) {
+      return c.json({ error: rateSourcePolicy.error, code: rateSourcePolicy.code }, 400);
+    }
 
     if (existing) {
       const [updated] = await db

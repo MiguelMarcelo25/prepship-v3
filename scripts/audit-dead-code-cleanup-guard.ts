@@ -27,7 +27,7 @@ const clientCheaper = {
   serviceName: 'USPS Ground Advantage',
 } as any;
 
-const rows = buildRateRows([backendBest, clientCheaper], [], backendBest);
+const rows = buildRateRows([backendBest, clientCheaper], backendBest);
 assert.deepEqual(
   {
     baseCost: rows[0]?.baseCost,
@@ -48,7 +48,6 @@ const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 const ratesView = readFileSync('web/src/components/Views/RatesView.tsx', 'utf8');
 const ratesParity = readFileSync('web/src/components/Views/rates-parity.ts', 'utf8');
 const markupsContext = readFileSync('web/src/contexts/MarkupsContext.tsx', 'utf8');
-const markupsUtils = readFileSync('web/src/utils/markups.ts', 'utf8');
 const hooksIndex = readFileSync('web/src/hooks/index.ts', 'utf8');
 const ps178 = readFileSync('scripts/ps-178-fe-authority-ratchet-guard.ts', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
@@ -84,11 +83,7 @@ assert.doesNotMatch(
   /\b(?:applyMarkup|clearRateCache)\b/,
   'markup context must expose settings state/actions only',
 );
-assert.doesNotMatch(
-  markupsUtils,
-  /\b(?:getCarrierMarkup|applyCarrierMarkup|isOrionRate|priceDisplay|formatOrionRateDisplay)\b/,
-  'legacy frontend markup engine exports must stay deleted',
-);
+assert.equal(existsSync('web/src/utils/markups.ts'), false, 'frontend markup/eligibility authority must stay deleted');
 assert.match(ps178, /const allowlist: string\[\] = \[\]/, 'FE money-authority allowlist must be empty');
 assert.ok(packageJson.includes('"test:audit-dead-code-cleanup"'), 'package must expose the 4.1 guard');
 assert.ok(guardPack.includes("'test:audit-dead-code-cleanup'"), 'SOT pack must require the 4.1 guard');

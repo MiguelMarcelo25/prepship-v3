@@ -525,6 +525,9 @@ export async function cachedSafe<T>(
       return value;
     })
     .catch((err) => {
+      // PS-433: fail-closed reads (billing/money and explicit refreshes) must
+      // reject before the generic stale-cache policy can return old truth.
+      if (options.throwOnError) throw err;
       const current = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
       if (current?.hasValue && current.staleUntil > Date.now()) {
         if (options.warn !== false) {
@@ -543,7 +546,6 @@ export async function cachedSafe<T>(
           err instanceof Error ? err.message : err
         );
       }
-      if (options.throwOnError) throw err;
       const failedAt = Date.now();
       cachedReads.set(cacheKey, {
         hasValue: true,
@@ -775,6 +777,9 @@ export function translateRateToLegacyDisplayShape(r: unknown): Record<string, un
       shippingProviderId: toProviderAccountId(obj.carrier_id),
       sourceClientId: obj.source_client_id ?? obj.sourceClientId ?? null,
       sourceClientName: obj.source_client_name ?? obj.sourceClientName ?? null,
+      rateSourceKind: obj.rateSourceKind ?? null,
+      rateSourceLabel: obj.rateSourceLabel ?? null,
+      rateSourceDetail: obj.rateSourceDetail ?? null,
       amount: obj.amount ?? null,
       shipmentCost: obj.shipmentCost ?? null,
       otherCost: obj.otherCost ?? null,

@@ -1,7 +1,5 @@
-// Import path adjusted for the new location: the parent
-// (Views/DashboardView.tsx) imports getAnalysisPresetRange from
-// './analysis-parity'; from components/ it resolves to './Views/analysis-parity'.
-import { getAnalysisPresetRange } from './Views/analysis-parity'
+import { useState } from 'react'
+import { api } from '../lib/api'
 
 // 2026-05-13: 7/30/90/180-day quick range selector for the Units
 // Sold Trend panel. Clicking a preset replaces the dashboard-wide
@@ -21,6 +19,7 @@ export function RangeToggle({
   value: { from: string; to: string }
   onChange: (next: { from: string; to: string }) => void
 }) {
+  const [loadingDays, setLoadingDays] = useState<number | null>(null)
   const presets: Array<{ days: number; label: string }> = [
     { days: 7,   label: '7d' },
     { days: 30,  label: '30d' },
@@ -38,18 +37,16 @@ export function RangeToggle({
     return Math.round((to - from) / 86_400_000) + 1
   })()
 
-  const setRange = (days: number) => {
-    // 2026-05-14: was reimplementing the same "today minus (days - 1),
-    // formatted YYYY-MM-DD" math that lives in getAnalysisPresetRange.
-    // The two helpers drifted — Analysis used `(days)` instead of
-    // `(days - 1)`, producing a 31-day window for "30d" while the
-    // Dashboard produced 30. Operators saw the same SKU + same preset
-    // showing different unit totals on the two screens (70 vs 72 for
-    // B0OOOBYO3K). Now both screens call the same helper, so
-    // 7d/30d/90d/180d are guaranteed to mean the same window
-    // everywhere — and any future preset addition (e.g. 1yr) inherits
-    // the convention automatically.
-    onChange(getAnalysisPresetRange(days))
+  const setRange = async (days: number) => {
+    setLoadingDays(days)
+    try {
+      const range = await api.get<{ from: string; to: string }>(`/analysis/preset-window?days=${days}`)
+      onChange(range)
+    } catch (error) {
+      console.warn('[RangeToggle] backend preset resolution failed:', error)
+    } finally {
+      setLoadingDays(null)
+    }
   }
 
   return (
@@ -64,7 +61,8 @@ export function RangeToggle({
           <button
             key={preset.days}
             type="button"
-            onClick={() => setRange(preset.days)}
+            onClick={() => { void setRange(preset.days) }}
+            disabled={loadingDays != null}
             title={`Last ${preset.days} days`}
             aria-pressed={active}
             className={`inline-flex h-6 items-center justify-center rounded px-2 text-[11px] font-extrabold tabular-nums transition ${

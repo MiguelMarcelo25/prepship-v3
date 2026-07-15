@@ -27,7 +27,6 @@ import {
   buildRateSelectionToast,
   buildRatesMetaLabel,
   buildRatesSummary,
-  getAvailableRates,
   getRatesValidationState,
   type RateRowView,
   type RatesEmptyState,
@@ -144,7 +143,7 @@ export default function RatesView() {
   }, [])
 
   const rows = resultState.kind === 'table'
-    ? buildRateRows(resultState.rates, shippingAccounts, resultState.bestRate)
+    ? buildRateRows(resultState.rates, resultState.bestRate)
     : []
   const rateColumns = useMemo<TableColumn<RateRowView>[]>(() => [
     {
@@ -277,15 +276,9 @@ export default function RatesView() {
         return
       }
 
-      const availableRates = getAvailableRates(allRates)
-      if (availableRates.length === 0) {
-        setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No available rates returned.' }, directCarrierErrors })
-        return
-      }
-
       setResultState({
         kind: 'table',
-        rates: availableRates,
+        rates: allRates,
         bestRate: response?.bestRate ?? null,
         directCarrierErrors,
       })

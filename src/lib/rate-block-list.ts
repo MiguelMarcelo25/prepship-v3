@@ -1,23 +1,14 @@
 /**
- * PS-135(b): canonical Policy-B rate block list — USPS-economy / flat-rate / box package blocking
- * (+ the FE-applied blocked-carrier set). SINGLE SOURCE OF TRUTH for the constants that were
- * previously DUPLICATED verbatim in src/services/rates.ts and web/src/utils/markups.ts. Both now
- * import from here, so the two can no longer drift into an FE↔backend mismatch (the bug class the
- * PS-135(b) drift guard was created to catch — this module makes that drift structurally impossible).
+ * PS-135(b)/PS-433: canonical backend Policy-B rate block list.
  *
- * This is Policy B. Policy A (HUGRAB UPS Ground Saver, client-conditional) lives in
- * shipping-service-eligibility.ts and is already shared the same way; this module mirrors that pattern.
+ * The backend rate owner enforces service, package, provider-account, and
+ * store-exception rules before official ranking. Frontends consume the
+ * resulting eligibility DTO facts and do not import or reapply this policy.
  *
- * Pure constants + a pure predicate, ZERO imports — safe to import from the FE bundle (web/ imports
- * this directly via ../../../src/lib/rate-block-list, exactly as it imports shipping-service-eligibility).
- *
- * APPLICATION SCOPE (unchanged by the consolidation):
- *   - The service/package/name block (isServiceOrPackageBlocked) is applied BY THE BACKEND
- *     (src/services/rates.ts drops these before returning rates) AND mirrored by the FE.
- *   - BLOCKED_CARRIER_IDS is applied ONLY by the FE (web/src/utils/markups.ts) today; the backend
- *     rate path does not carrier-id-block (those accounts do not produce server-side rates). The set
- *     lives here to be de-duplicated, NOT to change where it is enforced. Moving backend enforcement
- *     is a separate behavioral decision, intentionally out of scope for this byte-preserving refactor.
+ * Policy A (client-conditional service eligibility such as HUGRAB Ground
+ * Saver) lives in shipping-service-eligibility.ts. This module is Policy B:
+ * global service/package/provider exclusions. Pure constants and predicate,
+ * with zero imports.
  */
 
 /** USPS economy / media classes blocked from selection (with a media-mail store exception). */
@@ -41,25 +32,27 @@ export const BLOCKED_PACKAGE_TYPES = new Set<string>([
   'regional_rate_box_b',
 ]);
 
-/** FE-applied blocked carrier (shipping-provider) IDs. See APPLICATION SCOPE above. */
+/** Blocked ShipStation shipping-provider IDs, enforced by the backend rate owner. */
 export const BLOCKED_CARRIER_IDS = new Set<number>([
   442017, // Amazon Buy Shipping
   566344, // Sendle
   593739, // Amazon Shipping US
 ]);
 
-/** Catches flat-rate / box service names (e.g. "Priority Mail Flat Rate Envelope"). */
+/** Catches flat-rate / box service names (for example, Priority Mail Flat Rate Envelope). */
 export const BLOCKED_NAME_RE = /flat[\s-]?rate|\bbox\b/i;
 
-/** Stores explicitly permitted to use USPS Media Mail (overrides the media-mail block). */
+/** Stores explicitly permitted to use USPS Media Mail (overrides Policy B). */
 export const MEDIA_MAIL_ALLOWED_STORES = new Set<number>([376759]);
 
-/**
- * Shared core predicate: is this rate blocked by service code, package type, or service-name match?
- * This is the logic common to BOTH the backend and FE block checks. It deliberately does NOT include
- * the media-mail store exception (callers apply that as a short-circuit BEFORE this, so the exception
- * can also bypass the FE carrier check) nor the FE-only carrier-id check (callers compose that).
- */
+/** Resolve the ShipStation carrier id to its provider-account eligibility verdict. */
+export function isProviderAccountBlocked(carrierId: string | null | undefined): boolean {
+  const match = /^se-(\d+)$/i.exec(String(carrierId ?? ''));
+  const providerId = match ? Number.parseInt(match[1]!, 10) : null;
+  return providerId != null && BLOCKED_CARRIER_IDS.has(providerId);
+}
+
+/** Core service/package/name rule; the backend owner composes store/account context. */
 export function isServiceOrPackageBlocked(
   serviceCode: string | null | undefined,
   packageType: string | null | undefined,

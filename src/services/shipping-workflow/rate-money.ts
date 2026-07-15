@@ -2,7 +2,7 @@
  * PS-177 (Phase 5, part 2) — canonical owner of order-row MONEY display.
  *
  * Before this module the markup MATH lived twice: src/services/rates.ts
- * applyMarkups (browse responses) and web/src/utils/markups.ts
+ * applyMarkups (browse responses) and a now-deleted frontend helper's
  * applyCarrierMarkup (order-row Best Rate / Margin cells, applied client-side
  * from the FE-fetched markup map). The row display therefore depended on the
  * FE re-deriving money policy — exactly what ARCHITECTURE.md forbids for

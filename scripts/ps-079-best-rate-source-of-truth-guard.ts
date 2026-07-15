@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   filterEligibleShippingServices,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -136,13 +136,12 @@ check('Awaiting shipping-account column prefers the bestRate account nickname',
 
 // ── (4) PS-135: proof helpers are canonical-lib-owned; no FE client-side best-rate selector ─
 const rateProofLib = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
-const markups = readFileSync('web/src/utils/markups.ts', 'utf8');
 check('PS-135: rate-proof helpers live in the canonical lib (rate-proof.ts)',
   /export function rateProofFingerprint/.test(rateProofLib) &&
     /export function selectProofFromCandidates/.test(rateProofLib) &&
     ordersView.includes("from '../../lib/rate-proof'"));
 check('PS-135: frontend has no client-side pickBestRate selector (backend owns selection)',
-  !/export function pickBestRate/.test(markups));
+  !existsSync('web/src/utils/markups.ts'));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-079 best-rate source-of-truth guard (${failures} failing)`);

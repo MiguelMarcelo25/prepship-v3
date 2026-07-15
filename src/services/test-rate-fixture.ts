@@ -30,6 +30,30 @@ const TEST_FIXTURE_ACCOUNTS = [
   { shippingProviderId: 900005, label: 'PrepShip Test Local' },
 ] as const;
 
+/** Backend-owned synthetic account DTOs for Rate Browser grouping/display. */
+export function buildTestFixtureCarrierAccounts(input: {
+  sourceClientId: number | null;
+  sourceClientName: string;
+}): Array<{
+  carrier_id: string;
+  carrier_code: string;
+  nickname: string;
+  friendly_name: string;
+  source_client_id: number | null;
+  source_client_name: string;
+  display_disambiguator: string;
+}> {
+  return TEST_FIXTURE_ACCOUNTS.map((account) => ({
+    carrier_id: `se-${account.shippingProviderId}`,
+    carrier_code: TEST_FIXTURE_CARRIER_CODE,
+    nickname: account.label,
+    friendly_name: account.label,
+    source_client_id: input.sourceClientId,
+    source_client_name: input.sourceClientName,
+    display_disambiguator: 'Test',
+  }));
+}
+
 const TEST_FIXTURE_SERVICE_TEMPLATES = [
   { code: 'prepship_test_economy', name: 'PrepShip Test Economy', base: 4.65, spread: 2.75, perLb: 0.72, days: 5 },
   { code: TEST_FIXTURE_SERVICE_CODE, name: 'PrepShip Test Standard', base: 7.25, spread: 3.8, perLb: 0.96, days: 3 },

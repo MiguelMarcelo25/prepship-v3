@@ -78,11 +78,6 @@ export type UpdateBillingConfigInput = {
 
 export type BillingPresetId = 'all' | 'this_month' | 'last_month' | 'last_30' | 'last_90'
 
-export interface BillingDateRange {
-  from: string
-  to: string
-}
-
 export interface BillingConfigDraft {
   pickPackFee: string
   pickPackMaxUnits: string
@@ -217,19 +212,6 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'margin',
 ]
 
-function formatDateInput(value: Date) {
-  const year = value.getFullYear()
-  const month = String(value.getMonth() + 1).padStart(2, '0')
-  const day = String(value.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function addCalendarDays(value: Date, days: number) {
-  const next = new Date(value)
-  next.setDate(next.getDate() + days)
-  return next
-}
-
 function parseNumber(value: string) {
   const parsed = Number.parseFloat(value)
   return Number.isNaN(parsed) ? 0 : parsed
@@ -262,43 +244,6 @@ function moneyNumber(value: number) {
 // They duplicated the backend fee math (src/services/billing.ts generator) in React;
 // the backend emits pickPackFeeTotal / fulfillmentFeeTotal on every summary and
 // detail row (typed since PS-368), so the FE displays them verbatim.
-
-export function getBillingInitialRange(now = new Date()): BillingDateRange {
-  // Default the billing summary to the last 30 days (was 90) so the
-  // initial fetch matches the 'last_30' preset selected on load.
-  const from = addCalendarDays(now, -29)
-  return {
-    from: formatDateInput(from),
-    to: formatDateInput(now),
-  }
-}
-
-export function getBillingPresetRange(preset: BillingPresetId, now = new Date()): BillingDateRange {
-  let from: Date
-  let to: Date
-
-  if (preset === 'all') {
-    from = new Date(2020, 0, 1)
-    to = new Date(now)
-  } else if (preset === 'this_month') {
-    from = new Date(now.getFullYear(), now.getMonth(), 1)
-    to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-  } else if (preset === 'last_month') {
-    from = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    to = new Date(now.getFullYear(), now.getMonth(), 0)
-  } else if (preset === 'last_30') {
-    to = new Date(now)
-    from = addCalendarDays(now, -29)
-  } else {
-    to = new Date(now)
-    from = addCalendarDays(now, -89)
-  }
-
-  return {
-    from: formatDateInput(from),
-    to: formatDateInput(to),
-  }
-}
 
 export function createBillingConfigDraft(config: BillingConfigDto): BillingConfigDraft {
   // Accept either the v4 camelCase (`billingMode`, `pickPackMaxUnits`) or

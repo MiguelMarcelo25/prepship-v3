@@ -98,7 +98,7 @@ export default function RateRowItem({
   const eta = formatEta(r);
   const primaryText = showCarrier ? acctName : svcName;
   const secondaryText = showCarrier ? svcName : '';
-  const sourceText = getModalRateSourceLabel(r, rateShippingAccounts);
+  const sourceText = getModalRateSourceLabel(r);
 
   // PS-290 (slice 2): the backend-owned HUGRAB $100-insurance coverage verdict for THIS rate,
   // read with the SAME pure pass-through the Awaiting column uses. The verdict may ride the rate

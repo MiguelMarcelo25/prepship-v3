@@ -4,8 +4,8 @@
  * Proves the frontend no longer OWNS the apply orchestration: OrdersView's
  * persistAppliedRateForOrder delegates to the backend-owned command
  * (apiClient.applyBestRate -> POST /orders/:id/apply-best-rate, one atomic persist)
- * as the PRIMARY path, with the legacy saveOrderDims+saveOrderBestRate sequence kept
- * ONLY as the rare no-provider-id fallback branch.
+ * as the only path. A missing provider id fails closed and requires a re-rate;
+ * the frontend cannot fall back to independent dims/best-rate writes.
  *
  * Offline/static only: no DB, no network, no providers, no labels, no postage, no
  * marketplace, no Trello mutation, no shipped/cancelled mutation.
@@ -38,10 +38,10 @@ const fn = fnStart >= 0 ? ordersView.slice(fnStart, fnStart + 2600) : '';
 check('persistAppliedRateForOrder exists', fn.length > 0);
 check('persistAppliedRateForOrder delegates to the backend apply command',
   /apiClient\.applyBestRate\(/.test(fn));
-check('apply command is the PRIMARY path (guarded by a present provider id)',
-  /if \(shippingProviderId != null\) \{[\s\S]*?apiClient\.applyBestRate\(/.test(fn));
-check('legacy 3-call save remains ONLY in the else (fallback) branch',
-  /\} else \{[\s\S]*?apiClient\.saveOrderBestRate\(/.test(fn));
+check('missing provider id fails closed before Apply',
+  /if \(shippingProviderId == null\) \{[\s\S]*?throw new Error\(/.test(fn));
+check('legacy independent save fallback is absent',
+  !/apiClient\.(?:saveOrderDims|saveOrderBestRate|setOrderSelectedPid)\(/.test(fn));
 check('setOrderSelectedPid is no longer part of the primary apply orchestration',
   !/apiClient\.setOrderSelectedPid\(/.test(fn));
 

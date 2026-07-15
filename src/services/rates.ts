@@ -18,7 +18,7 @@ import {
 } from '../lib/shipstation/client';
 import { getDefaultShipFrom } from '../lib/ship-from';
 import { loadClientIsTest } from './fulfillment/test-label-policy';
-import { buildTestFixtureRates } from './test-rate-fixture';
+import { buildTestFixtureCarrierAccounts, buildTestFixtureRates } from './test-rate-fixture';
 import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
 import {
   directCarrierVisibleForScope,
@@ -51,7 +51,9 @@ import {
   BLOCKED_SERVICE_CODES,
   BLOCKED_PACKAGE_TYPES,
   BLOCKED_NAME_RE,
+  BLOCKED_CARRIER_IDS,
   MEDIA_MAIL_ALLOWED_STORES,
+  isProviderAccountBlocked,
   isServiceOrPackageBlocked,
 } from '../lib/rate-block-list';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
@@ -163,16 +165,16 @@ export const SS_BASELINE_CARRIER_CODES = new Set<string>([
 ]);
 
 // PS-135(b): Policy-B block list moved to the canonical owner (src/lib/rate-block-list.ts) so this
-// backend authority and the FE (web/src/utils/markups.ts) cannot drift. Re-exported here to preserve
+// backend authority applies it before ranking. Re-exported here to preserve
 // this module's historical public surface.
-export { BLOCKED_SERVICE_CODES, BLOCKED_PACKAGE_TYPES, BLOCKED_NAME_RE, MEDIA_MAIL_ALLOWED_STORES };
+export { BLOCKED_SERVICE_CODES, BLOCKED_PACKAGE_TYPES, BLOCKED_NAME_RE, BLOCKED_CARRIER_IDS, MEDIA_MAIL_ALLOWED_STORES };
 
 // v4 Rate uses snake_case + `service_type` as the display name equivalent of
 // v2's `serviceName` (there's no separate serviceName field on the ShipStation
-// v2-API rate payload — service_type IS the human label). Behavior is unchanged: the media-mail
-// store exception short-circuits, then the shared service/package/name predicate applies.
+// v2-API rate payload — service_type IS the human label). The media-mail
+// store exception short-circuits, then provider-account and service/package rules apply.
 export function isBlockedRate(
-  rate: Pick<Rate, 'service_code' | 'package_type' | 'service_type'>,
+  rate: Pick<Rate, 'carrier_id' | 'service_code' | 'package_type' | 'service_type'>,
   storeId: number | null = null,
 ): boolean {
   if (
@@ -182,7 +184,8 @@ export function isBlockedRate(
   ) {
     return false;
   }
-  return isServiceOrPackageBlocked(rate.service_code, rate.package_type, rate.service_type);
+  return isProviderAccountBlocked(rate.carrier_id) ||
+    isServiceOrPackageBlocked(rate.service_code, rate.package_type, rate.service_type);
 }
 
 // Exported for ps-307-direct-rate-markup-behavior-test (drives the real lift+markup ranking
@@ -1107,6 +1110,15 @@ export async function getCarrierAccountsForRateContext(
   input: Pick<RateInput, 'storeId' | 'clientId'>,
   options: { includeAutomationDisabled?: boolean } = {},
 ): Promise<RateCarrierAccount[]> {
+  const testClientId = input.clientId ?? (
+    input.storeId != null ? await resolveClientIdForStoreId(input.storeId) : null
+  );
+  if (testClientId != null && (await loadClientIsTest(testClientId))) {
+    return buildTestFixtureCarrierAccounts({
+      sourceClientId: testClientId,
+      sourceClientName: (await loadClientName(testClientId)) ?? 'PrepShip Test',
+    });
+  }
   const context = await resolveRateCredentialContext({
     storeId: input.storeId ?? null,
     clientId: input.clientId ?? null,

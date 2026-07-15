@@ -107,10 +107,23 @@ import {
   isBillingRegenerationBlockedError,
   requireBillingRegenerationRead,
 } from '../services/billing-regeneration-readiness';
+import {
+  resolveBillingPresetWindow,
+  type BillingWindowPreset,
+} from '../services/reporting-window-presets';
 
 const app = new Hono();
 
 app.use('*', requirePermission('financials:read'));
+
+const billingPresetWindowQuery = z.object({
+  preset: z.enum(['all', 'this_month', 'last_month', 'last_30', 'last_90']),
+});
+
+app.get('/preset-window', zValidator('query', billingPresetWindowQuery), (c) => {
+  const { preset } = c.req.valid('query');
+  return c.json(resolveBillingPresetWindow(preset as BillingWindowPreset));
+});
 
 function billingOrderIdFromPath(path: string): number | null {
   const match = /\/(?:details|zero-shipping-review)\/(\d+)(?:\/|$)/.exec(path);
@@ -745,12 +758,18 @@ app.get('/shipping-margin', zValidator('query', generateSchema), async (c) => {
 
 app.get('/details', zValidator('query', detailsSchema), async (c) => {
   const q = c.req.valid('query');
+  if (q.clientId != null && !(await canAccessBillingClient(q.clientId, billingScopeFromContext(c)))) {
+    return c.json({ error: 'Billing details not found' }, 404);
+  }
   const rows = await billingDetails(withBillingScope(c, {
     clientId: q.clientId,
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
   }));
-  return c.json({ data: rows });
+  const totals = q.clientId == null
+    ? null
+    : await billingInvoiceHeaderTotals(q.clientId, q.dateFrom!, q.dateTo!);
+  return c.json({ data: rows, totals });
 });
 
 // ─── Storage-fee PROOF drilldown (admin) ───────────────────────────────

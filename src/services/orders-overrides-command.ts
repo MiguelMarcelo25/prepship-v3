@@ -239,7 +239,6 @@ export async function applyBestRateForOrder(
     ? await loadRateQuoteSnapshot(quoteRef.rateQuoteId)
     : null;
   const finalized = finalizeAppliedBestRateFromSnapshot({
-    fallbackRate: body.bestRateJson,
     rateQuoteId: quoteRef.rateQuoteId,
     selectedRateKey: quoteRef.selectedRateKey,
     snapshot: quoteSnapshot,

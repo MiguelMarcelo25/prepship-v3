@@ -49,6 +49,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { californiaDateInputValue } from '../lib/ca-time'
+import { api } from '../lib/api'
 
 // ----------------- public types -----------------
 
@@ -58,7 +59,6 @@ export type DateRange = {
   /** Inclusive end, YYYY-MM-DD. */
   to: string
 }
-
 export type DateRangePresetId =
   | 'today'
   | 'yesterday'
@@ -111,10 +111,6 @@ function startOfMonth(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), 1)
 }
 
-function endOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0)
-}
-
 function sameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -122,7 +118,6 @@ function sameDay(a: Date, b: Date): boolean {
     a.getDate() === b.getDate()
   )
 }
-
 function isWithin(d: Date, fromD: Date, toD: Date): boolean {
   const lo = fromD <= toD ? fromD : toD
   const hi = fromD <= toD ? toD : fromD
@@ -148,36 +143,6 @@ function formatRangeLabel(range: DateRange): string {
   return `${formatHuman(range.from)} – ${formatHuman(range.to)}`
 }
 
-// ----------------- preset resolver -----------------
-
-function computePreset(id: DateRangePresetId, today: Date): DateRange {
-  switch (id) {
-    case 'today':
-      return { from: toIso(today), to: toIso(today) }
-    case 'yesterday': {
-      const y = addDays(today, -1)
-      return { from: toIso(y), to: toIso(y) }
-    }
-    case 'last7':
-      return { from: toIso(addDays(today, -6)), to: toIso(today) }
-    case 'last15':
-      return { from: toIso(addDays(today, -14)), to: toIso(today) }
-    case 'last30':
-      return { from: toIso(addDays(today, -29)), to: toIso(today) }
-    case 'thisMonth':
-      return { from: toIso(startOfMonth(today)), to: toIso(today) }
-    case 'lastMonth': {
-      const start = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-      const end = endOfMonth(start)
-      return { from: toIso(start), to: toIso(end) }
-    }
-    case 'last90':
-      return { from: toIso(addDays(today, -89)), to: toIso(today) }
-    case 'ytd':
-      return { from: toIso(new Date(today.getFullYear(), 0, 1)), to: toIso(today) }
-  }
-}
-
 const PRESETS: Array<{ id: DateRangePresetId; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'yesterday', label: 'Yesterday' },
@@ -197,6 +162,7 @@ const WEEKDAY_NAMES = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
 
 export function DateRangePicker({ value, onChange, label, className }: Props): JSX.Element {
   const [open, setOpen] = useState(false)
+  const [presetLoading, setPresetLoading] = useState(false)
   // Draft range edited inside the popover. Only committed on Apply.
   const [draft, setDraft] = useState<DateRange>(value)
   // Calendar view state — which month is visible, what view mode.
@@ -239,10 +205,17 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
   }, [open])
 
   // ----- preset click → commit immediately (no extra Apply needed) -----
-  const applyPreset = (id: DateRangePresetId) => {
-    const next = computePreset(id, californiaTodayDate())
-    onChange(next)
-    setOpen(false)
+  const applyPreset = async (id: DateRangePresetId) => {
+    setPresetLoading(true)
+    try {
+      const next = await api.get<DateRange>(`/analysis/date-preset?preset=${encodeURIComponent(id)}`)
+      onChange(next)
+      setOpen(false)
+    } catch (error) {
+      console.warn('[DateRangePicker] backend preset resolution failed:', error)
+    } finally {
+      setPresetLoading(false)
+    }
   }
 
   // ----- day cell click → first sets from, second sets to -----
@@ -324,7 +297,8 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => applyPreset(p.id)}
+                  onClick={() => { void applyPreset(p.id) }}
+                  disabled={presetLoading}
                   className="rounded-md px-3 py-1.5 text-left text-tiny font-semibold text-ink-2 transition hover:bg-brand/10 hover:text-brand"
                 >
                   {p.label}
@@ -538,31 +512,4 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
     </div>
   )
 }
-
-// ----------------- helpers for callers -----------------
-
-/**
- * Compute the prior comparison range — same length, immediately
- * preceding the current range. Used by dashboards that show
- * "this period vs prior period" comparisons.
- *
- *   current = { 2026-04-14, 2026-05-13 }  → 30 days
- *   prior   = { 2026-03-15, 2026-04-13 }
- */
-export function priorRange(current: DateRange): DateRange {
-  const from = fromIso(current.from)
-  const to = fromIso(current.to)
-  const days = Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1
-  const priorTo = addDays(from, -1)
-  const priorFrom = addDays(priorTo, -(days - 1))
-  return { from: toIso(priorFrom), to: toIso(priorTo) }
-}
-
-/**
- * Default range = last 30 days ending today. Convenience for
- * dashboard initial state.
- */
-export function defaultLast30(): DateRange {
-  const today = californiaTodayDate()
-  return { from: toIso(addDays(today, -29)), to: toIso(today) }
-}
+// Reporting presets and comparison windows are resolved by the backend.

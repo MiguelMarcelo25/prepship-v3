@@ -340,10 +340,8 @@ interface OrdersViewProps {
 // name / store id / current id) are deleted; getLegacyClientIdForDisplay passes
 // the backend value through.
 
-// PS-166 (#685): TEST_CARRIER_CODE + the test-mock rate-builder cluster moved to
-// ./orders/test-rate-mock (its own small module). Re-imported below.
-// PS-166 (this slice): TEST_SERVICE_CODE + TEST_SHIPPING_ACCOUNT_LABEL +
-// buildTestMockRate also moved VERBATIM to ./orders/test-mock-rate-normalizer; re-imported below.
+// Test carrier/service constants remain for mock-label display. Test-rate
+// creation itself is backend-owned by src/services/test-rate-fixture.ts.
 // PS-135: BACKEND_RATE_PROOF_SOURCE now imported from ../../lib/rate-proof (single source).
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
 // PS-perf (DJ 2026-06-23): clearer message for the COMMON stale-saved-rate case (a saved rate
@@ -372,19 +370,13 @@ import { californiaDateInputValue, CALIFORNIA_TZ } from '../../lib/ca-time'
 import { getQueueableLabelUrl, getQueuePayloadEntries } from './orders-queue-parsers'
 // PS-258 (slice B): pure idle-time non-critical scheduler (strict module).
 import { scheduleNonCriticalOrdersWork } from './orders-non-critical-scheduler'
-// PS-166 (#685): the pure test-mock rate-builder cluster (deterministic synthetic
-// rates for the local prepship_test carrier) moved VERBATIM into the orders/
-// package directory. TEST_CARRIER_CODE re-imported (still used widely in the body).
+// Mock-label display constants only; the browser never fabricates rate money.
 import {
   TEST_CARRIER_CODE,
-  buildBestTestRateForShipment,
-  buildTestRateBrowserAccounts,
 } from './orders/test-rate-mock'
-// PS-166 (this slice): buildTestMockRate + TEST_SERVICE_CODE +
-// TEST_SHIPPING_ACCOUNT_LABEL moved VERBATIM to their own small file.
+// Test service fallback is used only when rendering a mock-label intent.
 import {
   TEST_SERVICE_CODE,
-  buildTestMockRate,
 } from './orders/test-mock-rate-normalizer'
 import {
   ageLabel,
@@ -4064,26 +4056,19 @@ export default function OrdersView({
 
     // PS-302: delegate to the backend-owned Apply Best Rate command — ONE atomic persist
     // of dims + weight + selected provider + best_rate_json — instead of the 3 independent
-    // browser writes (which could partially fail). The legacy 3-call path remains ONLY as a
-    // fallback for the rare no-provider edge (the command requires a selected provider id).
-    if (shippingProviderId != null) {
-      await apiClient.applyBestRate(orderId, {
-        bestRateJson: rateToPersist,
-        bestRateDims: dimsLabel,
-        selectedPid: shippingProviderId,
-        weightOz: weightOz != null && weightOz > 0 ? weightOz : null,
-      })
-    } else {
-      const tasks: Promise<unknown>[] = []
-      if (dims || (weightOz != null && weightOz > 0)) {
-        tasks.push(apiClient.saveOrderDims(orderId, {
-          ...(dims ? { length: dims.length, width: dims.width, height: dims.height } : {}),
-          ...(weightOz != null && weightOz > 0 ? { weightOz } : {}),
-        }))
-      }
-      tasks.push(apiClient.saveOrderBestRate(orderId, rateToPersist, dimsLabel))
-      await Promise.all(tasks)
+    // browser writes (which could partially fail).
+    // Per user override unlock shipped data on 2026-07-15: PS-433 removes the
+    // frontend best-rate persistence fallback. The backend Apply command remains
+    // behind the existing order-edit lock and requires backend quote-snapshot proof.
+    if (shippingProviderId == null) {
+      throw new Error('Backend rate is missing its provider account; re-rate before applying.')
     }
+    await apiClient.applyBestRate(orderId, {
+      bestRateJson: rateToPersist,
+      bestRateDims: dimsLabel,
+      selectedPid: shippingProviderId,
+      weightOz: weightOz != null && weightOz > 0 ? weightOz : null,
+    })
     if (options.refetch) {
       await refetchOrders()
       // Per user override unlock shipped data on 2026-06-26: PS-328 only
@@ -4110,31 +4095,6 @@ export default function OrdersView({
     const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
     const effectivePanelForm = options.panelForm ?? panelForm
     const shippingOptions = buildPanelShippingOptionsPayload(effectivePanelForm)
-
-    if (isTestOrder(order, orderDetail)) {
-      const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, dims, weightOz) ?? undefined)
-      setPanelRatePreview([testRate])
-      setPanelForm((current) => ({
-        ...current,
-        shipAccountId: TEST_CARRIER_CODE,
-        serviceCode: testRate.serviceCode,
-      }))
-      const autoRequest = getAutoBestRateRequest(order)
-      if (autoRequest) {
-        setAutoBestRateEntries((current) => ({
-          ...current,
-          [order.orderId]: { key: autoRequest.key, rate: testRate },
-        }))
-      }
-      await persistAppliedRateForOrder(order.orderId, testRate, {
-        fallbackDims: dims,
-        fallbackWeightOz: weightOz,
-        // Per user override unlock shipped data on 2026-06-26: PS-328 keeps
-        // panel Recalculate as a thin refresher of backend packageFacts only.
-        refetch: true,
-      })
-      return testRate
-    }
 
     const shipTo = getShipTo(order, orderDetail)
     if (!shipTo.postalCode) return null
@@ -4530,29 +4490,6 @@ export default function OrdersView({
 
   async function openRateBrowser() {
     if (!panelOrder) return
-    if (isTestOrder(panelOrder, panelDetail)) {
-      const weightOz = getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail)
-      const panelDims = getPanelDims()
-      const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === panelForm.packageId)
-      const dims = hasCompleteDims(panelDims)
-        ? panelDims
-        : getPackageDims(selectedPackage) ?? getDimensions(panelOrder, panelDetail)
-
-      if (!weightOz) {
-        showToast('Enter shipment weight', 'error')
-        return
-      }
-      if (!dims || !hasCompleteDims(dims)) {
-        showToast('Enter shipment size', 'error')
-        return
-      }
-
-      setRateBrowserRates([buildTestMockRate(buildBestTestRateForShipment(panelOrder.orderId, dims, weightOz) ?? undefined)])
-      setRateBrowserLoading(false)
-      setRateBrowserOpen(true)
-      return
-    }
-
     setRateBrowserOpen(true)
     setRateBrowserRates([])
     setRateBrowserLoading(false)
@@ -4560,10 +4497,6 @@ export default function OrdersView({
 
   async function recalculateBestRate() {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return null
-    if (isTestOrder(panelOrder, panelDetail)) {
-      showToast('Test orders use mock rates and do not need live recalculation')
-      return null
-    }
 
     const dims = getPanelDims()
     const weightOz = getPanelWeightOz()
@@ -4653,37 +4586,6 @@ export default function OrdersView({
   }
 
   function applyRateSelection(rate: Record<string, unknown>) {
-    if (panelOrder && isTestOrder(panelOrder, panelDetail)) {
-      const testRate = buildTestMockRate(rate)
-      const dims = rate?.dims && typeof rate.dims === 'object' ? rate.dims as Record<string, unknown> : null
-      const dimsLabel = dims
-        ? `${Number(dims.length) || 0}x${Number(dims.width) || 0}x${Number(dims.height) || 0}`
-        : `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`
-
-      setPanelForm((current) => ({
-        ...current,
-        shipAccountId: TEST_CARRIER_CODE,
-        serviceCode: testRate.serviceCode,
-      }))
-      setPanelRatePreview([testRate])
-      trackAppliedRatePersist(
-        appliedRatePersistsRef.current,
-        panelOrder.orderId,
-        Promise.resolve()
-          .then(() => apiClient.saveOrderDims(panelOrder.orderId, {
-            ...(dims ? { length: Number(dims.length) || 0, width: Number(dims.width) || 0, height: Number(dims.height) || 0 } : {}),
-            weightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-          }))
-          .then(() => apiClient.saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel))
-          .then(() => refetchOrders())
-          .catch((error) => {
-            showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
-          }),
-      )
-      void closeRateBrowserAfterPersist()
-      return
-    }
-
     const shippingProviderId = toNumberValue(rate.shippingProviderId)
     const serviceCode = toStringValue(rate.serviceCode)
     if (!panelOrderId || shippingProviderId == null || !serviceCode) return
@@ -7009,7 +6911,7 @@ export default function OrdersView({
             order={panelOrder}
             locations={locations}
             packages={packages as any}
-            shippingAccounts={panelOrder && isTestOrder(panelOrder, panelDetail) ? buildTestRateBrowserAccounts() : shippingAccounts}
+            shippingAccounts={shippingAccounts}
             testMode={Boolean(panelOrder && isTestOrder(panelOrder, panelDetail))}
             initialDims={{
               length: Number.parseFloat(panelForm.length) || 0,
@@ -7026,37 +6928,6 @@ export default function OrdersView({
             onClose={() => { void closeRateBrowserAfterPersist() }}
             onBestRateResolved={(best) => {
               if (!panelOrderId) return
-              if (panelOrder && isTestOrder(panelOrder, panelDetail)) {
-                const testRate = buildTestMockRate(best)
-                setPanelRatePreview([testRate])
-                const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
-                if (autoRequest) {
-                  setAutoBestRateEntries((current) => ({
-                    ...current,
-                    [panelOrderId]: { key: autoRequest.key, rate: testRate },
-                  }))
-                }
-                setPanelForm((current) => ({
-                  ...current,
-                  shipAccountId: TEST_CARRIER_CODE,
-                  serviceCode: testRate.serviceCode,
-                }))
-                const dims = best.dims
-                trackAppliedRatePersist(
-                  appliedRatePersistsRef.current,
-                  panelOrderId,
-                  Promise.resolve()
-                    .then(() => persistAppliedRateForOrder(panelOrderId, testRate, {
-                      fallbackDims: dims ?? getPanelDims(),
-                      fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-                      refetch: true,
-                    }))
-                    .catch((error) => {
-                      showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
-                    }),
-                )
-                return
-              }
               setPanelRatePreview([best])
               const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
               if (autoRequest) {

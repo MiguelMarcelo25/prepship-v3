@@ -55,13 +55,14 @@ export type ApplyBestRateResult =
   | { ok: false; code: ApplyBestRateErrorCode; error: string };
 
 export type ApplyBestRateSnapshotErrorCode =
+  | 'rate_quote_required'
   | 'rate_quote_not_found'
   | 'rate_quote_expired'
   | 'selected_rate_not_found'
   | 'selected_rate_proof_invalid';
 
 export type FinalizeAppliedBestRateFromSnapshotResult =
-  | { ok: true; bestRateJson: Record<string, unknown>; source: 'snapshot' | 'fallback' }
+  | { ok: true; bestRateJson: Record<string, unknown>; source: 'snapshot' }
   | { ok: false; code: ApplyBestRateSnapshotErrorCode; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,7 +126,6 @@ export function applyRateQuoteRef(rate: unknown): { rateQuoteId: string | null; 
 }
 
 export function finalizeAppliedBestRateFromSnapshot(input: {
-  fallbackRate: unknown;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
   snapshot: ApplyRateQuoteSnapshot | null;
@@ -135,11 +135,11 @@ export function finalizeAppliedBestRateFromSnapshot(input: {
   const rateQuoteId = stringOrNull(input.rateQuoteId);
   const selectedRateKey = stringOrNull(input.selectedRateKey);
   if (!rateQuoteId || !selectedRateKey) {
-    const fallback = recordOrNull(input.fallbackRate);
-    if (!fallback) {
-      return { ok: false, code: 'selected_rate_not_found', error: 'A selected rate is required to apply.' };
-    }
-    return { ok: true, bestRateJson: fallback, source: 'fallback' };
+    return {
+      ok: false,
+      code: 'rate_quote_required',
+      error: 'Backend rate-quote proof is required. Re-rate before applying this rate.',
+    };
   }
   if (!input.snapshot?.cacheKey) {
     return { ok: false, code: 'rate_quote_not_found', error: 'Rate quote expired. Re-rate before applying this rate.' };

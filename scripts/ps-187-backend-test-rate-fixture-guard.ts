@@ -29,6 +29,7 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  buildTestFixtureCarrierAccounts,
   buildTestFixtureRates,
   TEST_FIXTURE_CARRIER_CODE,
 } from '../src/services/test-rate-fixture';
@@ -56,6 +57,11 @@ check('every rate is the prepship_test carrier',
   a.every((r) => r.carrier_code === TEST_FIXTURE_CARRIER_CODE));
 check('every rate uses a synthetic 9000xx provider id',
   a.every((r) => /^se-9000\d{2}$/.test(String(r.carrier_id))));
+const fixtureAccounts = buildTestFixtureCarrierAccounts({ sourceClientId: 99, sourceClientName: 'Test Client' });
+check('Rate Browser receives the same five backend-owned synthetic accounts',
+  fixtureAccounts.length === 5 &&
+  fixtureAccounts.every((account) => /^se-9000\d{2}$/.test(account.carrier_id)) &&
+  fixtureAccounts.every((account) => account.source_client_id === 99));
 
 // ── 4. markers ────────────────────────────────────────────────────────────────
 check('every rate carries testFixture + mocked markers',
@@ -87,6 +93,8 @@ function feSeededUnit(seed: string): number {
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 check('getRates gates the fixture on the canonical loadClientIsTest authority',
   /await loadClientIsTest\(Number\(resolvedInput\.clientId\)\)/.test(ratesService));
+check('carrier-account browsing also gates test clients before credential/live-account resolution',
+  /getCarrierAccountsForRateContext[\s\S]*await loadClientIsTest\(testClientId\)[\s\S]*buildTestFixtureCarrierAccounts/.test(ratesService));
 {
   // Scope to the getRates body — loadShippingAutomationRules has earlier call
   // sites in the file; the ordering that matters is inside getRates itself.

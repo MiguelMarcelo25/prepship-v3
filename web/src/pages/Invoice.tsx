@@ -41,6 +41,18 @@ type Client = {
   phone: string | null;
 };
 
+type InvoiceTotals = {
+  orderCount: number;
+  pickPackTotal: number;
+  additionalTotal: number;
+  pickPackFeeTotal: number;
+  packageTotal: number;
+  shippingTotal: number;
+  storageTotal: number;
+  grandTotal: number;
+  fulfillmentFeeTotal: number;
+};
+
 type InvoiceSummarySortKey = 'category' | 'amount';
 type InvoiceLineSortKey =
   | 'date'
@@ -114,25 +126,28 @@ export default function Invoice() {
 
   const details = useQuery({
     queryKey: ['billing-details-invoice', detailsQs],
-    queryFn: () => api.get<{ data: LineItem[] }>(`/billing/details${detailsQs}`),
+    queryFn: () => api.get<{ data: LineItem[]; totals: InvoiceTotals | null }>(`/billing/details${detailsQs}`),
     enabled: Number.isFinite(clientId) && clientId > 0,
   });
 
   const lines = details.data?.data ?? [];
-  const grand = lines.reduce((s, l) => s + Number(l.totalCost), 0);
+  const totals = details.data?.totals ?? null;
   const summaryRows = useMemo(() => {
-    const byType = lines.reduce<Record<string, number>>((acc, l) => {
-      acc[l.lineType] = (acc[l.lineType] ?? 0) + Number(l.totalCost);
-      return acc;
-    }, {});
-
     return sortRows(
-      Object.entries(byType).map(([type, amount]) => ({ type, amount })),
+      totals
+        ? [
+            { type: 'Pick & pack', amount: totals.pickPackTotal },
+            { type: 'Additional units', amount: totals.additionalTotal },
+            { type: 'Package', amount: totals.packageTotal },
+            { type: 'Shipping', amount: totals.shippingTotal },
+            { type: 'Storage', amount: totals.storageTotal },
+          ]
+        : [],
       summarySort,
       (row, key) => (key === 'amount' ? row.amount : row.type),
       (row) => row.type
     );
-  }, [lines, summarySort]);
+  }, [summarySort, totals]);
   const sortedLines = useMemo(
     () =>
       sortRows(
@@ -280,7 +295,7 @@ export default function Invoice() {
                     {summaryRows.map((row) => (
                       <tr key={row.type} className="border-b border-line">
                         <td className="py-1.5 capitalize">
-                          {row.type.replace(/_/g, ' ')}
+                          {row.type}
                         </td>
                         <td className="py-1.5 text-right font-mono">
                           {fmtMoney(row.amount)}
@@ -290,7 +305,7 @@ export default function Invoice() {
                     <tr className="border-t-2 border-ink">
                       <td className="py-2 font-bold">Total</td>
                       <td className="py-2 text-right font-mono font-bold text-[16px]">
-                        {fmtMoney(grand)}
+                        {fmtMoney(totals?.grandTotal ?? 0)}
                       </td>
                     </tr>
                   </tbody>

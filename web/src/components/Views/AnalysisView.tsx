@@ -28,7 +28,6 @@ import {
   filterAnalysisRows,
   formatAnalysisMoney,
   getAnalysisEmptyMessage,
-  getAnalysisPresetRange,
   getAnalysisSummaryText,
   getInitialAnalysisFilters,
   sortAnalysisRows,
@@ -579,15 +578,6 @@ interface AnalysisViewProps {
   initialRequestId?: number
 }
 
-function inferPresetDays(from: string | undefined, to: string | undefined) {
-  if (!from || !to) return null
-  for (const days of [30, 90, 180, 365]) {
-    const preset = getAnalysisPresetRange(days)
-    if (preset.from === from && preset.to === to) return days
-  }
-  return null
-}
-
 export default function AnalysisView({
   initialSearch,
   initialFrom,
@@ -603,7 +593,7 @@ export default function AnalysisView({
   const [from, setFrom] = useState(initialFrom ?? initialFilters.from)
   const [to, setTo] = useState(initialTo ?? initialFilters.to)
   const [presetDays, setPresetDays] = useState<number | null>(
-    initialFrom && initialTo ? inferPresetDays(initialFrom, initialTo) : initialFilters.presetDays,
+    initialFrom && initialTo ? null : initialFilters.presetDays,
   )
   const [clientId, setClientId] = useState(
     initialClientId != null && Number.isFinite(Number(initialClientId)) && Number(initialClientId) > 0
@@ -611,6 +601,17 @@ export default function AnalysisView({
       : '',
   )
   const [search, setSearch] = useState(initialSearch ?? '')
+  const presetWindowQuery = useQuery<{ from: string; to: string }>({
+    queryKey: ['analysis', 'preset-window', presetDays],
+    enabled: presetDays != null,
+    queryFn: () => api.get(`/analysis/preset-window?days=${presetDays}`),
+  })
+
+  useEffect(() => {
+    if (presetDays == null || !presetWindowQuery.data) return
+    setFrom(presetWindowQuery.data.from)
+    setTo(presetWindowQuery.data.to)
+  }, [presetDays, presetWindowQuery.data])
 
   // Keep dashboard click-throughs in sync. The Dashboard now passes the SKU
   // plus its active date/client filters, so Analysis does not reuse a stale
@@ -622,7 +623,7 @@ export default function AnalysisView({
     if (initialFrom && initialTo) {
       setFrom(initialFrom)
       setTo(initialTo)
-      setPresetDays(inferPresetDays(initialFrom, initialTo))
+      setPresetDays(null)
     }
     if (initialClientId != null && Number.isFinite(Number(initialClientId)) && Number(initialClientId) > 0) {
       setClientId(String(initialClientId))
@@ -712,6 +713,7 @@ export default function AnalysisView({
     totals?: AnalysisTotals | null
   }>({
     queryKey: ['analysis', 'skus', from || null, to || null, analysisClientId ?? null],
+    enabled: Boolean(to && (from || presetDays === 0)),
     queryFn: () => apiClient.fetchAnalysisSkus(analysisQuery),
   })
 
@@ -729,7 +731,7 @@ export default function AnalysisView({
 
   const dailySalesQuery = useQuery<AnalysisDailySalesResponse>({
     queryKey: ['analysis', 'daily-sales', from || null, to || null, analysisClientId ?? null],
-    enabled: dailySalesReady,
+    enabled: dailySalesReady && Boolean(to && (from || presetDays === 0)),
     queryFn: () => apiClient.fetchAnalysisDailySales(analysisQuery),
   })
 
@@ -1086,10 +1088,7 @@ export default function AnalysisView({
   }, [orderModal.open])
 
   function handlePresetClick(days: number) {
-    const range = getAnalysisPresetRange(days)
     setPresetDays(days)
-    setFrom(range.from)
-    setTo(range.to)
   }
 
   function openSkuDrawer(invSkuId: number) {

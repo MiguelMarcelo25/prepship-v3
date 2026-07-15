@@ -47,17 +47,17 @@ import {
   // since the table body no longer renders them inline.
 } from 'lucide-react'
 import { apiClient } from '../../api/client'
+import { api, qs } from '../../lib/api'
 import {
   SortableHeader,
   nextSortState,
   sortRows,
   type SortState,
 } from '../SortableTable'
-import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../DateRangePicker'
+import { DateRangePicker, type DateRange } from '../DateRangePicker'
 import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
 import { formatCaDateTime } from '../../lib/ca-time'
 import { FilterSelect } from '../FilterSelect'
-import { getAnalysisPresetRange } from './analysis-parity'
 import { TOTAL_TREND_SERIES_KEY } from './dashboard-trend-constants'
 // PS-154: pure presentational primitives extracted to reusable components.
 import { KpiCard } from '../KpiCard'
@@ -557,19 +557,6 @@ function normalizeShippingMarginCarriers(value: unknown): ShippingMarginCarrierD
   })
 }
 
-function dateOffsetFrom(day: string, daysBack: number) {
-  const d = new Date(`${day}T00:00:00.000Z`)
-  d.setUTCDate(d.getUTCDate() - daysBack)
-  return d.toISOString().slice(0, 10)
-}
-
-function inclusiveRangeDays(from: string, to: string) {
-  const fromTime = new Date(from).getTime()
-  const toTime = new Date(to).getTime()
-  if (!Number.isFinite(fromTime) || !Number.isFinite(toTime) || toTime < fromTime) return 1
-  return Math.max(1, Math.round((toTime - fromTime) / 86_400_000) + 1)
-}
-
 function formatDayLabel(day: string) {
   if (!day) return ''
   const [year, month, date] = day.split('-').map((part) => Number(part))
@@ -953,13 +940,29 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // mutations of its own.
   const queryClient = useQueryClient()
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
-  // Operator-selected date range that drives every API call below.
-  // Default is the last 30 days ending today (matches the old
-  // hard-coded behavior). The DateRangePicker component handles
-  // all the calendar / preset UX; this state is just the result.
-  // priorRange() derives the comparison window (same length,
-  // immediately preceding) used by trend / top-SKUs / heatmap.
-  const [dateRange, setDateRange] = useState<DateRange>(() => defaultLast30())
+  // Operator intent only. The backend resolves the initial range, comparison
+  // range, and trailing-seven anchors used by every reporting request below.
+  const [dateRange, setDateRange] = useState<DateRange>({ from: '', to: '' })
+  const dashboardWindowQuery = useQuery<{
+    current: DateRange
+    prior: DateRange
+    currentTrailingSeven: DateRange
+    priorTrailingSeven: DateRange
+    rangeDays: number
+  }>({
+    queryKey: ['dashboard', 'reporting-window', dateRange.from || null, dateRange.to || null],
+    queryFn: () => api.get(`/analysis/reporting-window${qs(
+      dateRange.from && dateRange.to
+        ? { from: dateRange.from, to: dateRange.to }
+        : { days: 30 },
+    )}`),
+  })
+  useEffect(() => {
+    if (dateRange.from || dateRange.to || !dashboardWindowQuery.data) return
+    setDateRange(dashboardWindowQuery.data.current)
+  }, [dashboardWindowQuery.data, dateRange.from, dateRange.to])
+  const priorDateRange = dashboardWindowQuery.data?.prior ?? { from: '', to: '' }
+  const dashboardWindowReady = dashboardWindowQuery.data != null
   // Sync status feeds the live-data chip in the dashboard header.
   // Polled every 60s via refetchInterval (independent of the main dashboard
   // queries) so operators see the cron cadence and last-synced time without
@@ -1017,24 +1020,18 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     )
   }, [reportingClientsQuery.data])
   // ── Dashboard query scope ─────────────────────────────────────────────
-  // Replace hardcoded last-30-days with the operator-chosen range from the
-  // DateRangePicker. priorRange() gives us the "same length, immediately
-  // preceding" window for the comparison metrics (trend dashed line, heatmap
-  // baseline, KPI vs-prior arrows). This one memo feeds every dashboard
+  // The backend-owned window feeds every dashboard comparison metric (trend
+  // dashed line, heatmap baseline, KPI vs-prior arrows). This one memo feeds every dashboard
   // query key + queryFn below, so a client/date change re-keys the queries —
   // the React Query analogue of the old loadDashboard('initial') effect
   // re-running on the canonical filters.
   const dashboardScope = useMemo(() => {
-    const currentFrom = dateRange.from
-    const currentTo = dateRange.to
-    const prior = priorRange(dateRange)
-    const priorFrom = prior.from
-    const priorTo = prior.to
-    // Keep the 7-day KPI literal: last seven calendar days inside
-    // the active dashboard window, not a percentage of the range.
-    const rangeLengthDays = inclusiveRangeDays(currentFrom, currentTo)
-    const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))
-    const priorSevenFrom = dateOffsetFrom(priorTo, Math.min(6, rangeLengthDays - 1))
+    const currentFrom = dashboardWindowQuery.data?.current.from ?? ''
+    const currentTo = dashboardWindowQuery.data?.current.to ?? ''
+    const priorFrom = priorDateRange.from
+    const priorTo = priorDateRange.to
+    const sevenFrom = dashboardWindowQuery.data?.currentTrailingSeven.from ?? ''
+    const priorSevenFrom = dashboardWindowQuery.data?.priorTrailingSeven.from ?? ''
     const cid = selectedClientId ?? undefined
     return {
       currentFrom,
@@ -1047,8 +1044,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       // Stable string identity for the non-critical first-paint gate below.
       key: `${currentFrom}|${currentTo}|${cid ?? 'all'}`,
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- from/to are the only dateRange fields read (priorRange derives from them too)
-  }, [selectedClientId, dateRange.from, dateRange.to])
+  }, [selectedClientId, dashboardWindowQuery.data, priorDateRange.from, priorDateRange.to])
 
   // ── Critical first paint — KPI / daily-count aggregates ───────────────
   // One atomic query preserving the old criticalMetricsPromise semantics:
@@ -1056,6 +1052,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // renders (or faults) as a unit.
   const metricsQuery = useQuery({
     queryKey: ['dashboard', 'metrics', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    enabled: dashboardWindowReady,
     queryFn: async () => {
       const { currentFrom, currentTo, priorFrom, priorTo, sevenFrom, priorSevenFrom, cid } = dashboardScope
       const [
@@ -1088,6 +1085,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // exactly like the old shippingMarginPromise fired with the first batch.
   const shippingMarginQuery = useQuery({
     queryKey: ['dashboard', 'shipping-margin', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    enabled: dashboardWindowReady,
     queryFn: async () => {
       const { currentFrom, currentTo, cid } = dashboardScope
       const shippingMarginRes: any = await apiClient.fetchDashboardShippingMarginAnalytics({ from: currentFrom, to: currentTo, clientId: cid })
@@ -1122,7 +1120,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // ── Non-critical panels (idle-deferred behind the gate above) ─────────
   const skuTrendsQuery = useQuery({
     queryKey: ['dashboard', 'sku-trends', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
-    enabled: nonCriticalReady,
+    enabled: dashboardWindowReady && nonCriticalReady,
     queryFn: async () => {
       const { currentFrom, currentTo, priorFrom, priorTo, cid } = dashboardScope
       const [currentSalesRes, priorSalesRes] = await Promise.all([
@@ -1142,7 +1140,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     // omits the range: a date change reuses the cached snapshot instead of
     // refiring the pageSize:300 fetch with byte-identical params.
     queryKey: ['dashboard', 'inventory-risk', dashboardScope.cid ?? null],
-    enabled: nonCriticalReady,
+    enabled: dashboardWindowReady && nonCriticalReady,
     queryFn: async () => {
       const { cid } = dashboardScope
       const inventoryRes: any = await apiClient.fetchDashboardInventoryRisk({ ...(cid ? { clientId: cid } : {}), active: true, pageSize: 300 })
@@ -1159,7 +1157,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   const topSkusQuery = useQuery({
     queryKey: ['dashboard', 'top-skus', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
-    enabled: nonCriticalReady,
+    enabled: dashboardWindowReady && nonCriticalReady,
     queryFn: async () => {
       const { currentFrom, currentTo, cid } = dashboardScope
       const analysisRes: any = await apiClient.fetchDashboardTopSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
@@ -1181,9 +1179,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // first batch before, too).
   const dailyRevenueByClientQuery = useQuery({
     queryKey: ['dashboard', 'daily-revenue-by-client', dashboardScope.currentFrom, dashboardScope.currentTo],
-    enabled: selectedClientId == null,
+    enabled: dashboardWindowReady && selectedClientId == null,
     queryFn: async () => {
-      const res = await apiClient.fetchDashboardDailyRevenueByClient({ from: dateRange.from, to: dateRange.to, hideTestOrders: true })
+      const res = await apiClient.fetchDashboardDailyRevenueByClient({ from: dashboardScope.currentFrom, to: dashboardScope.currentTo, hideTestOrders: true })
       return safeArray<{ day: string; clientId: number | null; revenue: number; count: number }>(res?.data)
     },
   })
@@ -1536,10 +1534,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [skuPanelTab, setSkuPanelTab] = useState<'skus' | 'combos'>('skus')
   const topCombosQuery = useQuery({
     queryKey: ['dashboard', 'top-combos', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
-    enabled: skuPanelTab === 'combos',
+    enabled: dashboardWindowReady && skuPanelTab === 'combos',
     queryFn: () => {
       const cid = selectedClientId ?? undefined
-      return apiClient.fetchDashboardTopCombos({ from: dateRange.from, to: dateRange.to, limit: 50, clientId: cid, hideTestOrders: true })
+      return apiClient.fetchDashboardTopCombos({ from: dashboardScope.currentFrom, to: dashboardScope.currentTo, limit: 50, clientId: cid, hideTestOrders: true })
     },
   })
   const topCombos = topCombosQuery.data?.combos ?? []
@@ -1904,8 +1902,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // were undercounted.
   const trend = useMemo(() => {
     const currentDays = buildDateBuckets(dateRange.from, dateRange.to)
-    const prior = priorRange(dateRange)
-    const priorDays = buildDateBuckets(prior.from, prior.to)
+    const priorDays = buildDateBuckets(priorDateRange.from, priorDateRange.to)
     // PS-212: the shared dashboard data is ALREADY scoped by the one
     // canonical client filter (selectedClientId rides every dashboard
     // fetch), so the chart always renders it — counts and revenue come
@@ -1920,6 +1917,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     currentDailyCounts,
     dateRange.from,
     dateRange.to,
+    priorDateRange.from,
+    priorDateRange.to,
     priorDailyCounts,
     revenueByDay,
   ])
@@ -2225,7 +2224,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   const visibleColumnCount = 4 + COLUMN_OPTIONS.filter((option) => visibleColumns[option.key]).length
 
-  const rangeDays = useMemo(() => inclusiveRangeDays(dateRange.from, dateRange.to), [dateRange.from, dateRange.to])
+  const rangeDays = dashboardWindowQuery.data?.rangeDays ?? 1
   const rangeLabel = rangeDays === 1 ? '1-Day' : `${rangeDays}-Day`
 
   const kpis = useMemo(() => {
@@ -2233,9 +2232,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const priorUnitsRange = priorAgg.units
     const currentUnits7 = [...currentAgg.bySku.values()].reduce((sum, row) => sum + row.units7, 0)
     const priorUnits7 = [...priorAgg.bySku.values()].reduce((sum, row) => sum + row.units7, 0)
-    const sevenFrom = dateOffsetFrom(dateRange.to, Math.min(6, rangeDays - 1))
-    const prior = priorRange(dateRange)
-    const priorSevenFrom = dateOffsetFrom(prior.to, Math.min(6, rangeDays - 1))
+    const sevenFrom = dashboardWindowQuery.data?.currentTrailingSeven.from ?? ''
+    const priorSevenFrom = dashboardWindowQuery.data?.priorTrailingSeven.from ?? ''
     const currentOrdersRange = sumDailyOrders(currentDailyCounts)
     const priorOrdersRange = sumDailyOrders(priorDailyCounts)
     const currentOrders7 = sumDailyOrders(currentDailyCounts, sevenFrom)
@@ -2266,7 +2264,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       outStock,
       totalStockSkus,
     }
-  }, [currentAgg, currentDailyCounts, dateRange, inventorySnapshot, inventoryRows, priorAgg, priorDailyCounts, rangeDays])
+  }, [
+    currentAgg,
+    currentDailyCounts,
+    dashboardWindowQuery.data,
+    inventorySnapshot,
+    inventoryRows,
+    priorAgg,
+    priorDailyCounts,
+    rangeDays,
+  ])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
   const metricsLoading = panelLoading.metrics

@@ -107,11 +107,11 @@ check('rate-browser money helper reads backend customer/rate-cost fields without
   money.includes('sortRateRowsByBackendDisplayRank') &&
   !/Markup|markups|rbMarkup|applyMarkup|rateDisplayTotal/.test(money));
 
-check('RateBrowserModal gates manual row apply through isBlockedRate before onApplyRate',
-  /function handleRateClick\(r: RateRow\): void \{[\s\S]{0,500}if \(isBlockedRate\(r, order, currentRateShippingOptions\)\) return;[\s\S]{0,900}onApplyRate\(/.test(modal));
+check('RateBrowserModal gates manual row apply through the backend availability fact before onApplyRate',
+  /function handleRateClick\(r: RateRow\): void \{[\s\S]{0,500}if \(isBackendUnavailableRate\(r, order, currentRateShippingOptions\)\) return;[\s\S]{0,900}onApplyRate\(/.test(modal));
 
-check('RateBrowserModal gates auto-applied best through isBlockedRate before returning DTO',
-  /function toAppliedRate\(r: RateRow\): RbAppliedRate \| null \{[\s\S]{0,500}if \(isBlockedRate\(r, order, currentRateShippingOptions\)\) return null;[\s\S]{0,400}return \{/.test(modal));
+check('RateBrowserModal gates auto-applied best through the backend availability fact before returning DTO',
+  /function toAppliedRate\(r: RateRow\): RbAppliedRate \| null \{[\s\S]{0,500}if \(isBackendUnavailableRate\(r, order, currentRateShippingOptions\)\) return null;[\s\S]{0,400}return \{/.test(modal));
 
 check('Hide Unavailable uses display-only hide helper, not purchase proof blocking',
   modal.includes('shouldHideRate={shouldHideUnavailableRate}') &&

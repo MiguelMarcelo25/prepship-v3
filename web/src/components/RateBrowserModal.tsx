@@ -9,9 +9,8 @@
 // adapter, but does them in parallel so the modal is not blocked account by
 // account.
 //
-// Keep the file under ~600 lines. If/when block-list logic or per-client
-// service unblocking is wired, extract v2's isBlockedRate into a helper
-// module rather than fattening this component.
+// Eligibility and block-list verdicts are backend DTO facts. This component
+// may render or honor those facts, but must not recreate their rules.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -259,6 +258,9 @@ export type RateRow = {
   selectedRateCost?: number | null;
   shippingMarginAmount?: number | null;
   shippingMarginPct?: number | null;
+  rateSourceKind?: string | null;
+  rateSourceLabel?: string | null;
+  rateSourceDetail?: string | null;
   insuranceCost?: unknown;
   insuranceProvenance?: unknown;
   insuranceCostUnresolved?: unknown;
@@ -618,29 +620,10 @@ function toOptionalString(value: unknown): string | null {
 
 export function getModalRateSourceLabel(
   rate: RateRow,
-  accounts: RbCarrierAccountDto[]
 ): string {
-  const pid = toFiniteNumber(rate.shippingProviderId);
-  const account = pid != null
-    ? accounts.find((candidate) => candidate.shippingProviderId === pid)
-    : null;
   const raw = rate.raw ?? {};
-  const providerKey =
-    normalizeProviderKey(account?.code) ||
-    normalizeProviderKey(raw.provider) ||
-    normalizeProviderKey(raw.source) ||
-    normalizeProviderKey(rate.carrierCode);
-  const sourceKey =
-    normalizeProviderKey(account?.source) ||
-    normalizeProviderKey(account?.sourceClientName) ||
-    normalizeProviderKey(raw.source);
-  const isDirect =
-    (pid != null && pid >= 10_000_000) ||
-    sourceKey === 'carrier_accounts' ||
-    sourceKey === 'direct_carrier_accounts';
-
-  if (isDirect) return DIRECT_PROVIDER_LABELS[providerKey] ?? 'Direct Carrier';
-  return 'ShipStation';
+  const label = toOptionalString(rate.rateSourceLabel) ?? toOptionalString(raw.rateSourceLabel);
+  return label ?? 'Unknown source';
 }
 
 function buildOrderBestRateSeed(
@@ -727,102 +710,6 @@ function buildOrderBestRateSeed(
     insuranceCertainty: bestRate.insuranceCertainty ?? raw.insuranceCertainty,
     raw: bestRate,
   };
-}
-
-const TEST_MOCK_SERVICE_TEMPLATES: Record<
-  string,
-  Array<{ code: string; name: string; base: number; spread: number; perLb: number; days: string }>
-> = {
-  prepship_test: [
-    { code: 'prepship_test_economy', name: 'PrepShip Test Economy', base: 4.65, spread: 2.75, perLb: 0.72, days: '3-6 days' },
-    { code: 'prepship_test_standard', name: 'PrepShip Test Standard', base: 7.25, spread: 3.8, perLb: 0.96, days: '2-4 days' },
-    { code: 'prepship_test_priority', name: 'PrepShip Test Priority', base: 13.9, spread: 6.75, perLb: 1.28, days: '1-3 days' },
-  ],
-  stamps_com: [
-    { code: 'usps_ground_advantage', name: 'USPS Ground Advantage', base: 4.45, spread: 2.5, perLb: 0.72, days: '2-5 days' },
-    { code: 'usps_priority_mail', name: 'USPS Priority Mail', base: 7.85, spread: 3.4, perLb: 0.94, days: '1-3 days' },
-    { code: 'usps_priority_mail_express', name: 'USPS Priority Mail Express', base: 27.4, spread: 9.5, perLb: 1.55, days: '1 day' },
-  ],
-  ups: [
-    { code: 'ups_ground', name: 'UPS Ground', base: 8.65, spread: 4.25, perLb: 1.05, days: '2-5 days' },
-    { code: 'ups_3_day_select', name: 'UPS 3 Day Select', base: 14.8, spread: 6.5, perLb: 1.28, days: '3 days' },
-    { code: 'ups_2nd_day_air', name: 'UPS 2nd Day Air', base: 20.95, spread: 8.2, perLb: 1.62, days: '2 days' },
-  ],
-  ups_walleted: [
-    { code: 'ups_ground_saver', name: 'UPS Ground Saver', base: 7.55, spread: 3.95, perLb: 0.86, days: '3-6 days' },
-    { code: 'ups_surepost', name: 'UPS Ground Saver', base: 6.95, spread: 3.1, perLb: 0.78, days: '2-7 days' },
-    { code: 'ups_next_day_air_saver', name: 'UPS Next Day Air Saver', base: 31.5, spread: 10.2, perLb: 1.9, days: '1 day' },
-  ],
-  fedex: [
-    { code: 'fedex_ground', name: 'FedEx Ground', base: 8.95, spread: 4.1, perLb: 1.08, days: '2-5 days' },
-    { code: 'fedex_2day', name: 'FedEx 2Day', base: 21.35, spread: 8.4, perLb: 1.55, days: '2 days' },
-    { code: 'fedex_standard_overnight', name: 'FedEx Standard Overnight', base: 33.75, spread: 12.5, perLb: 2.1, days: '1 day' },
-  ],
-  fedex_walleted: [
-    { code: 'fedex_home_delivery', name: 'FedEx Home Delivery', base: 9.25, spread: 4.2, perLb: 1.02, days: '2-5 days' },
-    { code: 'fedex_express_saver', name: 'FedEx Express Saver', base: 17.65, spread: 6.8, perLb: 1.35, days: '3 days' },
-    { code: 'fedex_priority_overnight', name: 'FedEx Priority Overnight', base: 38.4, spread: 13.2, perLb: 2.2, days: '1 day' },
-  ],
-};
-
-function seededUnit(seed: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash ^= seed.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0) / 4294967295;
-}
-
-function roundMoney(value: number): number {
-  return Math.round(Math.max(0, value) * 100) / 100;
-}
-
-function buildTestMockRateSeeds(
-  shippingAccounts: RbCarrierAccountDto[],
-  context: {
-    orderId?: number | null;
-    weightOz?: number;
-    dims?: { length?: number; width?: number; height?: number };
-  } = {}
-): RateRow[] {
-  const weightLb = Math.max(0.25, (context.weightOz ?? 0) / 16);
-  const dims = context.dims ?? {};
-  const cubicInches = Math.max(0, (dims.length ?? 0) * (dims.width ?? 0) * (dims.height ?? 0));
-  const dimFactor = Math.min(18, cubicInches / 1728) * 1.15;
-  const seedBase = `${context.orderId ?? 'test'}:${context.weightOz ?? 0}:${dims.length ?? 0}x${dims.width ?? 0}x${dims.height ?? 0}`;
-
-  return shippingAccounts.flatMap((account, accountIndex) => {
-    const templates = TEST_MOCK_SERVICE_TEMPLATES[account.code] ?? TEST_MOCK_SERVICE_TEMPLATES.prepship_test ?? [];
-    return templates.map((template, templateIndex) => {
-      const jitter = seededUnit(`${seedBase}:${account.shippingProviderId}:${template.code}`);
-      const surchargeSeed = seededUnit(`${seedBase}:fuel:${account.shippingProviderId}:${templateIndex}`);
-      const shipmentCost = roundMoney(template.base + template.spread * jitter + weightLb * template.perLb + dimFactor);
-      const otherCost = roundMoney(surchargeSeed > 0.72 ? 0.55 + surchargeSeed * 1.45 : 0);
-      return {
-        carrierCode: account.code || 'test',
-        serviceCode: template.code,
-        serviceName: template.name,
-        carrierNickname: formatAccountDisplay(account, `Test Carrier ${accountIndex + 1}`),
-        shippingProviderId: account.shippingProviderId,
-        shipmentCost,
-        otherCost,
-        amount: shipmentCost + otherCost,
-        raw: {
-          testRate: true,
-          mocked: true,
-          carrierCode: account.code || 'test',
-          serviceCode: template.code,
-          serviceName: template.name,
-          deliveryDays: template.days,
-          delivery_days: Number.parseInt(template.days, 10) || null,
-          rate_details: otherCost > 0
-            ? [{ rate_detail_type: 'fuel_surcharge', carrier_description: 'Mock fuel surcharge', amount: { amount: otherCost } }]
-            : [],
-        },
-      };
-    });
-  });
 }
 
 function rateRowTextKey(value: unknown): string {
@@ -995,7 +882,7 @@ function rateBlockedReason(
   return rateBrowserUnavailableReason(rate, displayOptions);
 }
 
-function isBlockedRate(
+function isBackendUnavailableRate(
   rate: RateRow,
   order: RbOrderSummaryDto | null,
   shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
@@ -1110,8 +997,8 @@ export default function RateBrowserModal({
   }
 
   const rateShippingAccounts = useMemo(
-    () => (testMode ? shippingAccounts : scopedShippingAccounts),
-    [testMode, shippingAccounts, scopedShippingAccounts]
+    () => scopedShippingAccounts,
+    [scopedShippingAccounts]
   );
 
   // PS-197c: when the BACKEND policy owns this order's insurance (HUGRAB default), the dropdown
@@ -1152,13 +1039,6 @@ export default function RateBrowserModal({
       setScopedAccountsError(null);
       return;
     }
-    if (testMode) {
-      setScopedShippingAccounts(shippingAccounts);
-      setScopedAccountsLoading(false);
-      setScopedAccountsError(null);
-      return;
-    }
-
     let cancelled = false;
     const scopeKey = carrierAccountScopeKey(order);
     const hasCachedScope = hasScopedCarrierAccounts(scopeKey);
@@ -1189,7 +1069,7 @@ export default function RateBrowserModal({
     return () => {
       cancelled = true;
     };
-  }, [open, testMode, order?.orderId, order?.storeId, order?.clientId]);
+  }, [open, order?.orderId, order?.storeId, order?.clientId]);
 
   // Populate form from order on open. Priority for dims: panel > saved >
   // nothing. Priority for weight: initialWeight prop > order.weight.value.
@@ -1225,31 +1105,16 @@ export default function RateBrowserModal({
     setSvcClass('');
     setViewMode('all');
     canonicalBestRef.current = null;
-    const initialTotalOz =
-      initialWeight && ((initialWeight.lb ?? 0) > 0 || (initialWeight.oz ?? 0) > 0)
-        ? (initialWeight.lb ?? 0) * 16 + (initialWeight.oz ?? 0)
-        : order?.weight?.value ?? 0;
-    const seededTestRates = testMode
-      ? buildTestMockRateSeeds(rateShippingAccounts, {
-          orderId: order?.orderId,
-          weightOz: initialTotalOz,
-          dims: { length: panelLen || savedLen || 0, width: panelWid || savedWid || 0, height: panelHgt || savedHgt || 0 },
-        })
-      : [];
-    const seededBestRate = testMode
-      ? [...seededTestRates].sort((a, b) => a.shipmentCost + a.otherCost - (b.shipmentCost + b.otherCost))[0] ?? null
-      : buildOrderBestRateSeed(order, rateShippingAccounts);
+    const seededBestRate = buildOrderBestRateSeed(order, rateShippingAccounts);
     setSelectedPid(
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
         : null
     );
     setRatesByPid(
-      testMode
-        ? groupRatesByProviderId(seededTestRates)
-        : seededBestRate?.shippingProviderId != null
-          ? { [String(seededBestRate.shippingProviderId)]: [seededBestRate] }
-          : {}
+      seededBestRate?.shippingProviderId != null
+        ? { [String(seededBestRate.shippingProviderId)]: [seededBestRate] }
+        : {}
     );
     setRateErrorsByPid({});
     setCarrierStatusByPid({});
@@ -1264,7 +1129,7 @@ export default function RateBrowserModal({
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, order?.orderId, testMode, rateShippingAccounts.length]);
+  }, [open, order?.orderId, rateShippingAccounts.length]);
 
   // Derived
   const lbNum = parseFloat(wtLb) || 0;
@@ -1476,26 +1341,15 @@ export default function RateBrowserModal({
       normalizeInsurance({ insuranceProvider: effectiveInsuranceProvider, insuredValue: effectiveInsuredValue });
     setBrowsing(true);
     if (options.forceLive !== true) resetRateBrowseWorkflow();
-    const seededTestRates = testMode
-      ? buildTestMockRateSeeds(rateShippingAccounts, {
-          orderId: order?.orderId,
-          weightOz: totalOz,
-          dims: { length: lenNum, width: widNum, height: hgtNum },
-        })
-      : [];
-    const seededBestRate = testMode
-      ? [...seededTestRates].sort((a, b) => a.shipmentCost + a.otherCost - (b.shipmentCost + b.otherCost))[0] ?? null
-      : buildOrderBestRateSeed(order, rateShippingAccounts);
+    const seededBestRate = buildOrderBestRateSeed(order, rateShippingAccounts);
     const seededPid =
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
         : null;
     setRatesByPid(
-      testMode
-        ? groupRatesByProviderId(seededTestRates)
-        : seededBestRate && seededPid != null
-          ? { [String(seededPid)]: [seededBestRate] }
-          : {}
+      seededBestRate && seededPid != null
+        ? { [String(seededPid)]: [seededBestRate] }
+        : {}
     );
     setRateErrorsByPid({});
     setRateMetaByPid({});
@@ -1542,17 +1396,6 @@ export default function RateBrowserModal({
         finishBrowseRequest(requestSeq);
         return { carriersWithRates, uncoveredPids };
       }
-    }
-
-    if (testMode) {
-      if (seededBestRate) {
-        setRatesByPid(groupRatesByProviderId(seededTestRates));
-        setSelectedPid(seededPid);
-        const applied = toAppliedRate(seededBestRate);
-        if (applied) emitBestRateResolved(applied);
-      }
-      finishBrowseRequest(requestSeq);
-      return { carriersWithRates, uncoveredPids };
     }
 
     try {
@@ -1883,7 +1726,7 @@ export default function RateBrowserModal({
       // If ShipStation returns no live rates, fall back to the table's
       // already-saved best rate so the modal stays consistent with the row.
       const ratesToRank = liveFetchedRates.length ? liveFetchedRates : [seededBestRate!];
-      const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r, order, currentRateShippingOptions));
+      const available = filterBySvcClass(ratesToRank).filter((r) => !isBackendUnavailableRate(r, order, currentRateShippingOptions));
       // PS-135 / PS-279: the backend owns best-rate selection (src/services/rates.ts picks the
       // cheapest ELIGIBLE rate POST-markup). Consume that canonical winner — matched WITHIN the
       // eligible set so the operator's service-class filter + blocked rules still apply. We must
@@ -2143,7 +1986,7 @@ export default function RateBrowserModal({
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
     if (!Number.isFinite(pid) || !r.serviceCode) return;
-    if (isBlockedRate(r, order, currentRateShippingOptions)) return;
+    if (isBackendUnavailableRate(r, order, currentRateShippingOptions)) return;
     // Per user override unlock shipped data on 2026-07-11: the parent Apply
     // command atomically persists the provider; avoid a second racing write.
     onApplyRate({
@@ -2174,7 +2017,7 @@ export default function RateBrowserModal({
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
     if (!Number.isFinite(pid) || !r.serviceCode) return null;
-    if (isBlockedRate(r, order, currentRateShippingOptions)) return null;
+    if (isBackendUnavailableRate(r, order, currentRateShippingOptions)) return null;
     return {
       carrierCode: r.carrierCode,
       serviceCode: r.serviceCode,
@@ -2398,7 +2241,7 @@ export default function RateBrowserModal({
 
   // PS-157: the rates body (empty/loading/all/carriers states + the All-Rates and
   // per-carrier views) moved verbatim into <RateRowsView>. The parent still owns
-  // combinedAll / filterBySvcClass / isBlockedRate and the row rendering
+  // combinedAll / display-only service-class filtering / backend availability facts and the row rendering
   // (renderRateRow), passing them down so behavior is byte-for-byte identical.
 
   // ── Main render ────────────────────────────────────────────────────────────

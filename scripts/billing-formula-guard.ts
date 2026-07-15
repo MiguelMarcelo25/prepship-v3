@@ -3,9 +3,8 @@ import {
   BILLING_DETAIL_COLUMNS,
   buildBillingSummaryTotals,
   computeBillingDetailMetrics,
-  getBillingInitialRange,
-  getBillingPresetRange,
 } from '../web/src/components/Views/billing-parity';
+import { resolveBillingPresetWindow } from '../src/services/reporting-window-presets';
 
 function fail(message: string): never {
   throw new Error(message);
@@ -82,12 +81,11 @@ assertEqual(bareMetrics.fulfillmentFee, 0, 'missing backend fulfillmentFeeTotal 
 const totalColumn = BILLING_DETAIL_COLUMNS.find((column) => column.id === 'total');
 assertEqual(totalColumn?.label, 'Fulfillment Fee', 'detail total column is labeled Fulfillment Fee');
 
-const localJulyFirst = new Date(2026, 6, 1, 0, 5, 0);
-assertEqual(getBillingPresetRange('this_month', localJulyFirst).from, '2026-07-01', 'this month preset uses local calendar day without UTC backshift');
-assertEqual(getBillingPresetRange('this_month', localJulyFirst).to, '2026-07-31', 'this month preset ends on local calendar month end');
-assertEqual(getBillingPresetRange('last_30', localJulyFirst).from, '2026-06-02', 'last 30 days is exactly 30 inclusive calendar days');
-assertEqual(getBillingPresetRange('last_90', localJulyFirst).from, '2026-04-03', 'last 90 days is exactly 90 inclusive calendar days');
-assertEqual(getBillingInitialRange(localJulyFirst).from, '2026-06-02', 'initial billing range matches Last 30 Days preset');
+const localJulyFirst = new Date('2026-07-01T08:05:00.000Z');
+assertEqual(resolveBillingPresetWindow('this_month', localJulyFirst).from, '2026-07-01', 'this month preset uses the backend California calendar day');
+assertEqual(resolveBillingPresetWindow('this_month', localJulyFirst).to, '2026-07-31', 'this month preset ends on backend calendar month end');
+assertEqual(resolveBillingPresetWindow('last_30', localJulyFirst).from, '2026-06-02', 'last 30 days is exactly 30 inclusive calendar days');
+assertEqual(resolveBillingPresetWindow('last_90', localJulyFirst).from, '2026-04-03', 'last 90 days is exactly 90 inclusive calendar days');
 
 const billingRoute = readFileSync('src/routes/billing.ts', 'utf8');
 const billingService = readFileSync('src/services/billing.ts', 'utf8');

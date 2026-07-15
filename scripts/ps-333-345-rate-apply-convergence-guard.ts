@@ -5,8 +5,8 @@
  * Rate Browser amount, then persist a third amount after Apply. This guard pins
  * the backend source-of-truth fix: Apply Best Rate must resolve the clicked
  * backend quote snapshot row by (rateQuoteId, selectedRateKey) and persist that
- * finalized backend DTO. The frontend-carried row object is only a compatibility
- * fallback when no backend quote identity exists.
+ * finalized backend DTO. The frontend-carried row object is never persistence
+ * authority when backend quote identity is absent.
  */
 import { readFileSync } from 'node:fs';
 

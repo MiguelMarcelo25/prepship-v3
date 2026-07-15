@@ -29,9 +29,7 @@ import {
   createBillingConfigDraftMap,
   formatBillingMoney,
   getBillingDetailColumnStorageKey,
-  getBillingInitialRange,
   getBillingInvoiceUrl,
-  getBillingPresetRange,
   getDefaultBillingDetailColumnIds,
   getVisibleBillingDetailColumns,
   readBillingDetailColumnIds,
@@ -310,7 +308,6 @@ function readBillingClientFilterIds() {
 
 export default function BillingView() {
   const toastContext = useContext(ToastContext)
-  const initialRange = getBillingInitialRange(typeof window === 'undefined' ? new Date('2026-03-22T00:00:00Z') : new Date())
   const detailWrapRef = useRef<HTMLDivElement | null>(null)
   const fetchRefPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const billingUpdateRunningRef = useRef(false)
@@ -322,8 +319,18 @@ export default function BillingView() {
   const [selectedPkgClientId, setSelectedPkgClientId] = useState('')
   const [packagePriceDrafts, setPackagePriceDrafts] = useState<Record<number, string>>({})
   const [activePreset, setActivePreset] = useState<BillingPresetId | null>('last_30')
-  const [from, setFrom] = useState(initialRange.from)
-  const [to, setTo] = useState(initialRange.to)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const billingPresetWindowQuery = useQuery<{ from: string; to: string }>({
+    queryKey: ['billing', 'preset-window', activePreset],
+    enabled: activePreset != null,
+    queryFn: () => api.get(`/billing/preset-window${qs({ preset: activePreset ?? undefined })}`),
+  })
+  useEffect(() => {
+    if (activePreset == null || !billingPresetWindowQuery.data) return
+    setFrom(billingPresetWindowQuery.data.from)
+    setTo(billingPresetWindowQuery.data.to)
+  }, [activePreset, billingPresetWindowQuery.data])
   // PS-311: bulk box-cost modal — open when the operator chooses to apply a reviewed box cost to
   // EVERY order with that box in the current (client + date range).
   const [bulkBoxCostOpen, setBulkBoxCostOpen] = useState(false)
@@ -1686,10 +1693,7 @@ export default function BillingView() {
           generateLoading={generateLoading}
           generateStatus={generateStatus}
           onSelectPreset={(preset) => {
-            const range = getBillingPresetRange(preset)
             setActivePreset(preset)
-            setFrom(range.from)
-            setTo(range.to)
           }}
           onFromChange={(value) => {
             setActivePreset(null)

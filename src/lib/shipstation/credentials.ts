@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { clients } from '../../db/schema/clients.js';
+import { evaluateClientRateSourcePolicy } from '../../services/client-rate-source-policy.js';
 
 export type ClientCredentials = {
   apiKeyV2: string | null;
@@ -16,28 +17,24 @@ const EMPTY: ClientCredentials = {
   sourceClientId: null,
 };
 
-// v2-parity: resolve per-client ShipStation credentials with the
-// rate_source_client_id fallback. Mirrors apps/api/src/modules/labels/data/
-// sqlite-label-repository.ts:81-120 in v2original.
-//
-// Resolution order:
-//   1. Direct lookup on clientId → ssApiKeyV2 / ssApiKey / ssApiSecret
-//   2. If clientId has null ssApiKeyV2 AND rateSourceClientId is set,
-//      recurse once to the target client to pick up ITS apiKeyV2 (v2 treats
-//      the rate-source client as a carrier-account fallback). V1 key+secret
-//      stay on the original client — the rate source only fills the V2 key.
-//   3. If nothing resolves, return all-null — callers fall through to env
-//      defaults via ssRequest/ssV1Request.
-//
-// Note: `opts.storeId` is accepted for forward-compat with v2's
-// `getShippingAccountContext(storeId)` signature, but v4 resolves by clientId.
-// If you need storeId→clientId resolution, fetch the client first and pass
-// its id here.
+/**
+ * Resolve per-client ShipStation credentials.
+ *
+ * Resolution order:
+ * 1. Use credentials owned by the requested client.
+ * 2. When the client has no v2 key and explicitly names a rate-source client,
+ *    validate that link through the canonical policy and borrow its v2 key.
+ * 3. With no explicit source, return null credentials so callers may use the
+ *    configured application default.
+ *
+ * An explicit but invalid source fails closed. Silently using the application
+ * default would quote, buy, or notify through a different account owner.
+ */
 export async function loadClientCredentials(
   clientId: number | null | undefined,
   opts: { storeId?: number } = {},
 ): Promise<ClientCredentials> {
-  void opts; // reserved for future storeId-based resolution
+  void opts;
   if (!clientId) return EMPTY;
 
   const [row] = await db
@@ -53,29 +50,25 @@ export async function loadClientCredentials(
 
   if (!row) return EMPTY;
 
-  let apiKeyV2 = row.apiKeyV2 ?? null;
+  let apiKeyV2 = row.apiKeyV2?.trim() || null;
   let sourceClientId = apiKeyV2 ? clientId : null;
 
-  // v2-parity fallback: if this client has no V2 key of its own AND points
-  // at a rate-source client, borrow the source's V2 key.
-  if (!apiKeyV2 && row.rateSourceClientId && row.rateSourceClientId !== clientId) {
-    try {
-      const [src] = await db
-        .select({ apiKeyV2: clients.ssApiKeyV2 })
-        .from(clients)
-        .where(eq(clients.id, row.rateSourceClientId))
-        .limit(1);
-      if (src?.apiKeyV2) {
-        apiKeyV2 = src.apiKeyV2;
-        sourceClientId = row.rateSourceClientId;
-      }
-    } catch (err) {
-      // Non-fatal — caller falls through to env default.
-      console.warn(
-        `[ss-credentials] rate-source lookup failed for clientId=${clientId} → ${row.rateSourceClientId}:`,
-        err
-      );
+  if (!apiKeyV2 && row.rateSourceClientId != null) {
+    const [source] = await db
+      .select({ id: clients.id, active: clients.active, ssApiKeyV2: clients.ssApiKeyV2 })
+      .from(clients)
+      .where(eq(clients.id, row.rateSourceClientId))
+      .limit(1);
+    const policy = evaluateClientRateSourcePolicy({
+      clientId,
+      rateSourceClientId: row.rateSourceClientId,
+      source: source ?? null,
+    });
+    if (!policy.ok) {
+      throw new Error(`${policy.code}: ${policy.error}`);
     }
+    apiKeyV2 = source!.ssApiKeyV2!.trim();
+    sourceClientId = row.rateSourceClientId;
   }
 
   return {

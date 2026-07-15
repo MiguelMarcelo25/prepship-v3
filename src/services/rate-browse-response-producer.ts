@@ -58,6 +58,10 @@ import {
   stampRateBrowserDisplayAliases,
 } from './rate-browser-display-fields';
 import { resolveRateBrowseDestinationCountry } from './rate-browse-destination-country';
+import {
+  stampRateSourceDisplay,
+  stampRateSourceDisplayList,
+} from './rate-source-display';
 
 type RateBrowseBody = Record<string, any>;
 
@@ -438,6 +442,7 @@ export async function produceRateBrowsePayload({
     stampHugrabCoverageDisplayFields(rate as Record<string, unknown>, hugrabCoverageDisplayContext),
   );
   responseRates = stampRateBrowserDisplayAliases(responseRates);
+  responseRates = stampRateSourceDisplayList(responseRates, accounts);
   if (bestRateOut) {
     bestRateOut = stampHugrabCoverageDisplayFields(
       bestRateOut as Record<string, unknown>,
@@ -450,6 +455,7 @@ export async function produceRateBrowsePayload({
       hugrabCoverageDisplayContext,
     );
     secondBestRateOut = stampRateBrowserDisplayAliases(secondBestRateOut);
+    secondBestRateOut = stampRateSourceDisplay(secondBestRateOut, accounts);
     if (bestRateOut) {
       bestRateOut = {
         ...(bestRateOut as Record<string, unknown>),
@@ -459,6 +465,10 @@ export async function produceRateBrowsePayload({
   }
   if (bestRateOut) {
     bestRateOut = stampRateBrowserDisplayAliases(bestRateOut) as typeof cheapest;
+    bestRateOut = stampRateSourceDisplay(
+      bestRateOut as Record<string, unknown>,
+      accounts,
+    ) as typeof cheapest;
   }
   let manualEstimate: { rates: unknown[]; fetchedAt: string; cached: boolean } | null = null;
   if (body.manualEstimate === true) {

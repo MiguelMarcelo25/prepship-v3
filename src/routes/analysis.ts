@@ -19,8 +19,47 @@ import {
   reportingShipmentCostJoinSql,
 } from '../services/reporting-projection';
 import { assertRuntimeSchemaReady } from '../services/runtime-schema-readiness.js';
+import {
+  resolveDashboardReportingWindow,
+  resolveLastDaysReportingWindow,
+  resolveReportingPickerPreset,
+} from '../services/reporting-window-presets';
 
 const app = new Hono();
+
+const reportingPresetQuery = z.object({
+  days: z.coerce.number().int().min(0).max(3650),
+});
+
+app.get('/preset-window', zValidator('query', reportingPresetQuery), (c) => {
+  return c.json(resolveLastDaysReportingWindow(c.req.valid('query').days));
+});
+
+const reportingPickerPresetQuery = z.object({
+  preset: z.enum(['today', 'yesterday', 'last7', 'last15', 'last30', 'thisMonth', 'lastMonth', 'last90', 'ytd']),
+});
+
+app.get('/date-preset', zValidator('query', reportingPickerPresetQuery), (c) => {
+  return c.json(resolveReportingPickerPreset(c.req.valid('query').preset));
+});
+
+const reportingWindowQuery = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  days: z.coerce.number().int().min(1).max(3650).optional(),
+});
+
+app.get('/reporting-window', zValidator('query', reportingWindowQuery), (c) => {
+  const query = c.req.valid('query');
+  const current = query.from && query.to
+    ? { from: query.from, to: query.to }
+    : resolveLastDaysReportingWindow(query.days ?? 30);
+  try {
+    return c.json(resolveDashboardReportingWindow(current));
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : 'Invalid reporting window' }, 400);
+  }
+});
 
 app.get('/overview', async (c) => {
   const scope = analysisScopeFromContext(c);
