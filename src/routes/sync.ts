@@ -7,7 +7,12 @@ import {
   getApiRuntimeStatus,
   getPersistedWorkerStatus,
 } from '../services/worker-status';
-import { enqueueManualOrderSyncJob, getSyncJobQueueStatus } from '../services/sync-job-queue';
+import {
+  enqueueManualOrderSyncJob,
+  getSyncJobQueueStatus,
+  type ManualOrderSyncEnqueueResult,
+} from '../services/sync-job-queue';
+import type { ManualOrderSyncRequest } from '../services/manual-order-sync-job';
 import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
 import {
   readShipmentSyncWatchdogStatus,
@@ -28,23 +33,37 @@ const triggerBody = z
   .optional()
   .default({});
 
+type ManualOrderSyncEnqueue = (
+  request: ManualOrderSyncRequest,
+) => Promise<ManualOrderSyncEnqueueResult>;
+
+export async function runManualOrderSyncRoute(
+  body: ManualOrderSyncRequest,
+  enqueue: ManualOrderSyncEnqueue = enqueueManualOrderSyncJob,
+) {
+  const result = await enqueue(body);
+  return {
+    body: {
+      ...result,
+      status: result.queueState,
+      message: result.queued
+        ? 'Order sync queued'
+        : result.error
+          ? result.error
+          : result.queueState === 'running'
+            ? 'Order sync is already running'
+            : result.queueState === 'retrying'
+              ? 'Order sync is waiting to retry'
+              : 'Order sync is already queued',
+    },
+    status: result.error ? 503 as const : 202 as const,
+  };
+}
+
 app.post('/orders', zValidator('json', triggerBody), async (c) => {
   const body = c.req.valid('json') ?? {};
-  const result = await enqueueManualOrderSyncJob(body);
-  const response = {
-    ...result,
-    status: result.queueState,
-    message: result.queued
-      ? 'Order sync queued'
-      : result.error
-        ? result.error
-        : result.queueState === 'running'
-          ? 'Order sync is already running'
-          : result.queueState === 'retrying'
-            ? 'Order sync is waiting to retry'
-            : 'Order sync is already queued',
-  };
-  return c.json(response, result.error ? 503 : 202);
+  const result = await runManualOrderSyncRoute(body);
+  return c.json(result.body, result.status);
 });
 
 app.get('/status', async (c) => {

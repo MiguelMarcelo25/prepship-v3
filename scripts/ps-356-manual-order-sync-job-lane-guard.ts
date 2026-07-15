@@ -32,7 +32,7 @@ const home = read('web/src/Home.tsx');
 
 check(
   '/sync/orders imports the backend queue owner',
-  /import \{ enqueueManualOrderSyncJob, getSyncJobQueueStatus \} from '\.\.\/services\/sync-job-queue';/.test(syncRoute),
+  /import \{[^}]*\benqueueManualOrderSyncJob\b[^}]*\bgetSyncJobQueueStatus\b[^}]*\} from '\.\.\/services\/sync-job-queue';/.test(syncRoute),
 );
 check(
   '/sync/orders no longer imports order-sync or rates-backfill work',
@@ -40,7 +40,8 @@ check(
 );
 check(
   '/sync/orders delegates to enqueueManualOrderSyncJob',
-  /const result = await enqueueManualOrderSyncJob\(body\);/.test(syncRouteBlock),
+  /enqueue: ManualOrderSyncEnqueue = enqueueManualOrderSyncJob/.test(syncRoute) &&
+    /const result = await runManualOrderSyncRoute\(body\);/.test(syncRouteBlock),
 );
 check(
   '/sync/orders does not run syncOrders inline',
@@ -48,8 +49,9 @@ check(
 );
 check(
   '/sync/orders returns accepted queued state instead of completed sync totals',
-  /return c\.json\(response, result\.error \? 503 : 202\);/.test(syncRouteBlock) &&
-    /status: result\.queueState/.test(syncRouteBlock),
+  /return c\.json\(result\.body, result\.status\);/.test(syncRouteBlock) &&
+    /status: result\.queueState/.test(syncRoute) &&
+    /status: result\.error \? 503 as const : 202 as const/.test(syncRoute),
 );
 
 check(

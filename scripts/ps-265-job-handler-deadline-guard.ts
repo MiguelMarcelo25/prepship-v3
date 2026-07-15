@@ -104,7 +104,10 @@ async function main() {
 
   // ── Static contract: the worker bounds the handler without releasing a zombie ──
   const q = read('src/services/sync-job-queue.ts');
-  check('sync-job-queue imports withDeadline', /import \{ withDeadline \} from '\.\.\/lib\/with-deadline'/.test(q));
+  check(
+    'sync-job-queue imports withDeadline',
+    /import \{[^}]*\bwithDeadline\b[^}]*\} from '\.\.\/lib\/with-deadline'/.test(q),
+  );
   check('handler is wrapped in withDeadline',
     /const handlerPromise = Promise\.resolve\(\)\.then\(\(\) =>\s*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\),?\s*\)[\s\S]*await withDeadline\(\s*\(\) => handlerPromise,[\s\S]*SYNC_JOB_HANDLER_TIMEOUT_MS[\s\S]*abortController\.abort\(error\)/.test(q));
   check('queue tracks the original handler promise outside the deadline race',
