@@ -71,14 +71,22 @@ export const billingLineItems = pgTable(
   (t) => [
     index('billing_li_client_idx').on(t.clientId),
     index('billing_li_date_idx').on(t.shipDate),
-    unique('billing_li_unique').on(t.orderId, t.lineType, t.description),
+    // PS-425: distinct outbound shipments retain their own frozen charge and
+    // margin lineage. Shipment-less external/order rows keep their order-level
+    // identity, while storage (orderId NULL) remains on its period-specific key.
+    uniqueIndex('billing_li_shipment_unique_idx')
+      .on(t.orderId, t.shipmentId, t.lineType, t.description)
+      .where(sql`${t.shipmentId} is not null`),
+    uniqueIndex('billing_li_order_unique_idx')
+      .on(t.orderId, t.lineType, t.description)
+      .where(sql`${t.orderId} is not null and ${t.shipmentId} is null`),
     // Audit B-4 (2026-07-13): storage lines carry orderId NULL, and Postgres
-    // default NULLS DISTINCT means billing_li_unique never fires for them — two
-    // concurrent generates could both insert the same storage line. This partial
+    // Storage rows all have orderId/shipmentId NULL, so their period identity
+    // uses this client/date key. This partial
     // unique closes the hole at the DB layer (created on prod via migration
     // audit_2026_07_13_week1_indexes_and_rls; zero violations existed). The
-    // generator also takes an xact advisory lock, so a collision here is a
-    // loud last-resort failure, not a duplicate charge.
+    // generator also takes an xact advisory lock, and RETURNING exposes any
+    // last-resort conflict no-op instead of reporting a duplicate charge.
     uniqueIndex('billing_li_storage_unique_idx')
       .on(t.clientId, t.lineType, t.shipDate, t.description)
       .where(sql`${t.orderId} is null`),

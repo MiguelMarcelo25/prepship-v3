@@ -24,6 +24,7 @@ import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-t
 export type InvoiceCsvDetailRow = {
   order_id: number | null;
   order_number: string | null;
+  shipment_id?: number | null;
   ship_date: string | null;
   base_qty: string;
   addl_qty: string;
@@ -55,6 +56,7 @@ export const INVOICE_CSV_HEADERS = [
   'Shipping',
   'Storage',
   'Total',
+  'Shipment #',
 ] as const;
 
 /** RFC-4180 quote a field, with spreadsheet formula-injection neutralization:
@@ -106,6 +108,7 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     num(shippingAmt),
     num(storageAmt),
     num(total),
+    row.shipment_id == null ? 'External' : `#${row.shipment_id}`,
   ];
   return cells.map(csvField).join(',');
 }

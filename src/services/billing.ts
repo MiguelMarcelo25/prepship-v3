@@ -107,6 +107,10 @@ import {
 } from './billing-hugrab-shipping-rate-override';
 import { requireBillingRegenerationRead } from './billing-regeneration-readiness';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
+import {
+  activeOutboundShipmentPredicate,
+  withShipmentBillingLineage,
+} from './shipment-aggregate';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -921,15 +925,10 @@ export async function generateLineItems(input: GenerateInput) {
       shipments,
       and(
         eq(shipments.orderId, orders.id),
-        eq(shipments.voided, false),
-        // Audit B-1 (2026-07-13): return labels are NOT outbound billing evidence.
-        // createReturnLabelV2 inserts a second non-voided shipment for the same
-        // orderId (isReturn=true, real cost) — without this filter that row joins
-        // here and the order bills shipping twice (or non-deterministically, since
-        // identical-description lines collide on billing_li_unique and
-        // onConflictDoNothing keeps an arbitrary winner). Read-only filter over
-        // shipped data; matches hugrab-billing-shipping-floor.ts:198.
-        sql`coalesce(${shipments.isReturn}, false) = false`
+        // Per user override unlock shipped data on 2026-05-23: PS-425 reads
+        // the canonical active-outbound set. Returns and voided/replaced labels
+        // are excluded; distinct active outbound shipments remain billable.
+        activeOutboundShipmentPredicate(),
       )
     )
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
@@ -1561,9 +1560,13 @@ export async function generateLineItems(input: GenerateInput) {
           },
         );
 
-    // Collect for batch insert instead of inserting one at a time.
+    // PS-425: the frozen description carries the same shipment identity as
+    // shipmentId, so audits and exports retain human-readable lineage.
     for (const row of effectiveRows) {
-      allRows.push(row);
+      allRows.push({
+        ...row,
+        description: withShipmentBillingLineage(row.description, row.shipmentId),
+      });
     }
   }
 
@@ -1593,8 +1596,6 @@ export async function generateLineItems(input: GenerateInput) {
       )
     : requestedWindowOrderLines;
   const CHUNK = 500;
-  let insertedOrderLineCount = 0;
-  let lineItemConflictCount = 0;
   try {
     await db.transaction(async (tx) => {
       await assertBillingOrdersEditable(
@@ -1622,16 +1623,13 @@ export async function generateLineItems(input: GenerateInput) {
         const inserted = await tx
           .insert(billingLineItems)
           .values(chunk)
-          .onConflictDoNothing({
-            target: [
-              billingLineItems.orderId,
-              billingLineItems.lineType,
-              billingLineItems.description,
-            ],
-          })
-          .returning({ totalCost: billingLineItems.totalCost });
-        insertedOrderLineCount += inserted.length;
-        lineItemConflictCount += chunk.length - inserted.length;
+          // PS-425: a duplicate candidate is a loud transaction failure, never
+          // a conflict-ignore that reports an attempted row as persisted.
+          .returning({
+            id: billingLineItems.id,
+            shipmentId: billingLineItems.shipmentId,
+            totalCost: billingLineItems.totalCost,
+          });
         generated += inserted.length;
         for (const row of inserted) total += toNum(row.totalCost);
       }
@@ -1649,17 +1647,6 @@ export async function generateLineItems(input: GenerateInput) {
     if (isBillingFinalizedLockError(error)) rethrowAsBillingFinalizedLock(error);
     throw error;
   }
-  if (lineItemConflictCount > 0) {
-    logStructured('warn', 'billing.line_item_conflict_skipped', {
-      clientId: input.clientId,
-      dateFrom: input.dateFrom,
-      dateTo: input.dateTo,
-      attemptedLineCount: allRows.length,
-      insertedLineCount: insertedOrderLineCount,
-      conflictCount: lineItemConflictCount,
-    });
-  }
-
   // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
   // The billable-storage math is owned by computeClientStorageBilling
   // (src/services/billing-storage.ts). For each client with a positive storage
@@ -1859,12 +1846,10 @@ export async function generateLineItems(input: GenerateInput) {
       await ensureBillingStorageProofSchema();
       const insertedStorageLines = await db.transaction(async (tx) => {
         // Audit B-4 (2026-07-13): serialize concurrent storage writers for this
-        // client+period. Storage rows have orderId=null, and Postgres default
-        // NULLS DISTINCT means billing_li_unique(orderId, lineType, description)
-        // never fires for them — so two concurrent generates (two operators, or
-        // box-cost bulk-apply's embedded regenerate racing a manual Update
-        // Billing) each saw no row to delete under their snapshots and BOTH
-        // inserted, double-billing storage. The xact advisory lock releases on
+        // client+period. The shipment-cardinality key does not carry client/date,
+        // so billing_li_storage_unique_idx remains storage's DB identity. The
+        // advisory lock prevents two writers from racing between delete/insert.
+        // It releases on
         // commit/rollback; the second writer waits (ms — this tx is 3 small
         // statements), then its delete sees the committed row.
         const [storageLockClassId, storageLockObjId] = advisoryLockKeyPair(
@@ -1916,10 +1901,12 @@ export async function generateLineItems(input: GenerateInput) {
           })
           .onConflictDoNothing({
             target: [
-              billingLineItems.orderId,
+              billingLineItems.clientId,
               billingLineItems.lineType,
+              billingLineItems.shipDate,
               billingLineItems.description,
             ],
+            where: sql`${billingLineItems.orderId} is null`,
           })
           // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
           // report only the derived billing rows Postgres actually persisted.

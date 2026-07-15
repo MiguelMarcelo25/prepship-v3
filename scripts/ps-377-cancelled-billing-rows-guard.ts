@@ -111,7 +111,7 @@ check('FE renders the CANCELLED badge from the backend field (no FE inference fr
 });
 
 check('empty billing message no longer says HUGRAB-only cancelled', () => {
-  assert.ok(/No billable shipped or cancelled orders found for this range\./.test(billing));
+  assert.ok(/billable shipments\/orders/.test(billing));
   assert.ok(!/HUGRAB cancelled orders found/.test(billing));
 });
 

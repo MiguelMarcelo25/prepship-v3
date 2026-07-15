@@ -1757,13 +1757,14 @@ type InvoiceTotals = {
   fulfillmentFeeTotal: number;
 };
 
-// PS-217: the renderer-facing per-order invoice row. box_cost is the BILLED
+// PS-217/PS-425: the renderer-facing per-shipment invoice row. box_cost is the BILLED
 // package_cost line value (never a current price-table guess); box_label is the
 // human-readable billed box; box_review marks an unresolved/mismatched box so
 // the export shows the review reason instead of a silent blank.
 type InvoiceDetailRow = {
   order_id: number | null;
   order_number: string | null;
+  shipment_id: number | null;
   ship_date: string | null;
   base_qty: string;
   addl_qty: string;
@@ -1819,7 +1820,11 @@ function resolveInvoiceBoxLabel(
     const dims = hasDims ? ` (${fmtDim(pkg.length)}x${fmtDim(pkg.width)}x${fmtDim(pkg.height)})` : '';
     return { box_label: `${pkg.name}${dims}`, box_review: false };
   }
-  const parsed = row.box_cost_desc ? /^Box\s+\((.+)\)$/i.exec(row.box_cost_desc.trim()) : null;
+  const parsed = row.box_cost_desc
+    ? /^Box\s+\((.+)\)(?:\s+·\s+(?:shipment #\d+|external fulfillment))?$/i.exec(
+        row.box_cost_desc.trim(),
+      )
+    : null;
   if (parsed?.[1]) return { box_label: parsed[1], box_review: false };
   if (row.box_review_reason && row.box_review_reason.trim()) {
     return { box_label: row.box_review_reason.trim(), box_review: true };
@@ -1828,7 +1833,7 @@ function resolveInvoiceBoxLabel(
 }
 
 // PS-134 (slice 2, extract-only): the /invoice DATA layer. Runs the invoice's OWN summary +
-// per-order aggregates VERBATIM (full-precision ::text sums, raw ::timestamptz bounds, client_id
+// per-shipment aggregates VERBATIM (full-precision ::text sums, raw ::timestamptz bounds, client_id
 // scope behind the billingClientScopePredicate(invoiceScope) gate). NOT delegated to billingSummary()
 // — that unify is a contingent, customer-facing $ behavior change (client-scope filter + date-key
 // granularity divergences) deferred per scoping. Kept in routes/billing.ts so the billing scope
@@ -1851,8 +1856,8 @@ async function billingInvoiceData(
   if (!clientRow.length) return null;
 
   // PS-134/Audit 3.6: the invoice header and close workflow share this exact
-  // frozen-total owner. The per-order breakdown stays here because the summary
-  // service has no per-order representation to delegate to.
+  // frozen-total owner. The per-shipment breakdown stays here because the summary
+  // service has no per-shipment representation to delegate to.
   const totals = await billingInvoiceHeaderTotals(clientId, dateFrom, dateTo);
   const detailAmount = cancelledNoChargeBillingAmountSql({
     lineType: sql`b.line_type`,
@@ -1865,6 +1870,8 @@ async function billingInvoiceData(
     select
       b.order_id,
       b.order_number,
+      -- PS-425: invoice cardinality follows the frozen shipment-scoped lines.
+      b.shipment_id,
       -- PS-208: ship_date is a calendar day stored at UTC midnight — extract
       -- the day AT UTC. The previous America/Los_Angeles conversion turned a
       -- May 1 row into April 30 before display even started.
@@ -1919,8 +1926,8 @@ async function billingInvoiceData(
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
       and b.ship_date >= ${dateFrom}::timestamptz
       and b.ship_date < ${dateTo}::timestamptz
-    group by b.order_id, b.order_number, b.ship_date
-    order by b.ship_date desc, b.order_id desc
+    group by b.order_id, b.order_number, b.shipment_id, b.ship_date
+    order by b.ship_date desc, b.order_id desc, b.shipment_id desc nulls last
   `);
 
   // PS-217: resolve the human-readable billed box from the stamped package_id.
@@ -1966,6 +1973,7 @@ async function billingInvoiceData(
     return {
       order_id: r.order_id,
       order_number: r.order_number,
+      shipment_id: r.shipment_id,
       ship_date: r.ship_date,
       base_qty: r.base_qty,
       addl_qty: r.addl_qty,
@@ -1999,7 +2007,7 @@ async function billingInvoiceData(
 // template (fmt / >0 dash guards / `|| grandTotal` fallbacks / escHtml call sites kept verbatim;
 // the guard-pinned `const totalQty = baseQty + addlQty`, `<th class="num">Qty</th>`, and addl-fee
 // ternary stay in-file). `generated` (Date.now()) is computed once per render, same as before.
-function renderInvoiceHtml(args: {
+export function renderInvoiceHtml(args: {
   clientName: string;
   /** PS-208: the operator-picked calendar days (plain YYYY-MM-DD), not instants. */
   fromDay: string;
@@ -2072,6 +2080,7 @@ function renderInvoiceHtml(args: {
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
+        <td class="mono">${escHtml(d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
       </tr>`;
     })
     .join('');
@@ -2159,6 +2168,7 @@ function renderInvoiceHtml(args: {
         <th class="num">Shipping</th>
         <th class="num">Storage</th>
         <th class="num">Fulfillment Fee</th>
+        <th>Shipment #</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -2172,6 +2182,7 @@ function renderInvoiceHtml(args: {
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
         <td class="num" style="font-size:14px">${fmt(fulfillmentFeeTotal || grandTotal)}</td>
+        <td></td>
       </tr>
     </tfoot>
   </table>
@@ -2207,7 +2218,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
 // the exact dataset behind the HTML invoice (no forked query, so the two
 // exports can never disagree about rows, totals, or which days are in range).
 
-async function renderInvoiceXlsx(args: {
+export async function renderInvoiceXlsx(args: {
   clientName: string;
   fromDay: string;
   toDay: string;
@@ -2224,7 +2235,7 @@ async function renderInvoiceXlsx(args: {
 
   const invoice = workbook.addWorksheet('Invoice');
   invoice.views = [{ state: 'frozen', ySplit: 1 }];
-  // Single operator-facing invoice sheet, one row per order.
+  // PS-425: one operator-facing row per frozen shipment identity.
   invoice.columns = [
     { header: 'Order #', key: 'orderNumber', width: 12 },
     { header: 'Status', key: 'status', width: 18 },
@@ -2242,6 +2253,7 @@ async function renderInvoiceXlsx(args: {
     { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: NUMBER_FMT } },
     { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
     { header: 'Fulfillment Fee', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
+    { header: 'Shipment #', key: 'shipmentId', width: 14 },
   ];
   invoice.getRow(1).font = { bold: true };
   for (const d of details) {
@@ -2277,6 +2289,7 @@ async function renderInvoiceXlsx(args: {
       shipping: shippingAmt,
       storage: storageAmt,
       fulfillmentFee: fulfillmentFeeAmt,
+      shipmentId: d.shipment_id == null ? 'External' : `#${d.shipment_id}`,
     });
   }
   if (details.length) {

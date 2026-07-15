@@ -54,6 +54,7 @@ assert.deepEqual(
     'Shipping',
     'Storage',
     'Total',
+    'Shipment #',
   ],
   'CSV columns must keep the operator-facing line item order and omit Prep Fee Waiver',
 );
@@ -64,6 +65,7 @@ assert.ok(!INVOICE_CSV_HEADERS.includes('Prep Fee Waiver'), 'CSV must not includ
 const richRow: InvoiceCsvDetailRow = {
   order_id: 9001,
   order_number: 'PO-9001',
+  shipment_id: 90011,
   ship_date: '2026-05-04T00:00:00.000Z',
   base_qty: '3',
   addl_qty: '2',
@@ -85,6 +87,7 @@ const richRow: InvoiceCsvDetailRow = {
 const fallbackRow: InvoiceCsvDetailRow = {
   order_id: 9002,
   order_number: 'PO-9002',
+  shipment_id: 90021,
   ship_date: '2026-05-05',
   base_qty: '1',
   addl_qty: '0',
@@ -111,7 +114,7 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  '5/4/2026 12:00 AM PT,PO-9001,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
+  '5/4/2026 12:00 AM PT,PO-9001,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -119,7 +122,7 @@ assert.equal(
 // pickPackFee(3) + package cost(2) + shipping(2) + storage(1) = 8. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8',
+  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

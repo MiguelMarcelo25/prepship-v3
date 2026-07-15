@@ -115,6 +115,10 @@ const migrationOwnership = [
       'generation',
     ],
   ],
+  [
+    'drizzle/0068_billing_shipment_cardinality.sql',
+    ['billing_li_shipment_unique_idx', 'billing_li_order_unique_idx', 'shipment_id'],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -154,6 +158,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(durableWorkerMigration),
   '0067 changes only durable job/artifact sidecars and never mutates orders/shipments',
 );
+const billingCardinalityMigration = read('drizzle/0068_billing_shipment_cardinality.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCardinalityMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCardinalityMigration),
+  '0068 changes only the generated billing-line key and never mutates orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -163,7 +173,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0067_durable_worker_execution_fences.sql',
+  '0068_billing_shipment_cardinality.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

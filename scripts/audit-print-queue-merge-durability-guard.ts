@@ -88,7 +88,7 @@ check('merge store persists and reads snapshots by job id with monotonic writes'
 check('boot readiness keeps worker-fence objects at the latest migration frontier', () => {
   assert.match(readiness, /'print_queue_merge_jobs'/);
   assert.match(readiness, /'print_queue_merge_jobs_updated_at_idx'/);
-  assert.match(readiness, /0067_durable_worker_execution_fences\.sql/);
+  assert.match(readiness, /0068_billing_shipment_cardinality\.sql/);
   assert.match(fenceMigration, /input_payload jsonb/);
   assert.match(fenceMigration, /generation integer/);
   assert.match(fenceMigration, /print_queue_merge_jobs_recovery_idx/);

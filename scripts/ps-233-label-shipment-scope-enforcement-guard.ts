@@ -118,7 +118,11 @@ check('createBatchV2 forwards scope into per-order createLabelV2', /\}, scope\);
 
 // 4. Routes pass the caller scope into every service call (no unscoped call).
 check('labels route derives labelsScopeFromContext', labelsRoute.includes('function labelsScopeFromContext('));
-check('labels route passes scope to createLabelV2', count(labelsRoute, 'createLabelV2(body, labelsScopeFromContext(c))') >= 2);
+check(
+  'labels route passes scope to createLabelV2',
+  count(labelsRoute, 'createLabelV2(body, labelsScopeFromContext(c))') >= 1 &&
+    count(labelsRoute, "return createLabelRouteResponse(c, c.req.valid('json'));") >= 2,
+);
 check('labels route passes scope to createBatchV2', labelsRoute.includes('createBatchV2(body, labelsScopeFromContext(c))'));
 check('labels route passes scope to voidLabelV2', labelsRoute.includes('voidLabelV2(id, labelsScopeFromContext(c))'));
 check('labels route passes scope to createReturnLabelV2', labelsRoute.includes('createReturnLabelV2(id, body, labelsScopeFromContext(c))'));

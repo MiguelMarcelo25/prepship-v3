@@ -66,6 +66,11 @@ import {
   type LabelVoidOutcomeStatus,
 } from './label-void-policy';
 import {
+  activeOutboundShipmentPredicate,
+  decideShipmentVoidLifecycle,
+  type ShipmentVoidLifecycleDecision,
+} from './shipment-aggregate';
+import {
   createDirectCarrierLabelForOrder,
   directLabelAccountRefFromProviderId,
   loadDirectAccountForLabel,
@@ -3054,22 +3059,55 @@ export async function voidLabelV2(
   }
 
   // Provider void succeeded (or this is a test/local row with no provider
-  // label) — NOW record the local void state and free the order for a new label.
+  // label) — NOW record the local void state and reconcile the full shipment
+  // aggregate before deciding whether the order can reopen.
   const now = new Date();
-  // Per user override unlock shipped data on 2026-07-11: successful void,
-  // order reset, and package-stock reversal commit together. Replays no-op.
-  await db.transaction(async (tx) => {
+  // Per user override unlock shipped data on 2026-05-23: PS-425 serializes on
+  // the order row and derives lifecycle from every active outbound shipment.
+  // The order reopens only after the final active void, and upstream/external
+  // terminal evidence is preserved. Package reversal remains in this tx.
+  const lifecycleDecision = await db.transaction<ShipmentVoidLifecycleDecision | null>(async (tx) => {
+    let decision: ShipmentVoidLifecycleDecision | null = null;
+    const [order] = row.orderId
+      ? await tx
+          .select({
+            orderStatus: orders.orderStatus,
+            canonicalStatus: orders.canonicalStatus,
+            externallyShipped: orders.externallyShipped,
+          })
+          .from(orders)
+          .where(eq(orders.id, row.orderId))
+          .for('update')
+          .limit(1)
+      : [];
     await tx
       .update(shipments)
       .set({ voided: true, updatedAt: now })
       .where(eq(shipments.id, row.id));
-    if (row.orderId) {
+    if (row.orderId && order) {
+      const [remaining] = await tx
+        .select({ id: shipments.id })
+        .from(shipments)
+        .where(activeOutboundShipmentPredicate({
+          orderId: row.orderId,
+          excludeShipmentId: row.id,
+        }))
+        .limit(1);
+      decision = decideShipmentVoidLifecycle({
+        remainingActiveOutboundShipmentCount: remaining ? 1 : 0,
+        orderStatus: order.orderStatus,
+        canonicalStatus: order.canonicalStatus,
+        externallyShipped: order.externallyShipped,
+      });
+    }
+    if (row.orderId && decision?.kind === 'reopen') {
       await tx
         .update(orders)
-        .set({ orderStatus: 'awaiting_shipment', updatedAt: now })
+        .set({ orderStatus: decision.nextOrderStatus, updatedAt: now })
         .where(eq(orders.id, row.orderId));
     }
     await reverseOutboundPackageConsumptionInTransaction(row.id, now, tx);
+    return decision;
   });
 
   // PS-263 (Per user override unlock shipped data on 2026-06-14): a void must retract the
@@ -3100,7 +3138,14 @@ export async function voidLabelV2(
     refundAmount: row.labelCost ? Number(row.labelCost) : null,
     refundInitiated: dispatch.kind === 'provider',
     refundEstimate: getRefundEstimate(row.carrierCode),
-    note: 'Order status reset to "Awaiting Shipment"; you can create a new label.',
+    note:
+      lifecycleDecision?.kind === 'reopen'
+        ? 'Final active outbound label voided; order reset to "Awaiting Shipment".'
+        : lifecycleDecision?.kind === 'keep_shipped'
+          ? 'Order remains Shipped because another active outbound shipment exists.'
+          : lifecycleDecision?.kind === 'preserve_terminal'
+            ? 'Order remains terminal because upstream or external fulfillment evidence still applies.'
+            : 'Shipment voided; no linked order lifecycle changed.',
   };
 }
 

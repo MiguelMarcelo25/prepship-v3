@@ -645,6 +645,7 @@
     "test:ps-409-status-catchup-backlog": "tsx scripts/ps-409-status-catchup-backlog-guard.ts",
     "test:ps-417-shipstation-sync-account-state": "tsx scripts/ps-417-shipstation-sync-account-state-guard.ts",
     "test:ps-426-awaiting-cursor-manual-sync": "tsx scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+    "test:ps-425-multi-shipment-cardinality": "tsx scripts/ps-425-multi-shipment-cardinality-guard.ts && tsx scripts/ps-425-multi-shipment-cardinality-integration.ts",
     "test:sync-job-admission": "tsx scripts/sync-job-admission-guard.ts",
     "test:worker-status-role-snapshot": "tsx scripts/worker-status-role-snapshot-guard.ts",
     "test:ps-365-shipment-sync-cron-safety-net": "tsx scripts/ps-365-shipment-sync-cron-safety-net-guard.ts",
