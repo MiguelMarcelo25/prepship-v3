@@ -1,0 +1,319 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-428",
+  "title": "Worker-owned durable Rate Browse and Print merge execution with timeout and reaper fences",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "08595af9db9d9351f415d8605156c883b85abba4"
+  },
+  "riskDomains": [
+    "provider_durable_job"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Rate Browse provider fan-out is claimed and executed by a pg-boss worker from durable serializable input; the API-local queueMicrotask scheduler is removed.",
+      "evidenceIds": [
+        "worker-ownership-static",
+        "durable-job-integration"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "One active request key and generation-conditional writes prevent simultaneous same-fingerprint work and stale Rate Browse or PDF workers from publishing over a successor.",
+      "evidenceIds": [
+        "durable-job-adversarial",
+        "migration-pglite-proof"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Print merge runs in the dedicated worker from persisted inputs, publishes mandatory generation-fenced chunks before done, releases completed base64 bytes, and resumes stored chunks after restart.",
+      "evidenceIds": [
+        "durable-job-integration",
+        "worker-ownership-static"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Deadline cancellation keeps durable or lane ownership until admitted work settles, and the reaper uses timeout plus grace and never reaps a held live lane.",
+      "evidenceIds": [
+        "noncooperative-failure-injection",
+        "durable-job-adversarial"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "Startup and periodic recovery requeue queued or stale Rate Browse and Print merge generations without duplicating PS-423 provider receipt/postage policy.",
+      "evidenceIds": [
+        "durable-job-integration",
+        "worker-ownership-static"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "The focused failure/restart suite, all mandatory source-of-truth guards, strict TypeScript checks, and production frontend build pass at the reviewed implementation SHA.",
+      "evidenceIds": [
+        "focused-ps428-suite",
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "met",
+      "description": "Verification created no live label, postage, provider notification, marketplace confirmation, or production orders/shipments mutation, and shipped/cancelled protections were not weakened.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "migration-pglite-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/rate-browse-worker.ts plus rate_browse_jobs durable claim/generation state",
+      "src/services/print-queue-worker.ts plus print_queue_merge_jobs durable claim/generation state",
+      "src/services/print-queue-pdf-store.ts plus print_queue_pdf_chunks immutable artifacts",
+      "src/services/durable-worker-attempt.ts cancellation acknowledgement boundary",
+      "src/services/sync-job-queue.ts and src/services/sync-stuck-job-reaper.ts lane/reaper fence"
+    ],
+    "oldOwners": [
+      {
+        "path": "src/services/rate-browse-job-scheduler.ts API queueMicrotask execution",
+        "disposition": "deleted",
+        "delegatesTo": "src/services/rate-browse-worker.ts"
+      },
+      {
+        "path": "src/services/print-queue.ts startPrintJob direct API runMergeJob invocation",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/print-queue-worker.ts"
+      },
+      {
+        "path": "fixed sync reaper age independent of configured handler timeout",
+        "disposition": "delegated",
+        "delegatesTo": "SYNC_JOB_RUNNING_LEASE_MS and held advisory-lane truth"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/rates.ts",
+        "action": "modified",
+        "delegatesTo": "startRateBrowseWorkflow durable intent persistence and worker enqueue"
+      },
+      {
+        "path": "src/services/print-queue.ts",
+        "action": "modified",
+        "delegatesTo": "durable merge store, dedicated worker claim, and chunk artifact owner"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Routes only persist/enqueue intent and return/read DTOs. Provider fan-out, merge execution, recovery, cancellation acknowledgement, terminal state, and artifact publication remain in named durable backend owners."
+    }
+  },
+  "evidence": [
+    {
+      "id": "durable-job-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "drizzle/0067_durable_worker_execution_fences.sql",
+        "src/services/rate-browse-worker.ts",
+        "src/services/print-queue-worker.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "restart_idempotency"
+      ],
+      "proves": "A migrated PostgreSQL-compatible database retains worker input and artifacts, exposes stale jobs for restart recovery, increments a new generation, and preserves already-written chunks across the simulated restart boundary."
+    },
+    {
+      "id": "durable-job-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "src/services/rate-browse-job-store.ts",
+        "src/services/print-queue/merge-job-store.ts",
+        "src/services/print-queue-pdf-store.ts"
+      ],
+      "assertions": [
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Concurrent duplicate active requests and overlapping fresh claims are rejected; stale snapshot writes, stale artifact overwrites, and stale new artifact inserts have zero durable effect."
+    },
+    {
+      "id": "noncooperative-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "src/services/durable-worker-attempt.ts",
+        "src/services/sync-job-queue.ts",
+        "src/services/print-queue-worker.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "crash_recovery",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "A non-cooperative attempt exceeds its deadline but the cancellation remains unacknowledged and the claim remains held until the original work settles; only then is acknowledgement recorded and recovery allowed."
+    },
+    {
+      "id": "migration-pglite-proof",
+      "classification": "integration",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0067_durable_worker_execution_fences.sql",
+        "scripts/ps-428-durable-worker-execution-integration.ts"
+      ],
+      "assertions": [
+        "migrated_job_sidecars",
+        "forward_compatible_rollback"
+      ],
+      "proves": "Migration 0067 applies to legacy-shaped sidecar tables, reconciles duplicate active job metadata, installs the unique/fence indexes and columns, and still accepts previous-application inserts that omit every new column."
+    },
+    {
+      "id": "worker-ownership-static",
+      "classification": "static",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-guard.ts",
+        "docs/ps-tickets/PS-428.md"
+      ],
+      "assertions": [],
+      "proves": "API detached execution is absent, worker enqueue/claim/recovery wiring is present, chunk bytes are released from memory, and timeout-derived reaper ownership is pinned against regression."
+    },
+    {
+      "id": "focused-ps428-suite",
+      "classification": "static",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-guard.ts",
+        "scripts/ps-428-durable-worker-execution-integration.ts"
+      ],
+      "assertions": [],
+      "proves": "The static ownership guard and executable migrated-database/failure-injection proof run as one focused PS-428 command."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 43 mandatory source-of-truth and lifecycle guards pass with PS-428 wired into both the pack and its guard-of-guard."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully with 2,989 modules transformed."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= 08595af9db9d9351f415d8605156c883b85abba4",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-428.md",
+        "drizzle/0067_durable_worker_execution_fences.sql",
+        "src/services/rate-browse-worker.ts",
+        "src/services/print-queue-worker.ts",
+        "src/services/print-queue.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed implementation changes durable job/artifact orchestration and offline proof only. Migration 0067 contains no orders/shipments mutation, and no test invokes a live provider, buys postage, or notifies a marketplace."
+    },
+    {
+      "id": "forward-compatible-rollback-proof",
+      "classification": "integration",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "drizzle/0067_durable_worker_execution_fences.sql"
+      ],
+      "assertions": [
+        "forward_compatible_rollback"
+      ],
+      "proves": "After applying migration 0067, legacy application inserts that omit all PS-428 columns still succeed; operational code rollback can safely leave the additive sidecars and indexes in place."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0067_durable_worker_execution_fences.sql"
+    ],
+    "verification": {
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "drizzle/0067_durable_worker_execution_fences.sql"
+      ]
+    },
+    "rollbackPlan": "Revert the application commit while leaving additive job/artifact columns and indexes in place. The integration proof confirms the previous application can still insert/read legacy-shaped rows. The one-time duplicate-active reconciliation affects only transient Rate Browse sidecar metadata and is intentionally not reversed."
+  },
+  "rollback": {
+    "strategy": "Revert the packet commit and implementation commit. Leave migration 0067's additive columns and indexes in place so in-flight sidecar/artifact history remains readable; the previous application ignores the new fields and its legacy inserts are verified against the migrated fixture.",
+    "tested": true,
+    "evidenceIds": [
+      "forward-compatible-rollback-proof"
+    ]
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "The required durable-job proof is executable against a PostgreSQL-compatible migrated fixture with injected timeout/crash/concurrency failures. No live provider, label purchase, postage, marketplace notification, or production orders/shipments mutation is required for closure; deployment health is checked separately after push.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
