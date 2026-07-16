@@ -1,0 +1,33 @@
+{
+  "taskId": "PS-432",
+  "executedAt": "2026-07-16T01:13:48.2905471Z",
+  "environment": "production-read-only",
+  "queryArtifact": "docs/final-review/evidence/PS-432-provider-pending-readonly.sql",
+  "result": {
+    "itemCount": 9,
+    "jobCount": 3,
+    "orderCount": 8,
+    "providerPendingCount": 7,
+    "providerPendingRecoveryCount": 2,
+    "durableProviderReceiptCount": 9,
+    "queueEntryCount": 6,
+    "unresolvedPurchaseIntentCount": 0
+  },
+  "classification": "provider_success_already_durable",
+  "conclusion": "All nine stale Print Queue item states have a non-voided outbound shipment with a label URL, tracking, and durable provider receipt. No automatic retry or label repurchase is permitted. Three items have no current Print Queue entry, but that does not make their already-persisted label outcome ambiguous.",
+  "deepHealth": {
+    "statusCode": 503,
+    "reason": "provider_reconciliation_required",
+    "providerPending": 9,
+    "workerHeartbeatFresh": true,
+    "queueRetryActiveFailedCounts": 0
+  },
+  "safety": {
+    "transactionMode": "read only",
+    "productionRowsChanged": 0,
+    "providerCalls": 0,
+    "labelsPurchasedOrVoided": 0,
+    "marketplaceNotifications": 0,
+    "customerOrSecretDataRecorded": false
+  }
+}

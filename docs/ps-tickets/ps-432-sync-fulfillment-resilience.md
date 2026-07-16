@@ -1,7 +1,10 @@
 # PS-432 — Sync and fulfillment resilience
 
-Status: executable failure-injection closure complete locally; push, deployment,
-and operator review of unresolved production purchase intents remain pending.
+Status: implementation and executable failure-injection proof are deployed. A
+2026-07-16 read-only production classification found zero unresolved label
+purchase intents. The nine deep-health provider-pending facts are stale Print
+Queue sidecar states whose orders already have durable provider receipts; no
+automatic retry or production metadata mutation was performed.
 
 ## Architecture placement
 
@@ -107,10 +110,16 @@ The test uses inert environment values and an in-memory PGlite database. No
 configured database, carrier, marketplace, label, postage, customer, inventory,
 or production order/shipment state is contacted or changed.
 
-The last production review reported nine unresolved purchase intents. This
-implementation does not auto-resolve them: each requires provider-side evidence
-and the admin-only audited operator workflow. No production intent row was read,
-resolved, retried, or mutated during this completion pass.
+The last production review described nine unresolved purchase intents. The
+2026-07-16 read-only query in
+`docs/final-review/evidence/PS-432-provider-pending-readonly.sql` established that
+the nine facts are instead stale `print_queue_batch_job_items` states across
+eight orders and three inactive jobs. All nine have a durable active shipment
+with label URL, tracking, and provider receipt; six also have a Print Queue
+entry, and the label-purchase-intent table has zero unresolved rows. No row was
+resolved, retried, or mutated. The provider outcome ambiguity is classified as
+already durably successful; any later cleanup of the stale sidecar metadata is
+an operator action and must not repurchase a label.
 
 ## Safety statement
 

@@ -199,6 +199,28 @@ async function main(): Promise<void> {
       order_status: 'shipped',
       intent_count: 1,
     });
+    await Promise.all([
+      enqueueInventoryDeduction(
+        { id: 43201 },
+        { source: 'ps_432_concurrent_duplicate_a' },
+        db as never,
+      ),
+      enqueueInventoryDeduction(
+        { id: 43201 },
+        { source: 'ps_432_concurrent_duplicate_b' },
+        db as never,
+      ),
+    ]);
+    const afterConcurrentDuplicates = await client.query<{ count: number }>(`
+      SELECT count(*)::int AS count
+      FROM fulfillment_outbox
+      WHERE dedupe_key = 'inventory_deduction_requested:43201'
+    `);
+    assert.equal(
+      afterConcurrentDuplicates.rows[0]?.count,
+      1,
+      'concurrent duplicate inventory intents must have one durable effect',
+    );
 
     // 2. A provider-success row with torn local projections reconverges once.
     // Calling the owner again returns zero and has no connector/provider seam.
@@ -330,6 +352,15 @@ async function main(): Promise<void> {
     }>(`SELECT shipment_id, error FROM label_purchase_intents WHERE id = $1`, [scopedIntentId]);
     assert.equal(resolutionAudit.rows[0]?.shipment_id, 43240);
     assert.match(resolutionAudit.rows[0]?.error ?? '', /operator linked_shipment/);
+    await assert.rejects(
+      () => resolveLabelPurchaseIntentByOperator(scopedIntentId, {
+        outcome: 'linked_shipment',
+        shipmentId: 43240,
+        note: 'stale repeated resolution attempt',
+      }, intentDependencies),
+      /already resolved_by_operator/,
+      'a stale resolver cannot overwrite a terminal purchase-intent decision',
+    );
 
     // 5. Simulate ShipStation accepting markasshipped and the process dying
     // before local settlement. The retry re-reads upstream shipped truth and
