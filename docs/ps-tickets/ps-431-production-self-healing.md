@@ -33,15 +33,36 @@ supervisor to replace the process once rather than leaving a poisoned worker ali
 
 ## 2026-07-13 incident conclusion
 
-The retained ticket evidence proves a crash/restart loop coincided with read-only
-database poisoning and stale sync health. It does **not** prove whether the process-level
-trigger was OOM, a poisoned PostgreSQL session, or a pg-boss failure because the required
-historical Render log event and memory graph were not available in this development run.
-The change therefore does not claim a false root cause: readiness already detects
-write failure, connection lifetime limits recycle poisoned sessions, the sync watchdog
-owns stale-job recovery, and repeated escaped worker failures now force a bounded
-supervisor restart. The runbook requires saving the first fatal event and memory graph
-the next time the condition occurs.
+The 2026-07-16 retrospective used retained Render worker logs and deploy history for
+2026-07-13 06:00-20:00 UTC. It resolves the ambiguity in the original incident report:
+
+- Render recorded 34 worker replacements: 30 were API-triggered deploys and four were
+  manual. None in the inspected window was a platform crash/OOM replacement.
+- The worker emitted 69 read-only transaction failures from 07:09:33 through 08:22:13
+  UTC across four successive instances. Three were process-level
+  `[worker:unhandledRejection]` failures from read-only `SELECT` operations; the rest
+  were primarily pg-boss update failures.
+- Jobs continued to wedge after replacement: 128 job attempts across 25 instances hit
+  the 600-second lane deadline during the inspected window. The query for the worker
+  status persistence deadline reached its 500-row evidence cap, spanning 24 instances.
+- The same retained log window contains no heap/OOM match. Absence of an OOM log is not
+  a substitute for a memory graph, but the deploy trigger history proves that the
+  observed replacement loop itself was control-plane API recovery rather than Render's
+  process supervisor reacting to OOM.
+
+The root cause of the reported "crash loop" was therefore a **watchdog/API redeploy
+loop over unhealthy data-plane lanes**: the read-only database window poisoned pg-boss
+and worker operations, 600-second jobs and status writes stayed stuck, the watchdog saw
+the replacement worker as stale, and its Render API recovery started another deploy.
+
+The deployed mitigation is intentionally layered. `/health/ready` rejects a non-writable
+database; the in-app watchdog caps API restarts and now sends a cooldown-deduplicated
+cap/alert-only escalation; repeated escaped worker failures force a bounded supervisor
+exit; job deadlines and abort signals bound stuck work; and the PS-426 consumer
+leadership controller releases/reacquires the stately ShipStation lanes when its
+PostgreSQL leadership session is lost. The runbook still requires preserving the first
+fatal event, exit reason, deploy id, and memory graph for any *future platform crash* so
+a different trigger is not conflated with this resolved API-redeploy incident.
 
 ## Shipped-data override boundary
 
@@ -55,12 +76,17 @@ created.
 
 ## Live acceptance still required
 
-Code and offline fixtures are not enough to close PS-431. Keep the Trello card In
-Progress until the following evidence is attached:
+Code, offline fixtures, and the retrospective root-cause evidence are not enough to
+close PS-431. Keep the Trello card In Progress until the following live evidence is
+attached:
 
 1. The GitHub workflow is green for at least 24 hours with repository secrets/variables configured.
 2. A controlled stale-heartbeat or worker-stop test produces one phone-reachable alert within about 10 minutes and no duplicate inside 30 minutes.
 3. A restart-cap fixture produces the distinct cap-exhaustion alert without spam.
 4. UptimeRobot or Better Stack monitors `/health/ready`, with SMS/email delivery tested for DJ and Lawrence.
 5. Render's health-check path is verified as `/health/ready`, and Render native service notifications are enabled and tested.
-6. The next crash-loop incident preserves the first fatal Render log line, exit/restart reason, deploy id, and memory graph so the exact causal trigger can be confirmed.
+
+The 2026-07-13 crash-loop/root-cause acceptance item is complete. For any future
+platform-triggered crash, preserve the first fatal Render log line, exit/restart reason,
+deploy id, and memory graph under the runbook rather than reopening this historical
+control-plane conclusion without new evidence.
