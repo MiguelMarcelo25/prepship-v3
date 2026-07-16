@@ -25,6 +25,7 @@ const adminRoute = read('src/routes/admin.ts');
 const shipStation = read('src/connectors/store/shipstation.ts');
 const inventoryDeductions = read('src/services/fulfillment-deductions.ts');
 const inventorySchema = read('src/db/schema/inventory.ts');
+const lifecycleCommand = read('src/services/order-lifecycle-command.ts');
 const billingGuard = read('scripts/audit-billing-cross-period-reconciliation-guard.ts');
 const backfill = read('scripts/backfill-inventory-ledger.ts');
 const integration = read('scripts/ps-432-sync-fulfillment-resilience-integration.ts');
@@ -33,12 +34,13 @@ const guardPack = read('scripts/sot-guard-pack.mjs');
 
 assert.match(inventoryOutbox, /executor: InventoryDeductionOutboxExecutor = db/);
 assert.match(inventoryOutbox, /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
-assert.match(shipmentSync, /db\.transaction\(async \(tx\)[\s\S]*enqueueInventoryDeduction\(row, \{ source: 'shipment_sync' \}, tx\)/);
+assert.match(shipmentSync, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,[\s\S]*fulfilledLines: exactLines[\s\S]*packageConsumption/);
 assert.match(orderSync, /inventoryDeductionSource: 'order_sync_status'/);
-assert.match(orderSync, /db\.transaction\(async \(tx\)[\s\S]*enqueueInventoryDeduction\(row, \{ source: 'order_sync_status' \}, tx\)/);
-assert.match(storeImport, /inventoryDeductionSource\?: string[\s\S]*db\.transaction\(async \(tx\)[\s\S]*enqueueInventoryDeduction\([\s\S]*tx,/);
-assert.match(externalShipped, /db\.transaction\(async \(tx\)[\s\S]*enqueueInventoryDeduction\([\s\S]*tx,/);
-assert.match(labels, /enqueueFulfillmentDeductions[\s\S]*tx: DbTx[\s\S]*enqueueInventoryDeduction\(\s*args\.order,[\s\S]*args\.tx/);
+assert.match(orderSync, /applyOrderLifecycleCommand\(\{[\s\S]*source: 'order_sync_status'/);
+assert.match(storeImport, /inventoryDeductionSource\?: string[\s\S]*db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,/);
+assert.match(externalShipped, /applyOrderLifecycleCommand\(\{[\s\S]*transition: 'external_shipped'/);
+assert.match(labels, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,/);
+assert.match(lifecycleCommand, /enqueueInventoryClaimDeduction\([\s\S]*, tx\)/);
 assert.doesNotMatch(labels, /inventory deduction enqueue failed; recovery scan will retry/);
 
 const settlementStart = fulfillmentOutbox.indexOf('async function settleOutboxRowWithExecutor');

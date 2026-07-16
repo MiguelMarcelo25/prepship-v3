@@ -167,7 +167,7 @@ check(
 const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');
 check(
   'label purchase captures realized House sidecar after committed SHIPP label transaction',
-  /await timer\.task\('markOrderShipped'[\s\S]*?if \(directProviderKey === 'shipp'\) \{[\s\S]*?captureRealizedHouseMargin\(\{[\s\S]*?shipmentId: localShipmentId,[\s\S]*?drpCost: Number\(created\.cost \?\? 0\)/.test(labelsSrc),
+  /await timer\.task\('apply order lifecycle'[\s\S]*?if \(directProviderKey === 'shipp'\) \{[\s\S]*?captureRealizedHouseMargin\(\{[\s\S]*?shipmentId: localShipmentId,[\s\S]*?drpCost: Number\(created\.cost \?\? 0\)/.test(labelsSrc),
 );
 
 const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
@@ -214,8 +214,8 @@ check(
   /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
     /cShippingRateAmount,/.test(billingSrc) &&
     /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
-    /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc) &&
-    /totalCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc),
+    /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc) &&
+    /totalCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc),
 );
 check(
   'billing details expose billed customer_rate and actual SHIPP cost for margin review',

@@ -17,6 +17,7 @@ import {
   getShipStationOrderExistence,
   listShipStationOrders,
 } from '../src/connectors/store/shipstation.ts';
+import { applyOrderLifecycleCommand } from '../src/services/order-lifecycle-command.ts';
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -383,14 +384,23 @@ async function applySafeCandidates(
   let overrideUpdated = 0;
   for (const candidate of candidates) {
     if (shouldApplyShipStationAwaitingParityCandidate(candidate)) {
-      const rows = await sql<Array<{ id: number }>>`
-        UPDATE orders
-        SET order_status = ${candidate.targetStatus}, updated_at = NOW()
-        WHERE id = ${candidate.id}
-          AND order_status = 'awaiting_shipment'
-        RETURNING id
-      `;
-      safeUpdated += rows.length;
+      if (candidate.id == null || (candidate.targetStatus !== 'shipped' && candidate.targetStatus !== 'cancelled')) {
+        continue;
+      }
+      // Per user override unlock shipped data on 2026-07-16 (PS-424): safe
+      // forward parity corrections use the row-locked lifecycle owner, which
+      // records exact claims and durable work with the terminal state.
+      const result = await applyOrderLifecycleCommand({
+        orderId: candidate.id,
+        commandKey: `lifecycle:shipstation-awaiting-parity:${candidate.id}:${candidate.targetStatus}`,
+        transition: candidate.targetStatus,
+        source: 'shipstation_awaiting_parity',
+        canonicalStatus: candidate.targetStatus,
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: candidate.targetStatus === 'cancelled',
+        provenance: { evidence: candidate.sourceEvidence },
+      });
+      if (result.statusChanged) safeUpdated += 1;
       continue;
     }
 
@@ -472,7 +482,6 @@ async function shipStationOrderExists(
 }
 
 async function resolveDeletedUpstream(
-  sql: Sql,
   accounts: SyncAccount[],
   suspects: ShipStationAwaitingParityFinding[],
   options: { apply: boolean; maxLookups: number },
@@ -505,13 +514,22 @@ async function resolveDeletedUpstream(
   let cancelled = 0;
   if (options.apply && deleted.length) {
     for (const s of deleted) {
-      const rows = await sql<Array<{ id: number }>>`
-        UPDATE orders
-        SET order_status = 'cancelled', canonical_status = 'cancelled', updated_at = NOW()
-        WHERE id = ${s.id} AND order_status = 'awaiting_shipment'
-        RETURNING id
-      `;
-      cancelled += rows.length;
+      if (s.id == null) continue;
+      // Per user override unlock shipped data on 2026-07-16 (PS-424): a
+      // verified upstream deletion is a canonical cancellation command, not
+      // a maintenance-script status write.
+      const result = await applyOrderLifecycleCommand({
+        orderId: s.id,
+        commandKey: `lifecycle:shipstation-deleted:${s.id}:cancelled`,
+        transition: 'cancelled',
+        source: 'shipstation_deleted_reconciliation',
+        canonicalStatus: 'cancelled',
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
+        fulfilledLines: [],
+        provenance: { externalOrderId: s.externalOrderId, verdict: 'deleted' },
+      });
+      if (result.statusChanged) cancelled += 1;
     }
   }
   return { checked, deleted, cancelled, errors, skipped };
@@ -695,7 +713,7 @@ async function main(): Promise<void> {
       }
       const writeDeleted = apply && scoped;
       const accounts = await loadSyncAccounts(sql, storeIds);
-      deletedUpstreamResult = await resolveDeletedUpstream(sql, accounts, needsConfirmation, {
+      deletedUpstreamResult = await resolveDeletedUpstream(accounts, needsConfirmation, {
         apply: writeDeleted,
         maxLookups: parsePositiveInteger('max-deleted-lookups', 200),
       });

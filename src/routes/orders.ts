@@ -42,7 +42,6 @@ import { loadClientIsTest } from '../services/fulfillment/test-label-policy';
 import {
   applyBestRateForOrder,
   applyBoxDimsCoherence,
-  applyEditableOrderPatch,
   applyOrderOverridesPatch,
   saveBestRateForOrder,
 } from '../services/orders-overrides-command';
@@ -3480,8 +3479,6 @@ const patchBody = z.object({
   selectedRateJson: z.unknown().optional(),
   shippingAccount: z.string().nullable().optional(),
   recipientOverride: recipientOverrideBody.optional(),
-  externallyShipped: z.boolean().optional(),
-  externallyShippedSource: z.string().nullable().optional(),
 });
 
 app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
@@ -3509,11 +3506,11 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     .limit(1);
   if (!existing) return c.json({ error: 'Order not found' }, 404);
 
-  // Split the body: externallyShipped lives on the `orders` table;
-  // everything else (including externallyShippedSource) lives on order_overrides.
   // selectedRateJson is not a column on order_overrides — drop it from the
   // overrides payload (it rides along into shipments via the label flow).
-  const { externallyShipped, selectedRateJson, ...overridesBody } = body;
+  // Lifecycle/external-shipment state is accepted only by the dedicated,
+  // guarded /shipped-external command below.
+  const { selectedRateJson, ...overridesBody } = body;
 
   if (overridesBody.recipientOverride !== undefined) {
     try {
@@ -3599,11 +3596,8 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   }
 
   // Per user override unlock shipped data on 2026-07-14: the final lifecycle
-  // check, orders flag update, and override upsert share one row-locked transaction.
-  const result = await applyEditableOrderPatch(id, {
-    externallyShipped,
-    overridesPatch: coherentBody.patch,
-  }, guard.writeAuthorization);
+  // check and override upsert share one row-locked transaction.
+  const result = await applyOrderOverridesPatch(id, coherentBody.patch, guard.writeAuthorization);
   if (!result.ok) return orderEditWriteFailureResponse(c, result);
   return c.json(result.value);
 });
@@ -3858,14 +3852,9 @@ app.post(
     // service markOrderShippedExternally(). assertOrderEditable (above) STAYS in this route as the
     // shipped/cancelled lockdown guard; the service adds a defense-in-depth forward-only
     // final lifecycle predicate so the transition cannot re-flip a shipped/cancelled order.
-    // Per user override unlock shipped data on 2026-07-14: persist the generic source override
-    // through the row-locked command BEFORE the service performs its atomic status transition.
-    // If a concurrent lifecycle transition wins first, no override or status write is applied.
-    const sourceWrite = await applyOrderOverridesPatch(id, {
-      externallyShippedSource: body.source ?? null,
-    }, guard.writeAuthorization);
-    if (!sourceWrite.ok) return orderEditWriteFailureResponse(c, sourceWrite);
-
+    // Per user override unlock shipped data on 2026-07-16 (PS-424): source
+    // provenance now commits inside the same lifecycle command as status and
+    // exact fulfillment claims. The route remains auth/validation only.
     const { notify: notifyResult } = await markOrderShippedExternally({
       order: existing,
       flag,
@@ -3876,7 +3865,12 @@ app.post(
       notifyMarketplace: body.notifyMarketplace,
       writeAuthorization: guard.writeAuthorization,
     });
-    return c.json({ data: sourceWrite.value, notify: notifyResult });
+    const [updatedOverrides] = await db
+      .select()
+      .from(orderOverrides)
+      .where(eq(orderOverrides.orderId, id))
+      .limit(1);
+    return c.json({ data: updatedOverrides ?? null, notify: notifyResult });
   }
 );
 

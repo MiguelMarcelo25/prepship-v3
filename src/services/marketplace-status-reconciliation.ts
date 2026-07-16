@@ -1,4 +1,8 @@
 import type postgres from 'postgres';
+import type {
+  OrderLifecycleCommandInput,
+  OrderLifecycleCommandResult,
+} from './order-lifecycle-command.js';
 
 export type MarketplaceProvider = 'walmart' | 'ebay' | 'shopify';
 export type PrepShipOrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled';
@@ -178,6 +182,9 @@ export async function reconcileMarketplaceOrderStatuses(
     storeAccountId?: number | null;
     orderNumbers?: string[];
     dryRun?: boolean;
+    applyLifecycleCommand?: (
+      input: OrderLifecycleCommandInput,
+    ) => Promise<OrderLifecycleCommandResult>;
   },
 ): Promise<MarketplaceReconciliationResult> {
   const dryRun = options.dryRun !== false;
@@ -336,18 +343,26 @@ export async function reconcileMarketplaceOrderStatuses(
   }
 
   if (!dryRun && result.candidates.length > 0) {
+    const lifecycleCommand = options.applyLifecycleCommand ??
+      (await import('./order-lifecycle-command.js')).applyOrderLifecycleCommand;
     for (const candidate of result.candidates) {
       // Per user override unlock shipped data on 2026-05-23: promote only
       // rows that are still awaiting after marketplace/duplicate evidence
       // proves they are terminal; never rewrite existing shipped/cancelled rows.
-      const rows = await sql<Array<{ id: number }>>`
-        UPDATE orders
-        SET order_status = ${candidate.targetStatus}, updated_at = NOW()
-        WHERE id = ${candidate.id}
-          AND order_status = 'awaiting_shipment'
-        RETURNING id
-      `;
-      result.updated += rows.length;
+      const command = await lifecycleCommand({
+        orderId: candidate.id,
+        commandKey:
+          `lifecycle:marketplace:${options.provider}:${options.storeAccountId ?? 'all'}:` +
+          `${candidate.externalOrderId}:order:${candidate.id}:${candidate.targetStatus}`,
+        transition: candidate.targetStatus === 'shipped' ? 'external_shipped' : 'cancelled',
+        source: `marketplace_status:${options.provider}`,
+        canonicalStatus: candidate.targetStatus,
+        requireAwaitingOrderStatus: true,
+        externallyShippedSource:
+          candidate.targetStatus === 'shipped' ? `marketplace_status:${options.provider}` : undefined,
+        provenance: { sourceStatuses: candidate.sourceStatuses },
+      });
+      if (command.statusChanged) result.updated += 1;
     }
   }
 

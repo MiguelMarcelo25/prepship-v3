@@ -44,6 +44,7 @@ assert.equal(resolveShipmentConfirmationProvider({ sourceProvider: null, externa
 
 // ── (2) mark-shipped-externally routes through the resolver ────────────────
 const svc = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
+const lifecycle = readFileSync('src/services/order-lifecycle-command.ts', 'utf8');
 
 assert.ok(svc.includes("import { confirmShipmentDirectNow, resolveShipmentConfirmationProvider } from './outbox'"),
   'the service must import the canonical resolver + the direct dispatcher');
@@ -68,16 +69,19 @@ assert.ok(svc.includes('Per user override unlock shipped data on 2026-06-13'),
   'the override-scoped change must carry its citation comment');
 
 // ── (3) LOCKDOWN NOT WEAKENED ───────────────────────────────────────────────
-// Forward-only flip: only an AWAITING order can transition; the WHERE guard
-// stays byte-intact.
-assert.ok(svc.includes("eq(orders.orderStatus, 'awaiting_shipment')"),
-  'the forward-only awaiting->shipped WHERE guard must stay');
-// The unmark branch flips ONLY the flag (never status).
-assert.ok(/\.set\(\{ externallyShipped: false, updatedAt: new Date\(\) \}\)/.test(svc),
+// Forward-only protection is now centralized under the lifecycle row lock.
+assert.ok(svc.includes("transition: 'external_shipped'") &&
+  lifecycle.includes("order.orderStatus === 'cancelled'") &&
+  lifecycle.includes(".for('update')"),
+  'the shipped-external path must delegate to row-locked terminal rejection');
+// The unmark branch remains flag-only through the canonical command.
+assert.ok(svc.includes("transition: 'external_unmark'") &&
+  lifecycle.includes(".set({ externallyShipped: false"),
   'unmark must keep flipping only the flag, never order status');
-// Inventory deduction still runs through the kill-switch-governed owner.
-assert.ok(/enqueueInventoryDeduction\(\s*order,[\s\S]*tx,/.test(svc),
-  'the shipped-external path must enqueue the durable inventory deduction lane');
+// Inventory intent is exact and still reaches the kill-switch-governed owner.
+assert.ok(svc.includes('fulfilledLines: order.items') &&
+  lifecycle.includes('enqueueInventoryClaimDeduction'),
+  'the shipped-external path must enqueue exact durable inventory claims');
 // The route still guards with assertOrderEditable BEFORE the service.
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 const routeStart = ordersRoute.indexOf("'/:id{[0-9]+}/shipped-external'");

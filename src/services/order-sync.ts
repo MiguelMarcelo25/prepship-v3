@@ -19,7 +19,7 @@ import {
   orderSourceIdentityOrLegacyPredicate,
   type OrderSourceIdentity,
 } from './order-source-identity';
-import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
+import { applyOrderLifecycleCommand } from './order-lifecycle-command';
 import { importStoreOrders } from './store-connector-orchestrator';
 import type { NormalizedOrder } from '../connectors/types';
 import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
@@ -519,10 +519,46 @@ async function updateExistingOrderStatusesBatch(
       includeUnqualifiedShipStationLegacy: true,
     });
     if (!identityPredicate) continue;
-    // Per user override unlock shipped data on 2026-07-15: shipped catch-up
-    // and its durable inventory intent commit atomically. An outbox failure
-    // rolls back the transition instead of creating a shipped-without-intent
-    // gap; other catch-up statuses create no deduction work.
+    if (orderStatus === 'shipped' || orderStatus === 'cancelled') {
+      const terminalCandidates = await db
+        .select({
+          id: orders.id,
+          sourceProvider: orders.sourceProvider,
+          sourceAccountId: orders.sourceAccountId,
+          sourceOrderId: orders.sourceOrderId,
+          externalOrderId: orders.externalOrderId,
+        })
+        .from(orders)
+        .where(and(
+          identityPredicate,
+          notInArray(orders.orderStatus, ['shipped', 'cancelled']),
+          ne(orders.orderStatus, orderStatus),
+        ));
+      for (const row of terminalCandidates) {
+        const command = await applyOrderLifecycleCommand({
+          orderId: row.id,
+          commandKey:
+            `lifecycle:order-sync:${row.sourceProvider ?? 'shipstation'}:` +
+            `${row.sourceAccountId ?? 'legacy'}:${row.sourceOrderId ?? row.externalOrderId ?? row.id}:` +
+            `${orderStatus}`,
+          transition: orderStatus,
+          source: 'order_sync_status',
+          canonicalStatus: orderStatus,
+          fulfilledLines: [],
+          provenance: {
+            sourceProvider: row.sourceProvider,
+            sourceAccountId: row.sourceAccountId,
+            sourceOrderId: row.sourceOrderId,
+            lineFacts: 'status_only_no_claim',
+          },
+        });
+        if (command.statusChanged) updated += 1;
+      }
+      continue;
+    }
+
+    // Non-terminal catch-up stays a direct status projection; it creates no
+    // fulfillment side effect and is outside the terminal command boundary.
     const rows = await db.transaction(async (tx) => {
       const transitioned = await tx
         .update(orders)
@@ -542,11 +578,6 @@ async function updateExistingOrderStatusesBatch(
           )
         )
         .returning();
-      if (orderStatus === 'shipped') {
-        for (const row of transitioned) {
-          await enqueueInventoryDeduction(row, { source: 'order_sync_status' }, tx);
-        }
-      }
       return transitioned;
     });
     updated += rows.length;

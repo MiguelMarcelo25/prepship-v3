@@ -2,20 +2,18 @@
 // the matching local order. Invoked (best-effort, off the webhook response path) after the
 // event is durably recorded in the ledger.
 //
-// Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129): this is the ONLY
-// place under these tickets that writes order columns, and it is STRICTLY FORWARD-ONLY:
-//   - it updates rows that are still order_status = 'awaiting_shipment' ONLY,
-//   - it sets a HOLD/EXTERNAL signal (canonical_status / externally_shipped), it does NOT
-//     flip order_status, and it NEVER reopens or rewrites a shipped/cancelled row.
-// The hard ship/label block is enforced separately by shipping-safety.ts reading these
-// signals + the ledger, so even if this reconcile no-ops the order is still protected.
+// Per user override unlock shipped data on 2026-07-16 (PS-424): candidate
+// matching stays awaiting-only, while normalized terminal facts delegate to
+// OrderLifecycleCommand. That owner atomically records status, provenance,
+// exact claims, and durable work; it never reopens a terminal order.
 
 import { sql as pg } from '../../db/client.js';
 import type { NormalizedWebhookEvent } from './webhook-providers.js';
+import { applyOrderLifecycleCommand } from '../order-lifecycle-command.js';
 
 export type UpstreamReconcileResult = {
   matchedOrderIds: number[];
-  action: 'none' | 'hold_cancelled' | 'flagged_external_shipped';
+  action: 'none' | 'cancelled' | 'external_shipped';
 };
 
 /**
@@ -35,8 +33,8 @@ export async function reconcileOrderFromUpstreamEvent(
 
   // Match candidate AWAITING orders by order number or source id. Forward-only guard:
   // order_status = 'awaiting_shipment' ensures we never touch a shipped/cancelled row.
-  const candidates = await pg<{ id: number }[]>`
-    SELECT id FROM orders
+  const candidates = await pg<{ id: number; items: unknown[] | null }[]>`
+    SELECT id, items FROM orders
     WHERE order_status = 'awaiting_shipment'
       AND (
         (${orderNumber ?? null}::text IS NOT NULL AND (order_number = ${orderNumber ?? null} OR source_order_number = ${orderNumber ?? null}))
@@ -53,27 +51,53 @@ export async function reconcileOrderFromUpstreamEvent(
     // NOT order_status — so we create a hold/review signal the guard blocks on, without
     // hard-cancelling the order row (avoids destructive cancelled-row side effects). Still
     // only awaiting rows.
-    await pg`
-      UPDATE orders
-      SET canonical_status = 'cancelled', updated_at = NOW()
-      WHERE id = ANY(${matchedOrderIds}) AND order_status = 'awaiting_shipment'
-    `;
+    await Promise.all(candidates.map((candidate) =>
+      applyOrderLifecycleCommand({
+        orderId: candidate.id,
+        commandKey: webhookCommandKey(event, candidate.id, 'cancelled'),
+        transition: 'cancelled',
+        source: `webhook:${String(event.metadata.provider ?? 'unknown')}`,
+        effectiveAt: event.occurredAt ?? new Date(),
+        canonicalStatus: 'cancelled',
+        requireAwaitingOrderStatus: true,
+        fulfilledLines: [],
+        provenance: event.metadata,
+      })));
     await linkLedgerToOrder(event, firstMatchedId);
-    return { matchedOrderIds, action: 'hold_cancelled' };
+    return { matchedOrderIds, action: 'cancelled' };
   }
 
   // PS-128: flag external shipment (forward-only). externally_shipped is the existing
   // external-shipped signal; we surface it + its source so the order presents as "already
   // shipped in store" instead of allowing another label. Only awaiting rows.
-  await pg`
-    UPDATE orders
-    SET externally_shipped = true,
-        externally_shipped_source = ${`webhook:${event.metadata.provider ?? 'unknown'}`},
-        updated_at = NOW()
-    WHERE id = ANY(${matchedOrderIds}) AND order_status = 'awaiting_shipment'
-  `;
+  const provenanceSource = `webhook:${String(event.metadata.provider ?? 'unknown')}`;
+  await Promise.all(candidates.map((candidate) =>
+    applyOrderLifecycleCommand({
+      orderId: candidate.id,
+      commandKey: webhookCommandKey(event, candidate.id, 'external_shipped'),
+      transition: 'external_shipped',
+      source: provenanceSource,
+      effectiveAt: event.occurredAt ?? new Date(),
+      canonicalStatus: 'shipped',
+      requireAwaitingOrderStatus: true,
+      externallyShippedSource: provenanceSource,
+      fulfilledLines: Array.isArray(candidate.items) ? candidate.items : [],
+      provenance: event.metadata,
+    })));
   await linkLedgerToOrder(event, firstMatchedId);
-  return { matchedOrderIds, action: 'flagged_external_shipped' };
+  return { matchedOrderIds, action: 'external_shipped' };
+}
+
+function webhookCommandKey(
+  event: NormalizedWebhookEvent,
+  orderId: number,
+  transition: 'cancelled' | 'external_shipped',
+): string {
+  const provider = String(event.metadata.provider ?? 'unknown');
+  const eventIdentity =
+    event.externalEventId ??
+    `${event.eventType}:${event.sourceOrderId ?? event.sourceOrderNumber ?? 'unknown'}:${event.occurredAt?.toISOString() ?? 'undated'}`;
+  return `lifecycle:webhook:${provider}:${eventIdentity}:order:${orderId}:${transition}`;
 }
 
 async function linkLedgerToOrder(event: NormalizedWebhookEvent, orderId: number): Promise<void> {

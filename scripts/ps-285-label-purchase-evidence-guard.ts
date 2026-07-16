@@ -85,17 +85,17 @@ check('createLabelV2 acquires and releases the purchase lock around impl',
   /acquireLabelPurchaseLock\(body\.orderId\)/.test(labels) &&
     /return await createLabelV2Impl\(body, scope\)/.test(labels) &&
     /finally \{\s*await purchaseLock\.release\(\)/.test(labels));
-check('label persist and mark-shipped run in one transaction with tx plumbing',
+check('label persist and lifecycle command run in one transaction with tx plumbing',
   /const localShipmentId = await db\.transaction\(async \(tx\) =>/.test(labels) &&
     /persistCreatedLabel\(\{[\s\S]*tx,/.test(labels) &&
-    /markOrderShipped\(order\.id, created\.trackingNumber, \{ cleanupQueue: false, tx \}\)/.test(labels));
+    /applyOrderLifecycleCommandInTransaction\(tx, \{[\s\S]*shipmentId,[\s\S]*transition: 'shipped'/.test(labels));
 check('PS-248 lock guard pins purchase lock mechanism',
   /migration owns durable label_purchase_locks/.test(lockGuard) &&
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockGuard) &&
     /createLabelV2 acquires the per-order purchase lock/.test(lockGuard));
 check('PS-248 atomic guard pins transaction mechanism',
   /persistCreatedLabel accepts a tx handle/.test(atomicGuard) &&
-    /label flow persists \+ marks-shipped inside ONE db\.transaction/.test(atomicGuard));
+    /label flow persists \+ applies lifecycle inside ONE db\.transaction/.test(atomicGuard));
 
 check('phase 4 is complete in checklist and matrix',
   /\|\s*4\s*\|\s*Label purchase boundary safety\s*\|\s*Complete\s*\|/i.test(checklist) &&

@@ -14,7 +14,6 @@ import {
   upsertNormalizedStoreOrders,
   type NormalizedStoreOrder,
 } from '../src/services/store-order-import';
-import { enqueueInventoryDeduction } from '../src/services/fulfillment/inventory-deduction-outbox';
 
 /**
  * PS-046 — Orphan ShipStation shipment reconciliation / backfill.
@@ -43,9 +42,10 @@ import { enqueueInventoryDeduction } from '../src/services/fulfillment/inventory
  *   - NEVER deletes shipments. NEVER buys postage / creates labels / notifies
  *     marketplaces. NEVER reopens a shipped/cancelled order (the upsert
  *     preserves terminal local statuses).
- *   - Inventory deduction for hydrated SHIPPED orders reuses the AI-locked
- *     durable inventory outbox (same lane order-sync uses); its processor is gated by
- *     the INVENTORY_AUTO_DEDUCT kill switch + ledger dedupe — no refactor.
+ *   - Per user override unlock shipped data on 2026-07-16: terminal status,
+ *     exact inventory claims, and durable intent are owned by the canonical
+ *     `upsertNormalizedStoreOrders` lifecycle command; this script never
+ *     starts a second deduction path after hydration.
  *   - `main()` only runs when the file is invoked directly, so a guard/test can
  *     import `classifyOrphanShipment` without triggering a network fetch/write.
  */
@@ -295,7 +295,6 @@ type ReconcileReport = {
   // Apply-mode outcomes (0 in dry-run)
   ordersHydrated: number;
   shipmentsLinked: number;
-  inventoryDeducted: number;
   samples: Array<{
     orderNumber: string | null;
     classification: OrphanClassification;
@@ -425,7 +424,6 @@ async function main(): Promise<void> {
     deferred: 0,
     ordersHydrated: 0,
     shipmentsLinked: 0,
-    inventoryDeducted: 0,
     samples: [],
   };
 
@@ -528,19 +526,6 @@ async function main(): Promise<void> {
             .where(and(isNull(shipments.orderId), eq(shipments.orderNumber, row.orderNumber)))
             .returning({ id: shipments.id });
           report.shipmentsLinked += linked.length;
-          // Mirror order-sync's forward path: a hydrated SHIPPED order must run
-          // the same AI-locked inventory deduction (kill-switch + ledger-dedupe
-          // protected) so backfilled orders don't skip stock movement.
-          if (row.orderStatus === 'shipped') {
-            try {
-              // Per user override unlock shipped data on 2026-07-14: enqueue
-              // durable intent; do not execute shipped stock writes inline.
-              await enqueueInventoryDeduction(row, { source: 'order_sync_status' });
-              report.inventoryDeducted += 1;
-            } catch (err) {
-              console.warn('[orphan-reconcile] inventory deduction failed:', err);
-            }
-          }
         }
       }
     }
@@ -583,7 +568,7 @@ async function main(): Promise<void> {
   if (apply) {
     console.log(
       `\n[orphan-reconcile] applied: ordersHydrated=${report.ordersHydrated} ` +
-        `shipmentsLinked=${report.shipmentsLinked} inventoryDeducted=${report.inventoryDeducted}`,
+        `shipmentsLinked=${report.shipmentsLinked}`,
     );
   } else {
     console.log('\nDry run only. Re-run with --apply (DJ-approved) after review.');

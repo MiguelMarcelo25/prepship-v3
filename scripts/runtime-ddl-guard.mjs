@@ -119,6 +119,17 @@ const migrationOwnership = [
     'drizzle/0068_billing_shipment_cardinality.sql',
     ['billing_li_shipment_unique_idx', 'billing_li_order_unique_idx', 'shipment_id'],
   ],
+  [
+    'drizzle/0069_order_lifecycle_commands.sql',
+    [
+      'order_lifecycle_events',
+      'fulfillment_line_claims',
+      'order_lifecycle_events_command_unq',
+      'order_lifecycle_events_no_update_delete',
+      'order_lifecycle_events_block_mutations',
+      'fulfillment_line_claims_idempotency_unq',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -164,6 +175,13 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCardinalityMigration),
   '0068 changes only the generated billing-line key and never mutates orders/shipments',
 );
+const orderLifecycleMigration = read('drizzle/0069_order_lifecycle_commands.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(orderLifecycleMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration),
+  '0069 adds lifecycle sidecars without mutating or destructively altering orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -173,7 +191,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0068_billing_shipment_cardinality.sql',
+  '0069_order_lifecycle_commands.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

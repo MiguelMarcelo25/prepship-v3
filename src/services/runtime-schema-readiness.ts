@@ -16,8 +16,10 @@ const REQUIRED_RELATIONS = [
   'label_purchase_intents',
   'label_purchase_locks',
   'order_competitive_rate',
+  'order_lifecycle_events',
   'order_rate_jobs',
   'package_consumption_reviews',
+  'fulfillment_line_claims',
   'print_queue_batch_job_items',
   'print_queue_merge_jobs',
   'print_queue_merged_pdfs',
@@ -108,6 +110,9 @@ const REQUIRED_INDEXES = [
   'order_competitive_rate_order_idx',
   'order_competitive_rate_projected_unq',
   'order_competitive_rate_realized_unq',
+  'order_lifecycle_events_command_unq',
+  'order_lifecycle_events_order_idx',
+  'order_lifecycle_events_shipment_idx',
   'order_rate_jobs_updated_idx',
   'orders_selling_fee_source_idx',
   'package_consumption_reviews_idempotency_unq',
@@ -117,6 +122,10 @@ const REQUIRED_INDEXES = [
   'package_ledger_idempotency_key_unq',
   'package_ledger_order_idx',
   'package_ledger_shipment_idx',
+  'fulfillment_line_claims_event_status_idx',
+  'fulfillment_line_claims_idempotency_unq',
+  'fulfillment_line_claims_original_idx',
+  'fulfillment_line_claims_shipment_idx',
   'print_queue_batch_job_items_job_idx',
   'print_queue_batch_job_items_state_idx',
   'print_queue_merge_jobs_updated_at_idx',
@@ -149,6 +158,7 @@ const REQUIRED_FUNCTIONS = [
   'audit_log_block_mutations',
   'billing_line_item_group_is_finalized',
   'billing_line_item_group_key',
+  'order_lifecycle_events_block_mutations',
   'billing_line_item_lock_group',
   'billing_line_items_block_finalized_mutation',
   'billing_line_items_block_finalized_truncate',
@@ -162,6 +172,7 @@ const REQUIRED_FUNCTIONS = [
 const REQUIRED_TRIGGERS = [
   'audit_log_no_update_delete',
   'billing_line_items_finalized_guard',
+  'order_lifecycle_events_no_update_delete',
   'billing_line_items_finalized_truncate_guard',
   'billing_line_items_mixed_finalization_guard',
   'billing_finalizations_overlap_guard',
@@ -257,7 +268,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0068_billing_shipment_cardinality.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0069_order_lifecycle_commands.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

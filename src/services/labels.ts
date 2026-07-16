@@ -26,10 +26,7 @@ import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
 import { deductBundleMembersOnce } from './shipment-bundles/deduct-bundle-members';
 import { env } from '../lib/env';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
-import {
-  consumeOutboundPackageInTransaction,
-  reverseOutboundPackageConsumptionInTransaction,
-} from './package-consumption';
+import { reverseOutboundPackageConsumptionInTransaction } from './package-consumption';
 import { resolveOrderLabelPackageSelection } from './package-resolution';
 import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 // PS-262a: single canonical owner of the per-marketplace confirmation identity.
@@ -65,11 +62,11 @@ import {
   voidNotSupportedMessage,
   type LabelVoidOutcomeStatus,
 } from './label-void-policy';
+import type { ShipmentVoidLifecycleDecision } from './shipment-aggregate';
 import {
-  activeOutboundShipmentPredicate,
-  decideShipmentVoidLifecycle,
-  type ShipmentVoidLifecycleDecision,
-} from './shipment-aggregate';
+  applyOrderLifecycleCommandInTransaction,
+  voidOrderShipmentLifecycleInTransaction,
+} from './order-lifecycle-command';
 import {
   createDirectCarrierLabelForOrder,
   directLabelAccountRefFromProviderId,
@@ -670,9 +667,10 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
   // Per user override unlock shipped data on 2026-05-23: normalize nested ShipStation label downloads before shipment persistence so queue recovery receives a plain URL string.
   const labelUrl = extractShipstationLabelUrl(label.label_download);
   await ensureShipmentsSelectedRateCostColumn();
-  const [row] = await db
-    .insert(shipments)
-    .values({
+  const row = await db.transaction(async (tx) => {
+    const [persisted] = await tx
+      .insert(shipments)
+      .values({
       orderId,
       clientId: clientId ?? null,
       carrierCode: label.carrier_code,
@@ -695,9 +693,20 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
       voided: !!label.voided,
       source: 'v4',
       isReturn: !!label.is_return_label,
-    })
-    .returning();
-  if (!row) throw new Error('Failed to persist shipment row');
+      })
+      .returning();
+    if (!persisted) throw new Error('Failed to persist shipment row');
+    await applyOrderLifecycleCommandInTransaction(tx, {
+      orderId,
+      shipmentId: persisted.id,
+      commandKey: `lifecycle:shipment:${persisted.id}:shipped`,
+      transition: 'shipped',
+      source: 'legacy_shipstation_label',
+      effectiveAt: shipDate ?? createdAt,
+      trackingNumber: label.tracking_number,
+    });
+    return persisted;
+  });
   return row;
 }
 
@@ -983,10 +992,10 @@ function serviceCodeFitsPackage(_: string): string {
   return 'package';
 }
 
-// PS-248 (Per user override unlock shipped data on 2026-06-16): a drizzle transaction handle so
-// persistCreatedLabel + markOrderShipped can COMMIT ATOMICALLY — a crash between them must not leave an
-// orphan shipment row with the order still not-shipped (torn state, broken invariant). Falls back to
-// the pool (db) when no tx is supplied, so existing non-transactional callers are unchanged.
+// PS-248 and PS-424 (Per user override unlock shipped data on 2026-07-16): a
+// drizzle transaction handle keeps shipment persistence and the canonical
+// lifecycle command atomic, so a crash cannot leave a persisted shipment with
+// the order still awaiting. The helper still supports legacy read/test callers.
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 async function persistCreatedLabel(args: {
@@ -1153,64 +1162,9 @@ async function persistCreatedLabel(args: {
   return row.id;
 }
 
-async function markOrderShipped(
-  orderId: number,
-  trackingNumber: string | null,
-  options: { cleanupQueue?: boolean; tx?: DbTx } = {}
-): Promise<void> {
-  // PS-248: run on the caller's transaction when supplied so the order-status flip + tracking
-  // override commit ATOMICALLY with the shipment insert (and atomically with each other).
-  const exec = (options.tx ?? db) as DbTx;
-  await exec
-    .update(orders)
-    .set({ orderStatus: 'shipped', updatedAt: new Date() })
-    .where(eq(orders.id, orderId));
-  if (trackingNumber) {
-    await exec
-      .insert(orderOverrides)
-      .values({ orderId, trackingNumber, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: orderOverrides.orderId,
-        set: { trackingNumber, updatedAt: new Date() },
-      });
-  }
-
-  // Print Queue persistence: shipped status means a label exists, not that an
-  // operator physically printed it. Queue entries persist until explicit
-  // operator action confirms printed or removes them.
-
-}
-
-async function enqueueFulfillmentDeductions(args: {
-  order: typeof orders.$inferSelect;
-  shipmentId: number | null;
-  source: string;
-  tx: DbTx;
-  timer?: LabelTimer;
-}) {
-  const enqueueInventory = () =>
-    enqueueInventoryDeduction(
-      args.order,
-      {
-        shipmentId: args.shipmentId,
-        source: args.source,
-      },
-      args.tx,
-    );
-
-  // Per user override unlock shipped data on 2026-07-15: label persistence,
-  // shipped status, and durable inventory intent now share the caller's
-  // transaction. An enqueue error rolls the local persistence back instead of
-  // leaving a shipped row without retryable intent.
-  if (args.timer) {
-    await args.timer.task('enqueue inventory deduction', enqueueInventory);
-  } else {
-    await enqueueInventory();
-  }
     // NOTE: the bundle MEMBER deduct-once fan-out (PS-312 S6) is NOT here — it is chained AFTER the
     // link keystone in createLabelV2Impl, so it can never race the bundle stamp into a silent
     // under-deduct. This event covers only the primary's own inventory.
-}
 
 /**
  * Create a label (v2-parity). Supports offline testLabel mode (generates a
@@ -1373,26 +1327,32 @@ async function persistShopifyPurchasedLabel(input: {
     }));
     // Per user override unlock shipped data on 2026-07-11: PS-413 consumes
     // real outbound package stock in the same transaction as shipment creation.
-    await consumeOutboundPackageInTransaction({
-      shipmentId,
-      orderId: input.order.id,
-      orderNumber: input.order.orderNumber ?? null,
-      source: SHOPIFY_SHIPPING_PROVIDER,
-      sourceAccountId: input.providerAccountId,
-      providerShipmentId: input.purchased?.labelId ?? null,
-      effectiveAt: created.shipDate,
-      selectedPackageId: input.resolvedPackageId ?? input.requestedPackageId,
-      dimensions: { length: input.length, width: input.width, height: input.height },
-      isTest: input.mock != null,
-    }, tx);
-    await input.timer.task('markOrderShipped', () => markOrderShipped(input.order.id, created.trackingNumber, { cleanupQueue: false, tx }));
-    await enqueueFulfillmentDeductions({
-      order: input.order,
-      shipmentId,
-      source: SHOPIFY_SHIPPING_PROVIDER,
-      tx,
-      timer: input.timer,
-    });
+    // Per user override unlock shipped data on 2026-07-16 (PS-424): the
+    // lifecycle owner commits status, tracking, exact SKU claims, package
+    // consumption, and durable work with this shipment insert.
+    await input.timer.task('apply order lifecycle', () =>
+      applyOrderLifecycleCommandInTransaction(tx, {
+        orderId: input.order.id,
+        shipmentId,
+        commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
+        transition: 'shipped',
+        source: SHOPIFY_SHIPPING_PROVIDER,
+        effectiveAt: new Date(created.shipDate),
+        fulfilledLines: input.order.items,
+        trackingNumber: created.trackingNumber,
+        packageConsumption: {
+          shipmentId,
+          orderId: input.order.id,
+          orderNumber: input.order.orderNumber ?? null,
+          source: SHOPIFY_SHIPPING_PROVIDER,
+          sourceAccountId: input.providerAccountId,
+          providerShipmentId: input.purchased?.labelId ?? null,
+          effectiveAt: created.shipDate,
+          selectedPackageId: input.resolvedPackageId ?? input.requestedPackageId,
+          dimensions: { length: input.length, width: input.width, height: input.height },
+          isTest: input.mock != null,
+        },
+      }));
     return shipmentId;
   });
   try {
@@ -2156,17 +2116,18 @@ async function createLabelV2Impl(
         isReturn: false,
         })
         .returning({ id: shipments.id });
-      await timer.task('markOrderShipped', () =>
-        markOrderShipped(order.id, fakeTracking, { cleanupQueue: false, tx }));
-      await enqueueFulfillmentDeductions({
-        order,
-        // fulfillment_outbox.shipment_id references the local shipment PK, not
-        // the synthetic provider label_shipment_id returned to the test caller.
-        shipmentId: persistedShipment?.id ?? null,
-        source: 'test_label',
-        tx,
-        timer,
-      });
+      if (!persistedShipment) throw new Error('Failed to persist test shipment');
+      await timer.task('apply order lifecycle', () =>
+        applyOrderLifecycleCommandInTransaction(tx, {
+          orderId: order.id,
+          shipmentId: persistedShipment.id,
+          commandKey: `lifecycle:shipment:${persistedShipment.id}:shipped`,
+          transition: 'shipped',
+          source: 'test_label',
+          effectiveAt: createdAt,
+          fulfilledLines: order.items,
+          trackingNumber: fakeTracking,
+        }));
       return persistedShipment;
     });
 
@@ -2495,27 +2456,32 @@ async function createLabelV2Impl(
     // Per user override unlock shipped data on 2026-07-11: PS-413 makes
     // PrepShip, ShipStation, Shipp, and Walmart package consumption share one
     // atomic owner. Test labels returned above never consume package stock.
-    await consumeOutboundPackageInTransaction({
-      shipmentId,
-      orderId: order.id,
-      orderNumber: order.orderNumber ?? null,
-      source: directProviderKey ?? 'prepship_v2',
-      sourceAccountId: created.providerAccountId ?? null,
-      providerShipmentId: directProviderKey
-        ? created.labelId ?? (created.shipmentId || null)
-        : created.shipmentId || null,
-      effectiveAt: created.shipDate,
-      selectedPackageId: resolvedPackageId ?? body.customPackageId,
-      dimensions: { length, width, height },
-    }, tx);
-    await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false, tx }));
-    await enqueueFulfillmentDeductions({
-      order,
-      shipmentId,
-      source: 'label',
-      tx,
-      timer,
-    });
+    // Per user override unlock shipped data on 2026-07-16 (PS-424): one
+    // command owns the terminal transition and both fulfillment ledgers.
+    await timer.task('apply order lifecycle', () =>
+      applyOrderLifecycleCommandInTransaction(tx, {
+        orderId: order.id,
+        shipmentId,
+        commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
+        transition: 'shipped',
+        source: directProviderKey ?? 'prepship_v2',
+        effectiveAt: new Date(created.shipDate),
+        fulfilledLines: order.items,
+        trackingNumber: created.trackingNumber,
+        packageConsumption: {
+          shipmentId,
+          orderId: order.id,
+          orderNumber: order.orderNumber ?? null,
+          source: directProviderKey ?? 'prepship_v2',
+          sourceAccountId: created.providerAccountId ?? null,
+          providerShipmentId: directProviderKey
+            ? created.labelId ?? (created.shipmentId || null)
+            : created.shipmentId || null,
+          effectiveAt: created.shipDate,
+          selectedPackageId: resolvedPackageId ?? body.customPackageId,
+          dimensions: { length, width, height },
+        },
+      }));
     return shipmentId;
   });
   } catch (persistErr) {
@@ -2807,9 +2773,10 @@ async function createMockShipmentForOrder(args: {
   saveMockLabel(fakeShipmentId, { ...mockData, pdfBase64 });
 
   await ensureShipmentsSelectedRateCostColumn();
-  const [row] = await db
-    .insert(shipments)
-    .values({
+  const row = await db.transaction(async (tx) => {
+    const [persisted] = await tx
+      .insert(shipments)
+      .values({
       orderId: order.id,
       clientId,
       orderNumber: order.orderNumber,
@@ -2835,11 +2802,21 @@ async function createMockShipmentForOrder(args: {
       source: 'test_offline',
       voided: false,
       isReturn: false,
-    })
-    .returning();
-  if (!row) throw new Error('Failed to persist mock shipment');
-
-  await markOrderShipped(order.id, fakeTracking);
+      })
+      .returning();
+    if (!persisted) throw new Error('Failed to persist mock shipment');
+    await applyOrderLifecycleCommandInTransaction(tx, {
+      orderId: order.id,
+      shipmentId: persisted.id,
+      commandKey: `lifecycle:shipment:${persisted.id}:shipped`,
+      transition: 'shipped',
+      source: 'test_label',
+      effectiveAt: createdAt,
+      fulfilledLines: order.items,
+      trackingNumber: fakeTracking,
+    });
+    return persisted;
+  });
 
   return row;
 }
@@ -3008,8 +2985,16 @@ export async function voidLabelV2(
 
   if (dispatch.kind === 'already_voided') {
     await ensurePackageConsumptionSchema();
-    await db.transaction((tx) =>
-      reverseOutboundPackageConsumptionInTransaction(row.id, new Date(), tx));
+    if (row.orderId) {
+      await db.transaction((tx) => voidOrderShipmentLifecycleInTransaction(tx, {
+        orderId: row.orderId!,
+        shipmentId: row.id,
+        source: 'label_void_retry',
+      }));
+    } else {
+      await db.transaction((tx) =>
+        reverseOutboundPackageConsumptionInTransaction(row.id, new Date(), tx));
+    }
     return {
       success: true,
       status: 'already_voided',
@@ -3067,47 +3052,18 @@ export async function voidLabelV2(
   // The order reopens only after the final active void, and upstream/external
   // terminal evidence is preserved. Package reversal remains in this tx.
   const lifecycleDecision = await db.transaction<ShipmentVoidLifecycleDecision | null>(async (tx) => {
-    let decision: ShipmentVoidLifecycleDecision | null = null;
-    const [order] = row.orderId
-      ? await tx
-          .select({
-            orderStatus: orders.orderStatus,
-            canonicalStatus: orders.canonicalStatus,
-            externallyShipped: orders.externallyShipped,
-          })
-          .from(orders)
-          .where(eq(orders.id, row.orderId))
-          .for('update')
-          .limit(1)
-      : [];
-    await tx
-      .update(shipments)
-      .set({ voided: true, updatedAt: now })
-      .where(eq(shipments.id, row.id));
-    if (row.orderId && order) {
-      const [remaining] = await tx
-        .select({ id: shipments.id })
-        .from(shipments)
-        .where(activeOutboundShipmentPredicate({
-          orderId: row.orderId,
-          excludeShipmentId: row.id,
-        }))
-        .limit(1);
-      decision = decideShipmentVoidLifecycle({
-        remainingActiveOutboundShipmentCount: remaining ? 1 : 0,
-        orderStatus: order.orderStatus,
-        canonicalStatus: order.canonicalStatus,
-        externallyShipped: order.externallyShipped,
+    if (row.orderId) {
+      const result = await voidOrderShipmentLifecycleInTransaction(tx, {
+        orderId: row.orderId,
+        shipmentId: row.id,
+        source: `label_void:${provider}`,
+        effectiveAt: now,
       });
+      return result.decision;
     }
-    if (row.orderId && decision?.kind === 'reopen') {
-      await tx
-        .update(orders)
-        .set({ orderStatus: decision.nextOrderStatus, updatedAt: now })
-        .where(eq(orders.id, row.orderId));
-    }
+    await tx.update(shipments).set({ voided: true, updatedAt: now }).where(eq(shipments.id, row.id));
     await reverseOutboundPackageConsumptionInTransaction(row.id, now, tx);
-    return decision;
+    return null;
   });
 
   // PS-263 (Per user override unlock shipped data on 2026-06-14): a void must retract the

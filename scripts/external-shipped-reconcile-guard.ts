@@ -70,7 +70,10 @@ console.log('PASS external-shipped classifier: external vs recoverable vs lookup
 const script = readFileSync('scripts/reconcile-external-shipped-orders.ts', 'utf8');
 assert.match(script, /const apply = options\.apply === true/, 'runner must be dry-run by default unless apply=true is passed');
 assert.match(script, /apply: hasFlag\('apply'\)/, 'CLI must require explicit --apply for writes');
-assert.match(script, /externallyShipped: true/, 'apply must set the reversible externally_shipped flag');
+assert.match(script, /applyOrderLifecycleCommand/, 'apply must delegate to the canonical lifecycle owner');
+assert.match(script, /external_shipped/, 'apply must request the reversible externally_shipped state');
+assert.match(script, /external_classified/, 'cancelled classification must preserve cancelled status while setting the flag');
+assert.doesNotMatch(script, /\.update\(orders\)/, 'the maintenance script must not own the external flag write');
 assert.match(script, /marketplace_fulfilled/, 'apply must record the marketplace_fulfilled audit source');
 assert.doesNotMatch(script, /db\.delete\(/, 'must never delete rows');
 assert.doesNotMatch(script, /\.update\(shipments\)/, 'must never mutate shipment history');

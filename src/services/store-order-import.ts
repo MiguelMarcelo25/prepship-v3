@@ -17,7 +17,7 @@ import {
   orderSourceIdentityKey,
   orderSourceIdentitiesPredicate,
 } from './order-source-identity';
-import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
+import { applyOrderLifecycleCommandInTransaction } from './order-lifecycle-command';
 
 export type NormalizedStoreOrder = {
   source: NormalizedOrderSource;
@@ -311,6 +311,7 @@ export function resolveImportedOrderTotal(
 type ExistingImportOrderFacts = {
   orderTotalsByIdentity: Map<string, string>;
   sourceIdentityKeys: Set<string>;
+  orderStatusesByIdentity: Map<string, string>;
 };
 
 async function loadExistingOrderFactsForImport(
@@ -319,7 +320,11 @@ async function loadExistingOrderFactsForImport(
   const identities = rows.map((row) => buildOrderSourceIdentity(row));
   const predicate = orderSourceIdentitiesPredicate(identities);
   if (!predicate) {
-    return { orderTotalsByIdentity: new Map(), sourceIdentityKeys: new Set() };
+    return {
+      orderTotalsByIdentity: new Map(),
+      sourceIdentityKeys: new Set(),
+      orderStatusesByIdentity: new Map(),
+    };
   }
 
   const existingRows = await db
@@ -328,20 +333,23 @@ async function loadExistingOrderFactsForImport(
       sourceAccountId: orders.sourceAccountId,
       sourceOrderId: orders.sourceOrderId,
       orderTotal: orders.orderTotal,
+      orderStatus: orders.orderStatus,
     })
     .from(orders)
     .where(predicate);
 
   const byIdentity = new Map<string, string>();
   const sourceIdentityKeys = new Set<string>();
+  const orderStatusesByIdentity = new Map<string, string>();
   for (const row of existingRows) {
     const identity = buildOrderSourceIdentity(row);
     if (!identity) continue;
     const key = orderSourceIdentityKey(identity);
     byIdentity.set(key, row.orderTotal);
     sourceIdentityKeys.add(key);
+    orderStatusesByIdentity.set(key, row.orderStatus);
   }
-  return { orderTotalsByIdentity: byIdentity, sourceIdentityKeys };
+  return { orderTotalsByIdentity: byIdentity, sourceIdentityKeys, orderStatusesByIdentity };
 }
 
 async function claimLegacyOrderSourceIdentities(rows: Array<typeof orders.$inferInsert>): Promise<void> {
@@ -400,6 +408,20 @@ export async function upsertNormalizedStoreOrders(
   // whole batch. The terminal-status preservation below remains unchanged.
   const importOrders = dedupeNormalizedStoreOrdersForImport(ordersIn);
 
+  const terminalTargetsByIdentity = new Map<string, {
+    status: 'shipped' | 'cancelled';
+    externallyShipped: boolean;
+  }>();
+  for (const order of importOrders) {
+    const identity = buildOrderSourceIdentity(order.source);
+    const status = String(order.orderStatus ?? '').trim().toLowerCase();
+    if (!identity || (status !== 'shipped' && status !== 'cancelled')) continue;
+    terminalTargetsByIdentity.set(orderSourceIdentityKey(identity), {
+      status,
+      externallyShipped: order.externallyShipped === true,
+    });
+  }
+
   type Row = typeof orders.$inferInsert;
   // Per user override unlock shipped data on 2026-07-15: Audit 5.6 makes
   // this shared importer delegate raw JSONB retention to one bounded policy.
@@ -414,7 +436,12 @@ export async function upsertNormalizedStoreOrders(
     sourceOrderNumber: order.source.sourceOrderNumber,
     rawSourcePayload: retainOrderRawSourcePayloadForPersistence(order.source.rawSourcePayload),
     orderNumber: order.orderNumber,
-    orderStatus: order.orderStatus,
+    // Terminal facts are applied below by OrderLifecycleCommand in this same
+    // transaction. The upsert itself only persists a mutable staging status.
+    orderStatus:
+      order.orderStatus === 'shipped' || order.orderStatus === 'cancelled'
+        ? 'awaiting_shipment'
+        : order.orderStatus,
     orderDate: order.orderDate,
     clientId: order.clientId,
     storeId: order.storeId,
@@ -433,7 +460,7 @@ export async function upsertNormalizedStoreOrders(
       sourceProvider: order.source.sourceProvider,
       raw: order.raw,
     }),
-    externallyShipped: order.externallyShipped === true,
+    externallyShipped: false,
     updatedAt: new Date(),
   }));
 
@@ -555,19 +582,53 @@ export async function upsertNormalizedStoreOrders(
         sourceOrderId: orders.sourceOrderId,
       });
 
-    if (options.inventoryDeductionSource) {
-      // Per user override unlock shipped data on 2026-07-15: the shipped-only
-      // hydration caller opts into this boundary so a newly imported terminal
-      // row and its durable deduction intent commit atomically. Other import
-      // callers remain unchanged and terminal-status preservation stays intact.
-      for (const row of persisted) {
-        if (row.orderStatus !== 'shipped') continue;
-        await enqueueInventoryDeduction(
-          row,
-          { source: options.inventoryDeductionSource },
-          tx,
-        );
-      }
+    for (const row of persisted) {
+      const identity = buildOrderSourceIdentity(row);
+      if (!identity) continue;
+      const identityKey = orderSourceIdentityKey(identity);
+      const target = terminalTargetsByIdentity.get(identityKey);
+      if (!target) continue;
+      const existingStatus = existingOrderFacts.orderStatusesByIdentity.get(identityKey);
+      if (existingStatus === 'shipped' || existingStatus === 'cancelled') continue;
+
+      // Per user override unlock shipped data on 2026-07-16 (PS-424): provider
+      // normalization feeds one terminal command. Status/external provenance,
+      // exact item claims, and durable work commit with the import upsert.
+      await applyOrderLifecycleCommandInTransaction(tx, {
+        orderId: row.id,
+        commandKey:
+          `lifecycle:store-import:${identity.sourceProvider}:${identity.sourceAccountId}:` +
+          `${identity.sourceOrderId}:${target.status}`,
+        transition:
+          target.status === 'shipped' && target.externallyShipped
+            ? 'external_shipped'
+            : target.status,
+        source: options.inventoryDeductionSource ?? `store_order_import:${identity.sourceProvider}`,
+        canonicalStatus: target.status,
+        externallyShippedSource:
+          target.status === 'shipped' && target.externallyShipped
+            ? `store_order_import:${identity.sourceProvider}`
+            : undefined,
+        suppressExternalWhenActiveShipment: true,
+        requireNoActiveOutboundShipment: target.status === 'cancelled',
+        fulfilledLines:
+          target.status === 'shipped' &&
+          (target.externallyShipped || identity.sourceProvider !== 'shipstation') &&
+          Array.isArray(row.items)
+            ? row.items
+            : [],
+        provenance: {
+          sourceProvider: identity.sourceProvider,
+          sourceAccountId: identity.sourceAccountId,
+          sourceOrderId: identity.sourceOrderId,
+          lineFacts:
+            target.status === 'shipped' &&
+            (target.externallyShipped || identity.sourceProvider !== 'shipstation')
+              ? 'whole_external_order'
+              : 'status_only_no_claim',
+        },
+      });
+      row.orderStatus = target.status;
     }
     return persisted;
   });

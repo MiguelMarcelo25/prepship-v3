@@ -19,37 +19,41 @@ assert(
 );
 
 assert(
-  shipmentSync.includes('enqueueInventoryDeduction(row, { source:') &&
-    shipmentSync.includes("source: 'shipment_sync'"),
-  'shipment sync must deduct inventory when it marks awaiting orders shipped',
+  shipmentSync.includes('applyOrderLifecycleCommandInTransaction(tx, {') &&
+    shipmentSync.includes("source: 'shipment_sync'") &&
+    shipmentSync.includes('fulfilledLines: exactLines'),
+  'shipment sync must create exact lifecycle claims when it marks orders shipped',
 );
 
 assert(
-  /enqueueInventoryDeduction\(\s*args\.order/.test(labels) &&
-    labels.includes('enqueue inventory deduction'),
-  'label creation must enqueue the shared durable inventory deduction path',
+  labels.includes('applyOrderLifecycleCommandInTransaction(tx, {') &&
+    labels.includes('fulfilledLines: order.items') &&
+    labels.includes('packageConsumption:'),
+  'label creation must delegate exact inventory intent to the lifecycle owner',
 );
 
 assert(
   // PS-136: the deduction lives in the extracted owner (shared kill-switch-governed path,
   // keyed external:<source>); the route delegates via markOrderShippedExternally().
   // Re-anchored to where the logic moved — protection intact, no lockdown logic changed.
-  /enqueueInventoryDeduction\(\s*order,[\s\S]*tx,/.test(markShippedExternally) &&
+  markShippedExternally.includes('applyOrderLifecycleCommand({') &&
+    markShippedExternally.includes("transition: 'external_shipped'") &&
     markShippedExternally.includes('external:${input.source}') &&
     ordersRoute.includes('markOrderShippedExternally('),
   'external shipped route must deduct inventory through the shared fulfillment deduction path',
 );
 
 assert(
-  orderSync.includes("import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox'") &&
-    orderSync.includes("if (orderStatus === 'shipped')") &&
+  orderSync.includes("import { applyOrderLifecycleCommand } from './order-lifecycle-command'") &&
+    orderSync.includes("if (orderStatus === 'shipped' || orderStatus === 'cancelled')") &&
     orderSync.includes("source: 'order_sync_status'") &&
     orderSync.includes('Per user override `unlock shipped data`'),
   'order status catch-up must deduct inventory when it flips awaiting orders to shipped',
 );
 
 assert(
-  deductionOutbox.includes('await deductInventoryForOrder(') &&
+  deductionOutbox.includes('await applyInventoryClaimsForLifecycleEvent(') &&
+    deductionOutbox.includes('await deductInventoryForOrder(') &&
     deductionOutbox.includes('INVENTORY_DEDUCTION_OUTBOX_EVENT') &&
     deductionOutbox.includes('enqueueMissingInventoryDeductions'),
   'the durable lane must delegate to the kill-switched owner and repair missed events',

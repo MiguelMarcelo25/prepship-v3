@@ -132,8 +132,13 @@ assert.match(
 );
 assert.match(
   script,
-  /enqueueInventoryDeduction\(row, \{ source: 'order_sync_status' \}\)/,
-  'hydrated shipped orders must reuse the shared durable inventory deduction lane, not a bespoke one',
+  /upsertNormalizedStoreOrders/,
+  'hydrated orders must delegate terminal state and durable work to the shared importer/lifecycle owner',
+);
+assert.doesNotMatch(
+  script,
+  /enqueueInventoryDeduction/,
+  'orphan hydration must not start a second order-only deduction after canonical import',
 );
 
 const pkg = readFileSync('package.json', 'utf8');

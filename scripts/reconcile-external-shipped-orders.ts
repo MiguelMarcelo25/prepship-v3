@@ -2,10 +2,11 @@ import 'dotenv/config';
 import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { fileURLToPath } from 'node:url';
 import { db } from '../src/db/client';
-import { orders, orderOverrides } from '../src/db/schema/orders';
+import { orders } from '../src/db/schema/orders';
 import { clients } from '../src/db/schema/clients';
 import { listShipStationShipments } from '../src/connectors/store/shipstation';
 import { ssV1Request } from '../src/lib/shipstation/v1-client';
+import { applyOrderLifecycleCommand } from '../src/services/order-lifecycle-command';
 
 /**
  * Mark genuinely marketplace-fulfilled ("Ext. Label") shipped orders.
@@ -303,12 +304,22 @@ export async function runExternalShippedReconcile(
       // Per user override unlock shipped data on 2026-07-02: automatic apply
       // only sets the reversible external-shipped flag for orders proven to
       // have no upstream shipment/fulfillment. It never mutates shipments.
-      await db.update(orders).set({ externallyShipped: true, updatedAt: new Date() }).where(eq(orders.id, o.id));
-      await db
-        .insert(orderOverrides)
-        .values({ orderId: o.id, externallyShippedSource: 'marketplace_fulfilled', updatedAt: new Date() })
-        .onConflictDoUpdate({ target: orderOverrides.orderId, set: { externallyShippedSource: 'marketplace_fulfilled', updatedAt: new Date() } });
-      report.flagged += 1;
+      // Per user override unlock shipped data on 2026-07-16 (PS-424): this
+      // classifier supplies provenance only. The lifecycle owner writes the
+      // external flag/sidecar atomically and empty lines prevent a second
+      // deduction for an order whose shipment already happened elsewhere.
+      const result = await applyOrderLifecycleCommand({
+        orderId: o.id,
+        commandKey:
+          `lifecycle:external-classifier:${o.id}:marketplace_fulfilled:` +
+          `${o.orderStatus === 'cancelled' ? 'external_classified' : 'external_shipped'}`,
+        transition: o.orderStatus === 'cancelled' ? 'external_classified' : 'external_shipped',
+        source: 'external_shipped_classifier',
+        externallyShippedSource: 'marketplace_fulfilled',
+        fulfilledLines: [],
+        provenance: { classification: 'marketplace_fulfilled' },
+      });
+      if (result.statusChanged) report.flagged += 1;
     }
   }
 
