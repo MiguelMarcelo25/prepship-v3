@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/pglite';
 import {
+  billingLineEffectiveDayRangeSql,
   billingProviderActivityTimestampSql,
   billingSourceCalendarSql,
 } from '../src/services/billing-calendar-policy.js';
@@ -139,6 +141,33 @@ const monday = await db.query<{ order_id: number; total_cost: string }>(`
 `);
 assert.deepEqual(monday.rows.map((row) => row.order_id), [201, 202, 203]);
 assert.equal(monday.rows.reduce((sum, row) => sum + Number(row.total_cost), 0), 33);
+
+// Regression: Drizzle's gte()/lt() loses the timestamp encoder when the left
+// side is coalesce(...), leaving postgres.js to reject raw Date parameters.
+// The canonical boundary must compile Dates to explicit ISO timestamptz values.
+const mondayRange = billingLineEffectiveDayRangeSql(
+  sql`billing_effective_date`,
+  sql`ship_date`,
+  new Date('2026-07-20T00:00:00Z'),
+  new Date('2026-07-21T00:00:00Z'),
+);
+const renderedMondayRange = new PgDialect().sqlToQuery(sql`
+  select order_id
+  from billing_line_items
+  where ${mondayRange}
+  order by order_id
+`);
+assert.deepEqual(renderedMondayRange.params, [
+  '2026-07-20T00:00:00.000Z',
+  '2026-07-21T00:00:00.000Z',
+]);
+const mondayViaOwner = await orm.execute<{ order_id: number }>(sql`
+  select order_id
+  from billing_line_items
+  where ${mondayRange}
+  order by order_id
+`);
+assert.deepEqual(mondayViaOwner.rows.map((row) => row.order_id), [201, 202, 203]);
 
 const legacyWeekend = await db.query<{ total: string }>(`
   select coalesce(sum(total_cost), 0)::text as total

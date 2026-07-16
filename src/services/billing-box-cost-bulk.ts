@@ -10,12 +10,12 @@
 // Slice 1: the read-only PREVIEW (dry-run). Slice 2: the APPLY — writes billing_box_resolutions
 // for every EDITABLE order + (the caller) regenerates; finalized (invoiced) orders are SKIPPED.
 
-import { sql, and, eq, gte, lt } from 'drizzle-orm';
+import { sql, and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
 import { roundMoney } from '../lib/money.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
-import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
+import { billingLineEffectiveDayRangeSql } from './billing-calendar-policy.js';
 import {
   assertBillingOrdersEditable,
   ensureBillingFinalizationPolicySchema,
@@ -103,19 +103,11 @@ export async function fetchBulkBoxCostOrderRows(
       and(
         eq(billingLineItems.clientId, scope.clientId),
         eq(billingLineItems.packageId, scope.packageId),
-        gte(
-          billingLineEffectiveDaySql(
-            billingLineItems.billingEffectiveDate,
-            billingLineItems.shipDate,
-          ),
-          new Date(scope.dateFrom),
-        ),
-        lt(
-          billingLineEffectiveDaySql(
-            billingLineItems.billingEffectiveDate,
-            billingLineItems.shipDate,
-          ),
-          new Date(scope.dateTo),
+        billingLineEffectiveDayRangeSql(
+          billingLineItems.billingEffectiveDate,
+          billingLineItems.shipDate,
+          scope.dateFrom,
+          scope.dateTo,
         ),
         clientScopePredicate,
       ),

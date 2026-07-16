@@ -88,6 +88,9 @@ assert.doesNotThrow(() => assertBillingWeekdayOperationAllowed({
 const read = (path: string) => readFileSync(path, 'utf8');
 const migration = read('drizzle/0071_billing_weekend_rollforward.sql');
 const billing = read('src/services/billing.ts');
+const calendarPolicy = read('src/services/billing-calendar-policy.ts');
+const boxCostBulk = read('src/services/billing-box-cost-bulk.ts');
+const boxCostByDims = read('src/services/billing-box-cost-by-dims.ts');
 const finalization = read('src/services/billing-finalization-policy.ts');
 const invoice = read('src/routes/billing.ts');
 const csv = read('src/routes/billing-invoice-csv.ts');
@@ -101,6 +104,11 @@ assert.match(migration, /coalesce\(NEW\.billing_effective_date, NEW\.ship_date\)
 assert.doesNotMatch(migration, /UPDATE\s+(?:public\.)?billing_line_items\s+SET/i);
 assert.doesNotMatch(migration, /ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)/i);
 assert.match(billing, /billingSourceCalendar\.billingEffectiveDay/);
+assert.match(calendarPolicy, /export function billingLineEffectiveDayRangeSql/);
+assert.match(billing, /billingLineEffectiveDayRangeSql/);
+assert.match(boxCostBulk, /billingLineEffectiveDayRangeSql/);
+assert.match(boxCostByDims, /billingLineEffectiveDayRangeSql/);
+assert.doesNotMatch(billing, /gte\(billingPersistedEffectiveDaySql/);
 assert.match(billing, /billingProviderActivityTimestampSql/);
 assert.match(billing, /billingEffectiveDate: s\.billingEffectiveDate/);
 assert.match(billing, /sourceMissingRow/);

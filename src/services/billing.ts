@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 // Audit B-4 (2026-07-13): xact advisory lock serializes concurrent storage-line writers.
 import { advisoryLockKeyPair } from '../lib/advisory-lock';
@@ -77,6 +77,7 @@ import { env } from '../lib/env';
 import {
   BILLING_POLICY_WEEKEND_ROLLFORWARD,
   assertBillingWeekdayOperationAllowed,
+  billingLineEffectiveDayRangeSql,
   billingLineEffectiveDaySql,
   billingProviderActivityTimestampSql,
   billingSourceCalendarSql,
@@ -2391,10 +2392,14 @@ export async function billingDetails(input: GenerateInput) {
     .leftJoin(orderOverrides, eq(billingLineItems.orderId, orderOverrides.orderId))
     .where(
       and(
-        gte(billingPersistedEffectiveDaySql, from),
-        // PS-208: `to` is the EXCLUSIVE day-after midnight — lt, never lte
-        // (the drizzle form the literal `<=` sweep missed).
-        lt(billingPersistedEffectiveDaySql, to),
+        // PS-208: `to` is the EXCLUSIVE day-after midnight. The canonical
+        // range owner emits a strict `<` upper bound, never `<=`.
+        billingLineEffectiveDayRangeSql(
+          billingLineItems.billingEffectiveDate,
+          billingLineItems.shipDate,
+          from,
+          to,
+        ),
         input.clientId !== undefined
           ? eq(billingLineItems.clientId, input.clientId)
           : undefined,

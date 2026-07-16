@@ -96,6 +96,7 @@ assert.equal(formatBillingLosAngelesDateTime('2026-05-01'), '5/1/2026 12:00 AM P
 
 const routes = read('src/routes/billing.ts');
 const service = read('src/services/billing.ts');
+const calendarPolicy = read('src/services/billing-calendar-policy.ts');
 const reporting = read('src/services/reporting-metrics.ts');
 const helper = read('src/lib/time/billing-day.ts');
 const invoiceText = read('src/routes/billing-invoice-text.ts');
@@ -162,15 +163,17 @@ assert.ok(!routes.includes('excelDayCell'),
 assert.ok(routes.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
   'XLSX response must carry the workbook MIME type');
 
-// Service layer: every ship_date bound is exclusive-upper; no <= anywhere —
-// in raw SQL (`<=`), drizzle sql-template (`shipDate} <=`), OR the drizzle
-// builder form (lte(...)) that a literal sweep misses.
+// Service layer: every ship_date bound is exclusive-upper; no <= anywhere.
+// The effective-day range owner emits the Drizzle-safe >= / < predicate so
+// query-builder callers cannot lose timestamp parameter encoding.
 assert.ok(!/ship_date <= /.test(service) && !/shipDate} <= /.test(service),
   'services/billing.ts must not retain inclusive ship_date upper bounds');
 assert.ok(!/lte\(billingPersistedEffectiveDaySql/.test(service),
-  'billingDetails must bound the effective day with lt(), not lte()');
-assert.ok(/lt\(billingPersistedEffectiveDaySql/.test(service),
-  'billingDetails must use the exclusive effective-day lt() upper bound');
+  'billingDetails must not use an inclusive effective-day upper bound');
+assert.ok(service.includes('billingLineEffectiveDayRangeSql('),
+  'billingDetails must delegate its effective-day bounds to the canonical range owner');
+assert.ok(/return sql`\$\{effectiveDay\} >= \$\{fromIso\}::timestamptz and \$\{effectiveDay\} < \$\{toIso\}::timestamptz`/.test(calendarPolicy),
+  'the canonical effective-day range owner must use an exclusive upper bound');
 assert.ok(service.includes('and b.ship_date < ${fromIso') === false, 'sanity: lower bounds stay >=');
 assert.ok(/dateFrom: string; \/\/ ISO, UTC midnight, inclusive/.test(service),
   'GenerateInput must document the calendar-day bound semantics');

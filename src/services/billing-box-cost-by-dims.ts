@@ -14,12 +14,12 @@
 // This is the dims-based companion to billing-box-cost-bulk.ts (which matches an already-resolved
 // packageId). The pure preview/split math + result types are reused from that module verbatim.
 
-import { sql, and, eq, gte, lt, inArray } from 'drizzle-orm';
+import { sql, and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
 import { roundMoney } from '../lib/money.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
-import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
+import { billingLineEffectiveDayRangeSql } from './billing-calendar-policy.js';
 import {
   assertBillingOrdersEditable,
   ensureBillingFinalizationPolicySchema,
@@ -105,19 +105,11 @@ export async function fetchUnmatchedBoxOrdersByDims(
         eq(billingLineItems.clientId, scope.clientId),
         eq(billingLineItems.lineType, REVIEW_LINE_TYPE),
         eq(billingLineItems.description, signature),
-        gte(
-          billingLineEffectiveDaySql(
-            billingLineItems.billingEffectiveDate,
-            billingLineItems.shipDate,
-          ),
-          new Date(scope.dateFrom),
-        ),
-        lt(
-          billingLineEffectiveDaySql(
-            billingLineItems.billingEffectiveDate,
-            billingLineItems.shipDate,
-          ),
-          new Date(scope.dateTo),
+        billingLineEffectiveDayRangeSql(
+          billingLineItems.billingEffectiveDate,
+          billingLineItems.shipDate,
+          scope.dateFrom,
+          scope.dateTo,
         ),
         clientScopePredicate,
       ),
@@ -297,19 +289,11 @@ export async function revertBulkBoxCostByDimsResolutions(
       and(
         eq(billingBoxResolutions.note, note),
         eq(billingLineItems.clientId, scope.clientId),
-        gte(
-          billingLineEffectiveDaySql(
-            billingLineItems.billingEffectiveDate,
-            billingLineItems.shipDate,
-          ),
-          new Date(scope.dateFrom),
-        ),
-        lt(
-          billingLineEffectiveDaySql(
-            billingLineItems.billingEffectiveDate,
-            billingLineItems.shipDate,
-          ),
-          new Date(scope.dateTo),
+        billingLineEffectiveDayRangeSql(
+          billingLineItems.billingEffectiveDate,
+          billingLineItems.shipDate,
+          scope.dateFrom,
+          scope.dateTo,
         ),
         clientScopePredicate,
       ),

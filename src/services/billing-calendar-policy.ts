@@ -207,6 +207,27 @@ export function billingLineEffectiveDaySql(
 }
 
 /**
+ * Canonical inclusive/exclusive range predicate for persisted billing days.
+ *
+ * Drizzle SQL expressions do not retain a timestamp column encoder. Passing a
+ * Date through gte()/lt() therefore reaches postgres.js as a raw Date, which
+ * its parameter writer rejects. Normalize the bounds to ISO strings here and
+ * cast them explicitly so every query-builder caller uses the same safe
+ * effective-day boundary.
+ */
+export function billingLineEffectiveDayRangeSql(
+  billingEffectiveDate: SQLWrapper,
+  shipDate: SQLWrapper,
+  dateFrom: string | Date,
+  dateTo: string | Date,
+): SQL {
+  const effectiveDay = billingLineEffectiveDaySql(billingEffectiveDate, shipDate);
+  const fromIso = (dateFrom instanceof Date ? dateFrom : new Date(dateFrom)).toISOString();
+  const toIso = (dateTo instanceof Date ? dateTo : new Date(dateTo)).toISOString();
+  return sql`${effectiveDay} >= ${fromIso}::timestamptz and ${effectiveDay} < ${toIso}::timestamptz`;
+}
+
+/**
  * Provider payloads mix true instants with date-only activity values. Preserve
  * a date-only value as a California calendar day by anchoring it at UTC noon;
  * only timestamp-shaped values are interpreted as real instants.
