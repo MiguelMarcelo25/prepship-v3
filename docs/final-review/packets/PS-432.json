@@ -5,7 +5,7 @@
   "title": "Sync and fulfillment resilience: data-integrity and retry-safety hardening",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "12223760bf20fd867bc820de98194d11fbbd1d3e"
+    "reviewedSha": "b91a3493eba26cfe64ea117556125a8c0226965f"
   },
   "riskDomains": [
     "rate_label",
@@ -78,12 +78,13 @@
       "id": "AC-7",
       "severity": "high",
       "status": "met",
-      "description": "The focused PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 45 mandatory source-of-truth guards, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA.",
+      "description": "The focused PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 45 mandatory source-of-truth guards, runtime-schema readiness audit, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA; later Billing, Returns/Orders read-model, and shipped-margin changes were classified without changing a PS-432 canonical owner.",
       "evidenceIds": [
         "ps424-lifecycle-integration",
         "ps426-consumer-leadership",
         "focused-ps432-suite",
         "full-sot-guard-pack",
+        "current-head-drift-review",
         "strict-typecheck",
         "frontend-build"
       ]
@@ -356,7 +357,24 @@
         "scripts/ps-430-print-queue-worker-health-integration.ts"
       ],
       "assertions": [],
-      "proves": "All 45 mandatory source-of-truth, worker, inventory, billing, rate/label, lockdown, and lifecycle guards pass at the exact reviewed SHA."
+      "proves": "All 45 mandatory source-of-truth, worker, inventory, billing, rate/label, lockdown, and lifecycle guards pass at the exact reviewed SHA. The only pre-refresh failure was a stale Print Queue static assertion naming migration 0070; its one-line test-only frontier was advanced to the already-applied additive 0071 migration before this passing run."
+    },
+    {
+      "id": "current-head-drift-review",
+      "classification": "static",
+      "command": "git diff --name-status 12223760bf20fd867bc820de98194d11fbbd1d3e b91a3493eba26cfe64ea117556125a8c0226965f -- . ':(exclude)docs/final-review/packets/PS-432.json' && git diff --quiet 946453f82f64cb4c8d3a5eeb32bc8e6f009c7a74 b91a3493eba26cfe64ea117556125a8c0226965f -- src/services/order-lifecycle-command.ts src/db/schema/order-lifecycle.ts drizzle/0070_order_lifecycle_commands.sql src/services/fulfillment/inventory-deduction-outbox.ts src/services/fulfillment-deductions.ts src/services/fulfillment/outbox.ts src/lib/label-purchase-intent.ts src/connectors/store/shipstation.ts src/services/sync-job-queue.ts",
+      "result": "pass",
+      "artifactPaths": [
+        "src/routes/orders.ts",
+        "src/services/return-order-read-model.ts",
+        "src/services/runtime-schema-readiness.ts",
+        "src/services/billing-calendar-policy.ts",
+        "web/src/components/Views/orders-row-display.tsx",
+        "web/src/components/Views/orders/cells/order-cells.tsx",
+        "scripts/audit-print-queue-merge-durability-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "Post-packet drift was classified as PS-431 documentation, PS-434 Billing policy plus additive migration 0071, read-only Returns/Orders display projection, backend-issued shipped-margin presentation, and a test-only migration-frontier assertion. None of the PS-432 lifecycle, fulfillment-deduction, purchase-intent, confirmation, or worker-leadership canonical owners changed after the prior packet."
     },
     {
       "id": "strict-typecheck",
@@ -419,10 +437,10 @@
         "src/services/runtime-schema-readiness.ts"
       ]
     },
-    "rollbackPlan": "Revert the packet, PS-426 leadership, and PS-424 runtime commits before redeploying while leaving the additive lifecycle receipt and claim tables intact. The pre-change runtime ignores those sidecars, so rollback never drops append-only evidence or rewrites historical shipped/cancelled meaning."
+    "rollbackPlan": "If a PS-432 runtime regression is found, prepare a reviewed revert of the original PS-432/PS-424/PS-426 runtime commits while leaving additive lifecycle receipt and claim tables intact. Preserve later independent Billing migration 0071, Returns/Orders display, and shipped-margin work; rollback must never drop append-only evidence or rewrite historical shipped/cancelled meaning."
   },
   "rollback": {
-    "strategy": "Redeploy the prior runtime after reverting 12223760bf20fd867bc820de98194d11fbbd1d3e, 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e, f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb, and 86f5dfe93c87d21597bcbd009d9e10934c68813d in that order. Keep additive 0070 sidecars and durable receipts; never delete lifecycle, shipment, intent, outbox, inventory-ledger, or package-ledger history and never mutate shipped/cancelled production records. The integration's injected exception proves the authoritative transaction rolls back all new lifecycle writes before a safe retry.",
+    "strategy": "Use a reviewed forward revert of the original PS-432/PS-424/PS-426 runtime changes only; do not reset the branch or roll back later independent Billing, Returns/Orders, or shipping-margin commits. Keep additive 0070 and 0071 sidecars and durable receipts; never delete lifecycle, shipment, intent, outbox, inventory-ledger, package-ledger, or billing history and never mutate shipped/cancelled production records. The integration's injected exception proves the authoritative transaction rolls back all new lifecycle writes before a safe retry.",
     "tested": true,
     "evidenceIds": [
       "ps424-lifecycle-integration"
@@ -430,7 +448,7 @@
   },
   "liveVerification": {
     "status": "verified",
-    "reason": "The previous nine-item provider ambiguity is closed by a production READ ONLY aggregate query: every stale Print Queue sidecar has a durable active shipment provider receipt and no unresolved label-purchase intent exists. /health/deep still reports the conservative stale sidecar count, but automatic recovery is fenced and no provider outcome remains unknown. No provider call or production write was required or performed.",
+    "reason": "The previous nine-item provider ambiguity is closed by a production READ ONLY aggregate query: every stale Print Queue sidecar has a durable active shipment provider receipt and no unresolved label-purchase intent exists. The deployed runtime parent 604e11f66f64849f54fe4c4f78b91253961a5cdf contains the reviewed product behavior; b91a3493eba26cfe64ea117556125a8c0226965f adds only an offline static-guard frontier update. /health/deep still reports the conservative stale sidecar count, but automatic recovery is fenced and no provider outcome remains unknown. No provider call or production write was required or performed.",
     "followUpOwner": null,
     "artifactPaths": [
       "docs/final-review/evidence/PS-432-provider-pending-readonly.sql",
