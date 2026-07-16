@@ -1,0 +1,291 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-425",
+  "title": "Define multi-shipment lifecycle and billing cardinality; stop silent conflict-drop underbilling",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "7a6da89f5889cdba79b9f44076a4b3ca3aec69c1"
+  },
+  "riskDomains": [
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Every distinct active outbound shipment is independently billable, while voided labels, return labels, and provider duplicates are excluded by the canonical shipment aggregate.",
+      "evidenceIds": [
+        "shipment-cardinality-integration",
+        "shipment-cardinality-adversarial"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Two active shipments persist two frozen billing rows totaling $32, preserve $25 of shipment cost and $7 of margin, and remain distinct in HTML, XLSX, and CSV exports.",
+      "evidenceIds": [
+        "shipment-cardinality-integration"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Generated counts and totals come from inserted PostgreSQL rows; a duplicate candidate fails loudly and a repeat attempt leaves two rows and $32 unchanged instead of silently conflict-dropping underbilling.",
+      "evidenceIds": [
+        "shipment-cardinality-integration",
+        "shipment-cardinality-adversarial"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Voiding the first active outbound shipment keeps the order shipped; only the final void may reopen it, and canonical or external terminal evidence prevents reopening.",
+      "evidenceIds": [
+        "shipment-cardinality-adversarial",
+        "focused-ps425-suite"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "Migration 0068 changes uniqueness without rewriting billing rows, and its executable rollback preserves the two current shipment rows while restoring the previous application duplicate constraint.",
+      "evidenceIds": [
+        "migration-forward-proof",
+        "migration-rollback-proof"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "The focused PS-425 suite, all 45 mandatory source-of-truth guards, strict TypeScript checks, and the production frontend build pass at the exact reviewed SHA.",
+      "evidenceIds": [
+        "focused-ps425-suite",
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "met",
+      "description": "The shipped-data override is narrowly documented, protections remain enforced, and verification performs no production billing regeneration, label purchase, postage charge, provider call, marketplace notification, or production shipped/cancelled mutation.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "focused-ps425-suite"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/shipment-aggregate.ts activeOutboundShipmentPredicate and decideShipmentVoidLifecycle",
+      "src/services/billing.ts shipment-scoped frozen billing persistence and PostgreSQL RETURNING totals",
+      "src/services/labels.ts locked label-void transaction delegating lifecycle decisions to the shipment aggregate",
+      "src/services/shipping-margin-analytics.ts shipment-scoped cost, charge, and margin read model"
+    ],
+    "oldOwners": [
+      {
+        "path": "billing_line_items order-level billing_li_unique conflict-drop behavior",
+        "disposition": "deleted",
+        "delegatesTo": "shipment-scoped uniqueness plus explicit PostgreSQL insert failure"
+      },
+      {
+        "path": "src/services/labels.ts unconditional awaiting_shipment reopen after any label void",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/shipment-aggregate.ts#decideShipmentVoidLifecycle"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/billing.ts",
+        "action": "modified",
+        "delegatesTo": "frozen shipment-scoped billing rows for HTML/XLSX display"
+      },
+      {
+        "path": "src/routes/billing-invoice-csv.ts",
+        "action": "modified",
+        "delegatesTo": "frozen shipment-scoped billing rows for CSV display"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Billing generation and label void call the canonical backend shipment aggregate. Routes and exports only consume frozen rows; no frontend or route wrapper owns cardinality, lifecycle, cost, margin, or terminal-state truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "shipment-cardinality-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-425-multi-shipment-cardinality",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts",
+        "src/services/shipment-aggregate.ts",
+        "src/services/shipping-margin-analytics.ts",
+        "src/routes/billing.ts",
+        "src/routes/billing-invoice-csv.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "A PostgreSQL-compatible migrated fixture persists exactly two shipment-scoped billing rows totaling $32, reconciles $25 cost and $7 margin, and renders the same two shipment identities and charges in HTML, XLSX, and CSV."
+    },
+    {
+      "id": "shipment-cardinality-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-425-multi-shipment-cardinality",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts",
+        "src/services/shipment-aggregate.ts",
+        "src/services/billing.ts",
+        "src/services/labels.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Returns, voided replacements, and duplicate provider shipment identities cannot enter the active outbound set; a duplicate billing candidate fails loudly, a repeat leaves count and total unchanged, first-void remains shipped, and terminal evidence prevents an unsafe reopen."
+    },
+    {
+      "id": "migration-forward-proof",
+      "classification": "integration",
+      "command": "npm run test:ps-425-multi-shipment-cardinality",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0068_billing_shipment_cardinality.sql",
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality"
+      ],
+      "proves": "Migration 0068 applies to a legacy-shaped billing table and replaces order-level uniqueness with shipment-aware and shipment-less partial unique indexes without rewriting fixture billing data."
+    },
+    {
+      "id": "migration-rollback-proof",
+      "classification": "integration",
+      "command": "npm run test:ps-425-multi-shipment-cardinality",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/evidence/PS-425-migration-rollback.sql",
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts"
+      ],
+      "assertions": [
+        "migration_rollback",
+        "row_preservation",
+        "legacy_constraint_restored"
+      ],
+      "proves": "The controlled rollback SQL drops both new indexes, restores billing_li_unique, preserves the two existing shipment rows and $32 total, accepts a legacy-shaped row, and rejects its duplicate."
+    },
+    {
+      "id": "focused-ps425-suite",
+      "classification": "static",
+      "command": "npm run test:ps-425-multi-shipment-cardinality",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-425-multi-shipment-cardinality-guard.ts",
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts",
+        "docs/ps-tickets/PS-425.md"
+      ],
+      "assertions": [],
+      "proves": "The source-of-truth placement guard and executable migrated-database cardinality, lifecycle, export, repeat-run, and rollback proof execute together at the reviewed SHA."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/ps-412-finalized-billing-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 45 mandatory source-of-truth, finalized-billing, lifecycle, runtime-schema, worker, and safety guards pass at the exact reviewed SHA."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully with 2,977 modules transformed."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= 644e4ca5a9c387e5b7a1fb054b088eb5d64a2e44 7a6da89f5889cdba79b9f44076a4b3ca3aec69c1",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-425.md",
+        "src/services/shipment-aggregate.ts",
+        "src/services/billing.ts",
+        "src/services/labels.ts",
+        "drizzle/0068_billing_shipment_cardinality.sql",
+        "docs/final-review/evidence/PS-425-migration-rollback.sql"
+      ],
+      "assertions": [],
+      "proves": "The implementation is scoped to shipment aggregation, billing cardinality/read models/exports, aggregate-aware void lifecycle, migration, and offline tests. Locked labels logic carries the required user-override comment; no destructive shipped/cancelled guard, history, or schema protection was removed."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0068_billing_shipment_cardinality.sql"
+    ],
+    "verification": {
+      "command": "npm run test:ps-425-multi-shipment-cardinality",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0068_billing_shipment_cardinality.sql",
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts",
+        "docs/final-review/evidence/PS-425-migration-rollback.sql"
+      ]
+    },
+    "rollbackPlan": "Stop Billing generation, run docs/final-review/evidence/PS-425-migration-rollback.sql transactionally, then deploy the previous application. The rollback removes the two PS-425 partial indexes, restores billing_li_unique (order_id, line_type, description), and preserves existing billing rows; the offline fixture proves both row preservation and legacy duplicate enforcement."
+  },
+  "rollback": {
+    "strategy": "Stop Billing generation, apply the tested PS-425 rollback SQL, verify billing row count and total, then revert the packet, rollback-evidence, and implementation commits before redeploying. Do not regenerate finalized billing rows or rewrite shipment history.",
+    "tested": true,
+    "evidenceIds": [
+      "migration-rollback-proof"
+    ]
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "Cardinality, lifecycle, exports, repeat behavior, and migration rollback are executable against an in-memory PostgreSQL-compatible migrated fixture. No live provider, label purchase, postage, marketplace notification, production billing regeneration, or production shipped/cancelled mutation is needed for closure; deployment health is checked separately after push.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
