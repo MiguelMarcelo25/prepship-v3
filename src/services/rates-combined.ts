@@ -248,11 +248,29 @@ export function withAbortableCarrierQuoteTimeout<T>(
   run: (signal: AbortSignal) => Promise<T>,
   label: string,
   timeoutMs: number = DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
+  const parentAbortReason = () =>
+    parentSignal?.reason instanceof Error
+      ? parentSignal.reason
+      : new Error(`${label} rate request aborted`);
+  if (parentSignal?.aborted) return Promise.reject(parentAbortReason());
+
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onParentAbort: (() => void) | undefined;
+  const parentAbort = new Promise<never>((_resolve, reject) => {
+    if (!parentSignal) return;
+    onParentAbort = () => {
+      const reason = parentAbortReason();
+      controller.abort(reason);
+      reject(reason);
+    };
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  });
   return Promise.race([
     run(controller.signal),
+    parentAbort,
     new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         const timeoutError = new Error(`${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`);
@@ -266,6 +284,9 @@ export function withAbortableCarrierQuoteTimeout<T>(
     }),
   ]).finally(() => {
     if (timer) clearTimeout(timer);
+    if (parentSignal && onParentAbort) {
+      parentSignal.removeEventListener('abort', onParentAbort);
+    }
   }) as Promise<T>;
 }
 

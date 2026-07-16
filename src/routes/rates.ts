@@ -22,6 +22,7 @@ import {
   getBackfillJob,
   getBackfillJobSnapshot,
   getLatestBackfillJobSnapshot,
+  getCadenceRateBackfillGenerationState,
   enqueueBackfillBestRates,
 } from '../services/rates-backfill';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
@@ -995,15 +996,25 @@ app.get('/backfill-best/status/:jobId', requireInternalPermission('scope:global'
 });
 
 app.get('/backfill-best/active', requireInternalPermission('scope:global'), async (c) => {
-  const durableJob = await getLatestBackfillJobSnapshot();
-  return c.json({ job: durableJob?.active ? durableJob : null });
+  const [durableJob, generation] = await Promise.all([
+    getLatestBackfillJobSnapshot(),
+    getCadenceRateBackfillGenerationState(),
+  ]);
+  return c.json({
+    job: durableJob?.active || generation?.status === 'active' ? durableJob : null,
+    generation: generation?.status === 'active' ? generation : null,
+  });
 });
 
 app.get('/backfill-best/latest', requireInternalPermission('scope:global'), async (c) => {
-  const durableJob = await getLatestBackfillJobSnapshot();
+  const [durableJob, generation] = await Promise.all([
+    getLatestBackfillJobSnapshot(),
+    getCadenceRateBackfillGenerationState(),
+  ]);
   return c.json({
     job: durableJob,
     durableJob,
+    generation,
   });
 });
 

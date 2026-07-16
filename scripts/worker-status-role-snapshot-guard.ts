@@ -66,7 +66,7 @@ check(
 );
 check(
   'returns role snapshots for diagnostics',
-  /snapshots: Record<[\s\S]*return \{ \.\.\.selected, snapshots \}/.test(
+  /snapshots: Record<[\s\S]*return \{[\s\S]*\.\.\.selected,[\s\S]*activeLane:[\s\S]*snapshots,/.test(
     workerStatus,
   ),
 );

@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   assert.match(producer, /id: payload\.jobId/);
   assert.match(backfill, /enqueueDurableRateBackfillJob\(payload\)/);
   assert.match(queue, /parseDurableRateBackfillJobPayload\(jobData\)/);
-  assert.match(queue, /runDurableRateBackfillJob\(explicitRequest\)/);
+  assert.match(queue, /runDurableRateBackfillJob\(explicitRequest, signal\)/);
   assert.match(queue, /ratePayload \? \{ \.\.\.ratePayload, \.\.\.deferredMetadata \}/);
   assert.match(queue, /ratePayload\?\.jobId \?\? 'cadence'/);
   assert.match(queue, /durable rate-backfill deferral failed; retrying original queue job/);

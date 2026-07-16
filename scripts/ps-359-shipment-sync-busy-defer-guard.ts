@@ -48,7 +48,7 @@ check('busy-defer uses pg-boss sendAfter for durable retry', /await boss\.sendAf
 check('busy-defer delegates singleton keys to the canonical admission owner',
   /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer',[\s\S]*orderStarvation,[\s\S]*singletonKey: admission\.singletonKey/.test(queue));
 check('blocked queue jobs call deferBusySyncJob before returning skipped',
-  /deferBusySyncJob\(name, blockedBy, lane, busyDeferCount\(job\?\.data\)\)/.test(skipBlock));
+  /deferBusySyncJob\(\s*name,\s*blockedBy,\s*lane,\s*busyDeferCount\(job\?\.data\),\s*job\?\.data,?\s*\)/.test(skipBlock));
 check('blocked queue return exposes deferred status', /deferred:\s*Boolean\(deferredJobId\)/.test(skipBlock));
 check(
   'cross-process ShipStation lane lock module exists',
@@ -81,7 +81,7 @@ check(
 );
 check(
   'cross-process lane lock miss defers order\/shipment sync instead of running concurrently',
-  /lane_lock_held/.test(queue) && /deferBusySyncJob\(name, blockedBy, lane, busyDeferCount\(job\?\.data\)\)/.test(queue),
+  /lane_lock_held/.test(queue) && /deferBusySyncJob\(\s*name,\s*blockedBy,\s*lane,\s*busyDeferCount\(job\?\.data\),\s*job\?\.data,?\s*\)/.test(queue),
 );
 check('busy-defer comment records the shipped-data override and safety boundary', /unlock shipped data on 2026-07-01/.test(queue));
 check(

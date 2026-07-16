@@ -23,6 +23,7 @@ const REQUIRED_GUARDS = [
   'test:ps-431-production-self-healing',
   'test:ps-432-sync-fulfillment-resilience',
   'test:ps-433-frontend-source-of-truth',
+  'test:ps-436-sync-starvation',
   'test:ps-320-v2-api-client-transport',
   'test:ps-321-ratebrowsermodal-thin-ui',
   'test:ps-329-orders-wrapper-sot-cleanup',

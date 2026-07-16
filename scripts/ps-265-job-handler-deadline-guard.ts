@@ -15,6 +15,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { withDeadline, DeadlineExceededError } from '../src/lib/with-deadline';
+import { awaitCancellationAcknowledgement } from '../src/lib/sync-job-cancellation';
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -75,32 +76,18 @@ async function main() {
   }
   check('cancellation hook failure still rejects with deadline error', callbackFailureKeptDeadline);
 
-  // 4. Deadline rejection must not make a still-running handler look finished. The
-  // lane remains owned until the original promise settles, preventing zombie overlap.
-  const activeLanes = new Map<string, string>([['shipstation-sync', 'prepship.sync.shipments']]);
-  let settleDeferredHandler!: () => void;
-  const deferredHandler = new Promise<void>((resolve) => {
-    settleDeferredHandler = resolve;
-  });
-  const clearDeferredLane = () => {
-    if (activeLanes.get('shipstation-sync') === 'prepship.sync.shipments') {
-      activeLanes.delete('shipstation-sync');
-    }
-  };
-  void deferredHandler.then(clearDeferredLane, clearDeferredLane);
-  try {
-    await withDeadline(() => deferredHandler, 80, 'deferred-handler');
-  } catch {
-    // Expected deadline; the original handler is deliberately still running.
-  }
-  check(
-    'deadline keeps lane owned while original handler is still running',
-    activeLanes.get('shipstation-sync') === 'prepship.sync.shipments',
-  );
-  settleDeferredHandler();
-  await deferredHandler;
-  await Promise.resolve();
-  check('lane releases when original handler settles', !activeLanes.has('shipstation-sync'));
+  // 4. A never-settling handler gets only a bounded cancellation grace. The
+  // queue owner still holds the advisory lane while this verdict is produced;
+  // an unacknowledged verdict therefore triggers fail-closed worker recovery.
+  const neverSettles = new Promise<void>(() => undefined);
+  const graceStartedAt = Date.now();
+  const unacknowledged = await awaitCancellationAcknowledgement(neverSettles, 80);
+  check('never-settling handler exhausts bounded cancellation grace', !unacknowledged.acknowledged);
+  check('cancellation grace itself is bounded', Date.now() - graceStartedAt < 2_000);
+
+  const cooperative = Promise.resolve();
+  const acknowledged = await awaitCancellationAcknowledgement(cooperative, 80);
+  check('cooperative handler acknowledges cancellation', acknowledged.acknowledged);
 
   // ── Static contract: the worker bounds the handler without releasing a zombie ──
   const q = read('src/services/sync-job-queue.ts');
@@ -112,8 +99,12 @@ async function main() {
     /const handlerPromise = Promise\.resolve\(\)\.then\(\(\) =>\s*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\),?\s*\)[\s\S]*await withDeadline\(\s*\(\) => handlerPromise,[\s\S]*SYNC_JOB_HANDLER_TIMEOUT_MS[\s\S]*abortController\.abort\(error\)/.test(q));
   check('queue tracks the original handler promise outside the deadline race',
     /const handlerPromise = Promise\.resolve\(\)\.then\(\(\) =>\s*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\),?\s*\)/.test(q));
-  check('active lane releases only when the original handler promise settles',
+  check('active lane remains attached to the original handler promise',
     /void handlerPromise\.then\(clearActiveLane, clearActiveLane\)/.test(q));
+  check('deadline waits only for bounded cancellation acknowledgement',
+    /awaitCancellationAcknowledgement\([\s\S]*handlerPromise[\s\S]*SYNC_JOB_CANCELLATION_GRACE_MS/.test(q));
+  check('unacknowledged cancellation terminates the worker while fenced',
+    /terminateWorkerForUnacknowledgedCancellation/.test(q));
   check('deadline path does not unconditionally clear a still-running lane',
     !/finally \{\s*if \(activeJobsByLane\.get\(lane\) === name\) activeJobsByLane\.delete\(lane\);\s*\}/.test(q));
   check('deadline is clamped BELOW the pg-boss expiry (25min < 30min)',

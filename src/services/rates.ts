@@ -436,6 +436,8 @@ async function getAllCarrierIds(): Promise<string[]> {
 }
 
 export type RateInput = {
+  /** Cooperative cancellation for backend-owned background quote workflows. */
+  signal?: AbortSignal;
   weightOz: number;
   toZip: string;
   toCountry?: string;
@@ -1269,6 +1271,7 @@ async function fetchEstimateForCarrier(
       }),
       `shipstation:${carrier.carrier_code}`,
       timeoutMs,
+      input.signal,
     );
     const rates = payload.rates as EstimateRate[];
     // Single-account responses can safely fill carrier_id when ShipStation omits it.
@@ -1340,6 +1343,7 @@ async function fetchEstimateForCarriers(
     }),
     'shipstation:batch',
     timeoutMs,
+    input.signal,
   );
   const rates = payload.rates as EstimateRate[];
   const partition = partitionShipStationEstimateBatch(
@@ -1539,7 +1543,9 @@ export async function fetchLiveRatesWithDiagnostics(
   automationRules: ShippingAutomationRule[] = [],
   priority: RateFetchPriority = 'interactive',
 ): Promise<FetchLiveRatesResult> {
+  input.signal?.throwIfAborted();
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
+  input.signal?.throwIfAborted();
 
   // If the caller restricted carriers via input.carrierIds, filter the
   // discovery list to that set. Otherwise use the full cached list.
@@ -1894,9 +1900,11 @@ export async function getRates(
   input: RateInput,
   opts: GetRatesOptions = {}
 ): Promise<GetRatesResult> {
+  input.signal?.throwIfAborted();
   const resolvedInput = await resolveRateInput(input, {
     rawManualEstimate: opts.rawManualEstimate === true,
   });
+  input.signal?.throwIfAborted();
   const key = rateCacheKey(resolvedInput);
 
   // PS-187: test clients (clients.is_test — the PS-186 authority) get DETERMINISTIC
@@ -2461,6 +2469,7 @@ export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
   options: { cachedOnly?: boolean; priority?: RateFetchPriority } = {},
 ): Promise<DirectCarrierRatesResult> {
+  input.signal?.throwIfAborted();
   const accounts = (await loadVisibleDirectCarrierAccounts(input)).filter((account) => {
     // eBay Logistics ONLY prices a specific eBay order (its shipping_quote API takes an eBay orderId),
     // so it can NEVER quote a non-eBay order. Gate on whether this is an eBay MARKETPLACE order
@@ -2595,6 +2604,7 @@ export async function getDirectCarrierRatesForRateInput(
       // PS-206: bounded per-carrier quoting — one slow/hung provider becomes a
       // per-account 'failed' diagnostic (caught below) instead of holding the
       // whole combined /browse response open while every other carrier waits.
+      input.signal?.throwIfAborted();
       const quoted = await withAbortableCarrierQuoteTimeout((signal) => quoteCarrierRates(account.provider, {
         credentials: account.credentials,
         weightOz: input.weightOz,
@@ -2633,7 +2643,7 @@ export async function getDirectCarrierRatesForRateInput(
         requestKey: requestFingerprint,
         shippingOptions,
         signal,
-      }), label, executionPolicy.timeoutMs);
+      }), label, executionPolicy.timeoutMs, input.signal);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
       const eligible = filterRatesForShippingServiceEligibility(
         rawRates,

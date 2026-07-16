@@ -65,6 +65,9 @@ assert.doesNotMatch(pdfStore, /if \(!durablePrintQueuePdfEnabled\(\)\)/);
 
 assert.match(reaper, /REAPER_MIN_ACTIVE_AGE_MS = SYNC_JOB_RUNNING_LEASE_MS/);
 assert.match(reaper, /if \(laneIsHeld\) continue/);
-assert.match(syncQueue, /err instanceof DeadlineExceededError[\s\S]{0,500}await handlerPromise\.catch/);
+assert.match(
+  syncQueue,
+  /err instanceof DeadlineExceededError[\s\S]{0,900}awaitCancellationAcknowledgement\([\s\S]*handlerPromise[\s\S]*terminateWorkerForUnacknowledgedCancellation/,
+);
 
 console.log('PASS PS-428 durable worker execution static guard');

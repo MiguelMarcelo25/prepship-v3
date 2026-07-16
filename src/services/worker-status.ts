@@ -29,8 +29,13 @@ type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 
 export type WorkerJobSnapshot = {
   name: string;
+  jobId?: string | null;
+  generationId?: string | null;
+  lane?: string | null;
   status: WorkerJobStatus;
   startedAt: string | null;
+  deadlineAt?: string | null;
+  timeoutMs?: number | null;
   finishedAt: string | null;
   durationMs: number | null;
   summary: Record<string, unknown> | null;
@@ -47,7 +52,31 @@ export type WorkerStatusSnapshot = {
   startedAt: string;
   heartbeatAt: string;
   currentJob: string | null;
+  activeLanes?: Record<string, Omit<WorkerActiveLaneStatus, 'ageSeconds'>>;
+  syncWatermarks?: {
+    ordersCompletedAt: string | null;
+    shipmentsCompletedAt: string | null;
+  };
   jobs: Record<string, WorkerJobSnapshot>;
+};
+
+export type WorkerActiveLaneStatus = {
+  jobName: string;
+  jobId: string | null;
+  generationId: string | null;
+  lane: string | null;
+  startedAt: string | null;
+  ageSeconds: number | null;
+  deadlineAt: string | null;
+  timeoutMs: number | null;
+};
+
+export type WorkerJobExecutionContext = {
+  jobId?: string | null;
+  generationId?: string | null;
+  lane?: string | null;
+  startedAtMs?: number;
+  timeoutMs?: number | null;
 };
 
 const processStartedAt = new Date().toISOString();
@@ -71,7 +100,44 @@ function createSnapshot(mode: WorkerMode): WorkerStatusSnapshot {
     startedAt: processStartedAt,
     heartbeatAt: now,
     currentJob: null,
+    activeLanes: {},
+    syncWatermarks: {
+      ordersCompletedAt: null,
+      shipmentsCompletedAt: null,
+    },
     jobs: {},
+  };
+}
+
+export function workerActiveLaneStatus(
+  status: WorkerStatusSnapshot | null,
+  nowMs: number = Date.now(),
+): WorkerActiveLaneStatus | null {
+  const jobName = status?.currentJob;
+  const sharedLane = status?.activeLanes?.['shipstation-sync'];
+  if (sharedLane) {
+    const startedMs = sharedLane.startedAt ? Date.parse(sharedLane.startedAt) : Number.NaN;
+    return {
+      ...sharedLane,
+      ageSeconds: Number.isFinite(startedMs)
+        ? Math.max(0, Math.round((nowMs - startedMs) / 1_000))
+        : null,
+    };
+  }
+  if (!jobName) return null;
+  const job = status.jobs[jobName];
+  const startedMs = job?.startedAt ? Date.parse(job.startedAt) : Number.NaN;
+  return {
+    jobName,
+    jobId: job?.jobId ?? null,
+    generationId: job?.generationId ?? null,
+    lane: job?.lane ?? null,
+    startedAt: job?.startedAt ?? null,
+    ageSeconds: Number.isFinite(startedMs)
+      ? Math.max(0, Math.round((nowMs - startedMs) / 1_000))
+      : null,
+    deadlineAt: job?.deadlineAt ?? null,
+    timeoutMs: job?.timeoutMs ?? null,
   };
 }
 
@@ -159,7 +225,23 @@ async function persistSnapshot(): Promise<void> {
 }
 
 export async function setWorkerMode(mode: WorkerMode): Promise<void> {
-  snapshot = createSnapshot(mode);
+  const next = createSnapshot(mode);
+  // PS-436: lane ownership is process-local, but completed order/shipment
+  // watermarks are durable truth. Preserve only those completion timestamps
+  // across worker restarts; never resurrect a prior process's currentJob.
+  try {
+    const priorRaw = await getSetting(workerStatusSnapshotKey(mode));
+    const prior = priorRaw ? JSON.parse(priorRaw) as WorkerStatusSnapshot : null;
+    if (prior?.syncWatermarks) {
+      next.syncWatermarks = {
+        ordersCompletedAt: prior.syncWatermarks.ordersCompletedAt ?? null,
+        shipmentsCompletedAt: prior.syncWatermarks.shipmentsCompletedAt ?? null,
+      };
+    }
+  } catch {
+    // A missing/corrupt observability snapshot must not block worker startup.
+  }
+  snapshot = next;
   await persistSnapshot();
 }
 
@@ -175,19 +257,41 @@ export async function recordWorkerHeartbeat(): Promise<void> {
   });
 }
 
-export async function recordWorkerJobStart(name: string): Promise<void> {
-  const now = new Date().toISOString();
+export async function recordWorkerJobStart(
+  name: string,
+  context: WorkerJobExecutionContext = {},
+): Promise<void> {
+  const startedAtMs = context.startedAtMs ?? Date.now();
+  const now = new Date(startedAtMs).toISOString();
+  const timeoutMs = context.timeoutMs ?? null;
   snapshot.currentJob = name;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
     name,
+    jobId: context.jobId ?? null,
+    generationId: context.generationId ?? null,
+    lane: context.lane ?? null,
     status: 'running',
     startedAt: now,
+    deadlineAt: timeoutMs == null ? null : new Date(startedAtMs + timeoutMs).toISOString(),
+    timeoutMs,
     finishedAt: null,
     durationMs: null,
     summary: null,
     error: null,
   };
+  if (context.lane) {
+    snapshot.activeLanes ??= {};
+    snapshot.activeLanes[context.lane] = {
+      jobName: name,
+      jobId: context.jobId ?? null,
+      generationId: context.generationId ?? null,
+      lane: context.lane,
+      startedAt: now,
+      deadlineAt: timeoutMs == null ? null : new Date(startedAtMs + timeoutMs).toISOString(),
+      timeoutMs,
+    };
+  }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
   void recordWorkerStatusEvent({
@@ -195,7 +299,15 @@ export async function recordWorkerJobStart(name: string): Promise<void> {
     pid: snapshot.pid,
     eventType: 'job_start',
     jobName: name,
-    details: { status: 'running', startedAt: now },
+    details: {
+      status: 'running',
+      startedAt: now,
+      jobId: context.jobId ?? null,
+      generationId: context.generationId ?? null,
+      lane: context.lane ?? null,
+      deadlineAt: timeoutMs == null ? null : new Date(startedAtMs + timeoutMs).toISOString(),
+      timeoutMs,
+    },
   });
 }
 
@@ -205,17 +317,29 @@ export async function recordWorkerJobSuccess(
   result: unknown
 ): Promise<void> {
   const now = new Date().toISOString();
+  const prior = snapshot.jobs[name];
   snapshot.currentJob = snapshot.currentJob === name ? null : snapshot.currentJob;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
+    ...prior,
     name,
     status: 'succeeded',
-    startedAt: snapshot.jobs[name]?.startedAt ?? new Date(startedAtMs).toISOString(),
+    startedAt: prior?.startedAt ?? new Date(startedAtMs).toISOString(),
     finishedAt: now,
     durationMs: Date.now() - startedAtMs,
     summary: summarizeResult(result),
     error: null,
   };
+  if (prior?.lane && snapshot.activeLanes?.[prior.lane]?.jobId === (prior.jobId ?? null)) {
+    delete snapshot.activeLanes[prior.lane];
+  }
+  if (name === 'prepship.sync.orders') {
+    snapshot.syncWatermarks ??= { ordersCompletedAt: null, shipmentsCompletedAt: null };
+    snapshot.syncWatermarks.ordersCompletedAt = now;
+  } else if (name === 'prepship.sync.shipments') {
+    snapshot.syncWatermarks ??= { ordersCompletedAt: null, shipmentsCompletedAt: null };
+    snapshot.syncWatermarks.shipmentsCompletedAt = now;
+  }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
   void recordWorkerStatusEvent({
@@ -233,17 +357,22 @@ export async function recordWorkerJobFailure(
   err: unknown
 ): Promise<void> {
   const now = new Date().toISOString();
+  const prior = snapshot.jobs[name];
   snapshot.currentJob = snapshot.currentJob === name ? null : snapshot.currentJob;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
+    ...prior,
     name,
     status: 'failed',
-    startedAt: snapshot.jobs[name]?.startedAt ?? new Date(startedAtMs).toISOString(),
+    startedAt: prior?.startedAt ?? new Date(startedAtMs).toISOString(),
     finishedAt: now,
     durationMs: Date.now() - startedAtMs,
     summary: null,
     error: err instanceof Error ? err.message : String(err),
   };
+  if (prior?.lane && snapshot.activeLanes?.[prior.lane]?.jobId === (prior.jobId ?? null)) {
+    delete snapshot.activeLanes[prior.lane];
+  }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
   void recordWorkerStatusEvent({
@@ -281,6 +410,7 @@ export async function getPersistedWorkerStatus(): Promise<{
   status: WorkerStatusSnapshot | null;
   stale: boolean;
   heartbeatAgeSeconds: number | null;
+  activeLane: WorkerActiveLaneStatus | null;
   snapshots: Record<
     string,
     {
@@ -340,9 +470,19 @@ export async function getPersistedWorkerStatus(): Promise<{
   const selected = selectedScheduler ?? legacy ?? null;
 
   if (!selected) {
-    return { status: null, stale: true, heartbeatAgeSeconds: null, snapshots };
+    return {
+      status: null,
+      stale: true,
+      heartbeatAgeSeconds: null,
+      activeLane: null,
+      snapshots,
+    };
   }
-  return { ...selected, snapshots };
+  return {
+    ...selected,
+    activeLane: workerActiveLaneStatus(selected.status),
+    snapshots,
+  };
 }
 
 export function getApiRuntimeStatus() {

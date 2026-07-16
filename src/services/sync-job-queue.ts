@@ -5,6 +5,10 @@ import postgres from 'postgres';
 import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
+import {
+  awaitCancellationAcknowledgement,
+  terminateWorkerForUnacknowledgedCancellation,
+} from '../lib/sync-job-cancellation';
 import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
@@ -49,7 +53,10 @@ import {
   setWorkerMode,
 } from './worker-status';
 import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
-import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
+import {
+  SYNC_JOB_CANCELLATION_GRACE_MS,
+  SYNC_JOB_HANDLER_TIMEOUT_MS,
+} from '../lib/sync-job-deadline';
 import {
   markShipStationSyncRunFailed,
   type ShipStationSyncRunIdentity,
@@ -62,7 +69,10 @@ import {
   type SyncJobAdmissionIntent,
 } from './sync-job-admission';
 import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
-import { parseDurableRateBackfillJobPayload } from './rate-backfill-job-types';
+import {
+  parseDurableRateBackfillJobPayload,
+  rateBackfillPriority,
+} from './rate-backfill-job-types';
 import { runDurableRateBackfillJob } from './rates-backfill';
 import { runLocalTariffCalibrationTick } from './local-tariff-calibration';
 import {
@@ -880,8 +890,10 @@ async function deferBusySyncJob(
       : null;
     const admission = isRateBackfill
       ? {
-          singletonKey: `rate-backfill-request:${ratePayload?.jobId ?? 'cadence'}`,
-          priority: ratePayload?.requestedBy === 'manual' ? 1_000 : ratePayload ? 100 : 0,
+          singletonKey:
+            `rate-backfill-defer:${ratePayload?.generationId ?? ratePayload?.jobId ?? 'cadence'}`
+            + `:${ratePayload?.chunkIndex ?? 0}`,
+          priority: rateBackfillPriority(ratePayload),
         }
       : resolveSyncJobAdmission(name, {
           kind: 'busy-defer',
@@ -902,12 +914,8 @@ async function deferBusySyncJob(
       name,
       ratePayload ? { ...ratePayload, ...deferredMetadata } : deferredMetadata,
       {
-        ...(isRateBackfill
-          ? {}
-          : {
-              singletonKey: admission.singletonKey,
-              singletonSeconds: delaySeconds,
-            }),
+        singletonKey: admission.singletonKey,
+        singletonSeconds: delaySeconds,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
@@ -925,7 +933,10 @@ async function deferBusySyncJob(
     } else {
       console.log(`[job-queue] ${name} already has a busy-defer job queued`);
     }
-    return id;
+    // PS-436: a null pg-boss id under the rate singleton means the exact
+    // generation/chunk deferral already exists. Treat that as successful
+    // coalescing instead of retrying the active row and creating more wake-ups.
+    return id ?? (isRateBackfill ? `coalesced:${admission.singletonKey}` : null);
   } catch (err) {
     console.error(
       `[job-queue] failed to defer ${name}:`,
@@ -948,7 +959,10 @@ async function reconcileDurableSchedule(
     return;
   }
 
-  const admission = resolveSyncJobAdmission(name, { kind: 'cadence' });
+  const admission = name === JOBS.rateBackfill
+    ? { singletonKey: 'rate-backfill-cadence', priority: rateBackfillPriority(null) }
+    : resolveSyncJobAdmission(name, { kind: 'cadence' });
+  const priority = admission.priority;
 
   // Per user override unlock shipped data on 2026-07-14: pg-boss persists
   // cadence in Postgres. The canonical admission owner gives equivalent
@@ -962,7 +976,7 @@ async function reconcileDurableSchedule(
       tz: 'UTC',
       singletonKey: admission.singletonKey,
       singletonSeconds: jobSingletonSeconds(intervalMs),
-      priority: admission.priority,
+      priority,
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
@@ -1139,9 +1153,18 @@ async function registerWorker(
           attemptId: randomUUID(),
         };
         const abortController = new AbortController();
+        const ratePayload = name === JOBS.rateBackfill
+          ? parseDurableRateBackfillJobPayload(job?.data)
+          : null;
         console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
         try {
-          await recordWorkerJobStart(name);
+          await recordWorkerJobStart(name, {
+            jobId: identity.queueJobId,
+            generationId: ratePayload?.generationId ?? ratePayload?.jobId ?? null,
+            lane,
+            startedAtMs: startedAt,
+            timeoutMs: SYNC_JOB_HANDLER_TIMEOUT_MS,
+          });
         } catch (err) {
           if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
           throw err;
@@ -1174,11 +1197,22 @@ async function registerWorker(
           return { ok: true, durationMs };
         } catch (err) {
           if (err instanceof DeadlineExceededError) {
-            // Per user override unlock shipped data on 2026-07-15: PS-428 keeps
-            // the cross-process lane fence until the timed-out handler has
-            // acknowledged cancellation by settling. No successor generation
-            // can overlap abandoned shipment/order work.
-            await handlerPromise.catch(() => undefined);
+            // PS-436: keep the advisory fence while cooperative work receives a
+            // bounded cancellation grace. If it ignores abort, do not return
+            // from this callback (which would release the lane): fail closed by
+            // terminating the worker and let Render/pg-boss recover the job.
+            const cancellation = await awaitCancellationAcknowledgement(
+              handlerPromise,
+              SYNC_JOB_CANCELLATION_GRACE_MS,
+            );
+            if (!cancellation.acknowledged) {
+              await recordWorkerJobFailure(name, startedAt, err).catch(() => undefined);
+              terminateWorkerForUnacknowledgedCancellation({
+                jobName: name,
+                jobId: identity.queueJobId,
+                graceMs: SYNC_JOB_CANCELLATION_GRACE_MS,
+              });
+            }
           }
           const durationMs = Date.now() - startedAt;
           if (name === JOBS.orders) {
@@ -1399,11 +1433,11 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierJob);
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
-  await registerWorker(JOBS.rateBackfill, (jobData) => {
+  await registerWorker(JOBS.rateBackfill, (jobData, { identity, signal }) => {
     const explicitRequest = parseDurableRateBackfillJobPayload(jobData);
     return explicitRequest
-      ? runDurableRateBackfillJob(explicitRequest)
-      : runBackfillTick();
+      ? runDurableRateBackfillJob(explicitRequest, signal)
+      : runBackfillTick(identity.queueJobId, signal);
   });
   await registerWorker(JOBS.rateMaintenance, async () => {
     await runReapStaleRateJobsTick();

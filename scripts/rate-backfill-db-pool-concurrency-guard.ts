@@ -69,13 +69,13 @@ const backfillSource = readFileSync('src/services/rates-backfill.ts', 'utf8');
 
 assert.match(
   schedulerSource,
-  /export async function runBackfillTick\(\): Promise<void>[\s\S]*await waitForBackfillJob\(job\.jobId\)/,
-  'the scheduler must await the canonical backfill service lifetime',
+  /export async function runBackfillTick\([\s\S]*buildCadenceRateBackfillJobPayload\(queueJobId\)[\s\S]*await runDurableRateBackfillJob\(payload, signal\)/,
+  'the scheduler must await one canonical durable backfill chunk',
 );
 assert.match(
   queueSource,
-  /registerWorker\(JOBS\.rateBackfill,[\s\S]{0,350}runDurableRateBackfillJob\(explicitRequest\)[\s\S]{0,150}runBackfillTick\(\)/,
-  'the durable rate worker must await explicit requests or the scheduled tick',
+  /registerWorker\(JOBS\.rateBackfill,[\s\S]{0,450}runDurableRateBackfillJob\(explicitRequest, signal\)[\s\S]{0,180}runBackfillTick\(identity\.queueJobId, signal\)/,
+  'the durable rate worker must thread queue cancellation through explicit and cadence chunks',
 );
 assert.doesNotMatch(
   queueSource,
@@ -84,7 +84,7 @@ assert.doesNotMatch(
 );
 assert.match(
   backfillSource,
-  /const backfillExecutionPromises = new Map<string, Promise<void>>\(\)[\s\S]*export async function waitForBackfillJob/,
+  /const backfillExecutionPromises = new Map<string, Promise<BackfillChunkOutcome>>\(\)[\s\S]*export async function waitForBackfillJob/,
   'the backfill service must expose its real execution lifetime to queue callers',
 );
 

@@ -1,11 +1,15 @@
 import PgBoss from 'pg-boss';
 import { env } from '../lib/env';
-import type { DurableRateBackfillJobPayload } from './rate-backfill-job-types';
+import {
+  rateBackfillPriority,
+  type DurableRateBackfillJobPayload,
+} from './rate-backfill-job-types';
 
 export const RATE_BACKFILL_JOB_NAME = 'prepship.sync.rate-backfill';
 
 export type DurableRateBackfillEnqueueResult = {
   queued: boolean;
+  deduplicated: boolean;
   queueJobId: string | null;
   error: string | null;
 };
@@ -66,7 +70,7 @@ export async function enqueueDurableRateBackfillJob(
     const producer = await getRateBackfillProducer();
     const queueJobId = await producer.send(RATE_BACKFILL_JOB_NAME, payload, {
       id: payload.jobId,
-      priority: payload.requestedBy === 'manual' ? 1_000 : 100,
+      priority: rateBackfillPriority(payload),
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
@@ -75,12 +79,14 @@ export async function enqueueDurableRateBackfillJob(
     });
     return {
       queued: Boolean(queueJobId),
+      deduplicated: !queueJobId,
       queueJobId: queueJobId ? String(queueJobId) : null,
-      error: queueJobId ? null : 'pg-boss did not admit the rate backfill job',
+      error: null,
     };
   } catch (error) {
     return {
       queued: false,
+      deduplicated: false,
       queueJobId: null,
       error: error instanceof Error ? error.message : String(error),
     };

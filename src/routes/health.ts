@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import { performance } from 'node:perf_hooks';
 import { env } from '../lib/env';
 import { readPrintQueueWorkerHealth } from '../services/print-queue-worker-health';
+import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
@@ -27,6 +28,7 @@ type ReadinessComponentName =
   | 'db'
   | 'dbWrite'
   | 'orders'
+  | 'syncFreshness'
   | 'printQueue'
   | 'printQueueWorker'
   | 'eventLoop';
@@ -125,6 +127,39 @@ async function checkPrintQueueWorker(): Promise<ReadinessComponent> {
   }
 }
 
+async function checkSyncFreshness(): Promise<ReadinessComponent> {
+  const startedAt = Date.now();
+  try {
+    const health = await readShipmentSyncWatchdogStatus();
+    return {
+      name: 'syncFreshness',
+      status: health.verdict.alert ? 'fail' : 'ok',
+      latencyMs: Date.now() - startedAt,
+      details: {
+        state: health.verdict.state,
+        reason: health.verdict.reason,
+        orderAgeSeconds: health.verdict.orderAgeSeconds ?? -1,
+        shipmentAgeSeconds: health.verdict.shipmentAgeSeconds ?? -1,
+        currentJob: health.worker.currentJob ?? 'none',
+        currentJobId: health.worker.currentJobId ?? 'none',
+        currentGenerationId: health.worker.currentGenerationId ?? 'none',
+        currentLane: health.worker.currentLane ?? 'none',
+        currentJobAgeSeconds: health.worker.currentJobAgeSeconds ?? -1,
+        currentJobDeadlineAt: health.worker.currentJobDeadlineAt ?? 'none',
+        lastCompletedOrderSyncAt: health.worker.lastCompletedOrderSyncAt ?? 'none',
+        lastCompletedShipmentSyncAt: health.worker.lastCompletedShipmentSyncAt ?? 'none',
+      },
+    };
+  } catch {
+    return {
+      name: 'syncFreshness',
+      status: 'fail',
+      latencyMs: Date.now() - startedAt,
+      details: { state: 'probe_failed', reason: 'sync freshness probe failed closed' },
+    };
+  }
+}
+
 const checkEventLoopDelay = () =>
   checkComponent('eventLoop', async () => {
     const startedAt = performance.now();
@@ -213,7 +248,16 @@ async function checkDeepReadiness() {
     }),
     checkPrintQueueWorker(),
   ]);
-  const components = [db, dbWrite, orders, printQueue, printQueueWorker, eventLoop];
+  const syncFreshness = await checkSyncFreshness();
+  const components = [
+    db,
+    dbWrite,
+    orders,
+    printQueue,
+    printQueueWorker,
+    syncFreshness,
+    eventLoop,
+  ];
 
   return {
     ok: components.every((component) => component.status === 'ok'),
