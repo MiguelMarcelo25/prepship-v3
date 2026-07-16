@@ -13,21 +13,32 @@ export type LocationDto = AnyRecord
 export type OrderFullDto = AnyRecord
 export type OrderPicklistResponseDto = AnyRecord
 export type OrderPicklistItemDto = AnyRecord
+export type ReturnOrderSummaryDto = {
+  returnId: number
+  returnReference: string | null
+  status: string
+  createdAt?: string | null
+  returnCustomerShippingRate: number | null
+  items?: Array<{
+    sku: string | null
+    name: string
+    quantity: number
+  }>
+  shipment?: AnyRecord | null
+}
 export type OrderSummaryDto = AnyRecord & {
   orderId: number
   orderNumber: string | null
+  displayRowKey?: string
+  displayRowKind?: 'order' | 'return'
   orderStatus?: string | null
   effectiveOrderStatus?: string | null
   orderLifecycleStatus?: string | null
   orderLifecycleLabel?: string | null
   orderLifecycleReason?: string | null
   fulfillmentConflict?: AnyRecord | null
-  returnSummary?: {
-    returnId: number
-    returnReference: string | null
-    status: string
-    returnCustomerShippingRate: number | null
-  } | null
+  returnSummary?: ReturnOrderSummaryDto | null
+  returnSummaries?: ReturnOrderSummaryDto[]
   clientId: number
   items?: unknown
   raw?: unknown

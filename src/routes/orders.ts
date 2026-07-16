@@ -1800,9 +1800,10 @@ async function ordersListResponse(
     });
     const effectiveOrderStatus = baseOrderLifecycle.effectiveOrderStatus;
     const isShippedBucket = effectiveOrderStatus === 'shipped';
-    const returnSummary = isShippedBucket
-      ? returnSummaryByOrderId.get(r.order.id) ?? null
-      : null;
+    const returnSummaries = isShippedBucket
+      ? returnSummaryByOrderId.get(r.order.id) ?? []
+      : [];
+    const returnSummary = returnSummaries.at(-1) ?? null;
     const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
     const selectedRateJsonRecord = recordOrNull(ship?.selected_rate_json);
     const selectedRateJsonProviderId = providerIdOrNull(
@@ -2531,8 +2532,15 @@ async function ordersListResponse(
       // PS-309: backend-owned shipped-label display state (active_label / voided_label /
       // external_label / missing_shipment_sync). The shipped table + drawer read THIS.
       shippedLabelDisplayState,
-      // Per user override unlock shipped data on 2026-05-23: display-only
-      // summary from returns; no shipped order or shipment row is modified.
+      // Per user override `unlock shipped data` on 2026-07-16: display-only
+      // return projections let PrepShip render a separate row per canonical
+      // return. No shipped order, shipment, label, or postage row is modified.
+      returnSummaries: returnSummaries.map((summary) => ({
+        ...summary,
+        returnCustomerShippingRate: canViewFinancials
+          ? summary.returnCustomerShippingRate
+          : null,
+      })),
       returnSummary: returnSummary
         ? {
             ...returnSummary,

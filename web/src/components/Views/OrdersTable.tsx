@@ -52,6 +52,13 @@ import {
 type SortDirection = 'asc' | 'desc'
 import { OrderRow } from './OrderRow'
 
+// Per user override `unlock shipped data` on 2026-07-16: return display rows
+// share the immutable original order id, so React/virtualizer identity uses
+// the backend-derived display key instead of inventing another order.
+function getDisplayRowKey(order: OrderSummaryDto): string {
+  return order.displayRowKey ?? `order:${order.orderId}`
+}
+
 export type OrdersTableProps = {
   // ── table shell + columns ──
   visibleColumns: TableColumn[]
@@ -150,7 +157,7 @@ export function OrdersTable({
     if (!skuSortActive) {
       return orderedFilteredOrders.map((order) => ({
         kind: 'order',
-        key: `order-${order.orderId}`,
+        key: getDisplayRowKey(order),
         order,
         transitioning: false,
       }))
@@ -159,7 +166,7 @@ export function OrdersTable({
       { kind: 'group' as const, key: `sku-group-${group.key}`, group },
       ...group.orders.map((order) => ({
         kind: 'order' as const,
-        key: `order-${order.orderId}`,
+        key: getDisplayRowKey(order),
         order,
         transitioning: transitionalShippedIds.has(order.orderId),
       })),
@@ -370,7 +377,7 @@ export function OrdersTable({
           const { order } = entry
           return (
             <OrderRow
-              key={order.orderId}
+              key={getDisplayRowKey(order)}
               order={order}
               detail={orderDetailsById.get(order.orderId) ?? null}
               visibleColumns={visibleColumns}
@@ -449,7 +456,7 @@ export function OrdersTable({
 
           const rows = group.orders.map((order) => (
             <OrderRow
-              key={order.orderId}
+              key={getDisplayRowKey(order)}
               order={order}
               detail={orderDetailsById.get(order.orderId) ?? null}
               visibleColumns={visibleColumns}
@@ -468,7 +475,7 @@ export function OrdersTable({
           return [header, ...rows]
         }) : orderedFilteredOrders.map((order) => (
           <OrderRow
-            key={order.orderId}
+            key={getDisplayRowKey(order)}
             order={order}
             detail={orderDetailsById.get(order.orderId) ?? null}
             visibleColumns={visibleColumns}
