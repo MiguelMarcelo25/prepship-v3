@@ -1,0 +1,60 @@
+{
+  "taskId": "PS-426",
+  "capturedAt": "2026-07-16T00:42:14Z",
+  "environment": "production",
+  "source": "Render read-only request and worker logs",
+  "service": {
+    "resourceId": "srv-d7qoar7lk1mc73cm4ma0",
+    "branch": "prepshipv4-stable",
+    "deployedCommit": "b006428ff3166b8da8582296859c2d75283deb59"
+  },
+  "request": {
+    "method": "POST",
+    "path": "/sync/orders",
+    "targetMs": 500,
+    "samples": [
+      {
+        "timestamp": "2026-07-16T00:41:33Z",
+        "renderLogId": "a2f06147-6c12-4a44-80f2-764a18cf2617",
+        "statusCode": 202,
+        "responseTimeMs": 299,
+        "responseBytes": 615
+      },
+      {
+        "timestamp": "2026-07-16T00:42:13Z",
+        "renderLogId": "fb6aa6bd-5c74-44a2-a0ab-af99ddf3579c",
+        "statusCode": 202,
+        "responseTimeMs": 293,
+        "responseBytes": 615
+      }
+    ],
+    "summary": {
+      "sampleCount": 2,
+      "maximumResponseTimeMs": 299,
+      "withinTarget": true
+    }
+  },
+  "workerSeparation": {
+    "alreadyRunningBehavior": "Both requests observed the existing shipstation-sync lane work and reused the already-queued busy-defer order job instead of creating competing provider execution.",
+    "workerStartedAt": "2026-07-16T00:42:33.819406815Z",
+    "workerJobId": "76480ee7-b753-4c7f-bfd5-b1e044c48c42",
+    "renderWorkerLogIds": [
+      "31569b09-6fee-4685-81e1-ec4c07f88604",
+      "ee1c0bdc-f942-4e68-91fe-d642ba3a4a7c",
+      "a642c994-735d-4782-b42f-628200514be4",
+      "4d44b976-2f82-4327-8c8f-3d78ae994d3f",
+      "700610a3-f8f3-4605-9c04-4c0da55562ab"
+    ]
+  },
+  "safety": {
+    "initiatedBy": "Operator using the normal PrepShip Sync Orders toolbar control",
+    "agentTriggeredRequest": false,
+    "productionProviderSyncOccurred": true,
+    "productionOrderDataMayHaveBeenReconciled": true,
+    "labelPurchaseTriggeredByVerification": false,
+    "postagePurchaseTriggeredByVerification": false,
+    "marketplaceNotificationTriggeredByVerification": false,
+    "shippedCancelledProtectionsWeakened": false
+  },
+  "redaction": "Client IP, user agent, authorization data, provider payloads, order identifiers, tracking numbers, and PII are intentionally omitted."
+}
