@@ -5,7 +5,7 @@
   "title": "Sync and fulfillment resilience: data-integrity and retry-safety hardening",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "901aaf0085a3296b59e464dd9f83172befc5905d"
+    "reviewedSha": "12223760bf20fd867bc820de98194d11fbbd1d3e"
   },
   "riskDomains": [
     "rate_label",
@@ -18,9 +18,9 @@
       "id": "AC-1",
       "severity": "critical",
       "status": "met",
-      "description": "Every shipped transition persists its durable inventory-deduction intent in the same transaction, and forced rollback plus retry cannot leave shipped state without intent or create duplicate intent rows.",
+      "description": "Every terminal lifecycle command persists order state, immutable source evidence, exact fulfillment-line claims, package work, and inventory-deduction intent in one backend-owned transaction; forced rollback plus retry cannot leave partial state or duplicate work.",
       "evidenceIds": [
-        "ps432-owner-integration",
+        "ps424-lifecycle-integration",
         "ps432-failure-injection"
       ]
     },
@@ -28,10 +28,10 @@
       "id": "AC-2",
       "severity": "critical",
       "status": "met",
-      "description": "Fulfillment outbox success, shipment confirmation, and canonical order status reconverge atomically; a torn projection repairs once and the repeat pass is a no-op without another provider dispatch.",
+      "description": "Shipment, label, sync, import, webhook, manual, and marketplace callers provide shipment-scoped exact fulfillment facts or an explicit review-only unavailable result; mutable whole-order quantities never create inventory intent, and repeat settlement is a no-op.",
       "evidenceIds": [
-        "ps432-owner-integration",
-        "ps432-failure-injection"
+        "ps424-lifecycle-integration",
+        "ps432-owner-integration"
       ]
     },
     {
@@ -78,8 +78,10 @@
       "id": "AC-7",
       "severity": "high",
       "status": "met",
-      "description": "The focused PS-432 suite, all 45 mandatory source-of-truth guards, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA.",
+      "description": "The focused PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 45 mandatory source-of-truth guards, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA.",
       "evidenceIds": [
+        "ps424-lifecycle-integration",
+        "ps426-consumer-leadership",
         "focused-ps432-suite",
         "full-sot-guard-pack",
         "strict-typecheck",
@@ -95,15 +97,27 @@
         "implementation-scope-proof",
         "live-provider-pending-classification"
       ]
+    },
+    {
+      "id": "AC-9",
+      "severity": "critical",
+      "status": "met",
+      "description": "Exactly one worker owns the ShipStation stately consumers; active-job handoff, PostgreSQL connection loss, fallback ping detection, retry cancellation, and idempotent shutdown reacquire or release leadership without concurrent provider work.",
+      "evidenceIds": [
+        "ps426-consumer-leadership"
+      ]
     }
   ],
   "architecture": {
     "canonicalOwners": [
+      "src/services/order-lifecycle-command.ts terminal order state, immutable provenance, exact fulfillment-line claims, package work, and inventory intent transaction",
+      "src/db/schema/order-lifecycle.ts plus drizzle/0070_order_lifecycle_commands.sql append-only lifecycle receipts and idempotent line claims",
       "src/services/fulfillment/inventory-deduction-outbox.ts durable inventory-deduction intent",
       "src/services/fulfillment-deductions.ts inventory movement, ledger idempotency, and INVENTORY_AUTO_DEDUCT kill switch",
       "src/services/fulfillment/outbox.ts confirmation settlement and succeeded-row reconvergence",
       "src/lib/label-purchase-intent.ts fail-closed purchase intent and scoped operator resolution",
-      "src/connectors/store/shipstation.ts upstream confirmation idempotency boundary"
+      "src/connectors/store/shipstation.ts upstream confirmation idempotency boundary",
+      "src/services/sync-job-queue.ts ShipStationConsumerLeadershipController for single-owner stately consumers"
     ],
     "oldOwners": [
       {
@@ -125,6 +139,16 @@
         "path": "ShipStation retry that blindly repeated markasshipped",
         "disposition": "delegated",
         "delegatesTo": "upstream order-status read before marketplace notification"
+      },
+      {
+        "path": "terminal-state callers that inferred fulfillment from mutable order.items or wrote status, shipment evidence, package work, and inventory work separately",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/order-lifecycle-command.ts exact-or-unavailable fulfillment-fact contract"
+      },
+      {
+        "path": "inline ShipStation stately-consumer registration without explicit connection-loss ownership",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/sync-job-queue.ts ShipStationConsumerLeadershipController"
       }
     ],
     "wrappers": [
@@ -136,15 +160,64 @@
       {
         "path": "shipment sync, order sync, store import, external-shipped, and label persistence callers",
         "action": "modified",
-        "delegatesTo": "the shared inventory-deduction outbox owner using the caller transaction"
+        "delegatesTo": "src/services/order-lifecycle-command.ts using exact shipment-scoped facts or explicit review-only unavailable facts"
+      },
+      {
+        "path": "src/services/sync-job-queue.ts scheduled worker startup and shutdown",
+        "action": "modified",
+        "delegatesTo": "ShipStationConsumerLeadershipController acquisition, loss, reacquisition, and unregister lifecycle"
       }
     ],
     "sotBypass": {
       "present": false,
-      "details": "Inventory movement, purchase intent, confirmation settlement, provider notification idempotency, and shipped-state durability remain in named backend owners. Routes and callers pass intent and transaction context; the frontend owns none of these decisions."
+      "details": "Terminal lifecycle truth, exact fulfillment facts, inventory movement, purchase intent, confirmation settlement, provider notification idempotency, and worker leadership remain in named backend owners. Routes and adapters translate or pass intent; the frontend owns none of these decisions."
     }
   },
   "evidence": [
+    {
+      "id": "ps424-lifecycle-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-424-order-lifecycle",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0070_order_lifecycle_commands.sql",
+        "src/db/schema/order-lifecycle.ts",
+        "src/services/order-lifecycle-command.ts",
+        "scripts/ps-424-order-lifecycle-command-guard.ts",
+        "scripts/ps-424-order-lifecycle-command-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "crash_recovery",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "transaction_rollback"
+      ],
+      "proves": "The additive 0070 schema and canonical lifecycle command run against a migrated PostgreSQL-compatible fixture. Two shipments claim only their exact quantities; Shopify partial fulfillment uses fulfillment-order quantities rather than mutable order totals; void-before-deduction, void-after-deduction, changed-quantity relabel, concurrent retries, stale writers, and injected transaction rollback preserve one append-only receipt and no duplicate inventory or package effect. Explicitly unavailable facts create review-only lifecycle evidence and no inventory outbox."
+    },
+    {
+      "id": "ps426-consumer-leadership",
+      "classification": "integration",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/sync-job-queue.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "scripts/ps-426-consumer-leadership-integration.ts",
+        "scripts/ps-426-manual-sync-timing-guard.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Provider-free behavioral proof covers two-worker exclusion, active-job handoff, immediate PostgreSQL onclose ownership loss, fallback ping loss detection and reacquisition ordering, retry/timer cancellation, and idempotent shutdown. One hundred foreground admission samples stayed below 500 ms with zero database connections and zero provider calls."
+    },
     {
       "id": "ps432-owner-integration",
       "classification": "integration",
@@ -260,15 +333,17 @@
     {
       "id": "focused-ps432-suite",
       "classification": "static",
-      "command": "npm run test:ps-432-sync-fulfillment-resilience",
+      "command": "npm run test:ps-424-order-lifecycle && npm run test:ps-426-awaiting-cursor-manual-sync && npm run test:ps-432-sync-fulfillment-resilience",
       "result": "pass",
       "artifactPaths": [
+        "scripts/ps-424-order-lifecycle-command-integration.ts",
+        "scripts/ps-426-consumer-leadership-integration.ts",
         "scripts/ps-432-sync-fulfillment-resilience-guard.ts",
         "scripts/ps-432-sync-fulfillment-resilience-integration.ts",
         "docs/ps-tickets/ps-432-sync-fulfillment-resilience.md"
       ],
       "assertions": [],
-      "proves": "The source-of-truth placement guard and executable failure, retry, concurrency, fencing, purchase, and notification proof run together at the reviewed SHA."
+      "proves": "The lifecycle source-of-truth, worker-leadership, and PS-432 executable failure, retry, concurrency, fencing, purchase, and notification proofs run together at the exact reviewed SHA."
     },
     {
       "id": "full-sot-guard-pack",
@@ -305,12 +380,12 @@
         "web/src"
       ],
       "assertions": [],
-      "proves": "The production frontend bundle builds successfully with 2,989 modules transformed."
+      "proves": "The production frontend bundle builds successfully with 2,977 modules transformed."
     },
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git show --name-only --format= 439c9ab19f30aa9c0f739df145cf11bf71d5c4e8 26bbc206deb116b5079c613fd9a0ec34990f3b1d 901aaf0085a3296b59e464dd9f83172befc5905d",
+      "command": "git show --name-only --format= 612f679664f9993f28b00c4fe6944ec86b92d4be 86f5dfe93c87d21597bcbd009d9e10934c68813d f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e 12223760bf20fd867bc820de98194d11fbbd1d3e",
       "result": "pass",
       "artifactPaths": [
         "src/services/fulfillment/inventory-deduction-outbox.ts",
@@ -318,26 +393,40 @@
         "src/lib/label-purchase-intent.ts",
         "src/connectors/store/shipstation.ts",
         "src/services/labels.ts",
+        "src/services/order-lifecycle-command.ts",
+        "src/services/sync-job-queue.ts",
+        "drizzle/0070_order_lifecycle_commands.sql",
+        "scripts/ps-424-order-lifecycle-command-integration.ts",
+        "scripts/ps-426-consumer-leadership-integration.ts",
         "scripts/ps-432-sync-fulfillment-resilience-integration.ts"
       ],
       "assertions": [],
-      "proves": "The implementation is limited to durable intent, atomic confirmation settlement, safe purchase/notification retry, guarded diagnostics, and offline/live-read-only evidence. The exact formally locked file touched was src/services/labels.ts for transactional shipped-state plus inventory-intent persistence and Shopify purchase recovery; required override comments and commit text are present, and protections were not weakened."
+      "proves": "The reviewed runtime adds durable lifecycle truth, exact fulfillment facts, safe provider retry, and single-owner worker leadership. Override-governed files touched were src/routes/orders.ts, src/services/fulfillment-deductions.ts, and src/services/labels.ts; nearby unlock comments and the 612f6796 override commit text are present. assertOrderEditable, LOCKED_STATUSES, INVENTORY_AUTO_DEDUCT, shipped/cancelled UI locks, and historical schema protections were not removed or weakened. PS-426 changed no formally locked file."
     }
   ],
   "migrations": {
-    "touched": false,
-    "paths": [],
+    "touched": true,
+    "paths": [
+      "drizzle/0070_order_lifecycle_commands.sql"
+    ],
     "verification": {
-      "command": "No migration was added or modified by the PS-432 implementation or closure evidence; not applicable.",
-      "result": "not-applicable",
-      "artifactPaths": []
+      "command": "npm run test:ps-424-order-lifecycle && npm run test:audit-runtime-schema-readiness",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0070_order_lifecycle_commands.sql",
+        "scripts/ps-424-order-lifecycle-command-integration.ts",
+        "scripts/runtime-ddl-guard.mjs",
+        "src/services/runtime-schema-readiness.ts"
+      ]
     },
-    "rollbackPlan": "Revert the packet and evidence commits, then revert 26bbc206deb116b5079c613fd9a0ec34990f3b1d and 439c9ab19f30aa9c0f739df145cf11bf71d5c4e8 before redeploying. Existing additive runtime sidecar tables remain compatible and require no production schema or data rollback."
+    "rollbackPlan": "Revert the packet, PS-426 leadership, and PS-424 runtime commits before redeploying while leaving the additive lifecycle receipt and claim tables intact. The pre-change runtime ignores those sidecars, so rollback never drops append-only evidence or rewrites historical shipped/cancelled meaning."
   },
   "rollback": {
-    "strategy": "Revert the packet-only commit, 901aaf0085a3296b59e464dd9f83172befc5905d, 26bbc206deb116b5079c613fd9a0ec34990f3b1d, and 439c9ab19f30aa9c0f739df145cf11bf71d5c4e8 in that order before redeploying. Do not delete durable intent/outbox history, regenerate billing, reverse inventory ledger rows, or mutate shipped/cancelled production records.",
-    "tested": false,
-    "evidenceIds": []
+    "strategy": "Redeploy the prior runtime after reverting 12223760bf20fd867bc820de98194d11fbbd1d3e, 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e, f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb, and 86f5dfe93c87d21597bcbd009d9e10934c68813d in that order. Keep additive 0070 sidecars and durable receipts; never delete lifecycle, shipment, intent, outbox, inventory-ledger, or package-ledger history and never mutate shipped/cancelled production records. The integration's injected exception proves the authoritative transaction rolls back all new lifecycle writes before a safe retry.",
+    "tested": true,
+    "evidenceIds": [
+      "ps424-lifecycle-integration"
+    ]
   },
   "liveVerification": {
     "status": "verified",
