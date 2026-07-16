@@ -1,6 +1,7 @@
 // Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
 import { randomUUID } from 'node:crypto';
 import PgBoss from 'pg-boss';
+import postgres from 'postgres';
 import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
@@ -117,11 +118,44 @@ type SyncJobHandlerContext = {
 let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let shipStationConsumerLeaderConnection: postgres.ReservedSql | null = null;
+let shipStationConsumerLeadershipTimer: ReturnType<typeof setTimeout> | null = null;
+let shipStationConsumerLeadershipTask: Promise<void> | null = null;
+let shipStationConsumersRegistered = false;
+let shipStationConsumerHandoffLogged = false;
+let stopping = false;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS.rateBackfill]);
+const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
+const SHIPSTATION_CONSUMER_LEADER_RETRY_MS = 5_000;
+const SHIPSTATION_CONSUMER_LEADER_HEALTH_MS = 15_000;
+
+function resolveShipStationConsumerLeaderDatabaseUrl(databaseUrl: string): string {
+  // Supabase port 6543 is transaction pooling, where a session advisory lock
+  // can move between server sessions. Port 5432 is the matching session pooler.
+  return databaseUrl.replace(':6543/', ':5432/');
+}
+
+// Per user override unlock shipped data on 2026-07-16: this dedicated session
+// owns only pg-boss consumer leadership. It never reads or mutates orders,
+// shipments, labels, postage, marketplace notifications, or customer data.
+const shipStationConsumerLeaderSql = postgres(
+  resolveShipStationConsumerLeaderDatabaseUrl(env.DATABASE_URL),
+  {
+    prepare: false,
+    max: 1,
+    idle_timeout: 0,
+    max_lifetime: null,
+    connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+    connection: {
+      application_name: 'prepship-shipstation-consumer-leader',
+      statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+    },
+  },
+);
 
 function queueOptionsFor(name: JobName): PgBoss.Queue {
   return {
@@ -952,6 +986,163 @@ async function registerWorker(
   );
 }
 
+type ActiveShipStationSyncJob = {
+  id: string;
+  name: string;
+};
+
+async function readActiveShipStationSyncJobs(): Promise<ActiveShipStationSyncJob[]> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  return pg<ActiveShipStationSyncJob[]>`
+    SELECT id::text AS id, name
+    FROM ${pg(jobTable)}
+    WHERE state = 'active'
+      AND name = ANY(${[JOBS.orders, JOBS.shipments] as string[]})
+    ORDER BY started_on ASC NULLS LAST
+  `;
+}
+
+async function registerShipStationStatelyWorkers(): Promise<void> {
+  if (!boss || shipStationConsumersRegistered) return;
+
+  try {
+    // Per user override unlock shipped data on 2026-07-02: pg-boss owns
+    // queue locking, deadlines, and worker-status writes. Call the canonical
+    // ShipStation sync services directly so queued mode does not also take the
+    // legacy interval-scheduler advisory lock and starve worker heartbeats.
+    await registerWorker(JOBS.orders, async (jobData, { identity, signal }) => {
+      const options = orderSyncOptionsFromJobPayload(jobData);
+      if (isDeferredShipStationOrderSync(jobData)) {
+        // Per user override unlock shipped data on 2026-05-23, reconfirmed on
+        // 2026-07-07: a busy-defer row is just a retry wake-up after the
+        // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
+        // wake-ups cannot become another long status catch-up that starves labels.
+        options.skipStatusPasses = true;
+      }
+      // Per user override unlock shipped data on 2026-07-14: order ingestion no
+      // longer starts a detached broad rate backfill outside its durable queue
+      // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
+      // owns both that targeted handoff and the separate broad cadence.
+      return syncOrders({ ...options, runIdentity: identity, signal });
+    });
+    // Audit SY-3 (2026-07-13): thread the queue deadline signal into shipment
+    // sync so abandoned page walks stop before a retry can become a second writer.
+    await registerWorker(JOBS.shipments, (jobData, { signal }) =>
+      syncShipments({ ...shipmentSyncOptionsFromJobPayload(jobData), signal }),
+    );
+    shipStationConsumersRegistered = true;
+  } catch (err) {
+    await Promise.allSettled([
+      boss.offWork(JOBS.orders),
+      boss.offWork(JOBS.shipments),
+    ]);
+    throw err;
+  }
+}
+
+async function releaseShipStationConsumerLeadership(): Promise<void> {
+  const reserved = shipStationConsumerLeaderConnection;
+  shipStationConsumerLeaderConnection = null;
+  if (!reserved) return;
+  try {
+    await reserved`
+      select pg_advisory_unlock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK}))
+    `;
+  } catch (err) {
+    console.warn(
+      '[job-queue] ShipStation consumer leadership release skipped:',
+      err instanceof Error ? err.message : err,
+    );
+  } finally {
+    reserved.release();
+  }
+}
+
+async function unregisterShipStationStatelyWorkers(): Promise<void> {
+  if (!boss || !shipStationConsumersRegistered) return;
+  await Promise.allSettled([
+    boss.offWork(JOBS.orders),
+    boss.offWork(JOBS.shipments),
+  ]);
+  shipStationConsumersRegistered = false;
+}
+
+function scheduleShipStationConsumerLeadership(delayMs: number): void {
+  if (stopping || !started || shipStationConsumerLeadershipTimer) return;
+  shipStationConsumerLeadershipTimer = setTimeout(() => {
+    shipStationConsumerLeadershipTimer = null;
+    shipStationConsumerLeadershipTask = maintainShipStationConsumerLeadership()
+      .finally(() => {
+        shipStationConsumerLeadershipTask = null;
+      });
+  }, delayMs);
+  shipStationConsumerLeadershipTimer.unref?.();
+}
+
+async function maintainShipStationConsumerLeadership(): Promise<void> {
+  if (stopping || !started || !boss) return;
+
+  try {
+    if (shipStationConsumerLeaderConnection) {
+      try {
+        await shipStationConsumerLeaderConnection`select 1`;
+      } catch (err) {
+        console.error(
+          '[job-queue] ShipStation consumer leadership connection lost:',
+          err instanceof Error ? err.message : err,
+        );
+        await unregisterShipStationStatelyWorkers();
+        shipStationConsumerLeaderConnection.release();
+        shipStationConsumerLeaderConnection = null;
+      }
+    }
+
+    if (!shipStationConsumerLeaderConnection) {
+      const reserved = await shipStationConsumerLeaderSql.reserve();
+      try {
+        const [row] = await reserved<{ acquired: boolean }[]>`
+          select pg_try_advisory_lock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK})) as acquired
+        `;
+        if (!row?.acquired) {
+          reserved.release();
+          scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_RETRY_MS);
+          return;
+        }
+        shipStationConsumerLeaderConnection = reserved;
+      } catch (err) {
+        reserved.release();
+        throw err;
+      }
+    }
+
+    if (!shipStationConsumersRegistered) {
+      const activeJobs = await readActiveShipStationSyncJobs();
+      if (activeJobs.length > 0) {
+        if (!shipStationConsumerHandoffLogged) {
+          console.log(
+            `[job-queue] ShipStation consumers waiting for active deploy handoff: ${activeJobs.map((job) => `${job.name}:${job.id}`).join(', ')}`,
+          );
+          shipStationConsumerHandoffLogged = true;
+        }
+        scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_RETRY_MS);
+        return;
+      }
+
+      await registerShipStationStatelyWorkers();
+      shipStationConsumerHandoffLogged = false;
+      console.log('[job-queue] ShipStation stately consumer leadership acquired');
+    }
+
+    scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_HEALTH_MS);
+  } catch (err) {
+    console.error(
+      '[job-queue] ShipStation consumer leadership check failed:',
+      err instanceof Error ? err.message : err,
+    );
+    scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_RETRY_MS);
+  }
+}
+
 async function createQueues(): Promise<void> {
   if (!boss) return;
   for (const name of Object.values(JOBS)) {
@@ -964,6 +1155,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     console.warn('[job-queue] already started, ignoring duplicate start');
     return;
   }
+  stopping = false;
   started = true;
 
   boss = new PgBoss({
@@ -996,36 +1188,14 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await setWorkerMode('worker-scheduler');
   await createQueues();
 
-  // Per user override unlock shipped data on 2026-07-02: pg-boss owns
-  // queue locking, deadlines, and worker-status writes. Call the canonical
-  // ShipStation sync services directly so queued mode does not also take the
-  // legacy interval-scheduler advisory lock and starve worker heartbeats.
-  await registerWorker(JOBS.orders, async (jobData, { identity, signal }) => {
-    const options = orderSyncOptionsFromJobPayload(jobData);
-    if (isDeferredShipStationOrderSync(jobData)) {
-      // Per user override unlock shipped data on 2026-05-23, reconfirmed on
-      // 2026-07-07: a busy-defer row is just a retry wake-up after the
-      // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
-      // wake-ups cannot become another long status catch-up that starves labels.
-      options.skipStatusPasses = true;
-    }
-    // Per user override unlock shipped data on 2026-07-14: order ingestion no
-    // longer starts a detached broad rate backfill outside its durable queue
-    // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
-    // owns both that targeted handoff and the separate broad cadence.
-    return syncOrders({ ...options, runIdentity: identity, signal });
-  });
-  // Audit SY-3 (2026-07-13): thread the deadline signal into the shipments and
-  // Shopify handlers too (orders already had it) — withDeadline races and
-  // ABANDONS the work, so without checkpoints an abandoned walk kept writing
-  // (pages, enrichment, cursors) after its lane lock was released and the
-  // pg-boss retry started a second writer. The label_shipment_id UNIQUE index
-  // is the DB backstop; this stops the zombie at the source.
+  // Per user override unlock shipped data on 2026-07-16: pg-boss v10 stately
+  // queues need one polling consumer across deploy overlap. The database-backed
+  // leader waits for an existing active generation before registering these two
+  // consumers, preventing the repeated stately singleton 23505 conflict.
+  await maintainShipStationConsumerLeadership();
+  // Audit SY-3 (2026-07-13): Shopify also receives the queue deadline signal.
   await registerWorker(JOBS.shopifyOrders, (_jobData, { signal }) =>
     runShopifyOrderSyncTick(signal),
-  );
-  await registerWorker(JOBS.shipments, (jobData, { signal }) =>
-    syncShipments({ ...shipmentSyncOptionsFromJobPayload(jobData), signal }),
   );
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
@@ -1079,13 +1249,26 @@ export async function startQueuedSyncScheduler(): Promise<void> {
 }
 
 export async function stopQueuedSyncScheduler(): Promise<void> {
+  stopping = true;
+  if (shipStationConsumerLeadershipTimer) {
+    clearTimeout(shipStationConsumerLeadershipTimer);
+    shipStationConsumerLeadershipTimer = null;
+  }
+  await shipStationConsumerLeadershipTask?.catch(() => undefined);
+  shipStationConsumerLeadershipTask = null;
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
   }
-  if (boss) {
-    await boss.stop({ graceful: true, timeout: 30_000 });
+  try {
+    if (boss) {
+      await boss.stop({ graceful: true, timeout: 30_000 });
+    }
+  } finally {
     boss = null;
+    shipStationConsumersRegistered = false;
+    shipStationConsumerHandoffLogged = false;
+    await releaseShipStationConsumerLeadership();
   }
   activeJobsByLane.clear();
   started = false;

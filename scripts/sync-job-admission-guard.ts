@@ -105,6 +105,16 @@ assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'watc
 assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(queue, /unlock shipped data on 2026-07-14/);
+assert.match(queue, /SHIPSTATION_CONSUMER_LEADER_LOCK/);
+assert.match(queue, /replace\(':6543\/', ':5432\/'\)/);
+assert.match(queue, /const shipStationConsumerLeaderSql = postgres\(/);
+assert.match(queue, /const reserved = await shipStationConsumerLeaderSql\.reserve\(\)/);
+assert.match(queue, /pg_try_advisory_lock\(hashtext\(\$\{SHIPSTATION_CONSUMER_LEADER_LOCK\}\)\)/);
+assert.match(queue, /async function readActiveShipStationSyncJobs/);
+assert.match(queue, /WHERE state = 'active'[\s\S]*name = ANY/);
+assert.match(queue, /await maintainShipStationConsumerLeadership\(\)/);
+assert.match(queue, /await registerShipStationStatelyWorkers\(\)/);
+assert.match(queue, /pg_advisory_unlock\(hashtext\(\$\{SHIPSTATION_CONSUMER_LEADER_LOCK\}\)\)/);
 
 assert.match(reaper, /PARTITION BY name, logical_singleton_key/);
 assert.match(reaper, /LEGACY_ORDER_REFRESH_SINGLETON_KEYS/);
