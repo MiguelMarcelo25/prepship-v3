@@ -133,6 +133,7 @@ const admission = read('src/services/sync-job-admission.ts');
 const storeImport = read('src/services/store-order-import.ts');
 const home = read('web/src/Home.tsx');
 const ui = read('web/src/components/Views/orders-parity.ts');
+const packageJson = read('package.json');
 
 assert.match(orderSync, /AWAITING_RESUME_CURSOR_KEY_PREFIX[\s\S]*shipStationSyncAccountId\(account\)/);
 assert.match(orderSync, /const awaitingSinceMs = activeCursor\?\.sinceMs/);
@@ -153,6 +154,13 @@ assert.match(route, /status: result\.queueState/);
 assert.match(admission, /ORDER_REFRESH_SINGLETON_KEY/);
 assert.match(queue, /orderSyncQueueBlocker\(await readOrderSyncQueueTruth\(\)\)/);
 assert.match(queue, /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/);
+assert.match(queue, /class ShipStationConsumerLeadershipController/);
+assert.match(queue, /onclose:[\s\S]*notifyConnectionClosed\(\)/);
+assert.match(queue, /await this\.unregisterConsumers\(\)[\s\S]*connection\.release\(\)/);
+assert.match(
+  packageJson,
+  /test:ps-426-awaiting-cursor-manual-sync[^\n]+ps-426-consumer-leadership-integration/,
+);
 
 assert.match(storeImport, /enqueueBackfillBestRatesForOrderIds\(/);
 assert.match(storeImport, /rateOnIngestOrderIds/);

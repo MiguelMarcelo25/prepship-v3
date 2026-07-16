@@ -36,7 +36,7 @@ assert.equal(
 );
 assert.match(
   queue,
-  /scheduleShipStationConsumerLeadership[\s\S]*shipStationConsumerLeadershipTimer = setTimeout\(/,
+  /class ShipStationConsumerLeadershipController[\s\S]*private schedule\([\s\S]*dependencies\.setTimer[\s\S]*setTimer: \(callback, delayMs\) => \{[\s\S]{0,120}setTimeout\(callback, delayMs\)/,
   'the remaining timeout must be scoped to queue-consumer leadership, not durable job cadence',
 );
 assert.equal(

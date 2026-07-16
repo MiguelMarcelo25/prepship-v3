@@ -118,12 +118,7 @@ type SyncJobHandlerContext = {
 let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-let shipStationConsumerLeaderConnection: postgres.ReservedSql | null = null;
-let shipStationConsumerLeadershipTimer: ReturnType<typeof setTimeout> | null = null;
-let shipStationConsumerLeadershipTask: Promise<void> | null = null;
-let shipStationConsumersRegistered = false;
-let shipStationConsumerHandoffLogged = false;
-let stopping = false;
+let shipStationConsumerLeadership: ShipStationConsumerLeadershipController | null = null;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_THRESHOLD = 3;
@@ -132,6 +127,241 @@ const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS
 const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
 const SHIPSTATION_CONSUMER_LEADER_RETRY_MS = 5_000;
 const SHIPSTATION_CONSUMER_LEADER_HEALTH_MS = 15_000;
+
+export type ActiveShipStationSyncJob = {
+  id: string;
+  name: string;
+};
+
+export type ShipStationConsumerLeadershipConnection = {
+  ping(): Promise<void>;
+  tryAcquire(): Promise<boolean>;
+  unlock(): Promise<void>;
+  release(): void;
+};
+
+type ShipStationConsumerLeadershipDependencies = {
+  reserveConnection(): Promise<ShipStationConsumerLeadershipConnection>;
+  readActiveJobs(): Promise<ActiveShipStationSyncJob[]>;
+  registerConsumers(): Promise<void>;
+  unregisterConsumers(): Promise<void>;
+  setTimer(callback: () => void, delayMs: number): unknown;
+  clearTimer(handle: unknown): void;
+  info(message: string): void;
+  warn(message: string, error: unknown): void;
+  error(message: string, error: unknown): void;
+};
+
+export type ShipStationConsumerLeadershipSnapshot = {
+  started: boolean;
+  stopping: boolean;
+  ownsLock: boolean;
+  consumersRegistered: boolean;
+  scheduledDelayMs: number | null;
+};
+
+/**
+ * Per user override unlock shipped data on 2026-07-16: this controller changes
+ * only queue-consumer leadership and never writes order or shipment data.
+ *
+ * Canonical lifecycle owner for the ShipStation stately-consumer leadership
+ * session. Queue registration, handoff, connection loss, retry, and shutdown
+ * all pass through this controller so they can be proven at one boundary.
+ */
+export class ShipStationConsumerLeadershipController {
+  private connection: ShipStationConsumerLeadershipConnection | null = null;
+  private timer: unknown = null;
+  private scheduledDelayMs: number | null = null;
+  private operation: Promise<void> = Promise.resolve();
+  private started = false;
+  private stopping = false;
+  private consumersRegistered = false;
+  private handoffLogged = false;
+
+  constructor(
+    private readonly dependencies: ShipStationConsumerLeadershipDependencies,
+    private readonly retryMs = SHIPSTATION_CONSUMER_LEADER_RETRY_MS,
+    private readonly healthMs = SHIPSTATION_CONSUMER_LEADER_HEALTH_MS,
+  ) {}
+
+  snapshot(): ShipStationConsumerLeadershipSnapshot {
+    return {
+      started: this.started,
+      stopping: this.stopping,
+      ownsLock: Boolean(this.connection),
+      consumersRegistered: this.consumersRegistered,
+      scheduledDelayMs: this.scheduledDelayMs,
+    };
+  }
+
+  async start(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+    this.stopping = false;
+    await this.enqueueMaintenance();
+  }
+
+  async runMaintenanceNow(): Promise<void> {
+    if (!this.started || this.stopping) return;
+    this.clearScheduledTimer();
+    await this.enqueueMaintenance();
+  }
+
+  async notifyConnectionClosed(): Promise<void> {
+    if (!this.started || this.stopping || !this.connection) return;
+    await this.enqueue(async () => {
+      if (!this.connection || this.stopping) return;
+      this.dependencies.error(
+        '[job-queue] ShipStation consumer leadership connection closed',
+        new Error('leadership_session_closed'),
+      );
+      this.clearScheduledTimer();
+      await this.dropLostConnection();
+      this.schedule(this.retryMs);
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (!this.started && !this.connection && !this.consumersRegistered) return;
+    this.stopping = true;
+    this.clearScheduledTimer();
+    await this.operation.catch(() => undefined);
+    try {
+      await this.unregisterConsumers();
+    } catch (error) {
+      this.dependencies.warn(
+        '[job-queue] ShipStation consumers could not unregister cleanly',
+        error,
+      );
+    }
+    await this.releaseLeadership();
+    this.handoffLogged = false;
+    this.started = false;
+  }
+
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const next = this.operation.catch(() => undefined).then(task);
+    this.operation = next;
+    return next;
+  }
+
+  private enqueueMaintenance(): Promise<void> {
+    return this.enqueue(() => this.maintain());
+  }
+
+  private clearScheduledTimer(): void {
+    if (this.timer === null) return;
+    this.dependencies.clearTimer(this.timer);
+    this.timer = null;
+    this.scheduledDelayMs = null;
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.stopping || !this.started || this.timer !== null) return;
+    this.scheduledDelayMs = delayMs;
+    this.timer = this.dependencies.setTimer(() => {
+      this.timer = null;
+      this.scheduledDelayMs = null;
+      void this.enqueueMaintenance();
+    }, delayMs);
+  }
+
+  private async unregisterConsumers(): Promise<void> {
+    if (!this.consumersRegistered) return;
+    try {
+      await this.dependencies.unregisterConsumers();
+    } finally {
+      this.consumersRegistered = false;
+    }
+  }
+
+  private async dropLostConnection(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    if (!connection) return;
+    try {
+      await this.unregisterConsumers();
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async releaseLeadership(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    if (!connection) return;
+    try {
+      await connection.unlock();
+    } catch (error) {
+      this.dependencies.warn(
+        '[job-queue] ShipStation consumer leadership release skipped',
+        error,
+      );
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async maintain(): Promise<void> {
+    if (this.stopping || !this.started) return;
+
+    try {
+      if (this.connection) {
+        try {
+          await this.connection.ping();
+        } catch (error) {
+          this.dependencies.error(
+            '[job-queue] ShipStation consumer leadership connection lost',
+            error,
+          );
+          await this.dropLostConnection();
+        }
+      }
+
+      if (!this.connection) {
+        const reserved = await this.dependencies.reserveConnection();
+        try {
+          if (!(await reserved.tryAcquire())) {
+            reserved.release();
+            this.schedule(this.retryMs);
+            return;
+          }
+          this.connection = reserved;
+        } catch (error) {
+          reserved.release();
+          throw error;
+        }
+      }
+
+      if (!this.consumersRegistered) {
+        const activeJobs = await this.dependencies.readActiveJobs();
+        if (activeJobs.length > 0) {
+          if (!this.handoffLogged) {
+            this.dependencies.info(
+              `[job-queue] ShipStation consumers waiting for active deploy handoff: ${activeJobs.map((job) => `${job.name}:${job.id}`).join(', ')}`,
+            );
+            this.handoffLogged = true;
+          }
+          this.schedule(this.retryMs);
+          return;
+        }
+
+        await this.dependencies.registerConsumers();
+        this.consumersRegistered = true;
+        this.handoffLogged = false;
+        this.dependencies.info('[job-queue] ShipStation stately consumer leadership acquired');
+      }
+
+      this.schedule(this.healthMs);
+    } catch (error) {
+      this.dependencies.error(
+        '[job-queue] ShipStation consumer leadership check failed',
+        error,
+      );
+      this.schedule(this.retryMs);
+    }
+  }
+}
 
 function resolveShipStationConsumerLeaderDatabaseUrl(databaseUrl: string): string {
   // Supabase port 6543 is transaction pooling, where a session advisory lock
@@ -153,6 +383,20 @@ const shipStationConsumerLeaderSql = postgres(
     connection: {
       application_name: 'prepship-shipstation-consumer-leader',
       statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+    },
+    // Per user override unlock shipped data on 2026-07-16: stop polling the
+    // stately queues as soon as the leadership session closes. The periodic
+    // ping remains a fallback, but an old worker no longer waits for that tick
+    // before surrendering its consumers during a connection-loss handoff.
+    onclose: () => {
+      const leadership = shipStationConsumerLeadership;
+      if (!leadership) return;
+      void leadership.notifyConnectionClosed().catch((error) => {
+        console.error(
+          '[job-queue] ShipStation leadership close handler failed:',
+          error instanceof Error ? error.message : error,
+        );
+      });
     },
   },
 );
@@ -986,11 +1230,6 @@ async function registerWorker(
   );
 }
 
-type ActiveShipStationSyncJob = {
-  id: string;
-  name: string;
-};
-
 async function readActiveShipStationSyncJobs(): Promise<ActiveShipStationSyncJob[]> {
   const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
   return pg<ActiveShipStationSyncJob[]>`
@@ -1003,7 +1242,7 @@ async function readActiveShipStationSyncJobs(): Promise<ActiveShipStationSyncJob
 }
 
 async function registerShipStationStatelyWorkers(): Promise<void> {
-  if (!boss || shipStationConsumersRegistered) return;
+  if (!boss) return;
 
   try {
     // Per user override unlock shipped data on 2026-07-02: pg-boss owns
@@ -1030,7 +1269,6 @@ async function registerShipStationStatelyWorkers(): Promise<void> {
     await registerWorker(JOBS.shipments, (jobData, { signal }) =>
       syncShipments({ ...shipmentSyncOptionsFromJobPayload(jobData), signal }),
     );
-    shipStationConsumersRegistered = true;
   } catch (err) {
     await Promise.allSettled([
       boss.offWork(JOBS.orders),
@@ -1040,107 +1278,61 @@ async function registerShipStationStatelyWorkers(): Promise<void> {
   }
 }
 
-async function releaseShipStationConsumerLeadership(): Promise<void> {
-  const reserved = shipStationConsumerLeaderConnection;
-  shipStationConsumerLeaderConnection = null;
-  if (!reserved) return;
-  try {
-    await reserved`
-      select pg_advisory_unlock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK}))
-    `;
-  } catch (err) {
-    console.warn(
-      '[job-queue] ShipStation consumer leadership release skipped:',
-      err instanceof Error ? err.message : err,
-    );
-  } finally {
-    reserved.release();
-  }
-}
-
 async function unregisterShipStationStatelyWorkers(): Promise<void> {
-  if (!boss || !shipStationConsumersRegistered) return;
+  if (!boss) return;
   await Promise.allSettled([
     boss.offWork(JOBS.orders),
     boss.offWork(JOBS.shipments),
   ]);
-  shipStationConsumersRegistered = false;
 }
 
-function scheduleShipStationConsumerLeadership(delayMs: number): void {
-  if (stopping || !started || shipStationConsumerLeadershipTimer) return;
-  shipStationConsumerLeadershipTimer = setTimeout(() => {
-    shipStationConsumerLeadershipTimer = null;
-    shipStationConsumerLeadershipTask = maintainShipStationConsumerLeadership()
-      .finally(() => {
-        shipStationConsumerLeadershipTask = null;
-      });
-  }, delayMs);
-  shipStationConsumerLeadershipTimer.unref?.();
+function leadershipError(error: unknown): unknown {
+  return error instanceof Error ? error.message : error;
+}
+
+function createShipStationConsumerLeadership(): ShipStationConsumerLeadershipController {
+  return new ShipStationConsumerLeadershipController({
+    reserveConnection: async () => {
+      const reserved = await shipStationConsumerLeaderSql.reserve();
+      return {
+        ping: async () => {
+          await reserved`select 1`;
+        },
+        tryAcquire: async () => {
+          const [row] = await reserved<{ acquired: boolean }[]>`
+            select pg_try_advisory_lock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK})) as acquired
+          `;
+          return Boolean(row?.acquired);
+        },
+        unlock: async () => {
+          await reserved`
+            select pg_advisory_unlock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK}))
+          `;
+        },
+        release: () => reserved.release(),
+      };
+    },
+    readActiveJobs: readActiveShipStationSyncJobs,
+    registerConsumers: async () => {
+      await registerShipStationStatelyWorkers();
+    },
+    unregisterConsumers: unregisterShipStationStatelyWorkers,
+    setTimer: (callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref?.();
+      return timer;
+    },
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    info: (message) => console.log(message),
+    warn: (message, error) => console.warn(`${message}:`, leadershipError(error)),
+    error: (message, error) => console.error(`${message}:`, leadershipError(error)),
+  });
 }
 
 async function maintainShipStationConsumerLeadership(): Promise<void> {
-  if (stopping || !started || !boss) return;
-
-  try {
-    if (shipStationConsumerLeaderConnection) {
-      try {
-        await shipStationConsumerLeaderConnection`select 1`;
-      } catch (err) {
-        console.error(
-          '[job-queue] ShipStation consumer leadership connection lost:',
-          err instanceof Error ? err.message : err,
-        );
-        await unregisterShipStationStatelyWorkers();
-        shipStationConsumerLeaderConnection.release();
-        shipStationConsumerLeaderConnection = null;
-      }
-    }
-
-    if (!shipStationConsumerLeaderConnection) {
-      const reserved = await shipStationConsumerLeaderSql.reserve();
-      try {
-        const [row] = await reserved<{ acquired: boolean }[]>`
-          select pg_try_advisory_lock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK})) as acquired
-        `;
-        if (!row?.acquired) {
-          reserved.release();
-          scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_RETRY_MS);
-          return;
-        }
-        shipStationConsumerLeaderConnection = reserved;
-      } catch (err) {
-        reserved.release();
-        throw err;
-      }
-    }
-
-    if (!shipStationConsumersRegistered) {
-      const activeJobs = await readActiveShipStationSyncJobs();
-      if (activeJobs.length > 0) {
-        if (!shipStationConsumerHandoffLogged) {
-          console.log(
-            `[job-queue] ShipStation consumers waiting for active deploy handoff: ${activeJobs.map((job) => `${job.name}:${job.id}`).join(', ')}`,
-          );
-          shipStationConsumerHandoffLogged = true;
-        }
-        scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_RETRY_MS);
-        return;
-      }
-
-      await registerShipStationStatelyWorkers();
-      shipStationConsumerHandoffLogged = false;
-      console.log('[job-queue] ShipStation stately consumer leadership acquired');
-    }
-
-    scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_HEALTH_MS);
-  } catch (err) {
-    console.error(
-      '[job-queue] ShipStation consumer leadership check failed:',
-      err instanceof Error ? err.message : err,
-    );
-    scheduleShipStationConsumerLeadership(SHIPSTATION_CONSUMER_LEADER_RETRY_MS);
-  }
+  if (!boss || !started) return;
+  shipStationConsumerLeadership ??= createShipStationConsumerLeadership();
+  await shipStationConsumerLeadership.start();
 }
 
 async function createQueues(): Promise<void> {
@@ -1155,7 +1347,6 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     console.warn('[job-queue] already started, ignoring duplicate start');
     return;
   }
-  stopping = false;
   started = true;
 
   boss = new PgBoss({
@@ -1249,13 +1440,12 @@ export async function startQueuedSyncScheduler(): Promise<void> {
 }
 
 export async function stopQueuedSyncScheduler(): Promise<void> {
-  stopping = true;
-  if (shipStationConsumerLeadershipTimer) {
-    clearTimeout(shipStationConsumerLeadershipTimer);
-    shipStationConsumerLeadershipTimer = null;
-  }
-  await shipStationConsumerLeadershipTask?.catch(() => undefined);
-  shipStationConsumerLeadershipTask = null;
+  // Per user override unlock shipped data on 2026-07-16: unregister the two
+  // ShipStation pollers before releasing their advisory leadership session.
+  // Any still-active pg-boss row remains the durable handoff fence for the
+  // next worker generation while the rest of this boss shuts down gracefully.
+  await shipStationConsumerLeadership?.stop();
+  shipStationConsumerLeadership = null;
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -1266,9 +1456,6 @@ export async function stopQueuedSyncScheduler(): Promise<void> {
     }
   } finally {
     boss = null;
-    shipStationConsumersRegistered = false;
-    shipStationConsumerHandoffLogged = false;
-    await releaseShipStationConsumerLeadership();
   }
   activeJobsByLane.clear();
   started = false;
