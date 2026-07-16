@@ -1,10 +1,10 @@
 /**
- * PS-249 (Card 4) guard — billing MUTATIONS require financials:write (read != write); a
- * financials:read-only principal can read invoices but cannot mutate billing config/prices/gen.
+ * PS-249 (Card 4) guard — broad billing mutations require financials:write
+ * (read != write). Canonical tenant-scoped generation uses billing:generate.
  *
  * BEHAVIORAL: runs hasAppPermission to prove the financials:write role matrix.
- * STATIC: every billing mutation route carries requirePermission('financials:write'), and the
- * router-wide financials:read gate is intact.
+ * STATIC: broad mutations carry financials:write, generation carries
+ * billing:generate, and the router-wide financials:read gate is intact.
  *
  *   npx tsx scripts/ps-249-billing-write-permission-guard.ts
  */
@@ -28,6 +28,8 @@ check('operator has financials:write', hasAppPermission({ role: 'operator' }, 'f
 check('admin has financials:write', hasAppPermission({ role: 'admin' }, 'financials:write') === true);
 check('client_user lacks financials:write', hasAppPermission({ role: 'client_user' }, 'financials:write') === false);
 check('read_only_support lacks financials:write', hasAppPermission({ role: 'read_only_support' }, 'financials:write') === false);
+check('client_user has narrow billing:generate', hasAppPermission({ role: 'client_user' }, 'billing:generate') === true);
+check('read_only_support lacks billing:generate', hasAppPermission({ role: 'read_only_support' }, 'billing:generate') === false);
 
 // ── static: billing mutations gated + read gate intact ────────────────────────────────────────
 const billing = readFileSync('src/routes/billing.ts', 'utf8');
@@ -35,7 +37,8 @@ const writeGates = (billing.match(/requirePermission\('financials:write'\)/g) ||
 check('all billing mutation routes carry financials:write (>= 7)', writeGates >= 7);
 
 const gate = "requirePermission('financials:write')";
-check('POST /generate gated', billing.includes(`app.post('/generate', ${gate}`));
+check('POST /generate uses narrow billing:generate gate',
+  billing.includes("app.post('/generate', requirePermission('billing:generate')"));
 check('PATCH /details/:orderId gated', billing.includes(`app.patch('/details/:orderId{[0-9]+}', ${gate}`));
 check('PUT /package-prices gated', billing.includes(`app.put('/package-prices', ${gate}`));
 check('POST /backfill-ref-rates gated', billing.includes(`app.post('/backfill-ref-rates', ${gate}`));

@@ -35,6 +35,9 @@ export const APP_PERMISSIONS = [
   'credentials:read',
   'credentials:write',
   'financials:read',
+  // Narrow capability for regenerating canonical billing rows. The billing
+  // router still requires financials:read, and its service applies tenant scope.
+  'billing:generate',
   // PS-246 (Card 1): a distinct WRITE permission for billing/financial mutations.
   // Read != write — Card 4 gates every billing mutation on this.
   'financials:write',
@@ -54,12 +57,13 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
     'credentials:read',
     'credentials:write',
     'financials:read',
+    'billing:generate',
     // PS-246 (Card 1): operators run billing, so they get write; warehouse/client/support stay read-only.
     'financials:write',
     'print_queue:write',
   ],
   warehouse: ['settings:read', 'credentials:read', 'print_queue:write'],
-  client_user: ['settings:read'],
+  client_user: ['settings:read', 'billing:generate'],
   read_only_support: ['settings:read', 'credentials:read'],
 };
 

@@ -586,7 +586,10 @@ function money(value: number): string {
   return (Number.isFinite(value) ? value : 0).toFixed(2);
 }
 
-app.post('/generate', requirePermission('financials:write'), zValidator('json', generateSchema), async (c) => {
+// Per user override unlock shipped data on 2026-07-16: billing generation remains
+// canonical and scope-filtered; clients receive only the narrow generate
+// capability, never financials:write.
+app.post('/generate', requirePermission('billing:generate'), zValidator('json', generateSchema), async (c) => {
   const body = c.req.valid('json');
   const result = await generateLineItems(withBillingScope(c, {
     clientId: body.clientId,

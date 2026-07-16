@@ -25,12 +25,15 @@ const auth = readFileSync('src/middleware/auth.ts', 'utf8');
 
 // The APP_PERMISSIONS tuple defines the type, so a write perm must live there.
 const appPerms = auth.match(/export const APP_PERMISSIONS = \[([\s\S]*?)\] as const/)?.[1] ?? '';
-check('APP_PERMISSIONS declares both financials:read and financials:write',
-  /'financials:read'/.test(appPerms) && /'financials:write'/.test(appPerms));
+check('APP_PERMISSIONS declares financial read/write and narrow billing generation',
+  /'financials:read'/.test(appPerms) &&
+    /'financials:write'/.test(appPerms) &&
+    /'billing:generate'/.test(appPerms));
 
 // Per-role assignment: operator + admin get write; warehouse/client/support do NOT.
 const operatorArr = auth.match(/operator:\s*\[([^\]]*)\]/)?.[1] ?? '';
 check('operator role has financials:write', /'financials:write'/.test(operatorArr));
+check('operator role has billing:generate', /'billing:generate'/.test(operatorArr));
 check('admin inherits all permissions (admin: APP_PERMISSIONS)', /admin:\s*APP_PERMISSIONS/.test(auth));
 
 const warehouseArr = auth.match(/warehouse:\s*\[([^\]]*)\]/)?.[1] ?? '';
@@ -39,13 +42,20 @@ const supportArr = auth.match(/read_only_support:\s*\[([^\]]*)\]/)?.[1] ?? '';
 check('warehouse has NO financials:write', !/'financials:write'/.test(warehouseArr));
 check('client_user has NO financials:read/write',
   !/'financials:(read|write)'/.test(clientArr));
+check('client_user has narrow billing:generate', /'billing:generate'/.test(clientArr));
 check('read_only_support has NO financials:write', !/'financials:write'/.test(supportArr));
+check('warehouse/support have NO billing:generate',
+  !/'billing:generate'/.test(warehouseArr) && !/'billing:generate'/.test(supportArr));
 
 // Behavioral role matrix: run the real permission owner, not just the source text.
 check('operator can write financials through hasAppPermission',
   hasAppPermission({ role: 'operator' }, 'financials:write') === true);
 check('admin can write financials through hasAppPermission',
   hasAppPermission({ role: 'admin' }, 'financials:write') === true);
+check('operator/admin/client_user can request scoped billing generation',
+  hasAppPermission({ role: 'operator' }, 'billing:generate') === true &&
+    hasAppPermission({ role: 'admin' }, 'billing:generate') === true &&
+    hasAppPermission({ role: 'client_user' }, 'billing:generate') === true);
 check('warehouse cannot write financials through hasAppPermission',
   hasAppPermission({ role: 'warehouse' }, 'financials:write') === false);
 check('client_user cannot read or write financials through hasAppPermission',
@@ -53,6 +63,9 @@ check('client_user cannot read or write financials through hasAppPermission',
     hasAppPermission({ role: 'client_user' }, 'financials:write') === false);
 check('read_only_support cannot write financials through hasAppPermission',
   hasAppPermission({ role: 'read_only_support' }, 'financials:write') === false);
+check('warehouse/support cannot request billing generation',
+  hasAppPermission({ role: 'warehouse' }, 'billing:generate') === false &&
+    hasAppPermission({ role: 'read_only_support' }, 'billing:generate') === false);
 
 // The permission type must still be derived from the tuple (so financials:write is a valid AppPermission).
 check('AppPermission is derived from APP_PERMISSIONS',
