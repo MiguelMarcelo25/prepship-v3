@@ -113,6 +113,15 @@ async function main(): Promise<void> {
     /unique|duplicate/i,
     'a duplicate candidate fails loudly instead of conflict-dropping',
   );
+  const persistedAfterRepeat = await client.query<{ count: number; total: string }>(`
+    SELECT count(*)::int AS count, sum(total_cost)::text AS total
+    FROM billing_line_items WHERE order_id = 425
+  `);
+  assert.deepEqual(
+    persistedAfterRepeat.rows[0],
+    { count: 2, total: '32.00' },
+    'a rejected repeat run leaves cardinality and total unchanged',
+  );
 
   const marginRows = [
     buildShippingMarginRow({
@@ -257,6 +266,36 @@ async function main(): Promise<void> {
     orderStatus: 'shipped',
     externallyShipped: true,
   }).kind, 'preserve_terminal');
+
+  await client.exec(readFileSync(
+    'docs/final-review/evidence/PS-425-migration-rollback.sql',
+    'utf8',
+  ));
+  const afterRollback = await client.query<{ count: number; total: string }>(`
+    SELECT count(*)::int AS count, sum(total_cost)::text AS total
+    FROM billing_line_items WHERE order_id = 425
+  `);
+  assert.deepEqual(
+    afterRollback.rows[0],
+    { count: 2, total: '32.00' },
+    'rollback restores the legacy key without rewriting current shipment lines',
+  );
+  await client.exec(`
+    INSERT INTO billing_line_items
+      (client_id, order_id, order_number, line_type, description, qty, unit_cost, total_cost)
+    VALUES
+      (42, 426, 'PS-425-LEGACY', 'shipping', 'Legacy shipping row', 1, 9.00, 9.00)
+  `);
+  await assert.rejects(
+    client.exec(`
+      INSERT INTO billing_line_items
+        (client_id, order_id, order_number, line_type, description, qty, unit_cost, total_cost)
+      VALUES
+        (42, 426, 'PS-425-LEGACY', 'shipping', 'Legacy shipping row', 1, 9.00, 9.00)
+    `),
+    /unique|duplicate/i,
+    'rollback restores the previous application duplicate constraint',
+  );
 
   await client.close();
   console.log('PASS PS-425 multi-shipment cardinality/lifecycle integration');
