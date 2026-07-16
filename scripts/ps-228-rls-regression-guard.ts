@@ -72,7 +72,21 @@ check('REVOKE migration exists', revoke.length > 0);
 check('REVOKE migration strips anon + authenticated grants',
   /revoke[\s\S]*\banon\b/i.test(revoke) && /revoke[\s\S]*\bauthenticated\b/i.test(revoke));
 
-// 6. Posture doc + the Supabase advisors the CI should watch.
+// 6. Billing proof and operational 0066 backups were created after the broad
+//    hardening migration. Pin their backend-only posture so later refactors
+//    cannot silently reopen them through PostgREST.
+let billingHardening = '';
+try { billingHardening = readFileSync('drizzle/0069_public_billing_rls_hardening.sql', 'utf8'); } catch { /* missing */ }
+check('billing storage proof explicitly enables RLS',
+  /alter\s+table\s+public\.billing_storage_proof\s+enable\s+row\s+level\s+security/i.test(billingHardening));
+check('billing storage proof revokes public API grants',
+  /revoke\s+all\s+privileges\s+on\s+table\s+public\.billing_storage_proof[\s\S]*\banon\b[\s\S]*\bauthenticated\b/i.test(billingHardening));
+check('0066 reference-rate backups are dynamically RLS-hardened',
+  /billing_ref_rates_backup_0066_/.test(billingHardening) &&
+    /enable\s+row\s+level\s+security/i.test(billingHardening) &&
+    /revoke\s+all\s+privileges/i.test(billingHardening));
+
+// 7. Posture doc + the Supabase advisors the CI should watch.
 let posture = '';
 try { posture = readFileSync('docs/engineering/rls-posture.md', 'utf8'); } catch { /* missing */ }
 check('RLS posture doc exists', posture.length > 0);
@@ -83,7 +97,7 @@ check('doc documents Render owner bypasses RLS + PostgREST unused',
 check('doc records the anon-key re-test (reads denied)',
   /anon/i.test(posture) && /\[\]|denied|empty/i.test(posture));
 
-// 7. Self-wiring.
+// 8. Self-wiring.
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json exposes test:ps-228-rls-regression', /test:ps-228-rls-regression/.test(pkg));
 
