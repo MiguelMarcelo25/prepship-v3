@@ -7,8 +7,12 @@ const CONFIRMATION = 'apply-ps-434-weekend-billing-0071';
 const migrationPath = 'drizzle/0071_billing_weekend_rollforward.sql';
 
 function approved(): boolean {
-  return process.argv.includes('--apply') &&
+  const explicitlyConfirmed = process.argv.includes('--apply') &&
     process.argv.includes(`--confirm=${CONFIRMATION}`);
+  // Per user override unlock shipped data on 2026-07-16: permit only this exact migration at API startup.
+  const startupConfirmed = process.argv.includes('--startup') &&
+    process.env.PS434_STARTUP_MIGRATION_CONFIRM?.trim() === CONFIRMATION;
+  return explicitlyConfirmed || startupConfirmed;
 }
 
 type BillingSnapshot = {
@@ -17,6 +21,11 @@ type BillingSnapshot = {
 };
 
 async function main(): Promise<void> {
+  if (process.argv.includes('--startup') && !approved()) {
+    console.log('[ps-434-migration] startup migration disabled');
+    return;
+  }
+
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
 
