@@ -29,6 +29,7 @@ import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
+import { billingLineEffectiveDaySql } from '../services/billing-calendar-policy';
 import { logStructured, reportError } from '../lib/structured-log';
 import { requirePermission } from '../middleware/auth';
 // PS-234: durable audit trail for billing generation.
@@ -94,8 +95,8 @@ import { renderInvoiceCsv } from './billing-invoice-csv';
 import {
   INVOICE_SHIP_DATE_HEADER,
   INVOICE_XLSX_SHIP_DATE_HEADER,
+  invoiceBillingActivityDateCell,
   invoiceOneLineCell,
-  invoiceShipDateCell,
   invoiceShipDateTimeCell,
 } from './billing-invoice-text';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
@@ -107,6 +108,7 @@ import {
   isBillingRegenerationBlockedError,
   requireBillingRegenerationRead,
 } from '../services/billing-regeneration-readiness';
+import { isBillingCalendarPolicyError } from '../services/billing-calendar-policy';
 import {
   resolveBillingPresetWindow,
   type BillingWindowPreset,
@@ -156,6 +158,18 @@ app.use('*', async (c, next) => {
         regenerationAllowed: error.regenerationAllowed,
         source: error.source,
       }, 503);
+    }
+    if (isBillingCalendarPolicyError(error)) {
+      logStructured('warn', 'billing.request.rejected', {
+        ...logFields,
+        status: error.status,
+        errorCode: error.code,
+      });
+      return c.json({
+        error: error.message,
+        code: error.code,
+        operationDay: error.operationDay,
+      }, error.status);
     }
     const closeError = asBillingCloseWorkflowError(error);
     if (closeError) {
@@ -904,6 +918,8 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       orderNumber: billingLineItems.orderNumber,
       shipmentId: billingLineItems.shipmentId,
       shipDate: billingLineItems.shipDate,
+      billingEffectiveDate: billingLineItems.billingEffectiveDate,
+      billingPolicyVersion: billingLineItems.billingPolicyVersion,
       packageId: billingLineItems.packageId,
     })
     .from(billingLineItems)
@@ -1057,6 +1073,8 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           orderNumber: base.orderNumber,
           shipmentId: base.shipmentId,
           shipDate: base.shipDate,
+          billingEffectiveDate: base.billingEffectiveDate,
+          billingPolicyVersion: base.billingPolicyVersion,
           lineType,
           description,
           qty: '1.00',
@@ -1769,6 +1787,8 @@ type InvoiceDetailRow = {
   order_number: string | null;
   shipment_id: number | null;
   ship_date: string | null;
+  billing_effective_date: string | null;
+  billing_policy_version: string | null;
   base_qty: string;
   addl_qty: string;
   pickpack_amt: string;
@@ -1868,6 +1888,10 @@ async function billingInvoiceData(
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const invoiceEffectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
 
   const rawDetails = await db.execute<InvoiceDetailSqlRow>(sql`
     select
@@ -1879,6 +1903,8 @@ async function billingInvoiceData(
       -- the day AT UTC. The previous America/Los_Angeles conversion turned a
       -- May 1 row into April 30 before display even started.
       to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD') as ship_date,
+      to_char(${invoiceEffectiveDay} at time zone 'UTC', 'YYYY-MM-DD') as billing_effective_date,
+      b.billing_policy_version,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then ${detailAmount} else 0 end), 0)::text as pickpack_amt,
@@ -1927,10 +1953,11 @@ async function billingInvoiceData(
     where b.client_id = ${clientId}
       -- PS-208: identical date-only bounds as every billing endpoint — UTC
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
-      and b.ship_date >= ${dateFrom}::timestamptz
-      and b.ship_date < ${dateTo}::timestamptz
-    group by b.order_id, b.order_number, b.shipment_id, b.ship_date
-    order by b.ship_date desc, b.order_id desc, b.shipment_id desc nulls last
+      and ${invoiceEffectiveDay} >= ${dateFrom}::timestamptz
+      and ${invoiceEffectiveDay} < ${dateTo}::timestamptz
+    group by b.order_id, b.order_number, b.shipment_id, b.ship_date,
+      b.billing_effective_date, b.billing_policy_version
+    order by ${invoiceEffectiveDay} desc, b.order_id desc, b.shipment_id desc nulls last
   `);
 
   // PS-217: resolve the human-readable billed box from the stamped package_id.
@@ -1978,6 +2005,8 @@ async function billingInvoiceData(
       order_number: r.order_number,
       shipment_id: r.shipment_id,
       ship_date: r.ship_date,
+      billing_effective_date: r.billing_effective_date,
+      billing_policy_version: r.billing_policy_version,
       base_qty: r.base_qty,
       addl_qty: r.addl_qty,
       pickpack_amt: r.pickpack_amt,
@@ -2068,10 +2097,19 @@ export function renderInvoiceHtml(args: {
         shipping: shippingAmt,
         storage: storageAmt,
       });
-      const shipDate = invoiceShipDateTimeCell(d.ship_date);
+      const billingDate = invoiceShipDateTimeCell(
+        d.billing_effective_date ?? d.ship_date,
+      );
+      const actualDate = invoiceShipDateTimeCell(d.ship_date);
+      const dateCell =
+        d.ship_date &&
+        d.billing_effective_date &&
+        d.ship_date !== d.billing_effective_date
+          ? `Billed ${billingDate}<br><small>Fulfilled ${actualDate}</small>`
+          : billingDate;
       return `
       <tr>
-        <td class="ship-date">${escHtml(shipDate)}</td>
+        <td class="ship-date">${dateCell}</td>
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
         <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
@@ -2280,7 +2318,10 @@ export async function renderInvoiceXlsx(args: {
     invoice.addRow({
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
       status: d.billing_status_label || 'Fulfilled',
-      shipDate: invoiceShipDateCell(d.ship_date),
+      shipDate: invoiceBillingActivityDateCell(
+        d.ship_date,
+        d.billing_effective_date,
+      ),
       carrier: invoiceCarrierCell(d.carrier_code),
       itemName: invoiceOneLineCell(d.item_names),
       sku: invoiceOneLineCell(d.skus),

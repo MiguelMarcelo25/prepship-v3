@@ -3,6 +3,7 @@ import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge';
+import { billingLineEffectiveDaySql } from './billing-calendar-policy';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 
 // PS-132: synthetic/system clients excluded from reporting metrics — single source.
@@ -529,6 +530,10 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
 
   return withRefreshRun('billing-summary', async () => {
     await db.execute(sql`
@@ -566,11 +571,11 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
       from clients c
       left join billing_line_items b
         on b.client_id = c.id
-        and b.ship_date >= ${from.toISOString()}::timestamptz
+        and ${effectiveDay} >= ${from.toISOString()}::timestamptz
         -- PS-208: STRICT upper bound ("to" is the exclusive day-after
         -- midnight); an inclusive bound would aggregate the next period's
         -- first day into this cache row.
-        and b.ship_date < ${to.toISOString()}::timestamptz
+        and ${effectiveDay} < ${to.toISOString()}::timestamptz
       left join orders o on o.id = b.order_id
       where c.active = true
         and c.name not in (${systemClientNamesSql})
@@ -973,6 +978,10 @@ export async function getFreshBillingSummaryMetrics(options: {
   maxAgeMinutes?: number;
 }): Promise<{ clients: BillingSummaryMetricRow[]; grandTotal: number } | null> {
   const maxAgeMinutes = options.maxAgeMinutes ?? 45;
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
   const fromDay = isoDate(new Date(options.dateFrom));
   const toDay = isoDate(new Date(options.dateTo));
   const billingMetricsScopePredicate = (() => {
@@ -1024,8 +1033,8 @@ export async function getFreshBillingSummaryMetrics(options: {
           max(b.created_at) as newest_line_item_created_at
         from billing_line_items b
         join scoped_clients sc on sc.id = b.client_id
-        where b.ship_date >= ${options.dateFrom}::timestamptz
-          and b.ship_date < ${options.dateTo}::timestamptz
+        where ${effectiveDay} >= ${options.dateFrom}::timestamptz
+          and ${effectiveDay} < ${options.dateTo}::timestamptz
         group by b.client_id
       ),
       candidate_metrics as (

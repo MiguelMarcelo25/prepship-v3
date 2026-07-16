@@ -155,11 +155,15 @@ assert.match(xlsxRenderer, /itemName:\s*invoiceOneLineCell\(d\.item_names\)/, 'I
 assert.match(xlsxRenderer, /sku:\s*invoiceOneLineCell\(d\.skus\)/, 'Invoice sheet must flatten SKUs to one readable cell');
 assert.doesNotMatch(xlsxRenderer, /skus:\s*d\.skus\s*\?\?\s*''/, 'Invoice sheet must not export raw multiline SKU text');
 assert.doesNotMatch(xlsxRenderer, /WAIVED_COLUMN_HEADER|key:\s*'waiver'|waivedCellText\(d\.fee_waived\)/, 'Invoice sheet must omit the Prep Fee Waiver column');
-assert.match(xlsxRenderer, /shipDate:\s*invoiceShipDateCell\(d\.ship_date\)/, 'XLSX ship date must render the date-only invoice day');
+assert.match(
+  xlsxRenderer,
+  /shipDate:\s*invoiceBillingActivityDateCell\(\s*d\.ship_date,\s*d\.billing_effective_date,?\s*\)/,
+  'XLSX must render the backend billing day and preserve a different actual activity day',
+);
 assert.doesNotMatch(xlsxRenderer, /invoiceShipDateTimeCell\(d\.ship_date\)/, 'XLSX ship date must not include time');
 assert.match(xlsxRenderer, /carrier:\s*invoiceCarrierCell\(d\.carrier_code\)/, 'Invoice sheet must use backend-owned carrier code display');
-assert.match(billingRoute, /order by b\.ship_date desc,\s*b\.order_id desc/, 'Invoice detail source must sort latest ship date/order first for Excel');
-assert.doesNotMatch(billingRoute, /order by b\.ship_date asc,\s*b\.order_id asc/, 'Invoice detail source must not sort oldest orders first');
+assert.match(billingRoute, /order by \$\{invoiceEffectiveDay\} desc, b\.order_id desc/, 'Invoice detail source must sort latest effective billing day/order first for Excel');
+assert.doesNotMatch(billingRoute, /order by \$\{invoiceEffectiveDay\} asc, b\.order_id asc/, 'Invoice detail source must not sort oldest effective billing days first');
 
 const packageJson = readFileSync('package.json', 'utf8');
 assert.match(packageJson, /"test:billing-invoice-xlsx-layout": "tsx scripts\/billing-invoice-xlsx-layout-guard\.ts"/, 'package.json must expose the XLSX layout guard');

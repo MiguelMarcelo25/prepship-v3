@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { roundMoney } from '../lib/money.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
+import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
 
 export type BillingInvoiceHeaderTotals = {
   orderCount: number;
@@ -34,6 +35,10 @@ export async function billingInvoiceHeaderTotals(
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
   const summaryRow = await conn.execute<{
     pickpack_total: string;
     additional_total: string;
@@ -54,8 +59,8 @@ export async function billingInvoiceHeaderTotals(
     from billing_line_items b
     left join orders o on o.id = b.order_id
     where b.client_id = ${clientId}
-      and b.ship_date >= ${dateFrom}::timestamptz
-      and b.ship_date < ${dateTo}::timestamptz
+      and ${effectiveDay} >= ${dateFrom}::timestamptz
+      and ${effectiveDay} < ${dateTo}::timestamptz
   `);
   const rows = Array.isArray(summaryRow)
     ? summaryRow

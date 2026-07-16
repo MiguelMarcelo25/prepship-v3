@@ -55,6 +55,11 @@ export const billingLineItems = pgTable(
     orderNumber: text(),
     shipmentId: integer().references(() => shipments.id),
     shipDate: timestamp({ withTimezone: true }),
+    // PS-434: shipDate remains the actual activity calendar day. This nullable
+    // field is the invoice/range bucket; NULL preserves all legacy rows through
+    // coalesce(billing_effective_date, ship_date) without a historical backfill.
+    billingEffectiveDate: timestamp('billing_effective_date', { withTimezone: true }),
+    billingPolicyVersion: text('billing_policy_version'),
     lineType: text().notNull(),
     description: text().notNull(),
     qty: numeric({ precision: 10, scale: 2 }).default('1').notNull(),
@@ -71,6 +76,9 @@ export const billingLineItems = pgTable(
   (t) => [
     index('billing_li_client_idx').on(t.clientId),
     index('billing_li_date_idx').on(t.shipDate),
+    index('billing_li_effective_date_idx').on(
+      sql`coalesce(${t.billingEffectiveDate}, ${t.shipDate})`,
+    ),
     // PS-425: distinct outbound shipments retain their own frozen charge and
     // margin lineage. Shipment-less external/order rows keep their order-level
     // identity, while storage (orderId NULL) remains on its period-specific key.

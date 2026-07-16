@@ -130,6 +130,10 @@ const migrationOwnership = [
       'fulfillment_line_claims_idempotency_unq',
     ],
   ],
+  [
+    'drizzle/0071_billing_weekend_rollforward.sql',
+    ['billing_effective_date', 'billing_policy_version', 'billing_li_effective_date_idx'],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -182,6 +186,13 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration),
   '0070 adds lifecycle sidecars without mutating or destructively altering orders/shipments',
 );
+const billingWeekendMigration = read('drizzle/0071_billing_weekend_rollforward.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments|billing_line_items)\b/i.test(billingWeekendMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(billingWeekendMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingWeekendMigration),
+  '0071 is additive, performs no backfill, and never mutates orders/shipments or historical billing lines',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -191,7 +202,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0070_order_lifecycle_commands.sql',
+  '0071_billing_weekend_rollforward.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

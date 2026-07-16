@@ -32,6 +32,8 @@ async function main(): Promise<void> {
     client_id integer not null,
     order_id integer,
     ship_date timestamptz not null,
+    billing_effective_date timestamptz,
+    billing_policy_version text,
     line_type text not null,
     total_cost numeric(10,2) not null
   )`);

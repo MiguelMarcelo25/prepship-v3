@@ -44,6 +44,7 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'hugrab_shipping_rate_override_threshold',
     'hugrab_shipping_rate_override_amount',
   ],
+  billing_line_items: ['billing_effective_date', 'billing_policy_version'],
   client_combo_package_defaults: ['source'],
   inventory_ledger: ['effective_at', 'idempotency_key'],
   orders: [
@@ -93,6 +94,7 @@ const REQUIRED_INDEXES = [
   'billing_manual_overrides_client_order_idx',
   'billing_li_order_unique_idx',
   'billing_li_shipment_unique_idx',
+  'billing_li_effective_date_idx',
   'billing_ref_rates_identity_unq',
   'billing_credit_notes_finalization_idx',
   'billing_credit_notes_idempotency_unq',
@@ -268,7 +270,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0070_order_lifecycle_commands.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0071_billing_weekend_rollforward.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

@@ -116,14 +116,15 @@ assert.ok(routes.includes('range?.toUtcExclusive') || routes.includes('range.toU
 // Invoice query: plain days accepted (no z.string().datetime() rejection).
 assert.ok(!/invoiceQuery = z\.object\(\{[^}]*datetime\(\)/s.test(routes),
   'invoiceQuery must accept plain YYYY-MM-DD (datetime() validation removed)');
-// SQL: day extraction at UTC; LA conversion of ship_date forbidden.
+// SQL: actual activity-day extraction stays at UTC; billing period membership
+// delegates to the persisted effective day with a legacy ship_date fallback.
 assert.ok(routes.includes("to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD')"),
   'invoice rows must extract the ship day AT UTC');
 assert.ok(!/ship_date at time zone 'America\/Los_Angeles'/.test(routes),
   'ship_date must never be converted to America/Los_Angeles');
 // Exclusive bound in the invoice detail query; the inclusive form is gone.
-assert.ok(routes.includes('and b.ship_date < ${dateTo}::timestamptz'),
-  'invoice bounds must use the exclusive upper bound');
+assert.ok(routes.includes('and ${invoiceEffectiveDay} < ${dateTo}::timestamptz'),
+  'invoice effective-day bounds must use the exclusive upper bound');
 assert.ok(!/b\.ship_date <= /.test(routes),
   'routes/billing.ts must not retain inclusive ship_date upper bounds');
 // formatInvoiceDate (Date round-trip + LA Intl) is deleted; renderer uses
@@ -132,10 +133,10 @@ assert.ok(!routes.includes('function formatInvoiceDate'),
   'formatInvoiceDate must stay deleted — formatBillingDay owns display');
 assert.ok(routes.includes('formatBillingDay(fromDay)') && routes.includes('formatBillingDay(toDay)'),
   'invoice header must format the operator-picked days via formatBillingDay');
-assert.ok(routes.includes('invoiceShipDateTimeCell(d.ship_date)'),
-  'HTML invoice rows must format ship_date via the Los Angeles date/time cell');
-assert.ok(invoiceText.includes("INVOICE_SHIP_DATE_HEADER = 'Ship Date/Time (Los Angeles)'"),
-  'invoice ship-date header must make the Los Angeles billing date/time explicit');
+assert.ok(routes.includes('d.billing_effective_date ?? d.ship_date'),
+  'HTML invoice rows must display the backend effective billing day with legacy fallback');
+assert.ok(invoiceText.includes("INVOICE_SHIP_DATE_HEADER = 'Billing / Activity Date (Los Angeles)'"),
+  'invoice date header must distinguish billing and activity dates');
 assert.ok(routes.includes('INVOICE_SHIP_DATE_HEADER'),
   'HTML invoice renderer must use the shared Los Angeles ship-date/time header');
 
@@ -152,8 +153,8 @@ assert.ok(routes.includes("state: 'frozen'"),
   'Invoice sheet must freeze the header row');
 assert.ok(routes.includes('SUM(M${first}:M${last})'),
   'Invoice totals row must use real SUM formulas for Fulfillment Fee');
-assert.ok(routes.includes('invoiceShipDateCell(d.ship_date)'),
-  'XLSX invoice rows must use the plain billing ship-date cell');
+assert.ok(routes.includes('invoiceBillingActivityDateCell('),
+  'XLSX invoice rows must preserve both effective billing and actual activity dates');
 assert.ok(routes.includes('INVOICE_XLSX_SHIP_DATE_HEADER'),
   'XLSX invoice must use the date-only Ship Date header');
 assert.ok(!routes.includes('excelDayCell'),
@@ -166,22 +167,25 @@ assert.ok(routes.includes('application/vnd.openxmlformats-officedocument.spreads
 // builder form (lte(...)) that a literal sweep misses.
 assert.ok(!/ship_date <= /.test(service) && !/shipDate} <= /.test(service),
   'services/billing.ts must not retain inclusive ship_date upper bounds');
-assert.ok(!/lte\(billingLineItems\.shipDate/.test(service),
-  'billingDetails must bound shipDate with lt(), not lte() (drizzle form)');
-assert.ok(/lt\(billingLineItems\.shipDate/.test(service),
-  'billingDetails must use the exclusive lt() upper bound');
+assert.ok(!/lte\(billingPersistedEffectiveDaySql/.test(service),
+  'billingDetails must bound the effective day with lt(), not lte()');
+assert.ok(/lt\(billingPersistedEffectiveDaySql/.test(service),
+  'billingDetails must use the exclusive effective-day lt() upper bound');
 assert.ok(service.includes('and b.ship_date < ${fromIso') === false, 'sanity: lower bounds stay >=');
 assert.ok(/dateFrom: string; \/\/ ISO, UTC midnight, inclusive/.test(service),
   'GenerateInput must document the calendar-day bound semantics');
 // The period rebuild DELETE must be strictly bounded (else regenerating May
 // wipes June 1 lines).
-assert.ok(service.includes('sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`'),
-  'generateLineItems period DELETE must use the strict upper bound');
-// Source ship dates normalize to UTC midnight (storage invariant).
-assert.ok(/billingShipDateSql = sql<Date \| null>`date_trunc\('day', coalesce\(/.test(service),
-  'billingShipDateSql must truncate source timestamps to the UTC day');
-assert.ok(service.includes("at time zone 'UTC') at time zone 'UTC'"),
-  'billingShipDateSql truncation must be UTC-anchored');
+assert.ok(service.includes('sql`${billingPersistedEffectiveDaySql} < ${toIso}::timestamptz`'),
+  'generateLineItems period DELETE must use the strict effective-day upper bound');
+// The legacy actual-day projection remains UTC-midnight while the PS-434
+// calendar owner receives the untouched source instant for LA-day policy.
+assert.ok(/billingLegacyActivityDaySql = sql<Date \| null>`date_trunc\(/.test(service),
+  'the legacy actual activity day must retain the UTC-midnight storage invariant');
+assert.ok(
+  service.includes("${billingSourceActivityTimestampSql} at time zone 'UTC'") &&
+    service.includes("at time zone 'UTC'`"),
+  'the legacy actual activity-day projection must be UTC-anchored');
 
 // Reporting cache materializer uses the same strict bound.
 assert.ok(!/b\.ship_date <= /.test(reporting),

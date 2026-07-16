@@ -24,8 +24,12 @@ function check(name: string, condition: boolean) {
 }
 
 check('HTML invoice renderer was found', html.length > 0);
-check('HTML invoice marks Ship Date header with the ship-date class', /<th class="ship-date">\$\{escHtml\(INVOICE_SHIP_DATE_HEADER\)\}<\/th>/.test(html));
-check('HTML invoice marks Ship Date cells with the ship-date class', /<td class="ship-date">\$\{escHtml\(shipDate\)\}<\/td>/.test(html));
+check('HTML invoice marks Billing / Activity Date header with the ship-date class', /<th class="ship-date">\$\{escHtml\(INVOICE_SHIP_DATE_HEADER\)\}<\/th>/.test(html));
+check('HTML invoice marks Billing / Activity Date cells with the ship-date class', /<td class="ship-date">\$\{dateCell\}<\/td>/.test(html));
+check(
+  'HTML invoice preserves both backend billing and actual activity dates when they differ',
+  /`Billed \$\{billingDate\}<br><small>Fulfilled \$\{actualDate\}<\/small>`/.test(html),
+);
 check(
   'HTML invoice Ship Date column is widened and non-wrapping',
   /th\.ship-date,\s*td\.ship-date\s*\{[^}]*width:\s*118px;[^}]*min-width:\s*118px;[^}]*white-space:\s*nowrap;[^}]*\}/s.test(html),

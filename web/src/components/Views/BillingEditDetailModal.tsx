@@ -110,7 +110,16 @@ export function BillingEditDetailModal({
 
         <div className="billing-edit-readonly-grid">
           <div><span>Order #</span><strong>{fallbackText(row.orderNumber)}</strong></div>
-          <div><span>Ship Date</span><strong>{formatBillingShipDate(row.shipDate)}</strong></div>
+          <div>
+            <span>Billing Date</span>
+            <strong>{formatBillingShipDate(row.billingEffectiveDate ?? row.shipDate)}</strong>
+          </div>
+          {row.rolledFromWeekend === true && (
+            <div>
+              <span>Actual Activity</span>
+              <strong>{formatBillingShipDate(row.actualActivityDate ?? row.shipDate)}</strong>
+            </div>
+          )}
           <div><span>Carrier</span><strong>{fallbackText(row.carrierNickname || row.providerAccountNickname || row.carrierCode)}</strong></div>
           <div><span>Qty</span><strong>{billingDetailQtyDisplay(row)}</strong></div>
           <div><span>Item Name</span><strong>{fallbackText(row.itemNames || row.description)}</strong></div>

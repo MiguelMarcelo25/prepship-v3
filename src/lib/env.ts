@@ -284,6 +284,13 @@ const schema = z.object({
   // orders/shipments (it only emits derived $0 billing_line_items). Keyed per ORDER (no shared-shipment
   // coupling). DJ canaries on Render. Per user override unlock shipped data on 2026-06-24.
   BUNDLE_BILL_ONCE: booleanFlag(false),
+  // PS-434: forward-only California weekend billing policy. Unset is the
+  // production-safe OFF state. DJ must approve and set an exact YYYY-MM-DD
+  // before any line can use weekday_weekend_rollforward_v2.
+  BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE: z.preprocess(
+    (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ),
   // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
   // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
   // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'

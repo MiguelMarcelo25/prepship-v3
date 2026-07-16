@@ -16,9 +16,18 @@ import {
 } from '../db/schema/billing';
 import { billingInvoiceHeaderTotals } from './billing-invoice-totals.js';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
+import { env } from '../lib/env.js';
+import {
+  assertBillingWeekdayOperationAllowed,
+  billingLineEffectiveDaySql,
+} from './billing-calendar-policy.js';
 
 export const BILLING_FINALIZED_LOCK_CODE = 'BILLING_FINALIZED_LOCKED';
 export const BILLING_PERIOD_FINALIZED_CODE = 'BILLING_PERIOD_FINALIZED';
+const billingFinalizationEffectiveDay = billingLineEffectiveDaySql(
+  billingLineItems.billingEffectiveDate,
+  billingLineItems.shipDate,
+);
 
 export class BillingCloseWorkflowError extends Error {
   constructor(
@@ -300,6 +309,12 @@ export async function finalizeBillingPeriod(input: {
   alreadyFinalized: boolean;
 }> {
   assertPeriod(input.dateFrom, input.dateTo);
+  // Per user override unlock shipped data on 2026-07-16: PS-434 keeps the
+  // shipped-derived billing close boundary weekday-only after the approved
+  // cutoff. This changes no order or shipment source data.
+  assertBillingWeekdayOperationAllowed({
+    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+  });
   await ensureBillingFinalizationPolicySchema();
   try {
     return await conn.transaction(async (tx) => {
@@ -334,8 +349,8 @@ export async function finalizeBillingPeriod(input: {
           ${billingLineItems.orderId} as "orderId"
         from ${billingLineItems}
         where ${billingLineItems.clientId} = ${input.clientId}
-          and ${billingLineItems.shipDate} >= ${input.dateFrom}::timestamptz
-          and ${billingLineItems.shipDate} < ${input.dateTo}::timestamptz
+          and ${billingFinalizationEffectiveDay} >= ${input.dateFrom}::timestamptz
+          and ${billingFinalizationEffectiveDay} < ${input.dateTo}::timestamptz
         order by ${billingLineItems.id}
         for update
       `));
@@ -357,8 +372,8 @@ export async function finalizeBillingPeriod(input: {
           where ${billingLineItems.clientId} = ${input.clientId}
             and ${billingLineItems.orderId} in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
             and not (
-              ${billingLineItems.shipDate} >= ${input.dateFrom}::timestamptz
-              and ${billingLineItems.shipDate} < ${input.dateTo}::timestamptz
+              ${billingFinalizationEffectiveDay} >= ${input.dateFrom}::timestamptz
+              and ${billingFinalizationEffectiveDay} < ${input.dateTo}::timestamptz
             )
         `));
         if (outside.length > 0) {
@@ -664,8 +679,8 @@ export async function finalizedBillingOrderIdsForRange(input: {
       ${candidateOrderIds !== undefined
         ? sql`and ${billingLineItems.orderId} in (${sql.join(candidateOrderIds.map((id) => sql`${id}`), sql`, `)})`
         : sql`
-            and ${billingLineItems.shipDate} >= ${input.dateFrom}::timestamptz
-            and ${billingLineItems.shipDate} < ${input.dateTo}::timestamptz
+            and ${billingFinalizationEffectiveDay} >= ${input.dateFrom}::timestamptz
+            and ${billingFinalizationEffectiveDay} < ${input.dateTo}::timestamptz
           `}
       ${input.clientId !== undefined ? sql`and ${billingLineItems.clientId} = ${input.clientId}` : sql``}
       and ${input.scopePredicate ?? sql`true`}

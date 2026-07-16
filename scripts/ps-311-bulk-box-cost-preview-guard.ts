@@ -66,13 +66,13 @@ const svc = readFileSync('src/services/billing-box-cost-bulk.ts', 'utf8');
 
 // Scope is enforced SERVER-SIDE (the card's DoD: "rows outside the range/client do not change",
 // "backend must enforce the same scope; do not trust only frontend filters"). The fetch WHERE
-// clause pins client + package + ship-date >= dateFrom + ship-date < dateTo, so an order outside
+// clause pins client + package + effective-day >= dateFrom + effective-day < dateTo, so an order outside
 // any of those can never be matched, previewed, or re-priced.
-check('scope enforced server-side: fetch filters by client + package + [dateFrom, dateTo) ship-date',
+check('scope enforced server-side: fetch filters by client + package + [dateFrom, dateTo) effective billing day',
   /eq\(billingLineItems\.clientId, scope\.clientId\)/.test(svc) &&
   /eq\(billingLineItems\.packageId, scope\.packageId\)/.test(svc) &&
-  /gte\(billingLineItems\.shipDate, new Date\(scope\.dateFrom\)\)/.test(svc) &&
-  /lt\(billingLineItems\.shipDate, new Date\(scope\.dateTo\)\)/.test(svc));
+  /gte\([\s\S]{0,180}billingLineEffectiveDaySql\([\s\S]{0,180}new Date\(scope\.dateFrom\)/.test(svc) &&
+  /lt\([\s\S]{0,180}billingLineEffectiveDaySql\([\s\S]{0,180}new Date\(scope\.dateTo\)/.test(svc));
 
 // ── Slice 2: APPLY safety ──
 const split = splitBulkBoxCostApplyTargets(rows);
@@ -135,12 +135,12 @@ check('bulk modal wired end-to-end (trigger → BillingView state → mounted mo
 // only way to reach the still-unmatched siblings the packageId path cannot see — and writes the same
 // PS-207 override resolution. Same server-side scope + money-safety posture as the bulk path.
 const byDimsSvc = readFileSync('src/services/billing-box-cost-by-dims.ts', 'utf8');
-check('by-dims: matches needs-review orders by client + review-line description (the dims signature) + [dateFrom, dateTo) ship-date',
+check('by-dims: matches needs-review orders by client + review-line description (the dims signature) + [dateFrom, dateTo) effective billing day',
   /eq\(billingLineItems\.clientId, scope\.clientId\)/.test(byDimsSvc) &&
   /eq\(billingLineItems\.lineType, REVIEW_LINE_TYPE\)/.test(byDimsSvc) &&
   /eq\(billingLineItems\.description, signature\)/.test(byDimsSvc) &&
-  /gte\(billingLineItems\.shipDate, new Date\(scope\.dateFrom\)\)/.test(byDimsSvc) &&
-  /lt\(billingLineItems\.shipDate, new Date\(scope\.dateTo\)\)/.test(byDimsSvc));
+  /gte\([\s\S]{0,180}billingLineEffectiveDaySql\([\s\S]{0,180}new Date\(scope\.dateFrom\)/.test(byDimsSvc) &&
+  /lt\([\s\S]{0,180}billingLineEffectiveDaySql\([\s\S]{0,180}new Date\(scope\.dateTo\)/.test(byDimsSvc));
 check('by-dims: re-derives the box signature SERVER-SIDE from the source order (never trusts an FE dims string)',
   /fetchBoxReviewSignature\(/.test(byDimsSvc) && /sourceOrderId/.test(byDimsSvc));
 check('by-dims: writes ONLY billing_box_resolutions by upsert; NEVER client_package_prices',

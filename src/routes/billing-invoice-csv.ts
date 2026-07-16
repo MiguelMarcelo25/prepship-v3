@@ -11,11 +11,15 @@
  * tall/clipped rows. No DB access, no recomputation of any money verdict beyond
  * the same display arithmetic the XLSX export already performs.
  *
- * Calendar-day safety: ship_date is a calendar day stored at UTC midnight. We
- * render it as a Los Angeles billing date/time without converting that midnight
- * instant into the prior Pacific evening.
+ * Calendar-day safety: the backend supplies both actual activity day and
+ * effective billing day. The serializer displays those values and never owns
+ * weekend roll-forward policy.
  */
-import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell, invoiceShipDateTimeCell } from './billing-invoice-text';
+import {
+  INVOICE_SHIP_DATE_HEADER,
+  invoiceBillingActivityDateTimeCell,
+  invoiceOneLineCell,
+} from './billing-invoice-text';
 import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
@@ -26,6 +30,7 @@ export type InvoiceCsvDetailRow = {
   order_number: string | null;
   shipment_id?: number | null;
   ship_date: string | null;
+  billing_effective_date: string | null;
   base_qty: string;
   addl_qty: string;
   pickpack_amt: string;
@@ -96,7 +101,10 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   });
 
   const cells = [
-    invoiceShipDateTimeCell(row.ship_date),
+    invoiceBillingActivityDateTimeCell(
+      row.ship_date,
+      row.billing_effective_date,
+    ),
     String(row.order_number ?? row.order_id ?? ''),
     row.billing_status_label || 'Fulfilled',
     invoiceOneLineCell(row.skus),

@@ -15,6 +15,7 @@ import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
 import { roundMoney } from '../lib/money.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
+import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
 import {
   assertBillingOrdersEditable,
   ensureBillingFinalizationPolicySchema,
@@ -102,8 +103,20 @@ export async function fetchBulkBoxCostOrderRows(
       and(
         eq(billingLineItems.clientId, scope.clientId),
         eq(billingLineItems.packageId, scope.packageId),
-        gte(billingLineItems.shipDate, new Date(scope.dateFrom)),
-        lt(billingLineItems.shipDate, new Date(scope.dateTo)),
+        gte(
+          billingLineEffectiveDaySql(
+            billingLineItems.billingEffectiveDate,
+            billingLineItems.shipDate,
+          ),
+          new Date(scope.dateFrom),
+        ),
+        lt(
+          billingLineEffectiveDaySql(
+            billingLineItems.billingEffectiveDate,
+            billingLineItems.shipDate,
+          ),
+          new Date(scope.dateTo),
+        ),
         clientScopePredicate,
       ),
     )

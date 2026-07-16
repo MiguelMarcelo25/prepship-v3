@@ -214,6 +214,9 @@ function carryBooleanOr(target: BillingDetailRowDto, source: BillingDetailReadMo
 // Carry tables — camelCase-only (PS-368 deleted the snake_case twins).
 const TEXT_CARRY_FIELDS = [
   'shipDate',
+  'actualActivityDate',
+  'billingEffectiveDate',
+  'billingPolicyVersion',
   'carrierCode',
   'carrierNickname',
   'providerAccountNickname',
@@ -268,6 +271,7 @@ const BOOLEAN_OR_FIELDS = [
   'packageCostNeedsReview',
   'shippingZeroNeedsReview',
   'feeWaived',
+  'rolledFromWeekend',
 ] as const;
 
 function applyBoxCostAlert(row: BillingDetailRowDto): void {

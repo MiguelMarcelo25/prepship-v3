@@ -310,6 +310,8 @@ async function main(): Promise<void> {
         client_id integer NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
         order_id integer,
         ship_date timestamptz,
+        billing_effective_date timestamptz,
+        billing_policy_version text,
         line_type text NOT NULL,
         description text NOT NULL,
         qty numeric(10,2) NOT NULL DEFAULT 1,

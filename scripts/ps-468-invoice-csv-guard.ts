@@ -42,7 +42,7 @@ function read(path: string): string {
 assert.deepEqual(
   INVOICE_CSV_HEADERS,
   [
-    'Ship Date/Time (Los Angeles)',
+    'Billing / Activity Date (Los Angeles)',
     'Order #',
     'Status',
     'SKUs',
@@ -66,7 +66,8 @@ const richRow: InvoiceCsvDetailRow = {
   order_id: 9001,
   order_number: 'PO-9001',
   shipment_id: 90011,
-  ship_date: '2026-05-04T00:00:00.000Z',
+  ship_date: '2026-05-03T00:00:00.000Z',
+  billing_effective_date: '2026-05-04T00:00:00.000Z',
   base_qty: '3',
   addl_qty: '2',
   pickpack_amt: '6.00',
@@ -89,6 +90,7 @@ const fallbackRow: InvoiceCsvDetailRow = {
   order_number: 'PO-9002',
   shipment_id: 90021,
   ship_date: '2026-05-05',
+  billing_effective_date: '2026-05-05',
   base_qty: '1',
   addl_qty: '0',
   pickpack_amt: '3.00',
@@ -109,12 +111,13 @@ const lines = csv.split('\r\n');
 assert.equal(csv.charCodeAt(0), 0xfeff, 'CSV starts with a UTF-8 BOM for Excel');
 assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'first CSV line is the header row');
 
-// Rich row: ship day rendered as the Los Angeles billing date/time,
+// Rich row: the backend-provided Monday billing day is rendered beside the
+// actual Sunday activity day; the serializer does not calculate roll-forward.
 // qty = 3+2 = 5, pickPackFee = 6.00+1.50 = 7.5, additional shown (addl>0) = 1.5,
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  '5/4/2026 12:00 AM PT,PO-9001,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011',
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 

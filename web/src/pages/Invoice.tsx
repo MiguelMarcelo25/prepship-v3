@@ -19,6 +19,7 @@ import {
   sortRows,
   type SortState,
 } from '../components/SortableTable';
+import { formatBillingShipDate } from '../components/Views/billing-parity';
 
 type LineItem = {
   id: number;
@@ -27,6 +28,9 @@ type LineItem = {
   orderNumber: string | null;
   shipmentId: number | null;
   shipDate: string | null;
+  actualActivityDate?: string | null;
+  billingEffectiveDate?: string | null;
+  rolledFromWeekend?: boolean;
   lineType: string;
   description: string;
   qty: string;
@@ -156,7 +160,7 @@ export default function Invoice() {
         (line, key) => {
           switch (key) {
             case 'date':
-              return line.shipDate ? new Date(line.shipDate) : null;
+              return line.billingEffectiveDate ?? line.shipDate;
             case 'order':
               return line.orderNumber ?? line.orderId;
             case 'type':
@@ -352,9 +356,12 @@ export default function Invoice() {
                   {sortedLines.map((l) => (
                     <tr key={l.id} className="border-b border-line">
                       <td className="py-1 text-ink-2 whitespace-nowrap">
-                        {l.shipDate
-                          ? formatCaDateLong(l.shipDate)
-                          : '—'}
+                        {l.rolledFromWeekend ? (
+                          <span className="flex flex-col leading-tight">
+                            <span>Billed {formatBillingShipDate(l.billingEffectiveDate)}</span>
+                            <span className="text-ink-3">Fulfilled {formatBillingShipDate(l.actualActivityDate ?? l.shipDate)}</span>
+                          </span>
+                        ) : formatBillingShipDate(l.billingEffectiveDate ?? l.shipDate)}
                       </td>
                       <td className="py-1 font-mono text-brand">
                         {l.orderNumber ?? l.orderId ?? '—'}

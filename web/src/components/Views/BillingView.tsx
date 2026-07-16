@@ -212,7 +212,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
   switch (key) {
     case 'actions': return ''
     case 'orderNumber': return row.orderNumber || row.orderId
-    case 'shipDate': return row.shipDate ? new Date(row.shipDate) : null
+    case 'shipDate': return row.billingEffectiveDate ?? row.shipDate
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
@@ -784,7 +784,7 @@ export default function BillingView() {
         case 'orderNumber':
           return row.orderNumber || row.orderId
         case 'shipDate':
-          return row.shipDate ? new Date(row.shipDate) : null
+          return row.billingEffectiveDate ?? row.shipDate
         case 'carrierNickname':
           return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
         case 'itemNames':
