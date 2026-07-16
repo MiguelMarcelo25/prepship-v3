@@ -84,6 +84,7 @@ import {
   buildShopifyShippingLabelPurchaseInput,
   createShopifyShippingMockLabel,
   extractShopifyFulfillmentOrderForPurchase,
+  extractShopifyFulfillmentLinesForPurchase,
   fulfillmentOrderPurchaseBlocker,
 } from './shopify-shipping-labels';
 import {
@@ -696,6 +697,8 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
       })
       .returning();
     if (!persisted) throw new Error('Failed to persist shipment row');
+    // Per user override unlock shipped data on 2026-07-16: a legacy label
+    // without shipment-line quantities records review state instead of order.items.
     await applyOrderLifecycleCommandInTransaction(tx, {
       orderId,
       shipmentId: persisted.id,
@@ -703,6 +706,10 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
       transition: 'shipped',
       source: 'legacy_shipstation_label',
       effectiveAt: shipDate ?? createdAt,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Legacy ShipStation label response did not identify shipped line quantities',
+      },
       trackingNumber: label.tracking_number,
     });
     return persisted;
@@ -1279,6 +1286,7 @@ async function persistShopifyPurchasedLabel(input: {
   height: number;
   purchased: CompletedShopifyPurchase | null;
   mock: ReturnType<typeof createShopifyShippingMockLabel> | null;
+  fulfillmentLines?: unknown[];
   timer: ReturnType<typeof createLabelTimer>;
 }): Promise<CreateShopifyShippingLabelResponseDto> {
   await ensurePackageConsumptionSchema();
@@ -1338,7 +1346,12 @@ async function persistShopifyPurchasedLabel(input: {
         transition: 'shipped',
         source: SHOPIFY_SHIPPING_PROVIDER,
         effectiveAt: new Date(created.shipDate),
-        fulfilledLines: input.order.items,
+        fulfillmentFacts: input.fulfillmentLines?.length
+          ? { kind: 'exact', lines: input.fulfillmentLines }
+          : {
+              kind: 'unavailable',
+              description: 'Shopify fulfillment order did not expose exact remaining line quantities',
+            },
         trackingNumber: created.trackingNumber,
         packageConsumption: {
           shipmentId,
@@ -1538,6 +1551,7 @@ export async function pollShopifyShippingLabelPurchase(
       height: pending.dims.height,
       purchased: result,
       mock: null,
+      fulfillmentLines: pending.fulfillmentLines,
       timer,
     });
   } catch (persistError) {
@@ -1660,6 +1674,7 @@ async function createShopifyShippingLabelForOrderImpl(
       409,
     );
   }
+  const fulfillmentLines = extractShopifyFulfillmentLinesForPurchase(fulfillmentOrder, rawOrder);
   const purchaseInput = buildShopifyShippingLabelPurchaseInput({
     fulfillmentOrderId: fulfillmentOrder.id,
     totalWeightOz: effectiveWeightOz,
@@ -1745,6 +1760,7 @@ async function createShopifyShippingLabelForOrderImpl(
       createdAt: now,
       updatedAt: now,
       rawPurchaseResult: purchased.raw,
+      fulfillmentLines,
     });
     timer.done('Shopify purchase pending');
     return {
@@ -1781,6 +1797,7 @@ async function createShopifyShippingLabelForOrderImpl(
       height,
       purchased,
       mock,
+      fulfillmentLines,
       timer,
     });
     if (shopifyPurchaseIntentId != null) {
@@ -2117,6 +2134,8 @@ async function createLabelV2Impl(
         })
         .returning({ id: shipments.id });
       if (!persistedShipment) throw new Error('Failed to persist test shipment');
+      // Per user override unlock shipped data on 2026-07-16: offline labels
+      // cannot infer shipment quantities from the mutable order snapshot.
       await timer.task('apply order lifecycle', () =>
         applyOrderLifecycleCommandInTransaction(tx, {
           orderId: order.id,
@@ -2125,7 +2144,10 @@ async function createLabelV2Impl(
           transition: 'shipped',
           source: 'test_label',
           effectiveAt: createdAt,
-          fulfilledLines: order.items,
+          fulfillmentFacts: {
+            kind: 'unavailable',
+            description: 'Offline test label request did not identify shipped line quantities',
+          },
           trackingNumber: fakeTracking,
         }));
       return persistedShipment;
@@ -2466,7 +2488,10 @@ async function createLabelV2Impl(
         transition: 'shipped',
         source: directProviderKey ?? 'prepship_v2',
         effectiveAt: new Date(created.shipDate),
-        fulfilledLines: order.items,
+        fulfillmentFacts: {
+          kind: 'unavailable',
+          description: 'Label purchase request did not identify shipped line quantities',
+        },
         trackingNumber: created.trackingNumber,
         packageConsumption: {
           shipmentId,
@@ -2805,6 +2830,8 @@ async function createMockShipmentForOrder(args: {
       })
       .returning();
     if (!persisted) throw new Error('Failed to persist mock shipment');
+    // Per user override unlock shipped data on 2026-07-16: legacy mock labels
+    // persist review-only line state and never enqueue guessed inventory work.
     await applyOrderLifecycleCommandInTransaction(tx, {
       orderId: order.id,
       shipmentId: persisted.id,
@@ -2812,7 +2839,10 @@ async function createMockShipmentForOrder(args: {
       transition: 'shipped',
       source: 'test_label',
       effectiveAt: createdAt,
-      fulfilledLines: order.items,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Legacy mock label request did not identify shipped line quantities',
+      },
       trackingNumber: fakeTracking,
     });
     return persisted;

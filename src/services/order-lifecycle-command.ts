@@ -37,6 +37,11 @@ export type OrderLifecycleTransition =
   | 'cancelled'
   | 'external_unmark';
 
+export type OrderLifecycleFulfillmentFacts =
+  | { kind: 'exact'; lines: unknown[] }
+  | { kind: 'unavailable'; description: string }
+  | { kind: 'none' };
+
 export type OrderLifecycleCommandInput = {
   orderId: number;
   shipmentId?: number | null;
@@ -44,7 +49,7 @@ export type OrderLifecycleCommandInput = {
   transition: OrderLifecycleTransition;
   source: string;
   effectiveAt?: Date;
-  fulfilledLines?: unknown[];
+  fulfillmentFacts: OrderLifecycleFulfillmentFacts;
   provenance?: Record<string, unknown>;
   trackingNumber?: string | null;
   externallyShippedSource?: string | null;
@@ -120,6 +125,39 @@ export function normalizeFulfilledLines(items: unknown[] | null | undefined): Fu
   return lines;
 }
 
+function normalizeFulfillmentFacts(
+  facts: OrderLifecycleFulfillmentFacts | null | undefined,
+  transition: OrderLifecycleTransition,
+): FulfilledLineSnapshot[] {
+  const createsDeduction = transition === 'shipped' || transition === 'external_shipped';
+  if (!facts) {
+    throw new Error('Order lifecycle fulfillmentFacts are required');
+  }
+  if (!createsDeduction) {
+    if (facts.kind !== 'none') {
+      throw new Error(`Order lifecycle ${transition} must not carry fulfillment lines`);
+    }
+    return [];
+  }
+  if (facts.kind === 'none') {
+    throw new Error(`Order lifecycle ${transition} requires exact or unavailable fulfillment facts`);
+  }
+  if (facts.kind === 'exact') {
+    const exactLines = normalizeFulfilledLines(facts.lines);
+    if (exactLines.length > 0) return exactLines;
+  }
+  const description = facts.kind === 'unavailable'
+    ? text(facts.description)
+    : null;
+  return [{
+    lineKey: 'review:fulfillment-lines-unavailable',
+    sku: null,
+    name: description ?? 'Exact shipment fulfillment-line quantities were unavailable',
+    quantity: 1,
+    reviewReason: 'fulfillment_lines_unavailable',
+  }];
+}
+
 function assertFaultAllowed(faultAfter: OrderLifecycleCommandInput['faultAfter']): void {
   if (faultAfter && process.env.NODE_ENV !== 'test') {
     throw new Error('Order lifecycle fault injection is test-only');
@@ -150,21 +188,16 @@ export async function applyOrderLifecycleCommandInTransaction(
       orderStatus: orders.orderStatus,
       canonicalStatus: orders.canonicalStatus,
       externallyShipped: orders.externallyShipped,
-      items: orders.items,
     })
     .from(orders)
     .where(eq(orders.id, input.orderId))
     .for('update')
     .limit(1);
   if (!order) throw new Error(`Order ${input.orderId} not found`);
-  // A plain provider status is not a fulfillment-line fact. Default status-
-  // only shipped commands to no claims so later shipment sync cannot deduct
-  // again. A persisted local shipment or external whole-order fulfillment may
-  // use the immutable order snapshot when the caller has no finer line data.
-  const fulfilledLines = normalizeFulfilledLines(
-    input.fulfilledLines ??
-      (input.shipmentId != null || input.transition === 'external_shipped' ? order.items : []),
-  );
+  // Per user override unlock shipped data on 2026-07-16: PS-424 never turns
+  // mutable order.items into shipment truth. Every shipped caller must provide
+  // exact shipment lines or persist a review-only unavailable-facts receipt.
+  const fulfilledLines = normalizeFulfillmentFacts(input.fulfillmentFacts, input.transition);
 
   if (input.requireNoActiveOutboundShipment) {
     const [activeShipment] = await tx

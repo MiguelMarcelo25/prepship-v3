@@ -398,6 +398,12 @@ async function applySafeCandidates(
         canonicalStatus: candidate.targetStatus,
         requireAwaitingOrderStatus: true,
         requireNoActiveOutboundShipment: candidate.targetStatus === 'cancelled',
+        fulfillmentFacts: candidate.targetStatus === 'shipped'
+          ? {
+              kind: 'unavailable',
+              description: 'ShipStation order parity evidence did not contain shipment line quantities',
+            }
+          : { kind: 'none' },
         provenance: { evidence: candidate.sourceEvidence },
       });
       if (result.statusChanged) safeUpdated += 1;
@@ -526,7 +532,7 @@ async function resolveDeletedUpstream(
         canonicalStatus: 'cancelled',
         requireAwaitingOrderStatus: true,
         requireNoActiveOutboundShipment: true,
-        fulfilledLines: [],
+        fulfillmentFacts: { kind: 'none' },
         provenance: { externalOrderId: s.externalOrderId, verdict: 'deleted' },
       });
       if (result.statusChanged) cancelled += 1;

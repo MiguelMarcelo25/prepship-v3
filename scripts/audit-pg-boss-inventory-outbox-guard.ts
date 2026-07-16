@@ -28,7 +28,17 @@ assert.match(queue, /await boss\.schedule\(/);
 assert.match(queue, /await boss\.unschedule\(name\)/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(queue, /singletonKey: admission\.singletonKey/);
-assert.doesNotMatch(queue, /scheduleEnqueue|SYNC_STARTUP_DELAY_MS|setTimeout\(/);
+assert.doesNotMatch(queue, /scheduleEnqueue|SYNC_STARTUP_DELAY_MS/);
+assert.equal(
+  queue.match(/setTimeout\(/g)?.length ?? 0,
+  1,
+  'only the ShipStation consumer-leadership control-plane retry timer may remain process-local',
+);
+assert.match(
+  queue,
+  /scheduleShipStationConsumerLeadership[\s\S]*shipStationConsumerLeadershipTimer = setTimeout\(/,
+  'the remaining timeout must be scoped to queue-consumer leadership, not durable job cadence',
+);
 assert.equal(
   queue.match(/setInterval\(/g)?.length ?? 0,
   1,

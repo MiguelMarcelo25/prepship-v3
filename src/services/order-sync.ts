@@ -535,6 +535,8 @@ async function updateExistingOrderStatusesBatch(
           ne(orders.orderStatus, orderStatus),
         ));
       for (const row of terminalCandidates) {
+        // Per user override unlock shipped data on 2026-07-16: order-level
+        // status is not shipment-line proof; shipped status is review-only.
         const command = await applyOrderLifecycleCommand({
           orderId: row.id,
           commandKey:
@@ -544,12 +546,17 @@ async function updateExistingOrderStatusesBatch(
           transition: orderStatus,
           source: 'order_sync_status',
           canonicalStatus: orderStatus,
-          fulfilledLines: [],
+          fulfillmentFacts: orderStatus === 'shipped'
+            ? {
+                kind: 'unavailable',
+                description: 'Order status sync did not contain shipment-scoped line quantities',
+              }
+            : { kind: 'none' },
           provenance: {
             sourceProvider: row.sourceProvider,
             sourceAccountId: row.sourceAccountId,
             sourceOrderId: row.sourceOrderId,
-            lineFacts: 'status_only_no_claim',
+            lineFacts: orderStatus === 'shipped' ? 'review_missing' : 'not_applicable',
           },
         });
         if (command.statusChanged) updated += 1;

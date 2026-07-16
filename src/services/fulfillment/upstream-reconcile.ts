@@ -33,8 +33,8 @@ export async function reconcileOrderFromUpstreamEvent(
 
   // Match candidate AWAITING orders by order number or source id. Forward-only guard:
   // order_status = 'awaiting_shipment' ensures we never touch a shipped/cancelled row.
-  const candidates = await pg<{ id: number; items: unknown[] | null }[]>`
-    SELECT id, items FROM orders
+  const candidates = await pg<{ id: number }[]>`
+    SELECT id FROM orders
     WHERE order_status = 'awaiting_shipment'
       AND (
         (${orderNumber ?? null}::text IS NOT NULL AND (order_number = ${orderNumber ?? null} OR source_order_number = ${orderNumber ?? null}))
@@ -60,7 +60,7 @@ export async function reconcileOrderFromUpstreamEvent(
         effectiveAt: event.occurredAt ?? new Date(),
         canonicalStatus: 'cancelled',
         requireAwaitingOrderStatus: true,
-        fulfilledLines: [],
+        fulfillmentFacts: { kind: 'none' },
         provenance: event.metadata,
       })));
     await linkLedgerToOrder(event, firstMatchedId);
@@ -81,7 +81,10 @@ export async function reconcileOrderFromUpstreamEvent(
       canonicalStatus: 'shipped',
       requireAwaitingOrderStatus: true,
       externallyShippedSource: provenanceSource,
-      fulfilledLines: Array.isArray(candidate.items) ? candidate.items : [],
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Redacted webhook status did not contain exact fulfilled line quantities',
+      },
       provenance: event.metadata,
     })));
   await linkLedgerToOrder(event, firstMatchedId);

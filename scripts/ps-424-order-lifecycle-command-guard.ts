@@ -40,6 +40,11 @@ assert.match(lifecycle, /applyOrderLifecycleCommandInTransaction/);
 assert.match(lifecycle, /\.for\('update'\)/);
 assert.match(lifecycle, /requireAwaitingOrderStatus/);
 assert.match(lifecycle, /normalizeFulfilledLines/);
+assert.match(lifecycle, /OrderLifecycleFulfillmentFacts/);
+assert.match(lifecycle, /fulfillment_lines_unavailable/);
+assert.doesNotMatch(lifecycle, /input\.fulfilledLines/);
+assert.doesNotMatch(lifecycle, /items:\s*orders\.items|normalizeFulfilledLines\([^)]*order\.items/,
+  'the canonical owner must never infer shipment quantities from mutable order items');
 assert.match(lifecycle, /consumeOutboundPackageInTransaction/);
 assert.match(lifecycle, /reverseOutboundPackageConsumptionInTransaction/);
 assert.match(lifecycle, /enqueueInventoryClaimDeduction/);
@@ -71,6 +76,10 @@ for (const [path, source] of [
 }
 
 assert.doesNotMatch(labels, /\.set\(\{\s*orderStatus:\s*'shipped'/s);
+assert.doesNotMatch(labels, /fulfilledLines:\s*(?:input\.)?order\.items/,
+  'label callers must provide Shopify fulfillment-order lines or explicit review state');
+assert.match(labels, /extractShopifyFulfillmentLinesForPurchase/);
+assert.match(labels, /kind: 'unavailable'/);
 assert.doesNotMatch(shipmentSync, /\.set\(\{\s*orderStatus:\s*'shipped'/s);
 assert.doesNotMatch(marketplace, /SET\s+order_status\s*=/i);
 assert.doesNotMatch(deleted, /orderStatus:\s*'cancelled'/);

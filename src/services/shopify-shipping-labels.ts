@@ -284,6 +284,54 @@ export function extractShopifyFulfillmentOrderForPurchase(rawPayload: unknown): 
   return null;
 }
 
+/**
+ * Per user override unlock shipped data on 2026-07-16: PS-424 retains the
+ * selected fulfillment-order quantities instead of using whole order items.
+ *
+ * Translate the selected Shopify fulfillment order into shipment-scoped line
+ * facts. REST fulfillment-order rows carry line_item_id while the order rows
+ * carry SKU/name; GraphQL rows may carry the nested lineItem directly.
+ */
+export function extractShopifyFulfillmentLinesForPurchase(
+  fulfillmentOrder: ShopifyFulfillmentOrderForPurchase,
+  rawOrderPayload: unknown,
+): unknown[] {
+  const rawOrder = asRecord(rawOrderPayload) ?? {};
+  const orderLines = [
+    ...connectionNodes(rawOrder.line_items),
+    ...connectionNodes(rawOrder.lineItems),
+  ];
+  const orderLinesById = new Map<string, UnknownRecord>();
+  for (const value of orderLines) {
+    const line = asRecord(value);
+    const id = comparableShopifyId(line?.id ?? line?.admin_graphql_api_id ?? line?.adminGraphqlApiId);
+    if (line && id) orderLinesById.set(id, line);
+  }
+
+  return fulfillmentOrder.remainingLineItems.flatMap((value, index) => {
+    const row = asRecord(value);
+    if (!row) return [];
+    const nestedLine = asRecord(row.line_item ?? row.lineItem);
+    const lineItemId = comparableShopifyId(
+      row.line_item_id ?? row.lineItemId ?? nestedLine?.id,
+    );
+    const orderLine = lineItemId ? orderLinesById.get(lineItemId) : undefined;
+    const rawQuantity = row.remaining_quantity ?? row.remainingQuantity ?? row.quantity;
+    const parsedQuantity = Number(rawQuantity);
+    if (Number.isFinite(parsedQuantity) && parsedQuantity <= 0) return [];
+    const fulfillmentLineId = optionalString(row.id ?? row.admin_graphql_api_id ?? row.adminGraphqlApiId);
+    return [{
+      lineKey: `shopify:${fulfillmentLineId ?? lineItemId ?? index + 1}`,
+      lineItemId: lineItemId ?? undefined,
+      sku: optionalString(nestedLine?.sku ?? orderLine?.sku),
+      name: optionalString(
+        nestedLine?.name ?? nestedLine?.title ?? orderLine?.name ?? orderLine?.title,
+      ),
+      quantity: rawQuantity,
+    }];
+  });
+}
+
 export function fulfillmentOrderPurchaseBlocker(orderPayload: unknown): string | null {
   const order = asRecord(orderPayload);
   if (!order) return 'Shopify fulfillment order is missing.';
@@ -395,6 +443,12 @@ function firstNormalizedFulfillmentOrderId(...values: unknown[]): string | null 
 
 function nestedId(value: unknown): unknown {
   return asRecord(value)?.id;
+}
+
+function comparableShopifyId(value: unknown): string | null {
+  const id = optionalString(value);
+  if (!id) return null;
+  return id.split('/').filter(Boolean).at(-1) ?? id;
 }
 
 function normalizeScopeSet(value: unknown): Set<string> {

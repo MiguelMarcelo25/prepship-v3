@@ -57,7 +57,10 @@ export async function markOrderShippedExternally(
       commandKey: `lifecycle:external-shipped:order:${id}`,
       transition: 'external_shipped',
       source: input.source ? `external:${input.source}` : 'external',
-      fulfilledLines: order.items,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Manual external-shipped action did not identify fulfilled line quantities',
+      },
       trackingNumber: input.trackingNumber ?? null,
       externallyShippedSource: input.source ?? null,
       allowCanonicalOverride: input.writeAuthorization.allowTerminal,
@@ -78,7 +81,7 @@ export async function markOrderShippedExternally(
       externallyShippedSource: null,
       allowCanonicalOverride: input.writeAuthorization.allowTerminal,
       requireAwaitingOrderStatus: true,
-      fulfilledLines: [],
+      fulfillmentFacts: { kind: 'none' },
     });
   }
 

@@ -13,12 +13,17 @@ import { inventory } from './inventory.js';
 import { orders } from './orders.js';
 import { shipments } from './shipments.js';
 
+// Per user override unlock shipped data on 2026-07-16: PS-424 adds a
+// review-only JSON snapshot reason; no orders/shipments column is changed.
 export type FulfilledLineSnapshot = {
   lineKey: string;
   sku: string | null;
   name: string | null;
   quantity: number;
-  reviewReason?: 'missing_quantity' | 'invalid_quantity';
+  reviewReason?:
+    | 'missing_quantity'
+    | 'invalid_quantity'
+    | 'fulfillment_lines_unavailable';
 };
 
 /**

@@ -510,13 +510,13 @@ async function upsertShipmentsBatch(
             isTest: sourceAccountIsTest,
           };
           if (row.orderId && !row.voided && !row.isReturn) {
-            const exactLines = Array.isArray(candidate?.source.shipmentItems) && candidate.source.shipmentItems.length > 0
-              ? candidate.source.shipmentItems
-              : [{
-                  lineKey: `review:shipstation:${row.labelShipmentId ?? row.id}:missing-items`,
-                  name: 'ShipStation shipment did not include fulfillment-line facts',
-                  quantity: 1,
-                }];
+            const fulfillmentFacts =
+              Array.isArray(candidate?.source.shipmentItems) && candidate.source.shipmentItems.length > 0
+                ? { kind: 'exact' as const, lines: candidate.source.shipmentItems }
+                : {
+                    kind: 'unavailable' as const,
+                    description: 'ShipStation shipment did not include fulfillment-line quantities',
+                  };
             // Per user override unlock shipped data on 2026-07-16 (PS-424):
             // shipment insert, terminal state, exact line claims, package
             // consumption, and outbox intent share this transaction.
@@ -527,7 +527,7 @@ async function upsertShipmentsBatch(
               transition: 'shipped',
               source: 'shipment_sync',
               effectiveAt: row.shipDate ?? row.createDate ?? new Date(),
-              fulfilledLines: exactLines,
+              fulfillmentFacts,
               provenance: {
                 provider: 'shipstation',
                 sourceAccountId,
@@ -565,13 +565,14 @@ async function upsertShipmentsBatch(
 
   for (const row of toUpdate) {
     if (!row.order || row.order.status !== 'awaiting_shipment' || row.values.voided || row.values.isReturn) continue;
-    const exactLines = Array.isArray(row.source.shipmentItems) && row.source.shipmentItems.length > 0
-      ? row.source.shipmentItems
-      : [{
-          lineKey: `review:shipstation:${row.source.shipmentId}:missing-items`,
-          name: 'ShipStation shipment did not include fulfillment-line facts',
-          quantity: 1,
-        }];
+    // Per user override unlock shipped data on 2026-07-16: existing provider
+    // shipments use exact shipmentItems or an explicit review receipt.
+    const fulfillmentFacts = Array.isArray(row.source.shipmentItems) && row.source.shipmentItems.length > 0
+      ? { kind: 'exact' as const, lines: row.source.shipmentItems }
+      : {
+          kind: 'unavailable' as const,
+          description: 'ShipStation shipment did not include fulfillment-line quantities',
+        };
     const command = await applyOrderLifecycleCommand({
       orderId: row.order.id,
       shipmentId: row.id,
@@ -579,7 +580,7 @@ async function upsertShipmentsBatch(
       transition: 'shipped',
       source: 'shipment_sync_existing',
       effectiveAt: row.values.shipDate ?? row.values.createDate ?? new Date(),
-      fulfilledLines: exactLines,
+      fulfillmentFacts,
       provenance: {
         provider: 'shipstation',
         sourceAccountId,
@@ -591,13 +592,18 @@ async function upsertShipmentsBatch(
   }
 
   for (const [orderId, shipmentId] of prepshipTransitions) {
+    // Per user override unlock shipped data on 2026-07-16: recovery status
+    // without retained line facts must not guess order-level quantities.
     const command = await applyOrderLifecycleCommand({
       orderId,
       shipmentId,
       commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
       transition: 'shipped',
       source: 'shipment_sync_prepship_recovery',
-      fulfilledLines: [],
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'PrepShip shipment recovery did not retain exact line quantities',
+      },
       provenance: { provider: 'shipstation', sourceAccountId, recoveryOnly: true },
     });
     if (command.statusChanged) ordersMarkedShipped += 1;

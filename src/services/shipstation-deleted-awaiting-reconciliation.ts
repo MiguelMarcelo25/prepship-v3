@@ -117,7 +117,7 @@ export async function reconcileDeletedShipStationAwaiting(
         canonicalStatus: 'cancelled',
         requireAwaitingOrderStatus: true,
         requireNoActiveOutboundShipment: true,
-        fulfilledLines: [],
+        fulfillmentFacts: { kind: 'none' },
         provenance: { storeId: input.storeId, externalOrderId },
       });
       if (command.statusChanged) cancelled += 1;

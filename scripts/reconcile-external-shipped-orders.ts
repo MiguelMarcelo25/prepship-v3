@@ -316,7 +316,12 @@ export async function runExternalShippedReconcile(
         transition: o.orderStatus === 'cancelled' ? 'external_classified' : 'external_shipped',
         source: 'external_shipped_classifier',
         externallyShippedSource: 'marketplace_fulfilled',
-        fulfilledLines: [],
+        fulfillmentFacts: o.orderStatus === 'cancelled'
+          ? { kind: 'none' }
+          : {
+              kind: 'unavailable',
+              description: 'External classifier had status proof but no exact fulfilled line quantities',
+            },
         provenance: { classification: 'marketplace_fulfilled' },
       });
       if (result.statusChanged) report.flagged += 1;

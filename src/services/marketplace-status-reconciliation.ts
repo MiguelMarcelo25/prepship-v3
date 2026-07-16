@@ -349,6 +349,8 @@ export async function reconcileMarketplaceOrderStatuses(
       // Per user override unlock shipped data on 2026-05-23: promote only
       // rows that are still awaiting after marketplace/duplicate evidence
       // proves they are terminal; never rewrite existing shipped/cancelled rows.
+      // Per user override unlock shipped data on 2026-07-16: marketplace
+      // status without shipment lines creates review state, not full-order claims.
       const command = await lifecycleCommand({
         orderId: candidate.id,
         commandKey:
@@ -360,6 +362,12 @@ export async function reconcileMarketplaceOrderStatuses(
         requireAwaitingOrderStatus: true,
         externallyShippedSource:
           candidate.targetStatus === 'shipped' ? `marketplace_status:${options.provider}` : undefined,
+        fulfillmentFacts: candidate.targetStatus === 'shipped'
+          ? {
+              kind: 'unavailable',
+              description: 'Marketplace order status did not contain exact fulfilled line quantities',
+            }
+          : { kind: 'none' },
         provenance: { sourceStatuses: candidate.sourceStatuses },
       });
       if (command.statusChanged) result.updated += 1;

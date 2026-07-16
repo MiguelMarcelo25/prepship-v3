@@ -78,10 +78,13 @@ assert.ok(svc.includes("transition: 'external_shipped'") &&
 assert.ok(svc.includes("transition: 'external_unmark'") &&
   lifecycle.includes(".set({ externallyShipped: false"),
   'unmark must keep flipping only the flag, never order status');
-// Inventory intent is exact and still reaches the kill-switch-governed owner.
-assert.ok(svc.includes('fulfilledLines: order.items') &&
-  lifecycle.includes('enqueueInventoryClaimDeduction'),
-  'the shipped-external path must enqueue exact durable inventory claims');
+// Manual actions cannot prove shipment-line quantities. They persist an
+// explicit review claim and never guess the mutable full order.
+assert.ok(svc.includes("kind: 'unavailable'") &&
+  svc.includes('Manual external-shipped action did not identify fulfilled line quantities') &&
+  !svc.includes('fulfilledLines: order.items') &&
+  lifecycle.includes("reviewReason: 'fulfillment_lines_unavailable'"),
+  'the shipped-external path must fail closed to review when exact line facts are unavailable');
 // The route still guards with assertOrderEditable BEFORE the service.
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 const routeStart = ordersRoute.indexOf("'/:id{[0-9]+}/shipped-external'");

@@ -34,7 +34,7 @@ const guardPack = read('scripts/sot-guard-pack.mjs');
 
 assert.match(inventoryOutbox, /executor: InventoryDeductionOutboxExecutor = db/);
 assert.match(inventoryOutbox, /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
-assert.match(shipmentSync, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,[\s\S]*fulfilledLines: exactLines[\s\S]*packageConsumption/);
+assert.match(shipmentSync, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,[\s\S]*fulfillmentFacts[\s\S]*packageConsumption/);
 assert.match(orderSync, /inventoryDeductionSource: 'order_sync_status'/);
 assert.match(orderSync, /applyOrderLifecycleCommand\(\{[\s\S]*source: 'order_sync_status'/);
 assert.match(storeImport, /inventoryDeductionSource\?: string[\s\S]*db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,/);

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
 import { fulfillmentLineClaims, orderLifecycleEvents } from '../src/db/schema/order-lifecycle.js';
 import { fulfillmentOutbox } from '../src/db/schema/fulfillment-outbox.js';
@@ -27,6 +27,8 @@ async function main(): Promise<void> {
     applyOrderLifecycleCommandInTransaction,
     voidOrderShipmentLifecycleInTransaction,
   } = await import('../src/services/order-lifecycle-command.js');
+  const { extractShopifyFulfillmentLinesForPurchase } =
+    await import('../src/services/shopify-shipping-labels.js');
   const { applyInventoryClaimsForLifecycleEvent } = await import('../src/services/fulfillment-deductions.js');
 
   const client = new PGlite();
@@ -132,9 +134,21 @@ async function main(): Promise<void> {
       (3, 'PS-424-CANCEL', '[]'::jsonb),
       (4, 'PS-424-EXTERNAL', '[]'::jsonb),
       (5, 'PS-424-STATUS-FIRST', '[{"sku":"STATUS-SKU","quantity":5}]'::jsonb),
-      (6, 'PS-424-BAD-QUANTITY', '[{"sku":"BAD-QTY","quantity":"unknown"}]'::jsonb)
+      (6, 'PS-424-BAD-QUANTITY', '[{"sku":"BAD-QTY","quantity":"unknown"}]'::jsonb),
+      (7, 'PS-424-SHOPIFY-PARTIAL', '[{"id":7001,"sku":"SHOPIFY-PARTIAL","quantity":9}]'::jsonb),
+      (8, 'PS-424-CONCURRENT', '[]'::jsonb),
+      (9, 'PS-424-LABEL-REVIEW', '[{"sku":"LABEL-GUESS","quantity":8}]'::jsonb),
+      (10, 'PS-424-SYNC-REVIEW', '[{"sku":"SYNC-GUESS","quantity":7}]'::jsonb),
+      (11, 'PS-424-IMPORT-REVIEW', '[{"sku":"IMPORT-GUESS","quantity":6}]'::jsonb),
+      (12, 'PS-424-WEBHOOK-REVIEW', '[{"sku":"WEBHOOK-GUESS","quantity":5}]'::jsonb),
+      (13, 'PS-424-MANUAL-REVIEW', '[{"sku":"MANUAL-GUESS","quantity":4}]'::jsonb),
+      (14, 'PS-424-VOID-BEFORE-DEDUCT', '[]'::jsonb),
+      (15, 'PS-424-MARKETPLACE-REVIEW', '[{"sku":"MARKETPLACE-GUESS","quantity":3}]'::jsonb)
   `);
-  await client.exec(`INSERT INTO shipments (id, order_id) VALUES (101, 1), (102, 1), (105, 5), (201, 2)`);
+  await client.exec(`
+    INSERT INTO shipments (id, order_id) VALUES
+      (101, 1), (102, 1), (105, 5), (106, 7), (107, 8), (108, 14), (109, 9), (201, 2)
+  `);
 
   const ship = (args: {
     shipmentId: number;
@@ -149,7 +163,10 @@ async function main(): Promise<void> {
     transition: 'shipped',
     source: 'ps424_fixture',
     trackingNumber: `TRACK-${args.shipmentId}`,
-    fulfilledLines: [{ lineItemId: `line-${args.shipmentId}`, sku: 'PS424-SKU', quantity: args.quantity }],
+    fulfillmentFacts: {
+      kind: 'exact',
+      lines: [{ lineItemId: `line-${args.shipmentId}`, sku: 'PS424-SKU', quantity: args.quantity }],
+    },
     faultAfter: args.faultAfter,
   }));
 
@@ -190,6 +207,40 @@ async function main(): Promise<void> {
     'new lifecycle commands verify shipment ownership under lock',
   );
 
+  const concurrentShip = () => pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {
+    orderId: 8,
+    shipmentId: 107,
+    commandKey: 'fixture:concurrent:107',
+    transition: 'shipped',
+    source: 'shipment_sync',
+    fulfillmentFacts: {
+      kind: 'exact',
+      lines: [{ lineItemId: 'concurrent-line', sku: 'CONCURRENT-SKU', quantity: 3 }],
+    },
+  }));
+  const concurrentResults = await Promise.all([concurrentShip(), concurrentShip()]);
+  assert.deepEqual(
+    concurrentResults.map((result) => result.alreadyApplied).sort(),
+    [false, true],
+    'row locking makes concurrent delivery produce one lifecycle receipt',
+  );
+  const [concurrentEvent] = concurrentResults.filter((result) => !result.alreadyApplied);
+  assert.ok(concurrentEvent);
+  assert.equal(
+    (await pg.select().from(fulfillmentLineClaims).where(eq(fulfillmentLineClaims.orderId, 8))).length,
+    1,
+    'concurrent delivery creates one exact line claim',
+  );
+  await Promise.all([
+    applyInventoryClaimsForLifecycleEvent(concurrentEvent.lifecycleEventId, pg as never),
+    applyInventoryClaimsForLifecycleEvent(concurrentEvent.lifecycleEventId, pg as never),
+  ]);
+  const [concurrentStock] = await pg
+    .select({ stockQty: inventory.stockQty })
+    .from(inventory)
+    .where(eq(inventory.sku, 'CONCURRENT-SKU'));
+  assert.equal(concurrentStock.stockQty, -3, 'concurrent worker retry applies inventory once');
+
   await assert.rejects(
     ship({ shipmentId: 201, commandKey: 'fixture:fault', quantity: 1, faultAfter: 'claims', orderId: 2 }),
     /injected fault/,
@@ -219,6 +270,33 @@ async function main(): Promise<void> {
     .from(shipments)
     .where(eq(shipments.id, 101));
   assert.equal(stillActive.voided, false, 'a mismatched order/shipment void rolls back without mutation');
+
+  const beforeDeduction = await pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {
+    orderId: 14,
+    shipmentId: 108,
+    commandKey: 'fixture:ship:108',
+    transition: 'shipped',
+    source: 'shipment_sync',
+    fulfillmentFacts: {
+      kind: 'exact',
+      lines: [{ lineItemId: 'void-before-line', sku: 'VOID-BEFORE-SKU', quantity: 4 }],
+    },
+  }));
+  const voidBeforeDeduction = await pg.transaction((tx) =>
+    voidOrderShipmentLifecycleInTransaction(tx as never, {
+      orderId: 14,
+      shipmentId: 108,
+      source: 'ps424_void_before_deduction_fixture',
+      reversePackage: false,
+    }));
+  assert.equal(voidBeforeDeduction.reversalClaimCount, 0);
+  await applyInventoryClaimsForLifecycleEvent(beforeDeduction.lifecycleEventId, pg as never);
+  await applyInventoryClaimsForLifecycleEvent(voidBeforeDeduction.lifecycleEventId, pg as never);
+  assert.equal(
+    (await pg.select().from(inventoryLedger).where(eq(inventoryLedger.orderId, 14))).length,
+    0,
+    'void before deduction supersedes pending work without a deduct or reversal movement',
+  );
 
   await applyInventoryClaimsForLifecycleEvent(first.lifecycleEventId, pg as never);
   let [stock] = await pg
@@ -289,7 +367,7 @@ async function main(): Promise<void> {
     commandKey: 'fixture:cancel:3',
     transition: 'cancelled',
     source: 'marketplace_status',
-    fulfilledLines: [],
+    fulfillmentFacts: { kind: 'none' },
   }));
   assert.equal(cancellation.claimCount, 0, 'cancellation creates no fulfillment deduction claims');
   const [cancelled] = await pg
@@ -305,7 +383,7 @@ async function main(): Promise<void> {
       transition: 'external_classified',
       source: 'external_classifier',
       externallyShippedSource: 'marketplace_fulfilled',
-      fulfilledLines: [],
+      fulfillmentFacts: { kind: 'none' },
     }));
   assert.equal(cancelledClassification.claimCount, 0);
   const [classifiedCancelled] = await pg
@@ -321,7 +399,10 @@ async function main(): Promise<void> {
     transition: 'external_shipped',
     source: 'webhook',
     externallyShippedSource: 'webhook:shopify',
-    fulfilledLines: [{ id: 'external-line', sku: 'EXT', quantity: 1 }],
+    fulfillmentFacts: {
+      kind: 'exact',
+      lines: [{ id: 'external-line', sku: 'EXT', quantity: 1 }],
+    },
   }));
   const [externalOverride] = await pg
     .select({ externallyShippedSource: orderOverrides.externallyShippedSource })
@@ -336,6 +417,10 @@ async function main(): Promise<void> {
     commandKey: 'fixture:external:bad-quantity',
     transition: 'external_shipped',
     source: 'bad_quantity_fixture',
+    fulfillmentFacts: {
+      kind: 'exact',
+      lines: [{ id: 'bad-quantity-line', sku: 'BAD-QTY', quantity: 'unknown' }],
+    },
   }));
   const [badQuantityClaim] = await pg
     .select({ status: fulfillmentLineClaims.status, lastError: fulfillmentLineClaims.lastError })
@@ -350,9 +435,20 @@ async function main(): Promise<void> {
     commandKey: 'fixture:status-only:5',
     transition: 'shipped',
     source: 'order_sync_status',
-    fulfilledLines: [],
+    fulfillmentFacts: {
+      kind: 'unavailable',
+      description: 'Order status sync did not contain shipment-scoped line quantities',
+    },
   }));
-  assert.equal(statusOnly.claimCount, 0, 'status-only shipped evidence never guesses mutable order quantities');
+  assert.equal(statusOnly.claimCount, 1, 'status-only shipped evidence persists one review claim');
+  const [statusOnlyClaim] = await pg
+    .select({ status: fulfillmentLineClaims.status, lastError: fulfillmentLineClaims.lastError })
+    .from(fulfillmentLineClaims)
+    .where(eq(fulfillmentLineClaims.lifecycleEventId, statusOnly.lifecycleEventId));
+  assert.deepEqual(statusOnlyClaim, {
+    status: 'review',
+    lastError: 'fulfillment_lines_unavailable',
+  }, 'status-only evidence is visible for review but cannot move inventory');
   await assert.rejects(
     pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {
       orderId: 5,
@@ -360,6 +456,10 @@ async function main(): Promise<void> {
       transition: 'external_shipped',
       source: 'stale_manual_writer',
       requireAwaitingOrderStatus: true,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Stale writer fixture has no shipment lines',
+      },
     })),
     /no longer awaiting shipment/,
     'an awaiting-only caller rechecks terminal state under the order lock',
@@ -370,7 +470,10 @@ async function main(): Promise<void> {
     commandKey: 'fixture:ship:105',
     transition: 'shipped',
     source: 'shipment_sync',
-    fulfilledLines: [{ lineItemId: 'status-exact', sku: 'STATUS-SKU', quantity: 2 }],
+    fulfillmentFacts: {
+      kind: 'exact',
+      lines: [{ lineItemId: 'status-exact', sku: 'STATUS-SKU', quantity: 2 }],
+    },
   }));
   await applyInventoryClaimsForLifecycleEvent(exactAfterStatus.lifecycleEventId, pg as never);
   const [statusStock] = await pg
@@ -378,6 +481,110 @@ async function main(): Promise<void> {
     .from(inventory)
     .where(eq(inventory.sku, 'STATUS-SKU'));
   assert.equal(statusStock.stockQty, -2, 'later exact shipment facts deduct once, not the whole order plus shipment');
+
+  const shopifyLines = extractShopifyFulfillmentLinesForPurchase({
+    id: 'gid://shopify/FulfillmentOrder/700',
+    status: 'open',
+    requestStatus: null,
+    assignedLocation: null,
+    remainingLineItems: [{ id: 9001, line_item_id: 7001, quantity: 2 }],
+    raw: {},
+  }, {
+    line_items: [{ id: 7001, sku: 'SHOPIFY-PARTIAL', title: 'Partial item', quantity: 9 }],
+  });
+  assert.deepEqual(shopifyLines, [{
+    lineKey: 'shopify:9001',
+    lineItemId: '7001',
+    sku: 'SHOPIFY-PARTIAL',
+    name: 'Partial item',
+    quantity: 2,
+  }], 'the real Shopify adapter joins fulfillment-order quantity to the order-line SKU');
+  const shopifyPartial = await pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {
+    orderId: 7,
+    shipmentId: 106,
+    commandKey: 'fixture:shopify-label:106',
+    transition: 'shipped',
+    source: 'shopify_shipping',
+    fulfillmentFacts: { kind: 'exact', lines: shopifyLines },
+  }));
+  await applyInventoryClaimsForLifecycleEvent(shopifyPartial.lifecycleEventId, pg as never);
+  const [shopifyStock] = await pg
+    .select({ stockQty: inventory.stockQty })
+    .from(inventory)
+    .where(eq(inventory.sku, 'SHOPIFY-PARTIAL'));
+  assert.equal(shopifyStock.stockQty, -2,
+    'Shopify label caller deducts its fulfillment-order quantity, never mutable order quantity 9');
+
+  const outboxBeforeReviewSources = (await pg.select().from(fulfillmentOutbox)).length;
+  const reviewSourceInputs: Array<{
+    orderId: number;
+    shipmentId?: number;
+    source: string;
+    transition: 'shipped' | 'external_shipped';
+    description: string;
+  }> = [
+    {
+      orderId: 9,
+      shipmentId: 109,
+      source: 'prepship_v2',
+      transition: 'shipped' as const,
+      description: 'Label purchase request did not identify shipped line quantities',
+    },
+    {
+      orderId: 10,
+      source: 'order_sync_status',
+      transition: 'shipped' as const,
+      description: 'Order status sync did not contain shipment-scoped line quantities',
+    },
+    {
+      orderId: 11,
+      source: 'store_order_import:shopify',
+      transition: 'external_shipped' as const,
+      description: 'Terminal order import did not contain shipment-scoped line quantities',
+    },
+    {
+      orderId: 12,
+      source: 'webhook:shopify',
+      transition: 'external_shipped' as const,
+      description: 'Redacted webhook status did not contain exact fulfilled line quantities',
+    },
+    {
+      orderId: 13,
+      source: 'external:manual',
+      transition: 'external_shipped' as const,
+      description: 'Manual external-shipped action did not identify fulfilled line quantities',
+    },
+    {
+      orderId: 15,
+      source: 'marketplace_status:walmart',
+      transition: 'external_shipped' as const,
+      description: 'Marketplace order status did not contain exact fulfilled line quantities',
+    },
+  ];
+  const reviewSourceResults = [];
+  for (const input of reviewSourceInputs) {
+    reviewSourceResults.push(await pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {
+      orderId: input.orderId,
+      shipmentId: input.shipmentId,
+      commandKey: `fixture:caller:${input.source}:${input.orderId}`,
+      transition: input.transition,
+      source: input.source,
+      fulfillmentFacts: { kind: 'unavailable', description: input.description },
+    })));
+  }
+  const reviewClaims = await pg
+    .select({ status: fulfillmentLineClaims.status, lastError: fulfillmentLineClaims.lastError })
+    .from(fulfillmentLineClaims)
+    .where(inArray(
+      fulfillmentLineClaims.lifecycleEventId,
+      reviewSourceResults.map((result) => result.lifecycleEventId),
+    ));
+  assert.equal(reviewClaims.length, reviewSourceInputs.length);
+  assert.ok(reviewClaims.every((claim) =>
+    claim.status === 'review' && claim.lastError === 'fulfillment_lines_unavailable'),
+  'label, sync, import, webhook, manual, and marketplace status callers fail closed to review');
+  assert.equal((await pg.select().from(fulfillmentOutbox)).length, outboxBeforeReviewSources,
+    'unavailable caller facts never enqueue inventory movement');
 
   claims = await pg.select().from(fulfillmentLineClaims);
   assert.ok(claims.every((claim) =>

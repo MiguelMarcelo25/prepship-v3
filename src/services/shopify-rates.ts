@@ -93,6 +93,11 @@ export type ShopifyLabelPurchasePendingSnapshot = {
   selectedRateKey?: string | null;
   purchaseResultId: string;
   fulfillmentOrderId: string;
+  /**
+   * Per user override unlock shipped data on 2026-07-16: immutable exact
+   * quantities selected before the asynchronous provider call.
+   */
+  fulfillmentLines?: unknown[];
   selectedRate?: ShopifyNormalizedRate | null;
   weightOz: number;
   dims: {

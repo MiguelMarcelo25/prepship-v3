@@ -611,21 +611,19 @@ export async function upsertNormalizedStoreOrders(
             : undefined,
         suppressExternalWhenActiveShipment: true,
         requireNoActiveOutboundShipment: target.status === 'cancelled',
-        fulfilledLines:
-          target.status === 'shipped' &&
-          (target.externallyShipped || identity.sourceProvider !== 'shipstation') &&
-          Array.isArray(row.items)
-            ? row.items
-            : [],
+        fulfillmentFacts: target.status === 'shipped'
+          ? {
+              kind: 'unavailable',
+              description: 'Terminal order import did not contain shipment-scoped line quantities',
+            }
+          : { kind: 'none' },
         provenance: {
           sourceProvider: identity.sourceProvider,
           sourceAccountId: identity.sourceAccountId,
           sourceOrderId: identity.sourceOrderId,
-          lineFacts:
-            target.status === 'shipped' &&
-            (target.externallyShipped || identity.sourceProvider !== 'shipstation')
-              ? 'whole_external_order'
-              : 'status_only_no_claim',
+          lineFacts: target.status === 'shipped'
+            ? 'review_missing_shipment_lines'
+            : 'not_applicable',
         },
       });
       row.orderStatus = target.status;
