@@ -144,6 +144,10 @@ assert(
     reportingSource.includes('scopeStoreIds'),
   'billing summary/details/read-model reads apply client/store scope',
 );
+assert(
+  serviceSource.includes('billingLineItemScopePredicate(input, sql`b.client_id`)'),
+  'aliased billing freshness query applies restricted scope through its b.client_id alias',
+);
 // PS-259: this guard now imports TypeScript owners, so it MUST run via tsx (node cannot
 // import .ts). Accept either runner so the guard does not flash red during the out-of-band
 // package.json flip from `node` -> `tsx`, but require it still targets this script.

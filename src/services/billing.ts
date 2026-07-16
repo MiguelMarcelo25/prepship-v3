@@ -249,7 +249,10 @@ function billingClientScopePredicate(input: GenerateInput): SQL {
   return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
-function billingLineItemScopePredicate(input: GenerateInput): SQL {
+function billingLineItemScopePredicate(
+  input: GenerateInput,
+  clientIdColumn: SQL = sql`${billingLineItems.clientId}`,
+): SQL {
   if (input.scopeIsGlobal === true) return sql`true`;
 
   const predicates: SQL[] = [];
@@ -257,12 +260,12 @@ function billingLineItemScopePredicate(input: GenerateInput): SQL {
   const storeIds = normalizeScopeIds(input.scopeStoreIds);
 
   if (clientIds.length) {
-    predicates.push(sql`${billingLineItems.clientId} = any(${intArraySql(clientIds)})`);
+    predicates.push(sql`${clientIdColumn} = any(${intArraySql(clientIds)})`);
   }
   if (storeIds.length) {
     predicates.push(sql`exists (
       select 1 from clients scoped_client
-      where scoped_client.id = ${billingLineItems.clientId}
+      where scoped_client.id = ${clientIdColumn}
         and scoped_client.store_ids && ${intArraySql(storeIds)}
     )`);
   }
@@ -399,7 +402,9 @@ export async function billingGenerationStatus(
       and b.ship_date < ${toIso}::timestamptz
       and b.order_id is not null
       ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
-      and ${billingLineItemScopePredicate(input)}
+      -- Per user override unlock shipped data on 2026-07-16: restricted billing
+      -- freshness uses the query's b alias without weakening tenant scope.
+      and ${billingLineItemScopePredicate(input, sql`b.client_id`)}
   `);
 
   // Re-price detection (PER CLIENT): a range is stale when ANY scoped client
