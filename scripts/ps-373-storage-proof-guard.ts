@@ -58,7 +58,7 @@ check('billing gates the storage charge on durable proof',
   /await ensureBillingStorageProofSchema\(\)[\s\S]*await db\.transaction\(async \(tx\) =>/.test(storageBlock) &&
     /tx\s*\n\s*\.insert\(billingStorageProof\)[\s\S]*tx\s*\n\s*\.insert\(billingLineItems\)/.test(storageBlock) &&
     /catch \(storageErr\)[\s\S]*skipped \+= 1/.test(storageBlock) &&
-    /storage line skipped because proof freeze failed/.test(storageBlock) &&
+    /reportError\('billing\.storage_line\.freeze_failed', storageErr/.test(storageBlock) &&
     !/storage line generated but proof freeze failed/.test(storageBlock));
 
 // ── 5b) Slice-1 dating FIX the proof consistency depends on: the storage line is
