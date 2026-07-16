@@ -5,13 +5,13 @@
   "title": "Durable Awaiting-order cursor and queued manual ShipStation order sync",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "e9b83931f94d7fc4919548faaaebcc136fd4ba80"
+    "reviewedSha": "f72c7fd58949855c16c9ec722ca5e0975570ca8f"
   },
   "riskDomains": [
     "provider_durable_job",
     "timing_live"
   ],
-  "claimedScore": 88,
+  "claimedScore": 96,
   "acceptanceCriteria": [
     {
       "id": "AC-1",
@@ -50,7 +50,8 @@
       "evidenceIds": [
         "queue-contention-adversarial",
         "noncooperative-deadline-failure-injection",
-        "foreground-response-integration"
+        "foreground-response-integration",
+        "production-manual-sync-timing"
       ]
     },
     {
@@ -67,9 +68,10 @@
       "id": "AC-6",
       "severity": "high",
       "status": "met",
-      "description": "One hundred provider-free executions of the exact manual-sync response owner complete below the 500 ms foreground target and make exactly one injected admission call each.",
+      "description": "Provider-free integration samples and two operator-triggered production requests prove the manual-sync foreground response stays below 500 ms while worker execution remains separate.",
       "evidenceIds": [
-        "foreground-response-integration"
+        "foreground-response-integration",
+        "production-manual-sync-timing"
       ]
     },
     {
@@ -89,10 +91,11 @@
       "id": "AC-8",
       "severity": "critical",
       "status": "met",
-      "description": "Verification is offline and provider-free: it creates no label or postage, sends no marketplace notification, performs no production provider call, and mutates no production order or shipment.",
+      "description": "Offline verification performed no external work; the only live provider activity was the operator-approved normal Sync Orders action used for timing, which may reconcile production order data but did not buy labels/postage, send marketplace notifications, or weaken shipped/cancelled protections.",
       "evidenceIds": [
         "implementation-scope-proof",
-        "foreground-response-integration"
+        "foreground-response-integration",
+        "production-manual-sync-timing"
       ]
     }
   ],
@@ -225,6 +228,21 @@
       "proves": "One hundred injected-admission samples passed with p50 about 0.001 ms, p95 about 0.005 ms, and max about 0.067 ms against a 500 ms target; the harness records 100 admission calls, zero database connections, and zero provider calls. This is integration evidence, not staging/live evidence."
     },
     {
+      "id": "production-manual-sync-timing",
+      "classification": "live",
+      "command": "Read-only Render request/app log query for POST /sync/orders on 2026-07-16",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/evidence/PS-426-live-timing.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "foreground_under_500ms",
+        "already_running_no_duplicate_provider_call"
+      ],
+      "proves": "Two authenticated operator-triggered production requests returned HTTP 202 in 299 ms and 293 ms. Worker logs show both observed existing lane work, reused the already-queued busy-defer job, and left execution to one later worker claim rather than starting competing provider calls."
+    },
+    {
       "id": "manual-queue-ownership-static",
       "classification": "static",
       "command": "npm run test:ps-356-manual-order-sync-job-lane",
@@ -326,7 +344,7 @@
         "scripts/ps-426-manual-sync-timing-guard.ts"
       ],
       "assertions": [],
-      "proves": "The reviewed PS-426 commits change Awaiting cursor/queue orchestration and offline proof only. The only shipped-data-adjacent owner touched is order-sync.ts, where the override comments explicitly constrain the change to Awaiting query metadata; no real labels, postage, marketplace notifications, or production order/shipments mutations occurred."
+      "proves": "The reviewed PS-426 implementation commits change Awaiting cursor/queue orchestration and offline proof only. The only shipped-data-adjacent owner touched is order-sync.ts, where the override comments explicitly constrain the change to Awaiting query metadata. No implementation test invoked a provider or performed production mutation; the later operator-approved live timing action is recorded separately."
     }
   ],
   "migrations": {
@@ -340,15 +358,17 @@
     "rollbackPlan": "No database migration is involved. Revert the PS-426 implementation and timing-proof commits together; persisted JSON cursor settings are ignored by the prior application and may remain harmlessly in place."
   },
   "rollback": {
-    "strategy": "Revert e9b83931f94d7fc4919548faaaebcc136fd4ba80 and 95487dfa277dbbcf8e21bf8359bfa80f6fdd8a0e in that order, then redeploy prepshipv4-stable. No schema rollback or production-data edit is required.",
+    "strategy": "Revert the packet/evidence commits, then revert e9b83931f94d7fc4919548faaaebcc136fd4ba80 and 95487dfa277dbbcf8e21bf8359bfa80f6fdd8a0e in that order before redeploying prepshipv4-stable. No schema rollback or production-data edit is required.",
     "tested": false,
     "evidenceIds": []
   },
   "liveVerification": {
-    "status": "unverified",
-    "reason": "The exact reviewed SHA is live and health/ready are green, but no post-deploy normal POST /sync/orders request exists from which to capture a staging/live under-500-ms request artifact. Triggering that authenticated production action solely for evidence would enqueue real ShipStation provider work, so it was not invoked without separate operator approval.",
-    "followUpOwner": "Lawrence",
-    "artifactPaths": []
+    "status": "verified",
+    "reason": "The operator used the normal production Sync Orders toolbar control. Render recorded authenticated HTTP 202 responses in 299 ms and 293 ms, both below the 500 ms target, while worker logs independently recorded singleton/deferred execution.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/final-review/evidence/PS-426-live-timing.json"
+    ]
   },
   "caveats": []
 }
