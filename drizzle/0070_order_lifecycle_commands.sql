@@ -32,6 +32,8 @@ BEGIN
 END;
 $$;
 --> statement-breakpoint
+DROP TRIGGER IF EXISTS order_lifecycle_events_no_update_delete ON order_lifecycle_events;
+--> statement-breakpoint
 CREATE TRIGGER order_lifecycle_events_no_update_delete
 BEFORE UPDATE OR DELETE ON order_lifecycle_events
 FOR EACH ROW EXECUTE FUNCTION order_lifecycle_events_block_mutations();

@@ -52,7 +52,7 @@ validated `INVENTORY_AUTO_DEDUCT` switch remains the single execution gate;
 when disabled, claims stay pending and no inventory or inventory-ledger write
 occurs.
 
-Migration `0069_order_lifecycle_commands.sql` is additive and performs no
+Migration `0070_order_lifecycle_commands.sql` is additive and performs no
 historical repair or production data mutation.
 
 ## Offline proof

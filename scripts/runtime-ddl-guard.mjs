@@ -120,7 +120,7 @@ const migrationOwnership = [
     ['billing_li_shipment_unique_idx', 'billing_li_order_unique_idx', 'shipment_id'],
   ],
   [
-    'drizzle/0069_order_lifecycle_commands.sql',
+    'drizzle/0070_order_lifecycle_commands.sql',
     [
       'order_lifecycle_events',
       'fulfillment_line_claims',
@@ -175,12 +175,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCardinalityMigration),
   '0068 changes only the generated billing-line key and never mutates orders/shipments',
 );
-const orderLifecycleMigration = read('drizzle/0069_order_lifecycle_commands.sql');
+const orderLifecycleMigration = read('drizzle/0070_order_lifecycle_commands.sql');
 assert(
   !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration) &&
     !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(orderLifecycleMigration) &&
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration),
-  '0069 adds lifecycle sidecars without mutating or destructively altering orders/shipments',
+  '0070 adds lifecycle sidecars without mutating or destructively altering orders/shipments',
 );
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
@@ -191,7 +191,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0069_order_lifecycle_commands.sql',
+  '0070_order_lifecycle_commands.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 const read = (path: string) => readFileSync(path, 'utf8');
 const lifecycle = read('src/services/order-lifecycle-command.ts');
 const schema = read('src/db/schema/order-lifecycle.ts');
-const migration = read('drizzle/0069_order_lifecycle_commands.sql');
+const migration = read('drizzle/0070_order_lifecycle_commands.sql');
+const drizzleConfig = read('drizzle.config.ts');
 const deductions = read('src/services/fulfillment-deductions.ts');
 const inventoryOutbox = read('src/services/fulfillment/inventory-deduction-outbox.ts');
 const labels = read('src/services/labels.ts');
@@ -22,11 +23,14 @@ const walmartPuller = read('api/carriers/walmart/orders.ts');
 const ebayPuller = read('api/carriers/ebay/orders.ts');
 const awaitingReconcile = read('scripts/reconcile-shipstation-awaiting.ts');
 const externalReconcile = read('scripts/reconcile-external-shipped-orders.ts');
+const applyMigration = read('scripts/apply-ps-424-order-lifecycle-migration.ts');
 
 assert.match(schema, /orderLifecycleEvents = pgTable/);
 assert.match(schema, /fulfillmentLineClaims = pgTable/);
+assert.match(drizzleConfig, /src\/db\/schema\/order-lifecycle\.ts/);
 assert.match(migration, /order_lifecycle_events_command_unq/);
 assert.match(migration, /order_lifecycle_events_no_update_delete/);
+assert.match(migration, /DROP TRIGGER IF EXISTS order_lifecycle_events_no_update_delete/);
 assert.match(migration, /order_lifecycle_events_block_mutations/);
 assert.match(migration, /fulfillment_line_claims_idempotency_unq/);
 assert.match(migration, /quantity integer NOT NULL CHECK \(quantity > 0\)/);
@@ -86,6 +90,9 @@ assert.doesNotMatch(awaitingReconcile, /SET order_status = \$\{candidate\.target
 assert.doesNotMatch(awaitingReconcile, /SET order_status = 'cancelled'/);
 assert.match(externalReconcile, /applyOrderLifecycleCommand/);
 assert.doesNotMatch(externalReconcile, /\.set\(\{ externallyShipped: true/);
+assert.match(applyMigration, /if \(!opsMayMutate\(\)\)/);
+assert.match(applyMigration, /\.split\('--> statement-breakpoint'\)/);
+assert.match(applyMigration, /append_only_trigger_present/);
 
 const patchSchema = ordersRoute.match(/const patchBody = z\.object\(\{([\s\S]*?)\n\}\);/)?.[1] ?? '';
 assert.ok(patchSchema, 'orders PATCH schema must remain discoverable');

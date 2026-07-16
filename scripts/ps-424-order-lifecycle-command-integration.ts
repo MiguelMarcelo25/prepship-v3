@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     );
     CREATE UNIQUE INDEX inventory_ledger_idempotency_key_unq ON inventory_ledger (idempotency_key);
   `);
-  await client.exec(readFileSync('drizzle/0069_order_lifecycle_commands.sql', 'utf8'));
+  await client.exec(readFileSync('drizzle/0070_order_lifecycle_commands.sql', 'utf8'));
   const pg = drizzle(client, { schema, casing: 'snake_case' });
 
   await client.exec(`
