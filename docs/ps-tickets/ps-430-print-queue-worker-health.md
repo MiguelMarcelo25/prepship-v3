@@ -73,9 +73,13 @@ protected shipping-reliability scope was used only for Print Queue orchestration
   the generation and provider-unknown fences cannot be authoritative in the UI or route.
 - Protections not weakened: no order/shipment edit guard, shipped/cancelled lock, inventory
   switch, label URL behavior, or provider purchase owner changed. Recovery became stricter.
-- Production side effects: none. No real label, postage purchase, provider call, marketplace
-  notification, service restart, production job insertion, or production shipped/cancelled
-  mutation was performed.
+- Production closure on 2026-07-16 used the explicit operator approval recorded in
+  `docs/final-review/evidence/PS-430-live-reconciliation.json`. A bounded statement updated
+  exactly nine `print_queue_batch_job_items` sidecars after proving nine durable provider
+  receipts, eight orders, three inactive jobs, and zero unresolved purchase intents. It
+  updated zero order, shipment, Print Queue entry, or purchase-intent rows and performed no
+  provider call, job replay, label purchase/void, postage charge, marketplace notification,
+  inventory movement, or manual service restart.
 
 ## Evidence
 
@@ -91,7 +95,7 @@ npm run test:ps-335-sot-guard-pack
   PASS
 
 npm run test:sot-guard-pack
-  PASS (39/39 mandatory commands)
+  PASS (45/45 mandatory commands)
 
 npm run test:order-editable-lockdown
   PASS
@@ -103,6 +107,17 @@ npm run build:web
   PASS
 ```
 
-The production configuration/deploy and any manual restart remain operator actions. Follow
-`docs/runbooks/ps-430-print-queue-worker-freeze.md`; they are not development-time tests and
-require DJ approval when they change live service state.
+## Production closure
+
+The dedicated Render worker is live on the session-mode port-5432 consumer configuration at
+`90ba73af1e63d893b79a0bf14fba1eb183b7e242`. Before reconciliation, `/health/deep` returned
+503 only for nine historical `provider_reconciliation_required` sidecars; heartbeat was
+fresh and pg-boss plus active durable counts were zero. The rollback-only production
+preflight matched the previously reviewed PS-432 classification exactly. The guarded apply
+reconciled six items to their matching existing queue entries and three to their existing
+durable shipment state. A read-only after-check found zero provider-pending items, and
+`/health/deep` returned HTTP 200 with `printQueueWorker.status=ok`.
+
+Future production configuration changes and manual restarts remain operator actions. Follow
+`docs/runbooks/ps-430-print-queue-worker-freeze.md`; they require DJ approval when they change
+live service state.

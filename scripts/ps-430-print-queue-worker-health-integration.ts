@@ -170,6 +170,106 @@ try {
     lastWorkerJobAgeSeconds: 10,
   });
   assert.equal(completedVerdict.status, 'ok');
+
+  // Per user override unlock shipped data on 2026-07-16: exercise the exact
+  // bounded operator reconciliation against an isolated migrated fixture.
+  // The production statement may update only Print Queue item sidecars after
+  // durable shipment receipts prove the provider outcome is already known.
+  await pg.exec(`
+    CREATE TABLE shipments (
+      order_id integer NOT NULL,
+      voided boolean NOT NULL DEFAULT false,
+      is_return boolean NOT NULL DEFAULT false,
+      label_url text,
+      label_tracking text,
+      tracking_number text,
+      label_shipment_id text,
+      label_provider_key text
+    );
+    CREATE TABLE print_queue_orders (
+      id text PRIMARY KEY,
+      client_id integer NOT NULL,
+      order_id text NOT NULL,
+      label_url text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE label_purchase_intents (
+      order_id integer NOT NULL,
+      state text NOT NULL
+    );
+
+    INSERT INTO print_queue_send_jobs (
+      job_id, status, active, progress, total, current, queued, failed,
+      snapshot, created_at, updated_at
+    ) VALUES
+      ('ps-430-reconcile-a', 'error', false, 100, 3, 3, 0, 3, '{}'::jsonb, now(), now()),
+      ('ps-430-reconcile-b', 'error', false, 100, 3, 3, 0, 3, '{}'::jsonb, now(), now()),
+      ('ps-430-reconcile-c', 'interrupted', false, 100, 3, 3, 0, 3, '{}'::jsonb, now(), now());
+
+    INSERT INTO print_queue_batch_job_items (job_id, order_id, client_id, state) VALUES
+      ('ps-430-reconcile-a', 43011, 1, 'provider_pending'),
+      ('ps-430-reconcile-a', 43012, 1, 'provider_pending'),
+      ('ps-430-reconcile-a', 43013, 1, 'provider_pending_recovery'),
+      ('ps-430-reconcile-b', 43011, 1, 'provider_pending'),
+      ('ps-430-reconcile-b', 43014, 1, 'provider_pending'),
+      ('ps-430-reconcile-b', 43015, 1, 'provider_pending_recovery'),
+      ('ps-430-reconcile-c', 43016, 1, 'provider_pending'),
+      ('ps-430-reconcile-c', 43017, 1, 'provider_pending'),
+      ('ps-430-reconcile-c', 43018, 1, 'provider_pending');
+
+    INSERT INTO shipments (
+      order_id, label_url, label_tracking, label_shipment_id, label_provider_key
+    )
+    SELECT
+      order_id,
+      'https://labels.invalid/' || order_id || '.pdf',
+      'TRACK-' || order_id,
+      'shipment-' || order_id,
+      'provider-' || order_id
+    FROM generate_series(43011, 43018) AS order_id;
+
+    INSERT INTO print_queue_orders (id, client_id, order_id, label_url)
+    SELECT
+      'queue-' || order_id,
+      1,
+      order_id::text,
+      'https://labels.invalid/' || order_id || '.pdf'
+    FROM generate_series(43011, 43015) AS order_id;
+  `);
+
+  const reconciliationSql = readFileSync(
+    'docs/final-review/evidence/PS-430-provider-pending-reconciliation.sql',
+    'utf8',
+  );
+  const reconciliation = await pg.query<{
+    guard_passed: boolean;
+    pending_count: number | string;
+    order_count: number | string;
+    job_count: number | string;
+    durable_receipt_count: number | string;
+    matching_queue_entry_count: number | string;
+    unresolved_purchase_intent_count: number | string;
+    updated_count: number | string;
+    reconciled_queued_count: number | string;
+    reconciled_shipment_persisted_count: number | string;
+  }>(reconciliationSql);
+  const reconciliationResult = reconciliation.rows[0];
+  assert.equal(reconciliationResult?.guard_passed, true);
+  assert.equal(Number(reconciliationResult?.pending_count), 9);
+  assert.equal(Number(reconciliationResult?.order_count), 8);
+  assert.equal(Number(reconciliationResult?.job_count), 3);
+  assert.equal(Number(reconciliationResult?.durable_receipt_count), 9);
+  assert.equal(Number(reconciliationResult?.matching_queue_entry_count), 6);
+  assert.equal(Number(reconciliationResult?.unresolved_purchase_intent_count), 0);
+  assert.equal(Number(reconciliationResult?.updated_count), 9);
+  assert.equal(Number(reconciliationResult?.reconciled_queued_count), 6);
+  assert.equal(Number(reconciliationResult?.reconciled_shipment_persisted_count), 3);
+
+  const repeat = await pg.query<{ guard_passed: boolean; updated_count: number | string }>(
+    reconciliationSql,
+  );
+  assert.equal(repeat.rows[0]?.guard_passed, false, 'resolved rows cannot be selected again');
+  assert.equal(Number(repeat.rows[0]?.updated_count), 0, 'repeat reconciliation is a no-op');
 } finally {
   await pg.close();
 }

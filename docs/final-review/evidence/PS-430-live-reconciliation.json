@@ -1,0 +1,80 @@
+{
+  "taskId": "PS-430",
+  "executedAt": "2026-07-16T01:47:52.7961083Z",
+  "environment": "production",
+  "approval": {
+    "approved": true,
+    "scope": "Proceed with the stated PS-430 session-mode verification and safe reconciliation of the nine stale sidecars without label purchase or job replay."
+  },
+  "deployment": {
+    "serviceId": "srv-d95qda7avr4c73apqo9g",
+    "serviceName": "prepshipv4-print-worker",
+    "deployId": "dep-d9c33iv7f7vs73fsk85g",
+    "commitSha": "90ba73af1e63d893b79a0bf14fba1eb183b7e242",
+    "status": "live",
+    "consumerConnectionMode": "Supabase session-mode port 5432 derived for PRINT_QUEUE_PG_BOSS_DATABASE_URL; API producer connection remains separate"
+  },
+  "before": {
+    "healthDeepStatusCode": 503,
+    "workerStatus": "fail",
+    "reasonCodes": [
+      "provider_reconciliation_required"
+    ],
+    "heartbeatAgeSeconds": 25,
+    "pgBossCreated": 0,
+    "pgBossRetry": 0,
+    "pgBossActive": 0,
+    "durableActive": 0,
+    "providerPending": 9
+  },
+  "rollbackOnlyPreflight": {
+    "guardPassed": true,
+    "pendingCount": 9,
+    "orderCount": 8,
+    "jobCount": 3,
+    "durableReceiptCount": 9,
+    "matchingQueueEntryCount": 6,
+    "unresolvedPurchaseIntentCount": 0,
+    "wouldUpdateCount": 9,
+    "transactionRolledBack": true
+  },
+  "apply": {
+    "artifact": "docs/final-review/evidence/PS-430-provider-pending-reconciliation.sql",
+    "command": "npx tsx scripts/ps-430-reconcile-provider-pending.ts --apply --expected-count=9",
+    "guardPassed": true,
+    "updatedCount": 9,
+    "reconciledQueuedCount": 6,
+    "reconciledShipmentPersistedCount": 3
+  },
+  "after": {
+    "providerPendingReadOnlyCount": 0,
+    "unresolvedPurchaseIntentReadOnlyCount": 0,
+    "healthDeepStatusCode": 200,
+    "healthDeepStatus": "ready",
+    "workerStatus": "ok",
+    "reasonCodes": [],
+    "heartbeatAgeSeconds": 25,
+    "pgBossCreated": 0,
+    "pgBossRetry": 0,
+    "pgBossActive": 0,
+    "durableActive": 0,
+    "providerPending": 0
+  },
+  "safety": {
+    "tablesUpdated": {
+      "print_queue_batch_job_items": 9,
+      "orders": 0,
+      "shipments": 0,
+      "print_queue_orders": 0,
+      "label_purchase_intents": 0
+    },
+    "jobReplayCount": 0,
+    "providerCallsByReconciliation": 0,
+    "labelsPurchasedOrVoided": 0,
+    "postageCharges": 0,
+    "marketplaceNotifications": 0,
+    "inventoryMovements": 0,
+    "manualServiceRestarts": 0,
+    "customerOrSecretDataRecorded": false
+  }
+}
