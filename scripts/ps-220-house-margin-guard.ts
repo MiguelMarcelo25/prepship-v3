@@ -365,9 +365,10 @@ check('producer (orders.ts): shipped rows bulk-load the REALIZED customer_rate a
 check('producer (orders.ts): the shipped house bulk-load is best-effort + gated (financial viewer + shipped page present)',
   /canViewFinancials && joined\.some\(\(r\) => r\.order\.orderStatus === 'shipped'\)/.test(ordersSrc) &&
   /bulk-load skipped/.test(ordersSrc));
-check('FE: shipped Selected Rate cell + Margin cell render the house display ONLY on markupSource house_account',
+check('FE: shipped Selected Rate keeps the HOUSE display while Margin renders the backend shipping-margin tuple for every financial row',
   /shippedBackendMoney\.markupSource === 'house_account'/.test(orderCellsSrc) &&
-  /shippedMoney\?\.markupSource === 'house_account'/.test(orderCellsSrc));
+  /const diff = backendMoney\?\.shippingMarginAmount/.test(orderCellsSrc) &&
+  /backendMoney\.shippingMarginPct/.test(orderCellsSrc));
 
 // ── slice 4b-3 (P4: per-client opt-in write + toggle UI) ─────────────────────
 const optInSrc = readFileSync('src/services/house-account-opt-in.ts', 'utf8');

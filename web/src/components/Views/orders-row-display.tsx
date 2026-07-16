@@ -474,6 +474,7 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     cShippingRateAmount: toNumberValue(money.cShippingRateAmount),
     selectedRateCost: toNumberValue(money.selectedRateCost),
     shippingMarginAmount: toNumberValue(money.shippingMarginAmount),
+    shippingMarginPct: toNumberValue(money.shippingMarginPct),
     customerRateSource: toStringValue(money.customerRateSource),
     // PS-220 (slice 4b): 'house_account' => SHIPP house order (marked = the customer_rate DRP bills,
     // base = DRP's SHIPP cost, markup = the house margin). Defaults to 'carrier_markup' on deploy-skew

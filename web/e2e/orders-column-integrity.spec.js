@@ -129,7 +129,7 @@ function freshBestRateWorkflow(rateLike = rate) {
       cShippingRateAmount: customerRateAmount,
       selectedRateCost: rateCostAmount,
       shippingMarginAmount,
-      shippingMarginPct: null,
+      shippingMarginPct: rateLike.shippingMarginPct ?? null,
       houseApplied: false,
       houseBadgeVisible: false,
       markupSource: 'carrier_markup',
@@ -349,6 +349,13 @@ const shippedPersisted = baseRow(980001, 'shipped', 1, {
     labelCreatedAt: '2026-05-15T17:02:00.000Z',
     bestRate: rate,
   },
+  bestRateWorkflow: freshBestRateWorkflow({
+    ...rate,
+    customerRateAmount: 11,
+    rateCostAmount: 9.86,
+    shippingMarginAmount: 1.14,
+    shippingMarginPct: 10.4,
+  }),
 })
 
 // 4) Shipped, EXPLICIT external flag, no local data -> must render "Ext. Label".
@@ -386,6 +393,7 @@ const shippedNoNickname = baseRow(980004, 'shipped', 1, {
   selectedRate: { carrierCode: 'ups', serviceCode: 'ups_ground_saver', serviceName: 'UPS Ground Saver', amount: 9.86, cost: 9.86, shipmentCost: 9.86, otherCost: 0 },
   label: { trackingNumber: '1Z999AA1010980004', carrierCode: 'ups', serviceCode: 'ups_ground_saver', shippingProviderId: 7381, cost: 9.86, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
   shipping: { carrierCode: 'ups', serviceCode: 'ups_ground_saver', trackingNumber: '1Z999AA1010980004', providerAccountId: 7381, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
+  bestRateWorkflow: { money: { ...freshBestRateWorkflow(rate).money, source: 'selected_rate' } },
 })
 
 // 5c) PS-273 — Shipped with a SHIPP-BROKERED label. The connector prefixes the
@@ -401,6 +409,18 @@ const shippedShippBrokered = baseRow(980005, 'shipped', 1, {
   selectedRate: { carrierCode: 'ups', serviceCode: 'shipp_ups_ground', serviceName: 'Shipp UPS Ground', amount: 9.86, cost: 9.86, shipmentCost: 9.86, otherCost: 0 },
   label: { trackingNumber: '1Z999AA1010980005', carrierCode: 'ups', serviceCode: 'shipp_ups_ground', shippingProviderId: 10000025, cost: 9.86, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
   shipping: { carrierCode: 'ups', serviceCode: 'shipp_ups_ground', trackingNumber: '1Z999AA1010980005', providerAccountId: 10000025, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
+  bestRateWorkflow: {
+    money: {
+      ...freshBestRateWorkflow({
+        ...rate,
+        customerRateAmount: 8.86,
+        rateCostAmount: 9.86,
+        shippingMarginAmount: -1,
+        shippingMarginPct: -11.3,
+      }).money,
+      source: 'selected_rate',
+    },
+  },
 })
 
 // PS-334/PS-356: house-feature shipped row. Selected Rate and C. Shipping Rate
@@ -608,6 +628,7 @@ test('Awaiting grid columns render every required field from source of truth', a
     orderNum: { contains: 'ORD-970006-HOUSE' },
     bestrate: { contains: ['10.55', 'HOUSE'], notContains: '14.25' },
     ratecost: { contains: '14.25' },
+    margin: { contains: ['3.70', '26%'] },
   })
   await scrollOrdersTableToColumn(page, 'ratecost')
   await page.screenshot({ path: path.join(screenshotDir, 'awaiting-ps334-rate-cost.png'), fullPage: true })
@@ -666,6 +687,7 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Shipment sync error'] },
     tracking: { contains: '1Z999AA1010980001' },
     labelcreated: { matches: /\d/ },
+    margin: { contains: ['1.14', '10.4%'] },
     test_carrierCode: { contains: 'ups' },
     test_shippingProviderID: { contains: '7381' },
     test_shippingAccount: {
@@ -673,6 +695,7 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
       notContains: ['ups', 'Ext. Label', 'Shipment sync error'],
     },
   })
+  await expect(page.locator(`#row-${shippedPersisted.orderId} td[data-col="margin"] .text-ok`)).toHaveCount(1)
 
   // Explicit external row — operator/marketplace flag drives "Ext. Label" and
   // it must NEVER be confused with a missing-sync row.
@@ -702,7 +725,9 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     orderNum: { contains: 'SHIPPED-980004' },
     test_carrierCode: { contains: 'ups' },        // carrier-code column legitimately shows ups
     test_shippingAccount: { notContains: 'ups' }, // Acct Nickname must NEVER be the carrier code
+    margin: { contains: '$0.00', notContains: '—' },
   })
+  await expect(page.locator(`#row-${shippedNoNickname.orderId} td[data-col="margin"] .text-ink-2`)).toHaveCount(1)
 
   // PS-273 — Shipp-brokered label (shipp_* service code, synthetic provider id
   // 10000025, NO persisted nickname). The account line must render "Shipp" and
@@ -713,7 +738,9 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     test_carrierCode: { contains: 'ups' },                 // underlying carrier is fine here
     custcarrier: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
     test_shippingAccount: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
+    margin: { contains: ['$-1.00', '-11.3%'] },
   })
+  await expect(page.locator(`#row-${shippedShippBrokered.orderId} td[data-col="margin"] .text-danger`)).toHaveCount(1)
 
   // PS-334/PS-356 - Selected Rate and C. Shipping Rate both show the realized
   // backend customer/billing amount; the HOUSE badge stays on Selected Rate.
@@ -721,6 +748,7 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     orderNum: { contains: 'SHIPPED-980006-HOUSE' },
     bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
     ratecost: { contains: '14.25' },
+    margin: { contains: ['3.70', '26%'] },
   })
   await scrollOrdersTableToColumn(page, 'ratecost')
   await page.screenshot({ path: path.join(screenshotDir, 'shipped-ps334-rate-cost.png'), fullPage: true })

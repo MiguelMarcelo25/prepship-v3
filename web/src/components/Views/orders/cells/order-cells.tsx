@@ -320,44 +320,34 @@ export function renderMargin(order: OrderSummaryDto, deps: OrderCellsDeps): Reac
     return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'—'}</span>
   }
 
-  // PS-220 (slice 4b-2): shipped SHIPP house orders show their realized Ship Margin (the spread DRP
-  // earned: customer_rate − SHIPP cost). Non-house shipped rows keep the existing dash (byte-identical).
-  if (order.orderStatus !== 'awaiting_shipment') {
-    const shippedMoney = getBackendRowMoney(order)
-    if (shippedMoney?.markupSource === 'house_account') {
-      const houseDiff = shippedMoney.markupAmount
-      if (houseDiff == null || houseDiff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'—'}</span>
-      return (
-        <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(houseDiff)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)' }}>{shippedMoney.marginPercent ?? 0}%</div>
-        </div>
-      )
+  const isAwaiting = order.orderStatus === 'awaiting_shipment'
+  const displayOrder = isAwaiting ? getOrderWithAutoBestRate(order) : order
+  if (isAwaiting) {
+    // PS-071 — consume the SAME auto-best-rate source as the Carrier / Shipping
+    // Account / Best Rate cells, so a rate found by passive auto-rating updates
+    // Margin too instead of leaving it spinning until a manual refetch.
+    const bestRateBaseCost = getBestRateBaseCost(displayOrder)
+    if (!displayOrder.bestRate || bestRateBaseCost == null) {
+      // Bounded/terminal fallback (compact) instead of an indefinite spinner.
+      return renderAwaitingRateFallback(order, displayOrder, 'compact')
+        ?? <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
     }
-    return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'—'}</span>
   }
 
-  // PS-071 — consume the SAME auto-best-rate source as the Carrier / Shipping
-  // Account / Best Rate cells, so a rate found by passive auto-rating updates
-  // Margin too instead of leaving it spinning until a manual refetch.
-  const displayOrder = getOrderWithAutoBestRate(order)
-  const bestRateBaseCost = getBestRateBaseCost(displayOrder)
-  if (!displayOrder.bestRate || bestRateBaseCost == null) {
-    // Bounded/terminal fallback (compact) instead of an indefinite spinner.
-    return renderAwaitingRateFallback(order, displayOrder, 'compact')
-      ?? <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-  }
-
-  // PS-178 final part: the BACKEND money tuple (PS-177) is the only margin
-  // source — the FE markup-math fallback is deleted. A row without the tuple
-  // shows a dash; the FE never computes money policy.
+  // Per user override unlock shipped data on 2026-07-16: shipped rows now display the
+  // backend-issued realized shipping margin; this is presentation-only and performs no mutation.
+  // The BACKEND money tuple is the only source. A row without the tuple shows a dash;
+  // the FE never recomputes customer shipping charge minus selected/purchased cost.
   const backendMoney = getBackendRowMoney(displayOrder)
-  const diff = backendMoney?.markupAmount
-  if (diff == null || diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
+  const diff = backendMoney?.shippingMarginAmount
+  if (diff == null) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
+  const amountClass = diff > 0.005 ? 'text-ok' : diff < -0.005 ? 'text-danger' : 'text-ink-2'
   return (
     <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
-      <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney!.marginPercent ?? 0}%</div>
+      <div className={amountClass} style={{ fontSize: 12, fontWeight: 700 }}>{diff > 0.005 ? '+' : ''}{formatMoney(diff)}</div>
+      {backendMoney?.shippingMarginPct != null
+        ? <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney.shippingMarginPct}%</div>
+        : null}
     </div>
   )
 }
