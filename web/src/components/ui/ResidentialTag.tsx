@@ -84,7 +84,7 @@ export function ResidentialTag({
   // Trusted commercial = green; UNTRUSTED commercial (heuristic/fallback) = amber warning; residential = neutral.
   const tone = isCommercial
     ? trusted
-      ? 'bg-emerald-100 text-emerald-800 ring-emerald-300 dark:bg-emerald-500/25 dark:text-emerald-100 dark:ring-emerald-400/50'
+      ? 'bg-emerald-100 text-emerald-950 ring-emerald-300 dark:bg-emerald-500/25 dark:text-emerald-100 dark:ring-emerald-400/50'
       : 'bg-amber-100/70 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30'
     : 'bg-surface-2 text-ink-2 ring-line'
 
@@ -94,12 +94,12 @@ export function ResidentialTag({
 
   return (
     <span
-      className={`inline-flex items-center gap-1 h-5 px-1.5 rounded ring-1 text-[10px] font-semibold ${tone} ${className}`}
+      className={`inline-flex items-center gap-1 h-5 px-1.5 rounded ring-1 text-[10px] font-bold ${tone} ${className}`}
       title={`${label} · ${descriptor}${facts.confidence ? ` (${facts.confidence})` : ''}`}
     >
       <Icon size={10} strokeWidth={2.5} />
       {label}
-      {descriptor !== '—' ? <span className="opacity-85">· {descriptor}</span> : null}
+      {descriptor !== '—' ? <span>· {descriptor}</span> : null}
     </span>
   )
 }
