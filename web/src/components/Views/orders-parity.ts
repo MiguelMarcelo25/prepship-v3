@@ -690,7 +690,7 @@ export function formatSyncPill(sync: {
   if (sync.syncState === 'queued') {
     return {
       className: 'sync-pill syncing',
-      text: 'Sync queuedâ€¦',
+      text: 'Sync queued…',
       title: 'Order sync is queued in the backend ShipStation lane and has not completed yet.',
     }
   }
@@ -698,7 +698,7 @@ export function formatSyncPill(sync: {
   if (sync.syncState === 'retrying') {
     return {
       className: 'sync-pill syncing',
-      text: 'Sync retryingâ€¦',
+      text: 'Sync retrying…',
       title: 'The backend worker will retry order sync; no duplicate browser sync is running.',
     }
   }

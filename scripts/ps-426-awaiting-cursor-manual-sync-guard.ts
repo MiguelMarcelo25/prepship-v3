@@ -110,7 +110,7 @@ assert.equal(
     page: 0,
     lastSync: null,
   }).text,
-  'Sync queuedâ€¦',
+  'Sync queued…',
   'queued backend truth must not render as completed',
 );
 assert.equal(
@@ -121,7 +121,7 @@ assert.equal(
     page: 0,
     lastSync: null,
   }).text,
-  'Sync retryingâ€¦',
+  'Sync retrying…',
 );
 
 const read = (path: string): string => readFileSync(path, 'utf8');
