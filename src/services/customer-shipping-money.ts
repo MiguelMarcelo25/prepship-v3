@@ -245,6 +245,21 @@ export async function previewShipmentCustomerShippingMoney(
 }
 
 /**
+ * Read-only reconciliation preview for a historical shipment whose exact
+ * provider-selected cost exists outside selected_rate_cost. The caller must
+ * supply evidence; the canonical policy owner still resolves every customer
+ * amount and margin field.
+ */
+export async function previewShipmentCustomerShippingMoneyWithSelectedRateCost(
+  shipmentId: number,
+  selectedRateCost: number,
+): Promise<CustomerShippingMoneyDecision> {
+  const row = await loadCustomerShippingMoneyRow(shipmentId);
+  if (!row) throw new Error('Shipment not found');
+  return decideCustomerShippingMoneyForRow({ ...row, selectedRateCost });
+}
+
+/**
  * Freeze the canonical return money tuple on shipments.selected_rate_json.
  * Per user override unlock shipped data on 2026-05-23: PS-437 updates only the
  * one explicitly requested return shipment, never status/history/postage, and

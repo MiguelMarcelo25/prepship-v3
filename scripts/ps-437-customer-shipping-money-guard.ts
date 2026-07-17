@@ -91,13 +91,22 @@ assert.equal(
 const billing = fs.readFileSync('src/services/billing.ts', 'utf8');
 const route = fs.readFileSync('src/routes/client-portal/integrations.ts', 'utf8');
 const owner = fs.readFileSync('src/services/customer-shipping-money.ts', 'utf8');
+const reconciliation = fs.readFileSync('scripts/ps-437-reconcile-return-money.ts', 'utf8');
 assert.match(billing, /resolveCustomerShippingMoney\(\{/);
 assert.match(route, /customer-shipping-money\/freeze/);
 assert.match(route, /requirePermission\('billing:generate'\)/);
 assert.match(route, /isClientVisibleToScope\(\{ id: target\.clientId, storeIds: target\.storeIds \}, scope\)/);
 assert.match(owner, /const selectedRateCost = finiteNumber\(row\.selectedRateCost\)/);
 assert.doesNotMatch(owner, /resolveBillingSelectedRateCost/);
+assert.match(owner, /previewShipmentCustomerShippingMoneyWithSelectedRateCost/);
 assert.match(owner, /Per user override unlock shipped data on 2026-05-23: PS-437/);
+assert.match(reconciliation, /--confirm-production/);
+assert.match(reconciliation, /--expected-count=/);
+assert.match(reconciliation, /DryRunRollback/);
+assert.match(reconciliation, /from billing_line_items/);
+assert.match(reconciliation, /for update of r, s/);
+assert.match(reconciliation, /Per user override unlock shipped data on 2026-05-23: PS-437/);
+assert.doesNotMatch(reconciliation, /createExternalLabel|purchaseLabel|notifyMarketplace/);
 const responseBlock = route.slice(route.indexOf("'/customer-shipping-money/freeze'"), route.indexOf("'/customer-shipping-money/freeze'") + 2200);
 assert.doesNotMatch(responseBlock, /selectedRateCost:\s*snapshot|shippingMarginAmount:\s*snapshot/);
 

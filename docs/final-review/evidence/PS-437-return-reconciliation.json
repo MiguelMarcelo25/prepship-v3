@@ -1,0 +1,89 @@
+{
+  "taskId": "PS-437",
+  "executedAt": "2026-07-17T02:10:56.9333254Z",
+  "environment": "production",
+  "approval": {
+    "shippedDataOverride": "unlock shipped data",
+    "separateProceedConfirmation": true,
+    "scope": "Evidence-backed reconciliation of only the two real historical PS-437 return shipments; intentional offline test rows remain unchanged."
+  },
+  "implementation": {
+    "prepShipBranch": "prepshipv4-stable",
+    "prepShipRuntimeCommit": "7c8cca4d1312379257948b728257be5353b60d90",
+    "clientPortalBranch": "main",
+    "clientPortalRuntimeCommit": "fb3cfb34d31138e2aabaa5a326d111787eb0f105"
+  },
+  "readOnlyClassification": {
+    "totalReturnShipments": 5,
+    "offlineTestNoCharge": 3,
+    "exactPersistedProviderReceiptCandidates": 2,
+    "insufficientEvidence": 0,
+    "candidateBillingLines": 0,
+    "candidateFinalizedPeriods": 0
+  },
+  "rollbackOnlyPreflight": {
+    "guardPassed": true,
+    "expectedCount": 2,
+    "wouldUpdateCount": 2,
+    "transactionRolledBack": true,
+    "canonicalPolicyVersion": "ps-437-v1"
+  },
+  "apply": {
+    "command": "npx tsx scripts/ps-437-reconcile-return-money.ts --apply --confirm-production --expected-count=2",
+    "updatedCount": 2,
+    "rows": [
+      {
+        "returnId": 4,
+        "shipmentId": 28887,
+        "selectedRateCost": 5.58,
+        "cShippingRateAmount": 6.77,
+        "shippingMarginAmount": 1.19,
+        "shippingMarginPct": 17.6,
+        "policyVersion": "ps-437-v1"
+      },
+      {
+        "returnId": 6,
+        "shipmentId": 28889,
+        "selectedRateCost": 5.70,
+        "cShippingRateAmount": 6.77,
+        "shippingMarginAmount": 1.07,
+        "shippingMarginPct": 15.8,
+        "policyVersion": "ps-437-v1"
+      }
+    ]
+  },
+  "after": {
+    "frozenPolicyTupleCount": 2,
+    "offlineTestNoChargeCount": 3,
+    "canonicalDeltaZeroCount": 2,
+    "remainingExactEvidenceCandidates": 0,
+    "candidateBillingLines": 0,
+    "candidateFinalizedPeriods": 0
+  },
+  "safety": {
+    "tablesUpdated": {
+      "shipments": 2,
+      "returns": 2,
+      "orders": 0,
+      "billing_line_items": 0,
+      "billing_finalizations": 0
+    },
+    "shipmentFieldsUpdated": [
+      "selected_rate_cost",
+      "selected_rate_json customer-shipping-money tuple",
+      "updated_at"
+    ],
+    "returnFieldsUpdated": [
+      "return_customer_shipping_rate compatibility alias",
+      "updated_at"
+    ],
+    "statusChanges": 0,
+    "providerCalls": 0,
+    "labelsPurchasedOrVoided": 0,
+    "postageCharges": 0,
+    "marketplaceNotifications": 0,
+    "printJobs": 0,
+    "inventoryMovements": 0,
+    "customerOrSecretDataRecorded": false
+  }
+}
