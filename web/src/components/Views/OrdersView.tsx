@@ -271,7 +271,7 @@ import {
 // PS-317: pure Best-Rate helpers extracted to ./orders/best-rate/*.
 import { getAppliedRateDims, getAppliedRateWeightOz, sanitizeRecalculateError } from './orders/best-rate/rate-values'
 import { residentialForRate, buildRateRequestDraftKey, orderShippingHold } from './orders/best-rate/rate-request'
-import { getBackendRateResponseFingerprint, withRateRequestMetadata, getSavedBestRateRecord, buildSelectedRateProofPayload, buildRateQuoteRefForOrder, getRateBaseAmount } from './orders/best-rate/rate-proof'
+import { getBackendRateResponseFingerprint, withRateRequestMetadata, getSavedBestRateRecord, buildRateQuoteRefForOrder, getRateBaseAmount } from './orders/best-rate/rate-proof'
 import { hasSavedBestRateForRequest, hasValidSavedBestRateForRequest, hasAnySavedBestRateForDisplay } from './orders/best-rate/rate-display-predicates'
 import { createBestRateHelpers } from './orders/best-rate/rate-helpers'
 
@@ -2883,7 +2883,8 @@ export default function OrdersView({
         // PS-204: proof candidates filtered to the account this batch payload
         // charges (shippingProviderId above) — same binding the panel payload
         // and the backend boundary enforce.
-        selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId),
+        // Per user override unlock shipped data on 2026-05-23: PS-422 sends
+        // only the opaque backend selectionRef through Print Queue.
         ...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId),
         testLabel: Boolean(options.batchTestMode) || orderIsTest,
       }
@@ -2989,8 +2990,8 @@ export default function OrdersView({
     const dims = getDimensions(order, orderDetail)
     const weightOz = getOrderWeightOz(order, orderDetail)
     const shippingOptions = buildOrderShippingOptionsPayload(order)
-    const selectedRateProof = buildSelectedRateProofPayload(order, rate)
-    if (!selectedRateProof || !serviceCode || !carrierCode || shippingProviderId == null) return null
+    const selection = buildRateQuoteRefForOrder(order, rate, shippingProviderId)
+    if (!selection.selectionRef || !serviceCode || !carrierCode || shippingProviderId == null) return null
     return {
       serviceCode,
       carrierCode,
@@ -3003,8 +3004,7 @@ export default function OrdersView({
       confirmation: shippingOptions.confirmation,
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue,
-      selectedRateProof,
-      ...buildRateQuoteRefForOrder(order, rate, shippingProviderId),
+      ...selection,
       testLabel: batchTestMode || isBackendTestOrder(order),
     }
   }
@@ -3458,7 +3458,6 @@ export default function OrdersView({
       // a DIFFERENT account can no longer ride along as "proof" for this
       // purchase (the order-1484 class: pid 10000025 with an se-565377 proof).
       // The backend boundary independently enforces the same binding.
-      selectedRateProof: buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate, isTest ? null : shippingProviderId),
       ...buildRateQuoteRefForOrder(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate, isTest ? null : shippingProviderId),
       testLabel: isTest || mode === 'test',
       shipTo: {
@@ -3491,9 +3490,9 @@ export default function OrdersView({
     // the chosen account instead of letting the purchase fail server-side with
     // a generic proof error. (No proof at all = unchanged: the backend proof
     // gate rejects exactly as before.)
-    if (!isTest && !payload.selectedRateProof && !payload.rateQuoteId) {
-      const unfiltered = buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate)
-      if (unfiltered) {
+    if (!isTest && !payload.selectionRef) {
+      const unfiltered = buildRateQuoteRefForOrder(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate)
+      if (unfiltered.selectionRef) {
         const accountLabel = account?.nickname || account?._label || `account ${shippingProviderId}`
         showToast(
           `The displayed rate belongs to a different carrier account — Browse Rates for ${accountLabel} before purchasing`,
@@ -3509,7 +3508,7 @@ export default function OrdersView({
       !isTest &&
       !panelRatePreview[0] &&
       Boolean(order.bestRate) &&
-      (Boolean(payload.selectedRateProof) || Boolean(payload.rateQuoteId))
+      Boolean(payload.selectionRef)
     if (
       usingSavedDisplayedRateProof &&
       workflowRecord?.canUseDisplayedRateForPurchase === false
@@ -4962,11 +4961,11 @@ export default function OrdersView({
         const outcome = await runCreatePrintChain(batchOrders, {
           needsOverride: (order) =>
             !isBackendTestOrder(order) &&
-            !buildSelectedRateProofPayload(
+            !buildRateQuoteRefForOrder(
               order,
               order.bestRate ?? order.selectedRate,
               resolveOrderShippingProviderId(order),
-            ),
+            ).selectionRef,
           recalculate: async (order) => {
             const request = getAutoBestRateRequest(order)
             if (!request) return { ok: false as const, message: 'Recalculate current best rate before label purchase' }

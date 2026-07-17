@@ -130,9 +130,9 @@ check(
     /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?/.test(buildPayload),
 );
 check(
-  'intent payload carries the account-bound selectedRateProof + rate-quote ref (relocated proof/binding)',
-  /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildPayload) &&
-    /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildPayload) &&
+  'intent payload carries the account-filtered opaque selectionRef',
+  /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildPayload) &&
+    !/selectedRateProof: buildSelectedRateProofPayload/.test(buildPayload) &&
     /shippingProviderId: shippingProviderId \?\? undefined/.test(buildPayload),
 );
 
@@ -146,10 +146,11 @@ check(
 );
 const labelsSource = readFileSync('src/services/labels.ts', 'utf8');
 check(
-  'backend enforces the selected-rate proof + account binding before ANY purchase',
+  'backend resolves selectionRef and revalidates current account identity before purchase',
   /assertLabelPurchaseRateSelection\(\{/.test(labelsSource) &&
-    /selectedRateProof: body\.selectedRateProof,/.test(labelsSource) &&
-    /purchaseShippingProviderId: body\.shippingProviderId,/.test(labelsSource),
+    /selectionRef: body\.selectionRef,/.test(labelsSource) &&
+    /assertShippingQuoteAccountMatches\(\{/.test(labelsSource) &&
+    /authorized: purchaseRateProof\.accountAuthorization/.test(labelsSource),
 );
 check(
   'backend owns the direct-carrier purchase (relocated from the deleted FE buy)',

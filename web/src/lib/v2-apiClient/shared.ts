@@ -653,9 +653,21 @@ export function translateRatePayloadToV4(
     : typeof input.clientId === 'string'
       ? Number.parseInt(input.clientId, 10)
       : NaN;
+  const numericShipFromLocationId = typeof input.shipFromLocationId === 'number'
+    ? input.shipFromLocationId
+    : typeof input.shipFromLocationId === 'string'
+      ? Number.parseInt(input.shipFromLocationId, 10)
+      : NaN;
+  const numericCustomPackageId = typeof input.customPackageId === 'number'
+    ? input.customPackageId
+    : typeof input.customPackageId === 'string'
+      ? Number.parseInt(input.customPackageId, 10)
+      : NaN;
   if (Number.isFinite(numericOrderId)) out.orderId = numericOrderId;
   if (Number.isFinite(numericStoreId)) out.storeId = numericStoreId;
   if (Number.isFinite(numericClientId)) out.clientId = numericClientId;
+  if (Number.isFinite(numericShipFromLocationId)) out.shipFromLocationId = numericShipFromLocationId;
+  if (Number.isFinite(numericCustomPackageId)) out.customPackageId = numericCustomPackageId;
   if (input.shipFrom && typeof input.shipFrom === 'object') out.shipFrom = input.shipFrom;
 
   // dims: v4 uses flat dimsL/W/H; v2 wraps them under `dimensions`.
@@ -793,6 +805,7 @@ export function translateRateToLegacyDisplayShape(r: unknown): Record<string, un
       // legacy cache), which keeps those rates structurally non-purchasable.
       rateQuoteId: obj.rateQuoteId ?? null,
       selectedRateKey: obj.selectedRateKey ?? null,
+      selectionRef: obj.selectionRef ?? null,
       secondBestRate: obj.secondBestRate ? translateRateToLegacyDisplayShape(obj.secondBestRate) : null,
       isComplete: obj.isComplete ?? null,
       rateCount: obj.rateCount ?? null,

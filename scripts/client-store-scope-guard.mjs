@@ -100,8 +100,8 @@ assert(scopeSource.includes('scope:global'), 'client/store scope helper supports
 assert(
   scopeSource.includes("auth.role === 'operator'") &&
     scopeSource.includes("auth.role === 'warehouse'") &&
-    scopeSource.includes("'print_queue:write'"),
-  'internal ops scope helper does not let portal tenant claims constrain internal operators',
+    !scopeSource.includes("auth.permissions?.includes('print_queue:write')"),
+  'internal roles stay global, while print_queue:write alone does not widen tenant scope',
 );
 assert(
   scopeSource.includes('if (explicitGlobal)') &&

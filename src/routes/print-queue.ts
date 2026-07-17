@@ -547,13 +547,8 @@ const queueSendLabelBody = z.object({
   insuredValue: z.number().nullable().optional(),
   notifyCustomer: z.boolean().optional(),
   testLabel: z.boolean().optional(),
-  // The backend-issued selected-rate proof the frontend captured for this order.
-  // Without this field zValidator strips it from the body, the durable queue
-  // worker calls createLabelV2 with selectedRateProof: undefined, and
-  // assertSelectedRateProofForLabelPurchase rejects with
-  // missing_current_fingerprint -> the user's recurring "Rate changed or
-  // expired" loop on real orders. .passthrough() preserves the full selectedRate
-  // object so the backend can recompute its fingerprint at the purchase boundary.
+  // Legacy transport compatibility only. PS-422 never treats this carried
+  // object as purchase authority; real purchases require selectionRef.
   selectedRateProof: z
     .object({
       requestFingerprint: z.string().nullable().optional(),
@@ -562,8 +557,9 @@ const queueSendLabelBody = z.object({
     })
     .passthrough()
     .optional(),
-  // PS-105: backend-owned rate quote snapshot id + chosen rate authority key.
-  // Preferred over selectedRateProof when a missing label must be created to queue.
+  selectionRef: z.string().min(1).nullable().optional(),
+  // Legacy transport compatibility only; the worker does not authorize from
+  // this reconstructable pair.
   rateQuoteId: z.string().min(1).nullable().optional(),
   selectedRateKey: z.string().min(1).nullable().optional(),
 });
@@ -659,13 +655,9 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
               insuredValue: order.label.insuredValue ?? undefined,
               notifyCustomer: order.label.notifyCustomer,
               testLabel: order.label.testLabel,
-              // Forward the selected-rate proof so the durable queue worker can
-              // satisfy assertSelectedRateProofForLabelPurchase. Omitting it here
-              // is what dropped the proof and produced missing_current_fingerprint.
+              // Legacy fields are forwarded for response compatibility only.
               selectedRateProof: order.label.selectedRateProof,
-              // PS-105: forward the backend-owned snapshot id + rate key too, so the
-              // worker's createLabelV2 can prefer it (selectedRateProof stays as
-              // the compatibility fallback). Dropping these would force legacy-only.
+              selectionRef: order.label.selectionRef,
               rateQuoteId: order.label.rateQuoteId,
               selectedRateKey: order.label.selectedRateKey,
             }

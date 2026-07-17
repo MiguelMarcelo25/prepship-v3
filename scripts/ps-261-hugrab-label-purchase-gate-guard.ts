@@ -247,15 +247,13 @@ const printQueueRoute = read('src/routes/print-queue.ts');
 check('print-queue service imports createLabelV2 as the missing-label purchase boundary',
   /import \{[\s\S]*?createLabelV2,[\s\S]*?type CreateLabelInputDto,[\s\S]*?type LabelCreateTimingBreakdown,[\s\S]*?\} from '\.\/labels'/.test(printQueue));
 check('print-queue missing-label path delegates to createLabelV2 (therefore uses the same PS-261 preflight)',
-  /const labelInput = order\.label;[\s\S]*?const created = await timeQueueStep\([\s\S]*?'labelPurchaseMs'[\s\S]*?return await createLabelV2\(\{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?\}, GLOBAL_SCOPE\)/.test(printQueue));
+  /const labelInput = order\.label;[\s\S]*?const created = await timeQueueStep\([\s\S]*?'labelPurchaseMs'[\s\S]*?return await createLabelV2\(\{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?\}, labelPurchaseScope\)/.test(printQueue));
 check('print-queue does NOT recompute HUGRAB coverage or call provider purchase APIs directly',
   !/resolveHugrabLabelPurchasePreflight|resolveHugrabLabelPurchaseGate|createDirectCarrierLabelForOrder|createLabelShipp|createLabelEasyPost/.test(printQueue));
-check('print-queue route schema preserves selectedRateProof for the createLabelV2 purchase boundary',
-  /selectedRateProof: z[\s\S]*?\.passthrough\(\)[\s\S]*?\.optional\(\)/.test(printQueueRoute));
-check('print-queue route forwards selectedRateProof + rateQuoteId + selectedRateKey into the worker label payload',
-  /selectedRateProof: order\.label\.selectedRateProof/.test(printQueueRoute) &&
-  /rateQuoteId: order\.label\.rateQuoteId/.test(printQueueRoute) &&
-  /selectedRateKey: order\.label\.selectedRateKey/.test(printQueueRoute));
+check('print-queue route schema preserves opaque selectionRef for the createLabelV2 purchase boundary',
+  /selectionRef: z\.string\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/.test(printQueueRoute));
+check('print-queue route forwards selectionRef into the worker label payload',
+  /selectionRef: order\.label\.selectionRef/.test(printQueueRoute));
 check('print-queue failed label purchases stay failed job results, not queued successes',
   // Repointed (guard rot): the batch-print rework names the failed result before pushing.
   /const retry = classifyLabelPurchaseRetry\(err\);[\s\S]*?const failedResult: QueueSendJobResult = \{[\s\S]*?success: false,[\s\S]*?job\.results\.push\(failedResult\)/.test(printQueue));

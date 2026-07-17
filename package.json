@@ -285,6 +285,7 @@
     "test:ps-403-print-queue-pdf-chunks": "tsx scripts/ps-403-print-queue-pdf-chunks-guard.ts",
     "test:ps-403-rate-browser-provider-timeouts": "tsx scripts/ps-403-rate-browser-provider-timeouts-guard.ts",
     "test:ps-419-strict-rate-snapshot": "tsx scripts/ps-419-strict-rate-snapshot-no-legacy-fallback-guard.ts",
+    "test:ps-422-shipping-quote-authorization": "tsx scripts/ps-422-shipping-quote-authorization-guard.ts",
     "test:ps-418-reporting-projection": "tsx scripts/ps-418-reporting-projection-sot-guard.ts",
     "test:ps-213-top-combos": "tsx scripts/ps-213-top-combos-guard.ts",
     "test:ps-210-global-orders-search": "tsx scripts/ps-210-global-orders-search-guard.ts",

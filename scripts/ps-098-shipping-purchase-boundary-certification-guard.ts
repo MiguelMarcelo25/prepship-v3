@@ -115,26 +115,12 @@ check(
 // keeps the still-live FE intent-payload proof shapes, (2) asserts the FE direct-buy is GONE
 // (anti-regression), and (3) RE-POINTS the deleted property to its new owners.
 check(
-  'frontend passes backend-issued selectedRateProof through label and queue intent payloads',
-  // PS-317: DEFINE check re-pointed to the new owner best-rate/rate-proof.ts (positive test →
-  // fails loud if the function is absent). The call-site census stays on OrdersView, but is
-  // SUMMED across OrdersView + the new file so the count can never undershoot if a call site
-  // ever moves too.
-  bestRateProof.includes('function buildSelectedRateProofPayload') &&
-    // The remaining FE proof flows: 2 INLINE property sites `selectedRateProof:
-    // buildSelectedRateProofPayload(order, ...)` (the queue INTENT payload in
-    // buildQueueSendOrderPayload + the panel single), and the BATCH-CREATE
-    // `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
-    // with the PS-204 account-binding 3rd arg. (The deleted direct-buy override-wrapper
-    // shape is asserted GONE below, not here.)
-    ((ordersView + bestRateProof).match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    // 2026-07-07 cleanup: the legacy batch loop's `let selectedRateProof = ...(order, proofRate,
-    // orderIsTest ? null : shippingProviderId)` is deleted with the loop. The chain carries the
-    // same account-bound proof: needsOverride probes with the PS-204 third arg, and the
-    // override payload re-derives proof from the SAME fresh rate.
-    ordersView.includes('resolveOrderShippingProviderId(order),') &&
-    ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
-    ordersView.includes('selectedRateProof,'),
+  'frontend passes only the backend-issued selectionRef through label and queue intent payloads',
+  bestRateProof.includes('function buildRateQuoteRefForOrder') &&
+    !/selectedRateProof: buildSelectedRateProofPayload/.test(ordersView) &&
+    ordersView.includes('...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId),') &&
+    ordersView.includes('const selection = buildRateQuoteRefForOrder(order, rate, shippingProviderId)') &&
+    ordersView.includes('...selection,'),
 );
 
 // PS-317 A4 anti-regression: the frontend must BUY NOTHING for direct carriers. The deleted
@@ -153,9 +139,9 @@ check(
 // on the queue-send payload (buildQueueSendOrderPayload, ~line 3107), so the backend purchase
 // owner receives exactly what the FE buy used to enforce locally.
 check(
-  'queue-send INTENT payload carries the proof + account binding + rate-quote ref the deleted FE buy used to carry',
+  'queue-send INTENT payload carries the account-filtered opaque selectionRef',
   ordersView.includes('function buildQueueSendOrderPayload') &&
-    ordersView.includes('selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId)') &&
+    !ordersView.includes('selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId)') &&
     ordersView.includes('shippingProviderId: shippingProviderId ?? undefined') &&
     /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView),
 );
@@ -166,9 +152,10 @@ check(
 // labels server-side (directLabelAccountRefFromProviderId → createDirectCarrierLabelForOrder).
 // This is where the protection the deleted FE buy used to own now lives.
 check(
-  'backend owns the direct-carrier purchase: print-queue worker → createLabelV2 proof-gated direct buy',
+  'backend owns the direct-carrier purchase and validates current credential identity',
   printQueueService.includes('createLabelV2(') &&
-    labelsService.includes('purchaseShippingProviderId: body.shippingProviderId') &&
+    labelsService.includes('selectionRef: body.selectionRef') &&
+    labelsService.includes('assertShippingQuoteAccountMatches({') &&
     indexAfter(
       labelsService,
       'const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);',

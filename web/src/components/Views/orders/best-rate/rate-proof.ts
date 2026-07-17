@@ -111,9 +111,9 @@ export function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?
   ], { forShippingProviderId });
 }
 
-// PS-105/PS-135: backend-owned rate-quote ref for label/queue payloads — mirrors the proof
-// candidate selection so id/key match the proof's rate.
-export function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown): { rateQuoteId?: string; selectedRateKey?: string } {
+// PS-422: pass through the backend-minted opaque selectionRef. The frontend
+// cannot reconstruct purchase authority from displayed rate fields.
+export function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown): { selectionRef?: string } {
   return rateQuoteRefFromCandidates([
     toRecord(candidate),
     toRecord(order.bestRate),

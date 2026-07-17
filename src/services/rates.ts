@@ -111,6 +111,10 @@ import {
   safeCarrierAccountIdentifier,
   type StoreAccountIdentity,
 } from './carrier-account-identity';
+import {
+  shippingQuoteCredentialFingerprint,
+  type ShippingQuoteAccountAuthorization,
+} from './shipping-workflow/shipping-quote-authorization';
 
 type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
@@ -1022,6 +1026,7 @@ export type DirectCarrierRatesResult = {
   errors: DirectCarrierRateError[];
   metas: DirectCarrierRateMeta[];
   diagnostics: CarrierRateDiagnostic[];
+  authorizationAccounts: ShippingQuoteAccountAuthorization[];
 };
 
 // PS-132: derived from the single backend carrier-account registry (src/lib/
@@ -2468,7 +2473,9 @@ export async function getDirectCarrierRatesForRateInput(
     }
     return true;
   });
-  if (!accounts.length) return { rates: [], errors: [], metas: [], diagnostics: [] };
+  if (!accounts.length) {
+    return { rates: [], errors: [], metas: [], diagnostics: [], authorizationAccounts: [] };
+  }
   // PS-206: cachedOnly means cached-only across the WHOLE combined universe.
   // Direct carriers have no rate cache today, so a cached-only lookup must NOT
   // live-quote them (the old behavior silently fired provider calls during the
@@ -2481,6 +2488,7 @@ export async function getDirectCarrierRatesForRateInput(
       rates: [],
       errors: [],
       metas: [],
+      authorizationAccounts: [],
       diagnostics: accounts.map((account) => {
         const shippingProviderId = directProviderIdFromAccount(account);
         return {
@@ -2547,6 +2555,7 @@ export async function getDirectCarrierRatesForRateInput(
           meta: null,
         }],
         metas: [] as DirectCarrierRateMeta[],
+        authorizationAccounts: [] as ShippingQuoteAccountAuthorization[],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
           accountId: String(account.id),
@@ -2706,6 +2715,18 @@ export async function getDirectCarrierRatesForRateInput(
         rates,
         errors: [] as DirectCarrierRateError[],
         metas: [{ accountId: account.id, shippingProviderId, sourceTable: account.sourceTable, provider: meta.provider, meta }],
+        authorizationAccounts: [{
+          providerFamily: 'direct',
+          provider: normalizeProviderKey(account.provider),
+          shippingProviderId,
+          sourceTable: account.sourceTable,
+          sourceAccountId: account.id,
+          ownerClientId: account.clientId,
+          ownerStoreAccountId: account.linkedStoreAccountId,
+          credentialSource: account.sourceTable === 'store_accounts' ? 'store_account' : 'carrier_account',
+          credentialFingerprint: shippingQuoteCredentialFingerprint(account.credentials),
+          environment: process.env.NODE_ENV ?? 'development',
+        }] satisfies ShippingQuoteAccountAuthorization[],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
           accountId: String(account.id),
@@ -2741,6 +2762,7 @@ export async function getDirectCarrierRatesForRateInput(
           meta: null,
         }],
         metas: [] as DirectCarrierRateMeta[],
+        authorizationAccounts: [] as ShippingQuoteAccountAuthorization[],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
           accountId: String(account.id),
@@ -2763,5 +2785,6 @@ export async function getDirectCarrierRatesForRateInput(
     errors: settled.flatMap((item) => item.errors),
     metas: settled.flatMap((item) => item.metas),
     diagnostics: settled.map((item) => item.diagnostic),
+    authorizationAccounts: settled.flatMap((item) => item.authorizationAccounts),
   };
 }

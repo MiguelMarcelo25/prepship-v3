@@ -179,29 +179,15 @@ export function findCanonicalBestRate<T>(backendBest: unknown, candidates: T[]):
 }
 
 /**
- * Backend-owned rate-quote reference ({ rateQuoteId, selectedRateKey }) for label/queue
- * payloads — mirrors selectProofFromCandidates's selection so id/key match the proof's rate.
- * Additive: omits fields the rate doesn't carry (the proof path is then used).
- *
- * PS-198: a candidate carrying BOTH opaque ids is a complete backend snapshot ref on its
- * own — /rates/browse is the only minter, and the purchase boundary validates the pair
- * server-side against the stored snapshot. It therefore wins even when the legacy
- * proofSource/requestFingerprint fields were dropped by a display translation. Candidates
- * without the pair still require the legacy backend proof (unchanged), and a rate with
- * neither yields {} — never synthesized.
+ * PS-422: select the single opaque purchase authorization minted by the backend.
+ * The frontend may filter by the operator-selected account, but it cannot rebuild
+ * the snapshot id/key pair or any facts bound inside the authorization.
  */
 export function rateQuoteRefFromCandidates(
   candidates: Array<Rec | null | undefined>,
   options?: ProofCandidateOptions,
-): { rateQuoteId?: string; selectedRateKey?: string } {
+): { selectionRef?: string } {
   const list = filterCandidatesForAccount(candidates.filter(Boolean) as Rec[], options);
-  const snapshotRef = list.find((r) => toStr(r.rateQuoteId) && toStr(r.selectedRateKey)) ?? null;
-  const rate = snapshotRef ?? list.find((r) => hasBackendIssuedRateProof(r) && rateProofFingerprint(r)) ?? null;
-  if (!rate) return {};
-  const rateQuoteId = toStr(rate.rateQuoteId);
-  const selectedRateKey = toStr(rate.selectedRateKey);
-  const ref: { rateQuoteId?: string; selectedRateKey?: string } = {};
-  if (rateQuoteId) ref.rateQuoteId = rateQuoteId;
-  if (selectedRateKey) ref.selectedRateKey = selectedRateKey;
-  return ref;
+  const selectionRef = toStr(list.find((rate) => toStr(rate.selectionRef))?.selectionRef);
+  return selectionRef ? { selectionRef } : {};
 }

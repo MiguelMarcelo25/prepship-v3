@@ -44,8 +44,9 @@ const proofResolver = read('src/services/shipping-workflow/rate-quote-snapshot-s
 check(
   'ShipStation label service enforces the selected-rate boundary before real postage',
   labelsService.includes('await assertLabelPurchaseRateSelection(') &&
-    labelsService.includes('body.selectedRateProof') &&
-    labelsService.includes('Per user override unlock shipped data on 2026-06-06') &&
+    labelsService.includes('selectionRef: body.selectionRef') &&
+    labelsService.includes('Per user override unlock shipped data on 2026-05-23') &&
+    labelsService.includes('assertShippingQuoteAccountMatches({') &&
     proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 
@@ -78,37 +79,13 @@ check(
 // binding + rate-quote ref the deleted buy used to carry are STILL sent, relocated
 // into the buildQueueSendOrderPayload INTENT payload that feeds the backend owner.
 check(
-  'FE direct-carrier label BUY is gone; queue intent still carries the account-bound selected-rate proof',
-  // PS-317: DEFINE check re-pointed to the new owner best-rate/rate-proof.ts (positive test →
-  // fails loud if absent). The call-site census stays on OrdersView but is summed with the new
-  // file so the count can never undershoot if a call site relocates too.
-  bestRateProof.includes('function buildSelectedRateProofPayload') &&
-    // (1) ANTI-REGRESSION: the deleted frontend direct-carrier buy must NOT come
-    // back. createDirectCarrierLabelThenQueue is gone, and there must be no
-    // `const selectedRateProof = ...(order, bestRate ?? selectedRate, shippingProviderId)`
-    // local-buy wrapper (the proof variable that buy used to assemble before its
-    // own apiClient.createLabel). Backend now owns the direct-carrier purchase.
+  'FE direct-carrier label BUY is gone; queue intent carries only the account-filtered opaque selectionRef',
+  bestRateProof.includes('function buildRateQuoteRefForOrder') &&
     !ordersView.includes('createDirectCarrierLabelThenQueue') &&
-    !/const selectedRateProof =[\s\S]{0,120}?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
-    // (2) RELOCATED: the queue-send INTENT payload (buildQueueSendOrderPayload, the
-    // payload print-queue.ts/createLabelV2 consume) still emits the account-bound
-    // selectedRateProof AND the rate-quote ref — the same proof/binding the deleted
-    // FE buy used to carry directly into apiClient.createLabel. shippingProviderId is
-    // both the payload's charged account and the proof's account filter (third arg).
+    !/selectedRateProof: buildSelectedRateProofPayload/.test(ordersView) &&
     ordersView.includes('function buildQueueSendOrderPayload') &&
-    /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\n\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
-    // The honest census of `selectedRateProof:` property sites sourced from
-    // buildSelectedRateProofPayload is TWO: the panel single payload + this queue
-    // INTENT payload. Both must be ACCOUNT-BOUND (third arg = shippingProviderId).
-    // PS-317: census summed across OrdersView + best-rate/rate-proof.ts so the count
-    // never undershoots if a call site relocates.
-    ((ordersView + bestRateProof).match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    // 2026-07-07 cleanup: the batch-create FE label call is DELETED (the chain sends queue
-    // intent instead). Its account-bound proof survives as the chain's needsOverride probe
-    // (PS-204 third arg) + the fresh-rate override payload proof.
-    ordersView.includes('resolveOrderShippingProviderId(order),') &&
-    ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
-    /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView),
+    /buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+    /buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView),
 );
 
 check(

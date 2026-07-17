@@ -122,7 +122,7 @@ check('backend process creates missing labels through createLabelV2 with worker 
   processBlock.includes('...labelInput') &&
   processBlock.includes('orderId: order.orderId') &&
   processBlock.includes('orderNumber: order.orderNumber ?? labelInput.orderNumber') &&
-  processBlock.includes('}, GLOBAL_SCOPE)'));
+  processBlock.includes('}, labelPurchaseScope)'));
 check('backend process recovers labels created before a later queue failure',
   processBlock.includes('existingLabelUrl = getExistingLabelUrl(err)') &&
   processBlock.includes('findExistingQueueSendLabel(order)') &&
@@ -164,16 +164,10 @@ const routePlanBlock = blockBetween(
   "app.post(\n  '/clear'",
 );
 
-check('/batch-send schema preserves backend selected-rate proof and snapshot refs',
-  printQueueRoute.includes('selectedRateProof: z') &&
-  printQueueRoute.includes('.passthrough()') &&
-  printQueueRoute.includes('rateQuoteId: z.string().min(1).nullable().optional()') &&
-  printQueueRoute.includes('selectedRateKey: z.string().min(1).nullable().optional()'));
-check('/batch-send forwards selectedRateProof into startQueueSendJob label payload',
-  batchSendBlock.includes('selectedRateProof: order.label.selectedRateProof'));
-check('/batch-send forwards rateQuoteId and selectedRateKey into the worker',
-  batchSendBlock.includes('rateQuoteId: order.label.rateQuoteId') &&
-  batchSendBlock.includes('selectedRateKey: order.label.selectedRateKey'));
+check('/batch-send schema preserves the opaque backend selectionRef',
+  printQueueRoute.includes('selectionRef: z.string().min(1).nullable().optional()'));
+check('/batch-send forwards selectionRef into the worker',
+  batchSendBlock.includes('selectionRef: order.label.selectionRef'));
 check('/batch-send starts the backend queue-send job, not a frontend purchase loop',
   batchSendBlock.includes('const result = await startQueueSendJob({') &&
   batchSendBlock.includes('orders: b.orders.map((order) => ({'));
@@ -195,10 +189,8 @@ check('label purchase proof gate runs before direct and ShipStation provider bra
   proofIndex >= 0 &&
   directBranchIndex > proofIndex &&
   shipStationBranchIndex > directBranchIndex);
-check('label proof gate accepts snapshot refs from the queue worker',
-  labels.includes('rateQuoteId: body.rateQuoteId') &&
-  labels.includes('selectedRateKey: body.selectedRateKey') &&
-  labels.includes('selectedRateProof: body.selectedRateProof'));
+check('label proof gate accepts the opaque selectionRef from the queue worker',
+  labels.includes('selectionRef: body.selectionRef'));
 
 const envText = read('src/lib/env.ts');
 check('backend route-plan flag defaults off',

@@ -30,6 +30,10 @@ import {
   type SelectedRateValidationResult,
 } from './rate-fingerprint.js';
 import { CACHE_TTL_MS } from '../rates.js';
+import type {
+  ShippingQuoteAccountAuthorization,
+  ShippingQuoteAuthorizationContext,
+} from './shipping-quote-authorization.js';
 
 /**
  * Short-lived snapshot freshness window. SLAVED to the saved best-rate cache TTL
@@ -54,6 +58,14 @@ export type RateQuoteSnapshot = {
   bestRateKey?: string | null;
   /** True only when the required carrier universe completed for this quote. */
   bestRateComplete?: boolean | null;
+  /**
+   * PS-422 purchase authority. Absent on calculators/backfills that are not
+   * attached to one concrete order and therefore may never authorize postage.
+   */
+  authorization?: {
+    context: ShippingQuoteAuthorizationContext;
+    accounts: ShippingQuoteAccountAuthorization[];
+  } | null;
 };
 
 export type ResolveRateQuoteResult =

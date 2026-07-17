@@ -145,10 +145,10 @@ check('proof identity readable from raw + shippingProviderId forms',
     selectProofFromCandidates([ssProofRate], { forShippingProviderId: 10000025 }) === undefined);
   check('selectProofFromCandidates unchanged without binding (legacy callers)',
     selectProofFromCandidates([ssProofRate])?.selectedRate === ssProofRate);
-  const snapRef = { rateQuoteId: 'rq_1', selectedRateKey: 'srk_1', carrier_id: 'se-565377' };
-  check('rateQuoteRefFromCandidates excludes cross-account snapshot ref when bound',
+  const snapRef = { selectionRef: 'qsel_opaque', carrier_id: 'se-565377' };
+  check('rateQuoteRefFromCandidates excludes cross-account opaque ref when bound',
     Object.keys(rateQuoteRefFromCandidates([snapRef], { forShippingProviderId: 10000025 })).length === 0 &&
-    rateQuoteRefFromCandidates([snapRef]).rateQuoteId === 'rq_1');
+    rateQuoteRefFromCandidates([snapRef]).selectionRef === 'qsel_opaque');
   check('rateProviderAccountKey mirrors backend normalization (se-/numeric forms)',
     rateProviderAccountKey({ carrier_id: 'se-10000025' }) === '10000025' &&
     rateProviderAccountKey({ shippingProviderId: '565377' }) === '565377');
@@ -180,22 +180,23 @@ check('proof identity readable from raw + shippingProviderId forms',
 
 // ── (7) Wiring pins: the binding is enforced at the real boundaries ───────────
 const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
-check('assertLabelPurchaseRateSelection binds the purchase account to the strict snapshot proof',
-  (store.match(/assertPurchaseAccountMatchesProof\(\{/g) ?? []).length >= 1 &&
-  !/selectedRate: body\.selectedRateProof\?\.selectedRate/.test(store) &&
-  /purchaseShippingProviderId\?: unknown/.test(store));
+check('assertLabelPurchaseRateSelection requires a stored typed account authorization',
+  /authorization\?\.accounts\.find\(\(account\) => account\.shippingProviderId === providerId\)/.test(store) &&
+  /if \(!authorization\?\.context \|\| !accountAuthorization\)/.test(store) &&
+  /ShippingQuoteAuthorizationError\('order or carrier credential identity'\)/.test(store));
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
-check('createLabelV2 passes the payload account into the purchase boundary',
-  /purchaseShippingProviderId: body\.shippingProviderId/.test(labelsService));
+check('createLabelV2 replaces the payload account with the authorized account',
+  /shippingProviderId: authorizedPurchaseFacts\.shippingProviderId/.test(labelsService) &&
+  /shippingQuoteAuthorizedPurchaseFacts\(purchaseSelection\)/.test(labelsService) &&
+  /assertShippingQuoteAccountMatches\(\{/.test(labelsService));
 const ssLabels = readFileSync('src/lib/shipstation/labels.ts', 'utf8');
 check('buildSsLabelRequestBody runs the synthetic-id assert before building',
   /assertSsCarrierIdIsNotSynthetic\(input\.carrierId\);/.test(ssLabels));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('panel payload proof + quote-ref are account-bound (isTest skips)',
-  /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
+check('panel opaque selectionRef is account-bound (isTest skips)',
   /buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView));
-check('batch queue payload proof is account-bound',
-  /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
+check('batch queue opaque selectionRef is account-bound',
+  /buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
 // PS-317 A4: the FE direct-carrier label BUY (createDirectCarrierLabelThenQueue,
 // which resolved a purchase account from overrideRecord ?? resolveOrderShippingProviderId
 // and fired apiClient.createLabel with a direct-carrier shipTo body) is DELETED. The
@@ -210,8 +211,9 @@ check('FE direct-carrier buy is GONE — createDirectCarrierLabelThenQueue canno
   !/toNumberValue\(overrideRecord\?\.shippingProviderId\)[\s\S]{0,160}\?\?\s*resolveOrderShippingProviderId\(order\)/.test(ordersView));
 // (2) Relocated to the INTENT payload: the queue-send payload still names the purchase
 //     account and account-binds BOTH the fallback proof and the rate-quote ref to it.
-check('queue-send INTENT payload (buildQueueSendOrderPayload) names the purchase account + account-binds fallback proof & ref',
-  /function buildQueueSendOrderPayload\([\s\S]*?shippingProviderId: shippingProviderId \?\? undefined,[\s\S]*?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),[\s\S]*?buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
+check('queue-send INTENT payload names the purchase account + account-filters the opaque selectionRef',
+  /function buildQueueSendOrderPayload\([\s\S]*?shippingProviderId: shippingProviderId \?\? undefined,[\s\S]*?buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+  !/function buildQueueSendOrderPayload\([\s\S]*?selectedRateProof: buildSelectedRateProofPayload/.test(ordersView));
 // (3) Relocated to the BACKEND owner: createLabelV2 detects the direct carrier and binds
 //     the purchase account on the SAME boundary that already gated ShipStation (the
 //     purchaseShippingProviderId pin at line ~174 proves the binding runs ahead of BOTH).

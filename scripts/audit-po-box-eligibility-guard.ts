@@ -80,7 +80,12 @@ assert.match(rates, /street1: input\.toAddress/);
 assert.match(rates, /destinationPoBox: residentialClassification\.poBox/);
 assert.match(rates, /destinationPoBox: input\.destinationPoBox/);
 assert.match(backfill, /toAddress:.*backfillRawShipTo\.street1/);
-assert.match(browse, /toAddress: rest\.toAddress \?\?/);
+assert.match(browse, /canonicalShipTo = resolveRecipientForShipping\(/);
+assert.match(
+  browse,
+  /toAddress: orderForBrowse \? readText\(orderRawShipTo\.street1\) \?\? undefined : rest\.toAddress/,
+  'order-backed browse must classify and quote the canonical recipient instead of caller-supplied address truth',
+);
 assert.match(ordersReadModel, /destinationPoBox:/);
 
 const labelImpl = labels.slice(labels.indexOf('async function createLabelV2Impl'));

@@ -216,8 +216,7 @@ check('orders route enriches rows through backend workflow DTO',
 const rateProof = read('web/src/lib/rate-proof.ts');
 check('frontend rate-proof helper reads backend proof and does not recompute fingerprint',
   rateProof.includes('NEVER recompute a fingerprint') &&
-  rateProof.includes('rateQuoteId') &&
-  rateProof.includes('selectedRateKey') &&
+  rateProof.includes('selectionRef') &&
   !rateProof.includes('createHash(') &&
   !rateProof.includes('buildShippingRateRequestFingerprint(') &&
   !rateProof.includes('selectedRateAuthorityKey('));
@@ -226,6 +225,7 @@ check('Rate Browser passes backend proof fields through instead of minting purch
   rateBrowser.includes('function rateBackendProof') &&
   rateBrowser.includes("'rateQuoteId'") &&
   rateBrowser.includes("'selectedRateKey'") &&
+  rateBrowser.includes("'selectionRef'") &&
   rateBrowser.includes("'proofSource'"));
 const useOrders = read('web/src/hooks/useOrders.ts');
 check('frontend row adapter prefers backend canonical shipping model before legacy fields',

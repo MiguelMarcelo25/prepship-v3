@@ -72,6 +72,7 @@ export interface OrderBestRateDto {
   proofSource: string | null;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
+  selectionRef: string | null;
   // PS-299: generic runner-up rate for Awaiting Shipment. This is the second cheapest
   // eligible/priced result from the SAME finalized backend rate-shopping pass as this
   // bestRate. It is not the house-account nextBestNonHouseRate competitor.
@@ -373,6 +374,7 @@ export interface SecondBestRateDto {
   proofSource: string | null;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
+  selectionRef: string | null;
 }
 
 function readRateInsuranceCoverageProofSource(record: Record<string, unknown>): InsuranceCoverageProofSource | null {
@@ -493,6 +495,7 @@ function normalizeSecondBestRate(value: unknown, path = 'bestRate.secondBestRate
     proofSource: readNullableString(value.proofSource ?? null, `${path}.proofSource`),
     rateQuoteId: readNullableString(value.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(value.selectedRateKey ?? null, `${path}.selectedRateKey`),
+    selectionRef: readNullableString(value.selectionRef ?? null, `${path}.selectionRef`),
   };
   return rate.serviceCode || rate.carrierCode || rate.shippingProviderId != null || rate.shipmentCost + rate.otherCost > 0
     ? rate
@@ -606,6 +609,7 @@ export function normalizeOrderBestRateDto(
     proofSource: readNullableString(record.proofSource ?? null, `${path}.proofSource`),
     rateQuoteId: readNullableString(record.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
+    selectionRef: readNullableString(record.selectionRef ?? null, `${path}.selectionRef`),
     secondBestRate: normalizeSecondBestRate(record.secondBestRate ?? record.second_best_rate, `${path}.secondBestRate`),
     nextBestNonHouseRate,
     houseMargin,

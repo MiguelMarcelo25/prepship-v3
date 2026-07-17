@@ -203,18 +203,17 @@ check('snapshot store blocks non-final quotes with no carried-proof fallback',
   !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
   !quoteStore.includes('assertSelectedRateProofForLabelPurchase(body.selectedRateProof'));
 checkPatterns('snapshot store validates account binding on the strict snapshot path', quoteStore, [
-  /assertPurchaseAccountMatchesProof\(\{/,
-  /purchaseShippingProviderId: input\.purchaseShippingProviderId/,
-  /selectedRate: resolved\.proof\.selectedRate/,
+  /authorization\?\.accounts\.find\(\(account\) => account\.shippingProviderId === providerId\)/,
+  /if \(!authorization\?\.context \|\| !accountAuthorization\)/,
+  /ShippingQuoteAuthorizationError\('order or carrier credential identity'\)/,
 ]);
 
 const labelsService = read('src/services/labels.ts');
-checkPatterns('createLabelV2 consumes selected-rate proof before direct and ShipStation purchase branches', labelsService, [
+checkPatterns('createLabelV2 resolves selectionRef and validates current context/account before provider branches', labelsService, [
   /await assertLabelPurchaseRateSelection\(\{/,
-  /rateQuoteId: body\.rateQuoteId/,
-  /selectedRateKey: body\.selectedRateKey/,
-  /selectedRateProof: body\.selectedRateProof/,
-  /purchaseShippingProviderId: body\.shippingProviderId/,
+  /selectionRef: body\.selectionRef/,
+  /assertShippingQuoteContextMatches\(\{/,
+  /assertShippingQuoteAccountMatches\(\{/,
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/,
   /createDirectCarrierLabelForOrder\(/,
   /createCarrierLabel\('shipstation'/,
@@ -241,13 +240,9 @@ checkPatterns('Print Queue worker delegates label creation to createLabelV2 and 
 ]);
 
 const printQueueRoute = read('src/routes/print-queue.ts');
-checkPatterns('Print Queue route preserves selected-rate proof and snapshot ref into the worker intent', printQueueRoute, [
-  /selectedRateProof: z/,
-  /rateQuoteId: z\.string\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/,
-  /selectedRateKey: z\.string\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/,
-  /selectedRateProof: order\.label\.selectedRateProof/,
-  /rateQuoteId: order\.label\.rateQuoteId/,
-  /selectedRateKey: order\.label\.selectedRateKey/,
+checkPatterns('Print Queue route preserves selectionRef into the worker intent', printQueueRoute, [
+  /selectionRef: z\.string\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/,
+  /selectionRef: order\.label\.selectionRef/,
 ]);
 
 const rateProof = read('web/src/lib/rate-proof.ts');
@@ -266,6 +261,7 @@ checkPatterns('Rate Browser lifts backend proof refs through Apply as pass-throu
   /function rateBackendProof\(r: RateRow\)/,
   /'rateQuoteId'/,
   /'selectedRateKey'/,
+  /'selectionRef'/,
   /'requestFingerprint'/,
   /'proofSource'/,
   /findCanonicalBestRate\(canonicalBestRef\.current, \[r\]\)/,

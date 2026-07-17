@@ -23,7 +23,7 @@ import {
 } from './labels';
 import { SHOPIFY_SHIPPING_PROVIDER } from './shopify-shipping-labels';
 import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
-import { GLOBAL_SCOPE } from '../lib/client-store-scope';
+import type { ClientStoreScope } from '../lib/client-store-scope';
 // Per user override unlock shipped data on 2026-07-07: batch-print pipeline — the merge job's
 // label fetches now go through a bounded prefetch pool (default concurrency 1 = serial, byte-
 // identical on the wire). Fetch mechanics only; ordering/grouping/error branches stay below.
@@ -319,6 +319,18 @@ export type PrintQueueListScope = {
   scopeStoreIds?: number[];
   scopeRestricted?: boolean;
 };
+
+function queueWorkerClientStoreScope(scope: PrintQueueListScope): ClientStoreScope {
+  const clientIds = normalizeScopeIds(scope.scopeClientIds);
+  const storeIds = normalizeScopeIds(scope.scopeStoreIds);
+  const isGlobal = scope.scopeRestricted === false;
+  return {
+    clientIds,
+    storeIds,
+    isGlobal,
+    isRestricted: !isGlobal,
+  };
+}
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
@@ -1261,6 +1273,7 @@ async function processQueueSendOrder(
   lifecycle?: QueueSendOrderLifecycle,
 ): Promise<QueueSendJobResult> {
   const startedAt = Date.now();
+  const labelPurchaseScope = queueWorkerClientStoreScope(scope);
   const timings: QueueSendTimingBreakdown = { totalMs: 0 };
   let labelUrl: unknown = order.labelUrl ?? null;
   let trackingNumber: string | null = null;
@@ -1293,10 +1306,10 @@ async function processQueueSendOrder(
               'the job is recoverable and must not be retried until existing labels/locks are checked.',
           });
         }, QUEUE_SEND_PROVIDER_PENDING_AFTER_MS);
-        // PS-233: the print-queue worker is a TRUSTED internal caller â€” the
-        // operator's scope was already enforced when the entry was queued, and
-        // the queue routes are gated by print_queue:write (portal roles can't
-        // reach them). GLOBAL_SCOPE = no per-resource restriction here.
+        // Per user override unlock shipped data on 2026-05-23: PS-422 preserves
+        // the initiating route's client/store scope through
+        // the durable worker. Possessing print_queue:write alone never widens
+        // label purchase to unrelated tenants.
         const created = await timeQueueStep(
           timings,
           'labelPurchaseMs',
@@ -1313,13 +1326,13 @@ async function processQueueSendOrder(
                   customPackageId: labelInput.customPackageId,
                   notifyCustomer: labelInput.notifyCustomer ?? false,
                   testLabel: labelInput.testLabel,
-                }, GLOBAL_SCOPE);
+                }, labelPurchaseScope);
               }
               return await createLabelV2({
                 ...labelInput,
                 orderId: order.orderId,
                 orderNumber: order.orderNumber ?? labelInput.orderNumber,
-              }, GLOBAL_SCOPE);
+              }, labelPurchaseScope);
             } finally {
               if (providerPendingTimer) {
                 clearTimeout(providerPendingTimer);
@@ -1587,7 +1600,7 @@ export async function startQueueSendJob(input: {
 
   cleanOldJobs();
   const preflight = orders.length > 0
-    ? await preflightQueueSendOrders(orders)
+    ? await preflightQueueSendOrders(orders, input.scope)
     : { readyOrders: [], blockedResults: [], itemStates: [] };
   const frontendSkippedResults = frontendPreflightSkips.map(toQueueSendPreflightSkipResult);
   const frontendSkippedItems = frontendPreflightSkips.map(toQueueSendPreflightSkipItem);

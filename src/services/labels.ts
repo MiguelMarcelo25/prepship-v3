@@ -57,6 +57,7 @@ import {
 } from './mock-label-generator';
 import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
 import { packages } from '../db/schema/packages';
+import { locations } from '../db/schema/locations';
 import {
   carrierConnectorSupportsVoid,
   createCarrierLabel,
@@ -123,6 +124,16 @@ import {
   residentialForShipping,
 } from './shipping-workflow/address-classification';
 import { assertLabelPurchaseRateSelection } from './shipping-workflow/rate-quote-snapshot-store';
+import {
+  assertShippingQuoteAccountMatches,
+  assertShippingQuoteContextMatches,
+  assertShippingQuoteIntentMatches,
+  normalizeShippingQuoteAddress,
+  shippingQuoteAuthorizedPurchaseFacts,
+  shippingQuoteCredentialFingerprint,
+  ShippingQuoteAuthorizationError,
+  type ShippingQuoteAccountAuthorization,
+} from './shipping-workflow/shipping-quote-authorization';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
 // PS-261 (Per user override unlock shipped data on 2026-06-18): backend-owned HUGRAB
 // label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
@@ -424,6 +435,7 @@ export type CreateLabelInputDto = {
   shipTo?: AddressInputDto;
   shipFrom?: AddressInputDto;
   selectedRateProof?: SelectedRateProofInput;
+  selectionRef?: string | null;
   // PS-105: backend-owned rate quote snapshot id + the chosen rate's authority
   // key. Preferred over selectedRateProof at the purchase boundary; selectedRateProof
   // remains a compatibility fallback during migration.
@@ -552,6 +564,44 @@ function defaultShipFromAddress(): ShipstationAddressInput {
   };
 }
 
+async function currentAuthorizedShipFrom(
+  locationId: number | null,
+): Promise<ShipstationAddressInput> {
+  if (locationId != null) {
+    const [row] = await db
+      .select()
+      .from(locations)
+      .where(eq(locations.id, locationId))
+      .limit(1);
+    if (!row || row.active === false) {
+      throw new ShippingQuoteAuthorizationError('ship-from location');
+    }
+    return {
+      name: row.name,
+      company: row.company ?? undefined,
+      street1: row.street1 ?? '',
+      street2: row.street2 ?? undefined,
+      city: row.city ?? '',
+      state: row.state ?? '',
+      postalCode: row.postalCode ?? '',
+      country: row.country,
+      phone: row.phone ?? undefined,
+    };
+  }
+  const from = await getDefaultShipFrom();
+  return {
+    name: from.name,
+    company: from.company_name,
+    street1: from.address_line1,
+    street2: from.address_line2,
+    city: from.city_locality,
+    state: from.state_province,
+    postalCode: from.postal_code,
+    country: from.country_code,
+    phone: from.phone,
+  };
+}
+
 function orderShipToFromRaw(rawOrder: {
   raw: Record<string, unknown>;
   shipToName: string | null;
@@ -634,6 +684,7 @@ async function loadClientCredentials(clientId: number | null | undefined): Promi
   apiKeyV2: string | null;
   apiKey: string | null;
   apiSecret: string | null;
+  sourceClientId: number | null;
 }> {
   return loadClientCredentialsImpl(clientId);
 }
@@ -1936,8 +1987,8 @@ async function createLabelV2Impl(
   body: CreateLabelInputDto,
   scope: ClientStoreScope,
 ): Promise<CreateLabelResponseDto> {
-  if (!body.orderId || !body.serviceCode) {
-    throw new Error('orderId and serviceCode required');
+  if (!body.orderId) {
+    throw new Error('orderId required');
   }
 
   const timer = createLabelTimer(body.orderId);
@@ -1981,6 +2032,57 @@ async function createLabelV2Impl(
       .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
       .limit(1);
     clientId = match?.id ?? null;
+  }
+  const requestedPurchaseIntent = body;
+  // Per user override unlock shipped data on 2026-05-23: PS-422 resolves
+  // test-mode authority before the real-postage authorization.
+  // Real clients cannot use testLabel to bypass selectionRef; test clients stay
+  // on the existing offline-only path and never reach a provider.
+  body = {
+    ...body,
+    testLabel: await resolveEffectiveTestLabel({
+      clientId,
+      requestedTestLabel: body.testLabel === true,
+      orderId: order.id,
+      entryPoint: 'createLabelV2',
+    }),
+  };
+  const purchaseSelection = body.testLabel
+    ? null
+    : await assertLabelPurchaseRateSelection({
+        selectionRef: body.selectionRef,
+      });
+  const authorizedPurchaseFacts = purchaseSelection
+    ? shippingQuoteAuthorizedPurchaseFacts(purchaseSelection)
+    : null;
+  if (purchaseSelection && authorizedPurchaseFacts) {
+    assertShippingQuoteIntentMatches({
+      ...purchaseSelection,
+      intent: requestedPurchaseIntent,
+    });
+    body = {
+      ...body,
+      carrierCode: authorizedPurchaseFacts.carrierCode ?? undefined,
+      serviceCode: authorizedPurchaseFacts.serviceCode,
+      serviceName: authorizedPurchaseFacts.serviceName ?? undefined,
+      serviceType: authorizedPurchaseFacts.serviceName ?? undefined,
+      shippingProviderId: authorizedPurchaseFacts.shippingProviderId,
+      packageCode: authorizedPurchaseFacts.packageCode,
+      customPackageId: authorizedPurchaseFacts.customPackageId,
+      weightOz: authorizedPurchaseFacts.weightOz,
+      length: authorizedPurchaseFacts.length ?? undefined,
+      width: authorizedPurchaseFacts.width ?? undefined,
+      height: authorizedPurchaseFacts.height ?? undefined,
+      confirmation: authorizedPurchaseFacts.confirmation,
+      insuranceProvider: authorizedPurchaseFacts.insuranceProvider,
+      insuredValue: authorizedPurchaseFacts.insuredValue,
+      selectedRateProof: undefined,
+      rateQuoteId: undefined,
+      selectedRateKey: undefined,
+    };
+  }
+  if (!body.serviceCode) {
+    throw new Error('serviceCode required');
   }
   const serviceDescriptor: ShippingServiceDescriptor = {
     carrierCode: body.carrierCode ?? null,
@@ -2041,7 +2143,7 @@ async function createLabelV2Impl(
   }
   const overrides = await loadOrderDimsOverride(order.id);
   const fallbackShipTo = orderShipToFromRaw(order, overrides?.recipientOverride);
-  const shipTo = mergeAddress(body.shipTo, fallbackShipTo);
+  const shipTo = purchaseSelection ? fallbackShipTo : mergeAddress(body.shipTo, fallbackShipTo);
   const rawShipTo = ((order.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
   const labelClassification = classifyShippingAddress({
     orderId: order.id,
@@ -2077,15 +2179,6 @@ async function createLabelV2Impl(
   // request for a REAL client is REJECTED with a structured 409 (TEST_LABEL_REJECTED)
   // instead of silently minting a fake label/tracking on a real customer order. Runs
   // BEFORE every consumption of the flag (rate-limit skip, weight default, mock branch).
-  body = {
-    ...body,
-    testLabel: await resolveEffectiveTestLabel({
-      clientId,
-      requestedTestLabel: body.testLabel === true,
-      orderId: order.id,
-      entryPoint: 'createLabelV2',
-    }),
-  };
   if (clientId && !body.testLabel) checkLabelRateLimit(clientId);
 
   const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
@@ -2104,12 +2197,22 @@ async function createLabelV2Impl(
     throw err;
   }
 
-  const effectiveWeightOz = Number(body.weightOz ?? overrides?.rateWeightOz ?? order.weightOz ?? (body.testLabel ? 1 : 0));
+  const currentWeightOz = Number(overrides?.rateWeightOz ?? order.weightOz ?? 0);
+  const effectiveWeightOz = Number(
+    authorizedPurchaseFacts?.weightOz
+      ?? body.weightOz
+      ?? overrides?.rateWeightOz
+      ?? order.weightOz
+      ?? (body.testLabel ? 1 : 0),
+  );
   if (!effectiveWeightOz) throw new Error('Order weight required to create label');
 
-  const length = Number(body.length ?? overrides?.rateDimsL ?? 0) || null;
-  const width = Number(body.width ?? overrides?.rateDimsW ?? 0) || null;
-  const height = Number(body.height ?? overrides?.rateDimsH ?? 0) || null;
+  const currentLength = Number(overrides?.rateDimsL ?? 0) || null;
+  const currentWidth = Number(overrides?.rateDimsW ?? 0) || null;
+  const currentHeight = Number(overrides?.rateDimsH ?? 0) || null;
+  const length = Number(authorizedPurchaseFacts?.length ?? body.length ?? overrides?.rateDimsL ?? 0) || null;
+  const width = Number(authorizedPurchaseFacts?.width ?? body.width ?? overrides?.rateDimsW ?? 0) || null;
+  const height = Number(authorizedPurchaseFacts?.height ?? body.height ?? overrides?.rateDimsH ?? 0) || null;
 
   // PS-127: the label is the authoritative rate↔label parity point. Classify
   // residential/commercial from the order's OWN evidence (operator override >
@@ -2125,13 +2228,17 @@ async function createLabelV2Impl(
     company: shipTo.company,
     customerEmail: order.customerEmail,
   });
-  const carrierShipTo: ShipstationAddressInput = {
+  let carrierShipTo: ShipstationAddressInput = {
     ...shipTo,
     name: carrierRecipient.name,
     company: carrierRecipient.company,
   };
   let shipFrom: ShipstationAddressInput;
-  if (body.shipFrom?.street1) {
+  if (purchaseSelection) {
+    shipFrom = await currentAuthorizedShipFrom(
+      purchaseSelection.authorizationContext.shipment.shipFromLocationId,
+    );
+  } else if (body.shipFrom?.street1) {
     shipFrom = mergeAddress(body.shipFrom, defaultShipFromAddress());
   } else {
     try {
@@ -2156,13 +2263,71 @@ async function createLabelV2Impl(
   // decremented correctly. Used for both the test-mode and real-postage paths.
   const resolvedPackageId = await resolveLabelPackageId({
     orderId: body.orderId ?? null,
-    customPackageId: body.customPackageId,
+    customPackageId: purchaseSelection
+      ? purchaseSelection.authorizationContext.shipment.package.id
+      : body.customPackageId,
     length,
     width,
     height,
   });
 
   // ── Offline test mode ───────────────────────────────────────────────────────
+  if (purchaseSelection) {
+    const [currentPackage] = resolvedPackageId == null
+      ? []
+      : await db
+          .select({
+            id: packages.id,
+            type: packages.type,
+            packageCode: packages.packageCode,
+            length: packages.length,
+            width: packages.width,
+            height: packages.height,
+          })
+          .from(packages)
+          .where(eq(packages.id, resolvedPackageId))
+          .limit(1);
+    assertShippingQuoteContextMatches({
+      authorized: purchaseSelection.authorizationContext,
+      current: {
+        version: 1,
+        order: {
+          orderId: order.id,
+          clientId,
+          storeId: order.storeId ?? null,
+          sourceProvider: order.sourceProvider ?? null,
+          sourceAccountId: order.sourceAccountId ?? null,
+          sourceOrderId: order.sourceOrderId ?? null,
+        },
+        shipment: {
+          shipFromLocationId: purchaseSelection.authorizationContext.shipment.shipFromLocationId,
+          shipFrom: normalizeShippingQuoteAddress(shipFrom),
+          shipTo: normalizeShippingQuoteAddress(carrierShipTo),
+          package: {
+            id: currentPackage?.id ?? resolvedPackageId,
+            type: currentPackage?.type ?? null,
+            code: currentPackage?.packageCode ?? null,
+          },
+          weightOz: currentWeightOz,
+          dimensions: {
+            length: currentLength ?? currentPackage?.length ?? null,
+            width: currentWidth ?? currentPackage?.width ?? null,
+            height: currentHeight ?? currentPackage?.height ?? null,
+          },
+          residential: labelResidential,
+          confirmation: options.confirmation,
+          insuranceProvider: options.insuranceProvider,
+          insuredValue: Number(options.insuredValue ?? 0) || 0,
+        },
+      },
+    });
+    shipFrom = { ...authorizedPurchaseFacts!.shipFrom };
+    carrierShipTo = {
+      ...authorizedPurchaseFacts!.shipTo,
+      residential: labelResidential,
+    };
+  }
+
   if (body.testLabel === true) {
     const fakeShipmentId = generateFakeShipmentId();
     const fakeTracking = generateFakeTrackingNumber();
@@ -2284,20 +2449,13 @@ async function createLabelV2Impl(
   // Per user override unlock shipped data on 2026-06-05: enforce the
   // selected-rate proof/fingerprint boundary before any real ShipStation
   // postage call. Test labels returned above remain offline-only.
-  // Per user override unlock shipped data on 2026-06-06 (PS-105): prefer the
-  // backend-owned rate quote snapshot id; fall back to the carried proof. Both run
-  // the SAME strict validator — identical to legacy when no rateQuoteId is sent.
+  // Per user override unlock shipped data on 2026-05-23: PS-422 resolved the
+  // opaque selectionRef before request-body purchase
+  // facts were used. Re-resolve only as a defensive invariant; legacy carried
+  // quote ids, keys, and proof never authorize postage.
   await ensurePackageConsumptionSchema();
-  const purchaseRateProof = await assertLabelPurchaseRateSelection({
-    rateQuoteId: body.rateQuoteId,
-    selectedRateKey: body.selectedRateKey,
-    selectedRateProof: body.selectedRateProof,
-    // PS-204: bind the proof to the account being CHARGED. A payload naming a
-    // direct synthetic id while the proof rate belongs to ShipStation (or any
-    // cross-account pair) is blocked here, before either family's provider
-    // call — this gate runs ahead of BOTH the direct branch and the
-    // ShipStation branch.
-    purchaseShippingProviderId: body.shippingProviderId,
+  const purchaseRateProof = purchaseSelection ?? await assertLabelPurchaseRateSelection({
+    selectionRef: body.selectionRef,
   });
   // Per user override unlock shipped data on 2026-07-14: bind the current toggle
   // to the backend quote. A setting change makes the old quote stale before any
@@ -2380,7 +2538,7 @@ async function createLabelV2Impl(
   // carried proof exposes the per-rate fingerprint; the snapshot path is coherence-checked
   // above and skipped here when no selectedRate fingerprint is present.
   const quotedResidential = residentialFromRequestFingerprint(
-    selectedRateRequestFingerprint(body.selectedRateProof?.selectedRate),
+    selectedRateRequestFingerprint(purchaseRateProof.selectedRate),
   );
   const labelTrusted =
     labelClassification.confidence === 'manual' ||
@@ -2430,6 +2588,21 @@ async function createLabelV2Impl(
       sourceAccountId: order.sourceAccountId ?? null,
     });
     directProviderKey = normalizeProviderKey(account.provider);
+    assertShippingQuoteAccountMatches({
+      authorized: purchaseRateProof.accountAuthorization,
+      current: {
+        providerFamily: 'direct',
+        provider: directProviderKey,
+        shippingProviderId: Number(body.shippingProviderId),
+        sourceTable: account.sourceTable,
+        sourceAccountId: account.id,
+        ownerClientId: account.clientId,
+        ownerStoreAccountId: account.linkedStoreAccountId,
+        credentialSource: account.sourceTable === 'store_accounts' ? 'store_account' : 'carrier_account',
+        credentialFingerprint: shippingQuoteCredentialFingerprint(account.credentials),
+        environment: process.env.NODE_ENV ?? 'development',
+      },
+    });
     // Per user override unlock shipped data on 2026-05-23: PS-423 journals
     // the stable request identity before dispatch and records the normalized
     // provider receipt before shipment/lifecycle persistence begins.
@@ -2523,6 +2696,28 @@ async function createLabelV2Impl(
     });
     const creds = await loadClientCredentials(clientId);
     const apiKeyV2 = creds.apiKeyV2 ?? undefined;
+    const currentShipStationCredential = creds.apiKeyV2 ?? env.SHIPSTATION_API_KEY_V2 ?? null;
+    const currentCredentialSource: ShippingQuoteAccountAuthorization['credentialSource'] =
+      creds.sourceClientId == null
+        ? 'application_default'
+        : creds.sourceClientId === clientId
+          ? 'client'
+          : 'rate_source_client';
+    assertShippingQuoteAccountMatches({
+      authorized: purchaseRateProof.accountAuthorization,
+      current: {
+        providerFamily: 'shipstation',
+        provider: 'shipstation',
+        shippingProviderId: Number(body.shippingProviderId),
+        sourceTable: 'shipstation',
+        sourceAccountId: Number(body.shippingProviderId),
+        ownerClientId: creds.sourceClientId,
+        ownerStoreAccountId: null,
+        credentialSource: currentCredentialSource,
+        credentialFingerprint: shippingQuoteCredentialFingerprint(currentShipStationCredential),
+        environment: process.env.NODE_ENV ?? 'development',
+      },
+    });
     const action = await acquireFulfillmentOperation({
       kind: 'forward_label',
       provider: 'shipstation',

@@ -160,7 +160,7 @@ check('Panel refreshed best rate is stamped with request fingerprint metadata be
   /const bestRateWithMetadata = autoRequest\s*\?\s*withRateRequestMetadata\(bestRate, autoRequest/.test(panelRefreshBlock) &&
     /setPanelRatePreview\(\[bestRateWithMetadata\]\)/.test(panelRefreshBlock) &&
     /persistAppliedRateForOrder\(order\.orderId, bestRateWithMetadata/.test(panelRefreshBlock));
-check('Batch Create + Print recalculates missing selected-rate proof before label purchase',
+check('Batch Create + Print recalculates missing selectionRef before label purchase',
   // 2026-07-07 cleanup: the legacy in-loop recalc idiom moved into the chain's injected
   // closures — needsOverride probes the ACCOUNT-BOUND proof (PS-204 third arg), recalculate
   // runs the SAME strict runner, and buildBatchPrintOverridePayload re-derives proof + pid
@@ -168,9 +168,11 @@ check('Batch Create + Print recalculates missing selected-rate proof before labe
   /needsOverride: \(order\) =>/.test(batchActionBlock) &&
     /!isBackendTestOrder\(order\) &&/.test(batchActionBlock) &&
     /resolveOrderShippingProviderId\(order\),/.test(batchActionBlock) &&
+    /\.selectionRef/.test(batchActionBlock) &&
     /runStrictBestRateRecalculation\(order, request/.test(batchActionBlock) &&
     /buildOverride: \(order, freshRate\) => buildBatchPrintOverridePayload\(order, freshRate\)/.test(batchActionBlock) &&
-    ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)'));
+    ordersView.includes('const selection = buildRateQuoteRefForOrder(order, rate, shippingProviderId)') &&
+    ordersView.includes('...selection,'));
 // PS-166/PS-306/PS-258 (Wave 5): the side-panel Rate card (incl. the Recalculate
 // button) was extracted VERBATIM from OrdersView into OrdersDetailSidePanel.tsx.
 // The button now FIRES an on* prop (onRecalculateBestRate); the OrdersView shell
