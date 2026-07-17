@@ -134,6 +134,15 @@ const migrationOwnership = [
     'drizzle/0071_billing_weekend_rollforward.sql',
     ['billing_effective_date', 'billing_policy_version', 'billing_li_effective_date_idx'],
   ],
+  [
+    'drizzle/0072_external_operations.sql',
+    [
+      'external_operations',
+      'external_operations_key_unq',
+      'external_operations_idempotency_unq',
+      'external_operations_state_lease_idx',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -193,6 +202,13 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingWeekendMigration),
   '0071 is additive, performs no backfill, and never mutates orders/shipments or historical billing lines',
 );
+const externalOperationsMigration = read('drizzle/0072_external_operations.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(externalOperationsMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(externalOperationsMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(externalOperationsMigration),
+  '0072 adds the provider-operation sidecar without mutating or destructively altering orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -202,7 +218,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0071_billing_weekend_rollforward.sql',
+  '0072_external_operations.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

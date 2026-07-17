@@ -3,6 +3,13 @@ import { hydrateMarketplaceConfirmationPayload } from './confirmation-payload.js
 import { loadClientCredentials } from '../../lib/shipstation/credentials.js';
 import { resolveStoreConnector } from '../../connectors/store-resolution.js';
 import { assertFulfillmentSchemaReady } from './schema-readiness.js';
+import {
+  acquireFulfillmentOperation,
+  consumeFulfillmentOperation,
+  consumeFulfillmentOperationWithSql,
+  dispatchFulfillmentOperation,
+  FulfillmentOperationHeldError,
+} from '../fulfillment-operation-ledger.js';
 // Per user override unlock shipped data on 2026-07-14: inventory events share
 // only the durable retry lifecycle; confirmation/order state remains isolated.
 import {
@@ -43,6 +50,16 @@ type OutboxRow = {
 };
 
 type SqlExecutor = any;
+
+class ConfirmationDispatchError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'ConfirmationDispatchError';
+  }
+}
 
 const MAX_ATTEMPTS = 6;
 const DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS = 72;
@@ -1103,21 +1120,71 @@ export async function confirmShipmentDirectNow(args: {
     shipDate: args.shipDate,
   };
   const credentials = await loadStoreCredentials(args.provider, payload, args.order.clientId ?? null);
-  const result = await resolvedStoreConnector.connector.confirmShipment({
-    orderId: args.order.id,
-    shipmentId: 0,
-    externalOrderId: args.order.externalOrderId,
-    clientId: args.order.clientId,
-    orderNumber: args.order.orderNumber,
-    trackingNumber: args.trackingNumber,
-    carrierCode: args.carrierCode,
-    shipDate: args.shipDate,
-    notifyCustomer: args.notifyCustomer,
-    notifyMarketplace: args.notifyMarketplace,
-    credentials,
-    payload,
+  // Per user override unlock shipped data on 2026-05-23: PS-423 journals the
+  // manual/external confirmation before provider dispatch. A lost response is
+  // operator-held instead of blindly notifying the marketplace again.
+  const action = await acquireFulfillmentOperation({
+    kind: 'marketplace_confirmation',
+    provider: args.provider,
+    subjectType: 'external_order_tracking',
+    subjectId: `${args.order.id}:${args.trackingNumber}`,
+    request: {
+      externalOrderId: args.order.externalOrderId,
+      trackingNumber: args.trackingNumber,
+      carrierCode: args.carrierCode,
+      shipDate: args.shipDate,
+      notifyCustomer: args.notifyCustomer,
+      notifyMarketplace: args.notifyMarketplace,
+    },
   });
-  return result.ok ? { ok: true } : { ok: false, reason: result.message ?? 'Confirmation failed' };
+  if (action.kind === 'consumed') return { ok: true };
+  if (action.kind === 'resume_receipt') {
+    await consumeFulfillmentOperation(action.operation.id, async () => ({ confirmed: true }));
+    return { ok: true };
+  }
+  if (action.kind !== 'dispatch') {
+    return { ok: false, reason: new FulfillmentOperationHeldError(action.operation).message };
+  }
+  try {
+    await dispatchFulfillmentOperation({
+      lease: action.lease,
+      label: `direct marketplace confirmation order ${args.order.id}`,
+      execute: async ({ signal, idempotencyKey }) => {
+        const result = await resolvedStoreConnector.connector.confirmShipment({
+          orderId: args.order.id,
+          shipmentId: 0,
+          externalOrderId: args.order.externalOrderId,
+          clientId: args.order.clientId,
+          orderNumber: args.order.orderNumber,
+          trackingNumber: args.trackingNumber,
+          carrierCode: args.carrierCode,
+          shipDate: args.shipDate,
+          notifyCustomer: args.notifyCustomer,
+          notifyMarketplace: args.notifyMarketplace,
+          credentials,
+          payload,
+          signal,
+          idempotencyKey,
+        });
+        if (!result.ok) {
+          throw new ConfirmationDispatchError(result.message ?? 'Confirmation failed', result.retryable !== false);
+        }
+        return result;
+      },
+      normalizeReceipt: (result) => ({
+        receipt: { ok: true, provider: result.provider, message: result.message ?? null },
+        providerResultId: args.trackingNumber,
+      }),
+      classifyError: (error) =>
+        error instanceof ConfirmationDispatchError && !error.retryable
+          ? 'failed_pre_dispatch'
+          : 'reconcile_required',
+    });
+    await consumeFulfillmentOperation(action.operation.id, async () => ({ confirmed: true }));
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function processOutboxRow(row: OutboxRow): Promise<boolean> {
@@ -1196,34 +1263,93 @@ async function processOutboxRow(row: OutboxRow): Promise<boolean> {
     }
   }
 
-  const result = await connector.confirmShipment({
-    orderId: Number(payload.orderId ?? row.order_id),
-    shipmentId: Number(payload.shipmentId ?? row.shipment_id ?? 0),
-    externalOrderId: typeof payload.externalOrderId === 'string' ? payload.externalOrderId : null,
-    clientId: Number(payload.clientId ?? null) || null,
-    orderNumber: typeof payload.orderNumber === 'string' ? payload.orderNumber : null,
-    trackingNumber,
-    carrierCode: typeof payload.carrierCode === 'string' ? payload.carrierCode : null,
-    shipDate: typeof payload.shipDate === 'string' ? payload.shipDate : new Date().toISOString().slice(0, 10),
-    notifyCustomer: payload.notifyCustomer === true,
-    notifyMarketplace: payload.notifyMarketplace !== false,
-    credentials,
-    payload,
+  // Per user override unlock shipped data on 2026-05-23: PS-423 makes the
+  // provider receipt durable before the outbox/shipment/order projections are
+  // atomically settled. A retry with receipt_recorded skips the connector.
+  const operation = await acquireFulfillmentOperation({
+    kind: 'marketplace_confirmation',
+    provider: row.provider,
+    subjectType: 'fulfillment_outbox',
+    subjectId: row.id,
+    request: {
+      orderId: Number(payload.orderId ?? row.order_id),
+      shipmentId: Number(payload.shipmentId ?? row.shipment_id ?? 0),
+      externalOrderId: typeof payload.externalOrderId === 'string' ? payload.externalOrderId : null,
+      trackingNumber,
+      carrierCode: typeof payload.carrierCode === 'string' ? payload.carrierCode : null,
+      shipDate: typeof payload.shipDate === 'string' ? payload.shipDate : new Date().toISOString().slice(0, 10),
+      notifyCustomer: payload.notifyCustomer === true,
+      notifyMarketplace: payload.notifyMarketplace !== false,
+      marketplaceIdentity: payload,
+    },
   });
-
-  if (result.ok) {
+  if (operation.kind === 'consumed') {
     await completeOutboxRow(row);
-    console.info('[fulfillment-outbox] confirmed shipment', {
-      orderId: row.order_id,
-      shipmentId: row.shipment_id,
-      provider: row.provider,
-      connectorCapabilities,
+    return true;
+  }
+  if (operation.kind === 'resume_receipt') {
+    await consumeFulfillmentOperationWithSql(operation.operation.id, async (tx) => {
+      await settleOutboxRowWithExecutor(row, tx);
+      return { outboxId: row.id, shipmentId: row.shipment_id };
     });
     return true;
   }
+  if (operation.kind !== 'dispatch') {
+    await failOutboxRow(row, new FulfillmentOperationHeldError(operation.operation), false);
+    return false;
+  }
 
-  await failOutboxRow(row, new Error(result.message ?? 'Confirmation failed'), result.retryable !== false);
-  return false;
+  try {
+    await dispatchFulfillmentOperation({
+      lease: operation.lease,
+      label: `marketplace confirmation outbox ${row.id}`,
+      execute: async ({ signal, idempotencyKey }) => {
+        const result = await connector.confirmShipment({
+          orderId: Number(payload.orderId ?? row.order_id),
+          shipmentId: Number(payload.shipmentId ?? row.shipment_id ?? 0),
+          externalOrderId: typeof payload.externalOrderId === 'string' ? payload.externalOrderId : null,
+          clientId: Number(payload.clientId ?? null) || null,
+          orderNumber: typeof payload.orderNumber === 'string' ? payload.orderNumber : null,
+          trackingNumber,
+          carrierCode: typeof payload.carrierCode === 'string' ? payload.carrierCode : null,
+          shipDate: typeof payload.shipDate === 'string' ? payload.shipDate : new Date().toISOString().slice(0, 10),
+          notifyCustomer: payload.notifyCustomer === true,
+          notifyMarketplace: payload.notifyMarketplace !== false,
+          credentials,
+          payload,
+          signal,
+          idempotencyKey,
+        });
+        if (!result.ok) {
+          throw new ConfirmationDispatchError(result.message ?? 'Confirmation failed', result.retryable !== false);
+        }
+        return result;
+      },
+      normalizeReceipt: (result) => ({
+        receipt: { ok: true, provider: result.provider, message: result.message ?? null },
+        providerResultId: trackingNumber,
+      }),
+      classifyError: (error) =>
+        error instanceof ConfirmationDispatchError && !error.retryable
+          ? 'failed_pre_dispatch'
+          : 'reconcile_required',
+    });
+  } catch (error) {
+    await failOutboxRow(row, error, false);
+    return false;
+  }
+
+  await consumeFulfillmentOperationWithSql(operation.operation.id, async (tx) => {
+    await settleOutboxRowWithExecutor(row, tx);
+    return { outboxId: row.id, shipmentId: row.shipment_id };
+  });
+  console.info('[fulfillment-outbox] confirmed shipment', {
+    orderId: row.order_id,
+    shipmentId: row.shipment_id,
+    provider: row.provider,
+    connectorCapabilities,
+  });
+  return true;
 }
 
 export async function processFulfillmentOutboxOnce(options: {

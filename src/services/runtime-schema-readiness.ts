@@ -13,6 +13,7 @@ const REQUIRED_RELATIONS = [
   'client_packing_rules',
   'client_sku_classes',
   'direct_carrier_rate_cache',
+  'external_operations',
   'label_purchase_intents',
   'label_purchase_locks',
   'order_competitive_rate',
@@ -46,6 +47,22 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   ],
   billing_line_items: ['billing_effective_date', 'billing_policy_version'],
   client_combo_package_defaults: ['source'],
+  external_operations: [
+    'operation_key',
+    'kind',
+    'provider',
+    'subject_type',
+    'subject_id',
+    'semantic_generation',
+    'request_hash',
+    'idempotency_key',
+    'state',
+    'generation',
+    'lease_token',
+    'lease_expires_at',
+    'provider_receipt',
+    'local_result',
+  ],
   inventory_ledger: ['effective_at', 'idempotency_key'],
   orders: [
     'selling_fee',
@@ -104,6 +121,10 @@ const REQUIRED_INDEXES = [
   'client_sku_classes_client_idx',
   'client_sku_classes_client_sku_idx',
   'direct_carrier_rate_cache_lookup_idx',
+  'external_operations_idempotency_unq',
+  'external_operations_key_unq',
+  'external_operations_state_lease_idx',
+  'external_operations_subject_idx',
   'inventory_ledger_effective_at_idx',
   'inventory_ledger_idempotency_key_unq',
   'label_purchase_intents_unresolved_idx',
@@ -270,7 +291,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0071_billing_weekend_rollforward.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0072_external_operations.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

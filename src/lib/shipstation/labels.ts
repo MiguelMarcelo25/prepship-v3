@@ -36,6 +36,8 @@ export type CreateExternalLabelInput = {
   insuredValue?: number | null;
   ssOrderId: number | null;
   orderNumber: string | null;
+  externalShipmentId?: string;
+  signal?: AbortSignal;
   testLabel?: boolean;
 };
 
@@ -239,6 +241,7 @@ export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
       confirmation: options.confirmation,
       ...(hasInsurance ? { insurance_provider: options.insuranceProvider } : {}),
       external_order_id: input.orderNumber ?? undefined,
+      external_shipment_id: input.externalShipmentId ?? undefined,
     },
     is_return_label: false,
     label_layout: '4x6',
@@ -260,6 +263,7 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
     body,
     apiKey: input.apiKeyV2,
     retryOn5xx: false,
+    signal: input.signal,
   });
 
   const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
@@ -291,11 +295,12 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
   };
 }
 
-export async function ssVoidLabel(labelId: string, apiKeyV2?: string): Promise<void> {
+export async function ssVoidLabel(labelId: string, apiKeyV2?: string, signal?: AbortSignal): Promise<void> {
   await ssRequest(`/v2/labels/${labelId}/void`, {
     method: 'PUT',
     body: {},
     apiKey: apiKeyV2,
+    signal,
   });
 }
 
@@ -311,7 +316,8 @@ export async function ssVoidShipment(shipmentId: number | string, apiKeyV2?: str
 export async function ssCreateReturnLabel(
   shipmentId: number,
   reason: string,
-  apiKeyV2?: string
+  apiKeyV2?: string,
+  signal?: AbortSignal,
 ): Promise<ReturnLabelResult> {
   // v2-parity: ShipStation's documented return-label endpoint is
   // POST /v2/shipments/{shipmentId}/returnlabel — singular, lowercase, no
@@ -327,6 +333,7 @@ export async function ssCreateReturnLabel(
       // Audit C1 (see ssCreateLabel): return-label creation also buys postage —
       // never blind-retry a 5xx on it.
       retryOn5xx: false,
+      signal,
     }
   );
   const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
@@ -380,7 +387,7 @@ export async function ssListRecentLabels(
 
 export async function ssGetShipmentV1(
   shipmentId: number,
-  opts: { apiKey?: string; apiSecret?: string } = {}
+  opts: { apiKey?: string; apiSecret?: string; signal?: AbortSignal } = {}
 ): Promise<ShipstationShipmentDetailsV1 | null> {
   try {
     const data = await ssV1Request<Record<string, unknown>>(`/shipments/${shipmentId}`, {
@@ -492,7 +499,7 @@ export async function ssMarkOrderShippedV1(
      *  loop with the upstream sales channel. */
     notifySalesChannel?: boolean;
   },
-  opts: { apiKey?: string; apiSecret?: string } = {}
+  opts: { apiKey?: string; apiSecret?: string; signal?: AbortSignal } = {}
 ): Promise<void> {
   await ssV1Request('/orders/markasshipped', {
     method: 'POST',
@@ -506,5 +513,6 @@ export async function ssMarkOrderShippedV1(
     },
     apiKey: opts.apiKey,
     apiSecret: opts.apiSecret,
+    signal: opts.signal,
   });
 }

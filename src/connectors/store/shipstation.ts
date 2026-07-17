@@ -328,6 +328,7 @@ export function createShipStationStoreConnector(
       const credentials = {
         apiKey: input.credentials?.apiKey ?? undefined,
         apiSecret: input.credentials?.apiSecret ?? undefined,
+        signal: input.signal,
       };
       // Per user override unlock shipped data on 2026-07-15: injected provider
       // calls let the offline retry test simulate an ACK/local-crash boundary.

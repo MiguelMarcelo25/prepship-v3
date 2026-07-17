@@ -33,8 +33,83 @@ import {
   buildInventoryReconciliationPlan,
   InventoryReconciliationError,
 } from '../services/inventory-reconciliation';
+import {
+  listHeldFulfillmentOperations,
+  recordFulfillmentOperationReceiptByOperator,
+  resolveFulfillmentOperationNoEffect,
+} from '../services/fulfillment-operation-ledger';
 
 const app = new Hono();
+
+app.get(
+  '/external-operations',
+  zValidator('query', z.object({
+    subjectType: z.string().trim().min(1).max(100).optional(),
+    subjectId: z.string().trim().min(1).max(200).optional(),
+    limit: z.coerce.number().int().positive().max(200).optional(),
+  })),
+  async (c) => {
+    const operations = await listHeldFulfillmentOperations(c.req.valid('query'));
+    return c.json({ operations, count: operations.length });
+  },
+);
+
+app.post(
+  '/external-operations/:id{[0-9]+}/resolve',
+  zValidator('json', z.discriminatedUnion('outcome', [
+    z.object({
+      outcome: z.literal('provider_verified_no_effect'),
+      note: z.string().trim().min(5).max(1000),
+    }),
+    z.object({
+      outcome: z.literal('provider_receipt_found'),
+      note: z.string().trim().min(5).max(1000),
+      receipt: z.record(z.string(), z.unknown()),
+      providerOperationId: z.union([z.string(), z.number()]).nullable().optional(),
+      providerResultId: z.union([z.string(), z.number()]).nullable().optional(),
+    }),
+  ])),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const resolution = c.req.valid('json');
+    const auditActor = auditActorFromContext(c);
+    const actor = auditActor.actorId ?? auditActor.actorEmail ?? 'authenticated-operator';
+    try {
+      const resolved = resolution.outcome === 'provider_verified_no_effect'
+        ? await resolveFulfillmentOperationNoEffect(id, {
+            actor,
+            note: resolution.note,
+          })
+        : await recordFulfillmentOperationReceiptByOperator(id, {
+            actor,
+            note: resolution.note,
+            receipt: resolution.receipt,
+            providerOperationId: resolution.providerOperationId,
+            providerResultId: resolution.providerResultId,
+          });
+      await recordAuditEvent({
+        ...auditActor,
+        eventType: 'external_operation.resolved',
+        resourceType: 'external_operation',
+        resourceId: id,
+        action: resolution.outcome,
+        details: {
+          operationKey: resolved.operationKey,
+          kind: resolved.kind,
+          provider: resolved.provider,
+          subjectType: resolved.subjectType,
+          subjectId: resolved.subjectId,
+          note: resolution.note,
+        },
+      });
+      return c.json(resolved);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = /not found/i.test(message) ? 404 : 409;
+      return c.json({ error: message }, status);
+    }
+  },
+);
 
 // Per user override unlock shipped data on 2026-07-15: admin-only, audited
 // resolution for ambiguous purchase intents. This never buys/voids a label or

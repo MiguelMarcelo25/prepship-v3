@@ -23,6 +23,7 @@ export * from './store-orders.js';
 export * from './sync-meta.js';
 export * from './carrier-accounts.js';
 export * from './fulfillment-outbox.js';
+export * from './external-operations.js';
 export * from './analytics-cache.js';
 export * from './order-competitive-rate.js';
 export * from './shipment-groups.js';

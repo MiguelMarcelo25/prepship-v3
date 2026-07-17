@@ -21,6 +21,7 @@ const storeImport = read('src/services/store-order-import.ts');
 const externalShipped = read('src/services/fulfillment/mark-shipped-externally.ts');
 const labels = read('src/services/labels.ts');
 const labelIntent = read('src/lib/label-purchase-intent.ts');
+const operationLedger = read('src/services/fulfillment-operation-ledger.ts');
 const adminRoute = read('src/routes/admin.ts');
 const shipStation = read('src/connectors/store/shipstation.ts');
 const inventoryDeductions = read('src/services/fulfillment-deductions.ts');
@@ -62,23 +63,26 @@ assert.match(enqueue, /pg\.begin\(async \(tx\)/);
 assert.match(enqueue, /WHEN fulfillment_outbox\.status = 'succeeded' THEN fulfillment_outbox\.status/);
 assert.match(enqueue, /WHEN fulfillment_outbox\.status = 'succeeded' THEN fulfillment_outbox\.payload/);
 assert.match(enqueue, /if \(row\.status === 'succeeded'\)[\s\S]*settleOutboxRowWithExecutor\(row, tx\)/);
-assert.ok(
-  enqueue.indexOf("row.status === 'succeeded'") < enqueue.indexOf("status: 'pending'"),
+assert.match(
+  enqueue,
+  /if \(row\.status === 'succeeded'\)[\s\S]*settleOutboxRowWithExecutor\(row, tx\)[\s\S]*status: 'pending'/,
   'succeeded re-enqueue must reconverge before any pending projection',
 );
 
 const directIntentStart = labels.indexOf('const directRef = directLabelAccountRefFromProviderId');
 const directIntentEnd = labels.indexOf('// PS-370:', directIntentStart);
 const directIntent = labels.slice(directIntentStart, directIntentEnd);
-assert.ok(directIntent.indexOf('loadDirectAccountForLabel') < directIntent.indexOf('createLabelPurchaseIntent'));
-assert.ok(directIntent.indexOf('createLabelPurchaseIntent') < directIntent.indexOf('direct = await timer.task'));
+assert.ok(directIntent.indexOf('loadDirectAccountForLabel') < directIntent.indexOf('acquireFulfillmentOperation'));
+assert.ok(directIntent.indexOf('acquireFulfillmentOperation') < directIntent.indexOf('dispatchFulfillmentOperation'));
 const shopifyStart = labels.indexOf('async function createShopifyShippingLabelForOrderImpl');
 const shopifyEnd = labels.indexOf('async function createLabelV2Impl', shopifyStart);
 const shopify = labels.slice(shopifyStart, shopifyEnd);
-assert.ok(shopify.indexOf('buildShopifyShippingLabelPurchaseInput') < shopify.indexOf('createLabelPurchaseIntent'));
-assert.ok(shopify.indexOf('createLabelPurchaseIntent') < shopify.indexOf('purchaseShopifyShippingLabel'));
-assert.match(shopify, /labelPurchaseIntentId: shopifyPurchaseIntentId/);
+assert.ok(shopify.indexOf('buildShopifyShippingLabelPurchaseInput') < shopify.indexOf('acquireFulfillmentOperation'));
+assert.ok(shopify.indexOf('acquireFulfillmentOperation') < shopify.indexOf('purchaseShopifyShippingLabel'));
+assert.match(shopify, /externalOperationId: shopifyExternalOperationId/);
 assert.match(labels, /pending\.labelPurchaseIntentId[\s\S]*state: 'completed'/);
+assert.match(operationLedger, /state: 'reconcile_required'/);
+assert.match(operationLedger, /eq\(externalOperations\.generation, lease\.generation\)/);
 assert.match(labelIntent, /export async function resolveLabelPurchaseIntentByOperator/);
 assert.match(labelIntent, /outcome: 'provider_verified_no_label'/);
 assert.match(labelIntent, /AND order_id = \$\{intent\.order_id\}[\s\S]*AND voided = false/);

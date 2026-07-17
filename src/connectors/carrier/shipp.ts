@@ -872,6 +872,7 @@ async function createLabelShipp(input: Record<string, unknown>): Promise<Record<
       saturdayDelivery: /saturday/i.test(shippRateServiceName(selectedRate)),
       customsValue: shippCustomsValue(labelShippingOptions),
     }),
+    signal: input.signal as AbortSignal | undefined,
   });
   const text = await labelRes.text().catch(() => '');
   let data: any = null;

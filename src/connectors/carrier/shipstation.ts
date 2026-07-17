@@ -157,7 +157,11 @@ export function createShipStationCarrierConnector(): CarrierConnector<
       }
       // Per user override unlock shipped data on 2026-07-06 (PS-399): ShipStation
       // voids are provider-confirmed only through /v2/labels/{label_id}/void.
-      await ssVoidLabel(raw, (input as { apiKeyV2?: string }).apiKeyV2);
+      await ssVoidLabel(
+        raw,
+        (input as { apiKeyV2?: string }).apiKeyV2,
+        input.signal,
+      );
     },
     // Tracking-driven queue retirement: delegate to the TrackingConnector
     // implementation (src/connectors/tracking/shipstation.ts) so the

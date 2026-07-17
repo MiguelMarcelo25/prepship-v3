@@ -43,8 +43,8 @@ assert.equal(alreadySucceededPlan.plannedAction, 'already_succeeded', 'succeeded
 
 const unsupportedPlan = buildShipmentConfirmationLifecyclePlan({
   ...shipstationCandidate,
-  sourceProvider: 'shopify',
-  externalOrderId: 'shopify-123',
+  sourceProvider: 'amazon',
+  externalOrderId: 'amazon-123',
   sourceOrderId: '123',
 });
 assert.equal(unsupportedPlan.plannedAction, 'mark_not_supported', 'unsupported live connector must get explicit not_supported state');
