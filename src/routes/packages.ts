@@ -9,7 +9,11 @@ import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
 import { ensurePackageConsumptionSchema } from '../services/package-consumption-schema';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
-import { hasAppPermission, requireInternalPermission } from '../middleware/auth';
+import {
+  hasAppPermission,
+  hasInternalAppPermission,
+  requireBusinessRoutePolicy,
+} from '../middleware/auth';
 
 const app = new Hono();
 const PACKAGE_START_BACKFILL_DATE = new Date('2026-04-01T00:00:00.000Z');
@@ -166,7 +170,7 @@ app.get('/:id{[0-9]+}', async (c) => {
 // PS-252 (Card 7 finish): package mutations are internal config — gate create/edit behind
 // settings:write (matching DELETE). Warehouse stock is edited via the inventory receive/adjust
 // routes, not here, so a single config gate is safe + backward-compatible.
-app.post('/', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
+app.post('/', requireBusinessRoutePolicy('packages.catalog.create'), zValidator('json', body), async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const v = c.req.valid('json');
   const [row] = await db.insert(packages).values(v).returning();
@@ -175,7 +179,7 @@ app.post('/', requireInternalPermission('settings:write'), zValidator('json', bo
   return c.json(publicPackageRow(row, canViewFinancials), 201);
 });
 
-app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
+app.patch('/:id{[0-9]+}', requireBusinessRoutePolicy('packages.catalog.patch'), zValidator('json', body.partial()), async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
@@ -190,9 +194,10 @@ app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidato
 });
 
 // PS-252 (Card 7): deleting a package definition is operator/admin config, so it is gated.
-// PS-413 removed stockQty from generic create/edit payloads; warehouse stock now changes only
-// through receive/adjust/ship ledger workflows.
-app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
+// PS-413 removed stockQty from generic create/edit payloads. Package stock is a
+// global catalog concern, so only settings-authorized internal callers may use
+// receive/adjust; automated shipment-ledger consumption remains a separate path.
+app.delete('/:id{[0-9]+}', requireBusinessRoutePolicy('packages.catalog.delete'), async (c) => {
   const id = Number(c.req.param('id'));
   const [history] = await db
     .select({ id: packageLedger.id })
@@ -211,7 +216,7 @@ app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c
 // Sync carrier-default packages from ShipStation. Pulls /v2/carriers and
 // upserts each carrier's package list into our packages table.
 // Dimensions stay 0 — ShipStation's API doesn't expose them; user fills in.
-app.post('/sync', async (c) => {
+app.post('/sync', requireBusinessRoutePolicy('packages.catalog.sync'), async (c) => {
   const res = await listCarrierAccounts('shipstation', {
     dedupeKey: 'carriers:list',
   }) as CarriersResponse;
@@ -259,7 +264,10 @@ app.post('/sync', async (c) => {
   });
 });
 
-app.post('/backfill-start-date', async (c) => {
+app.post(
+  '/backfill-start-date',
+  requireBusinessRoutePolicy('packages.catalog.backfill-start-date'),
+  async (c) => {
   const rows = await db
     .update(packages)
     .set({ createdAt: PACKAGE_START_BACKFILL_DATE })
@@ -272,7 +280,8 @@ app.post('/backfill-start-date', async (c) => {
     startDate: PACKAGE_START_BACKFILL_DATE.toISOString(),
     message: `Backfilled ${rows.length} packages to start 2026-04-01`,
   });
-});
+  },
+);
 
 const receiveBody = z.object({
   qty: z.number().int().positive(),
@@ -280,11 +289,28 @@ const receiveBody = z.object({
   note: z.string().max(500).optional(),
 });
 
-app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
-  await ensurePackageConsumptionSchema();
+app.post(
+  '/:id{[0-9]+}/receive',
+  requireBusinessRoutePolicy('packages.receive'),
+  zValidator('json', receiveBody),
+  async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const { qty, unitCost, note } = c.req.valid('json');
+  if (
+    unitCost !== undefined &&
+    !hasInternalAppPermission(
+      {
+        email: c.get('email' as never) as string | undefined,
+        role: c.get('role' as never) as string | undefined,
+        permissions: c.get('permissions' as never) as string[] | undefined,
+      },
+      'financials:write',
+    )
+  ) {
+    return c.json({ error: 'Financial write permission required for package unit cost' }, 403);
+  }
+  await ensurePackageConsumptionSchema();
 
   const result = await db.transaction(async (tx) => {
     const patch: Record<string, unknown> = {
@@ -320,14 +346,19 @@ app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
   if (!result) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
   return c.json({ data: redactPackageMutationResult(result, canViewFinancials) });
-});
+  },
+);
 
 const adjustBody = z.object({
   qtyDelta: z.number().int().refine((n) => n !== 0, 'qtyDelta cannot be 0'),
   note: z.string().max(500).optional(),
 });
 
-app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
+app.post(
+  '/:id{[0-9]+}/adjust',
+  requireBusinessRoutePolicy('packages.adjust'),
+  zValidator('json', adjustBody),
+  async (c) => {
   await ensurePackageConsumptionSchema();
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
@@ -360,7 +391,8 @@ app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
   if (!result) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
   return c.json({ data: redactPackageMutationResult(result, canViewFinancials) });
-});
+  },
+);
 
 app.get('/:id{[0-9]+}/ledger', async (c) => {
   await ensurePackageConsumptionSchema();
@@ -432,7 +464,7 @@ app.get('/usage-summary', async (c) => {
 });
 
 // v2-parity: PUT /packages/:id — alias for PATCH. v2 apiClient sends PUT.
-app.put('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
+app.put('/:id{[0-9]+}', requireBusinessRoutePolicy('packages.catalog.put'), zValidator('json', body.partial()), async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
@@ -450,6 +482,7 @@ app.put('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator(
 // v2 callers don't need to know the generic PATCH shape.
 app.patch(
   '/:id{[0-9]+}/reorder-level',
+  requireBusinessRoutePolicy('packages.catalog.reorder-level'),
   zValidator('json', z.object({ reorderLevel: z.number().int().nonnegative() })),
   async (c) => {
     const canViewFinancials = canViewPackageFinancials(c);
@@ -471,6 +504,7 @@ app.patch(
 // returns it, otherwise creates a new "custom" package with the given dims.
 app.post(
   '/auto-create',
+  requireBusinessRoutePolicy('packages.catalog.auto-create'),
   zValidator(
     'json',
     z.object({
@@ -519,14 +553,18 @@ app.post(
 
 // Adds the saved DR PREPPER custom box-size library. The importer is
 // idempotent: exact/fuzzy dimension matches are skipped instead of duplicated.
-app.post('/import-standard-dimensions', async (c) => {
+app.post(
+  '/import-standard-dimensions',
+  requireBusinessRoutePolicy('packages.catalog.import-dimensions'),
+  async (c) => {
   const result = await importStandardPackageDimensions();
   if (result.inserted > 0) invalidatePackagesCache();
   return c.json({
     ...result,
     message: `Added ${result.inserted} package sizes (${result.skippedExisting} already existed)`,
   });
-});
+  },
+);
 
 // v2-parity: GET /packages/low-stock — packages whose stockQty is at or
 // below reorderLevel. Used by the Packages view's "needs reorder" badge.

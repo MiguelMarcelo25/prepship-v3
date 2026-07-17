@@ -6,6 +6,8 @@ export type RateBrowseWorkflowSnapshot = {
   phase: RateBrowseWorkflowPhase;
   requestKey: string | null;
   orderId: number | null;
+  clientId: number | null;
+  storeId: number | null;
   totalCarriers: number;
   completedCarriers: number;
   successfulCarriers: number;

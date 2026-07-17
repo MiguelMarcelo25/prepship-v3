@@ -164,10 +164,15 @@ check('assertOrderEditable enforces order scope before force-override', ordersRo
 check('POST /manual blocks portal roles', /app\.post\('\/manual', requireInternalPermission\('print_queue:write'\)/.test(ordersRoute));
 
 // 9. PS-240 — clients write paths gated + scope-checked.
-check('clients POST gated', /app\.post\('\/', requireInternalPermission\('settings:write'\)/.test(clientsRoute));
-check('clients PATCH gated + scope-checked', /app\.patch\('\/:id\{\[0-9\]\+\}', requireInternalPermission\('settings:write'\)/.test(clientsRoute) && count(clientsRoute, 'isClientVisibleToScope(publicClient(') >= 3);
-check('clients DELETE gated', /app\.delete\('\/:id\{\[0-9\]\+\}', requireInternalPermission\('settings:write'\)/.test(clientsRoute));
-check('clients backfill gated', /backfill-orders',\s*requireInternalPermission\('settings:write'\)/.test(clientsRoute));
+check('clients POST gated',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.create')"));
+check('clients PATCH gated + scope-checked',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.patch')") &&
+    count(clientsRoute, 'isClientVisibleToScope(publicClient(') >= 3);
+check('clients DELETE gated',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.delete')"));
+check('clients backfill gated',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.orders.backfill')"));
 
 // 10. Lockdown citation present on the touched locked surfaces.
 check('labels service cites the override', labelsSvc.includes('unlock shipped data on 2026-06-13'));

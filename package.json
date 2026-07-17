@@ -181,6 +181,7 @@
     "test:ps-406-shopify-rates-labels": "tsx scripts/ps-406-shopify-rates-labels-guard.ts",
     "test:ps-411-effective-lifecycle-edit-lock": "tsx scripts/ps-411-effective-lifecycle-edit-lock-guard.ts",
     "test:ps-411-bulk-assign-terminal-lock": "tsx scripts/ps-411-bulk-assign-terminal-lock-guard.ts",
+    "test:ps-421-method-capability-matrix": "tsx scripts/ps-421-method-capability-matrix-guard.ts",
     "test:ps-387-effective-order-status-sot": "tsx scripts/ps-387-effective-order-status-sot-guard.ts",
     "test:ps-386-stale-rate-aliases": "tsx scripts/ps-386-stale-rate-aliases-guard.ts",
     "test:ps-383-billing-storage-proof-migration": "tsx scripts/ps-383-billing-storage-proof-migration-guard.ts",

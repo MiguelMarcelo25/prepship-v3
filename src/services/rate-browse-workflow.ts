@@ -21,8 +21,9 @@ function nowIso(): string {
 }
 
 function finiteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
   const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 function snapshotFromInput(input: StartRateBrowseWorkflowInput): RateBrowseWorkflowSnapshot {
@@ -33,6 +34,8 @@ function snapshotFromInput(input: StartRateBrowseWorkflowInput): RateBrowseWorkf
     phase: 'queued',
     requestKey: input.requestKey ?? buildRateBrowseWorkflowRequestKey(input.body),
     orderId: input.orderId ?? finiteNumber(input.body.orderId),
+    clientId: finiteNumber(input.body.clientId),
+    storeId: finiteNumber(input.body.storeId),
     totalCarriers: 0,
     completedCarriers: 0,
     successfulCarriers: 0,

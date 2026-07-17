@@ -22,7 +22,11 @@ import {
   logSlowInventoryRoute,
 } from '../lib/route-timing';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
-import { hasAppPermission } from '../middleware/auth';
+import {
+  hasAppPermission,
+  hasInternalAppPermission,
+  requireBusinessRoutePolicy,
+} from '../middleware/auth';
 import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
 import { applyMovement, inventoryStats } from '../services/inventory';
 import { applyInventoryMovementInTransaction } from '../services/inventory-movement';
@@ -552,7 +556,10 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
   return c.json(paginated(rows, totalCount, q));
 });
 
-app.delete('/ledger/:ledgerId{[0-9]+}', async (c) => {
+app.delete(
+  '/ledger/:ledgerId{[0-9]+}',
+  requireBusinessRoutePolicy('inventory.ledger.delete'),
+  async (c) => {
   const ledgerId = Number(c.req.param('ledgerId'));
   const scope = inventoryScopeFromContext(c);
   const email = c.get('email' as never) as string | undefined;
@@ -618,7 +625,8 @@ app.delete('/ledger/:ledgerId{[0-9]+}', async (c) => {
     deleted: result.row,
     inventory: result.inventory,
   });
-});
+  },
+);
 
 app.get('/stats', async (c) => {
   const clientId = c.req.query('clientId');
@@ -1067,7 +1075,11 @@ const createBody = z.object({
   active: z.boolean().optional(),
 });
 
-app.post('/', zValidator('json', createBody), async (c) => {
+app.post(
+  '/',
+  requireBusinessRoutePolicy('inventory.catalog.create'),
+  zValidator('json', createBody),
+  async (c) => {
   const body = c.req.valid('json');
   // PS-247: a restricted caller may only create inventory in its own client scope.
   if (!inventoryClientInScope(inventoryScopeFromContext(c), body.clientId)) {
@@ -1090,10 +1102,12 @@ app.post('/', zValidator('json', createBody), async (c) => {
     return movement.inventory;
   });
   return c.json(row, 201);
-});
+  },
+);
 
 app.patch(
   '/:id{[0-9]+}',
+  requireBusinessRoutePolicy('inventory.catalog.patch'),
   zValidator(
     'json',
     createBody
@@ -1137,6 +1151,7 @@ function movementDateFrom(value: string | undefined) {
 
 app.post(
   '/:id{[0-9]+}/receive',
+  requireBusinessRoutePolicy('inventory.receive.one'),
   zValidator('json', movementBody.refine((v) => v.qty > 0, 'Receive qty must be > 0')),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -1160,6 +1175,7 @@ app.post(
 
 app.put(
   '/:id{[0-9]+}/set-parent',
+  requireBusinessRoutePolicy('inventory.catalog.set-parent'),
   zValidator(
     'json',
     z.object({ parentSkuId: z.number().int().positive().nullable() })
@@ -1234,6 +1250,7 @@ app.get('/:id{[0-9]+}/parents', async (c) => {
 // Add a non-primary parent (idempotent). For primary parent use /set-parent.
 app.post(
   '/:id{[0-9]+}/add-parent',
+  requireBusinessRoutePolicy('inventory.catalog.add-parent'),
   zValidator(
     'json',
     z.object({ parentSkuId: z.number().int().positive() })
@@ -1263,6 +1280,7 @@ app.post(
 // out inventory.parentSkuId so the two representations stay consistent.
 app.delete(
   '/:id{[0-9]+}/parents/:parentSkuId{[0-9]+}',
+  requireBusinessRoutePolicy('inventory.catalog.remove-parent'),
   async (c) => {
     const id = Number(c.req.param('id'));
     const parentSkuId = Number(c.req.param('parentSkuId'));
@@ -1295,6 +1313,7 @@ app.delete(
 
 app.post(
   '/:id{[0-9]+}/adjust',
+  requireBusinessRoutePolicy('inventory.adjust.one'),
   zValidator('json', movementBody.refine((v) => v.qty !== 0, 'Adjust qty cannot be 0')),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -1353,6 +1372,7 @@ async function findOrCreateInventoryForReceive(
   item: z.infer<typeof bulkReceiveBody>['items'][number],
   clientId: number | null | undefined,
   scope: ClientStoreScope,
+  allowCatalogCreate: boolean,
 ) {
   const requestedId = item.invSkuId ?? item.inventoryId;
   if (requestedId != null) {
@@ -1375,6 +1395,9 @@ async function findOrCreateInventoryForReceive(
     .where(and(clientFilter, sql`lower(${inventory.sku}) = lower(${sku})`))
     .limit(1);
   if (existing) return existing;
+  if (!allowCatalogCreate) {
+    throw new Error(`Inventory item ${sku} must exist before warehouse receiving`);
+  }
 
   const [created] = await db
     .insert(inventory)
@@ -1395,6 +1418,7 @@ async function findOrCreateInventoryForReceive(
 // errors are tallied without aborting the batch.
 app.post(
   '/receive',
+  requireBusinessRoutePolicy('inventory.receive.bulk'),
   zValidator('json', bulkReceiveBody),
   async (c) => {
     const body = c.req.valid('json');
@@ -1404,6 +1428,14 @@ app.post(
       return c.json({ error: 'Inventory client out of scope' }, 403);
     }
     const email = c.get('email' as never) as string | undefined;
+    const allowCatalogCreate = hasInternalAppPermission(
+      {
+        email,
+        role: c.get('role' as never) as string | undefined,
+        permissions: c.get('permissions' as never) as string[] | undefined,
+      },
+      'settings:write',
+    );
     const receivedAt = movementDateFrom(body.receivedAt);
     // v2-parity ReceiveInventoryResultDto adds `newStock` per item so
     // the receiving UI can display the post-receive on-hand total without a
@@ -1423,7 +1455,12 @@ app.post(
     }> = [];
     for (const item of body.items) {
       try {
-        const inv = await findOrCreateInventoryForReceive(item, body.clientId, scope);
+        const inv = await findOrCreateInventoryForReceive(
+          item,
+          body.clientId,
+          scope,
+          allowCatalogCreate,
+        );
         // PS-324: the pack→unit expansion is a persisted MOVEMENT quantity, so the backend owns
         // it from the CANONICAL units_per_pack (the FE sends pack-count intent). Delegated to the
         // resolveReceiveUnits owner; a pre-multiplied `qty` is still honored for back-compat.
@@ -1484,6 +1521,7 @@ app.post(
 // Same semantic as POST /:id/adjust but v2 shape with id in the body.
 app.post(
   '/adjust',
+  requireBusinessRoutePolicy('inventory.adjust.body'),
   zValidator(
     'json',
     z.object({
@@ -1556,6 +1594,7 @@ const bulkSetPackageBody = z.object({
 
 app.post(
   '/bulk-set-default-package',
+  requireBusinessRoutePolicy('inventory.catalog.bulk-default-package'),
   zValidator('json', bulkSetPackageBody),
   async (c) => {
     const { clientId, packageId, skus } = c.req.valid('json');
@@ -1587,7 +1626,11 @@ app.post(
   }
 );
 
-app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
+app.post(
+  '/bulk-update-dims',
+  requireBusinessRoutePolicy('inventory.catalog.bulk-dimensions'),
+  zValidator('json', bulkDimsBody),
+  async (c) => {
   const { items } = c.req.valid('json');
   // PS-247: out-of-scope rows fall outside the predicate -> not updated (counted as skipped).
   const scope = inventoryScopeFromContext(c);
@@ -1614,7 +1657,8 @@ app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
     skipped: items.length - updated,
     message: `Updated ${updated} of ${items.length} items`,
   });
-});
+  },
+);
 
 // Scan orders.items JSONB and seed inventory rows for any SKU we don't
 // have yet (clientId set from the order's clientId, or null if order is
@@ -1625,10 +1669,14 @@ app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
 // in-process scheduler can call the same logic on a 30-min interval.
 // This route handler is now a thin wrapper that the Inventory toolbar's
 // "📥 Import SKUs from Orders" button still drives manually.
-app.post('/import-from-orders', async (c) => {
+app.post(
+  '/import-from-orders',
+  requireBusinessRoutePolicy('inventory.catalog.import-orders'),
+  async (c) => {
   const result = await importSkusFromOrders();
   return c.json(result);
-});
+  },
+);
 
 // Pull product catalog from ShipStation v1 /products (every account we
 // know about) and upsert as inventory rows. stockQty stays 0 — the
@@ -1642,9 +1690,13 @@ app.post('/import-from-orders', async (c) => {
 // in-process scheduler can fire this hourly. This route handler is the
 // manual path — the "📐 Import Dims from SS" toolbar button still
 // drives it on demand.
-app.post('/sync-products', async (c) => {
+app.post(
+  '/sync-products',
+  requireBusinessRoutePolicy('inventory.catalog.sync-products'),
+  async (c) => {
   const result = await syncShipStationProducts();
   return c.json(result);
-});
+  },
+);
 
 export default app;

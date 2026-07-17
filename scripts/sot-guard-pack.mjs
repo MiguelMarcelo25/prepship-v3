@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 const REQUIRED_GUARDS = [
   'test:ps-305-authority-drift',
   'test:rate-source-of-truth',
+  'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
   'test:ps-336-task-sot-gates',

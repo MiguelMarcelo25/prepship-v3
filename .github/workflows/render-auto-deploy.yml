@@ -45,6 +45,8 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npm run typecheck
+      - name: PS-421 method/capability/scope matrix
+        run: npm run test:ps-421-method-capability-matrix
       - name: Frontend build
         run: npm run build:web
       - name: Shipping roundtrip certification (offline gate)

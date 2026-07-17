@@ -25,6 +25,11 @@ import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
 import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { getComboBreakdownFromOrderItems, getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
+import {
+  dashboardDailyRevenueForFinancialViewer,
+  dashboardSummaryForFinancialViewer,
+  type DashboardSummaryFinancialPayload,
+} from '../services/dashboard-financial-redaction';
 
 const app = new Hono();
 
@@ -217,16 +222,10 @@ async function loadDashboardSummary(
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const sevenFrom = q.sevenFrom ?? q.from;
   const scope = dashboardScopeFromContext(c);
+  const canViewFinancials = canViewDashboardFinancials(c);
   const where = orderVisibilityWhere(c, q, fromDate, toDate, scope, { excludeCancelled: true });
 
-  type DashboardSummaryPayload = {
-    revenue: number;
-    units: number;
-    bySku: Array<{ sku: string; revenue: number | string; units30: number | string; units7: number | string }>;
-    dailyRevenue: Array<{ day: string; revenue: number | string }>;
-    // PS-325 (slice 4): additive provenance envelope (computedAt / window / live-vs-cache).
-    meta?: DashboardProvenance;
-  };
+  type DashboardSummaryPayload = DashboardSummaryFinancialPayload;
 
   // PS-325 (slice 4): stamp the compute instant ABOVE the cache read so a cache HIT replays it
   // (the cache round-trips the payload verbatim) — computedAt reports true cache age, never serve time.
@@ -240,6 +239,7 @@ async function loadDashboardSummary(
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
     caller: dashboardCallerCacheScope(c, scope),
+    financials: canViewFinancials,
   });
 
   const cached = await getAnalyticsCache<DashboardSummaryPayload>(cacheKey);
@@ -343,13 +343,13 @@ async function loadDashboardSummary(
       ) as "dailyRevenue"
   `);
 
-  const payload: DashboardSummaryPayload = {
+  const payload = dashboardSummaryForFinancialViewer({
     revenue: Number(row?.revenue ?? 0) || 0,
     units: Number(row?.units ?? 0) || 0,
     bySku: Array.isArray(row?.bySku) ? row.bySku : [],
     dailyRevenue: Array.isArray(row?.dailyRevenue) ? row.dailyRevenue : [],
     meta: buildProvenance({ from: q.from, to: q.to, computedAt }),
-  };
+  }, canViewFinancials);
 
   const totalMs = msSince(startedAt);
   if (totalMs >= 500) {
@@ -431,10 +431,12 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
   const fromDate = new Date(reportingWindow.dateFrom);
   const toDate = new Date(reportingWindow.dateToInclusive);
   const scope = dashboardScopeFromContext(c);
+  const canViewFinancials = canViewDashboardFinancials(c);
   const where = orderVisibilityWhere(c, q, fromDate, toDate, scope, { excludeCancelled: true });
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   type DashboardDailyRevenueByClientPayload = {
-    data: Array<{ day: string; clientId: number | null; revenue: number; count: number }>;
+    data: Array<{ day: string; clientId: number | null; revenue: number | null; count: number }>;
+    canViewFinancials: boolean;
     // PS-325 (slice 4b): additive provenance envelope — sibling to `data`, cache key unchanged so the
     // daily-orders-trend-count guard (which pins the `data:` type literal + the v2 key) stays green.
     meta?: DashboardProvenance;
@@ -448,6 +450,7 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
     caller: dashboardCallerCacheScope(c, scope),
+    financials: canViewFinancials,
   });
 
   const cached = await getAnalyticsCache<DashboardDailyRevenueByClientPayload>(cacheKey);
@@ -465,7 +468,11 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
     order by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles') asc
   `);
 
-  const payload = { data: rows, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
+  const payload = {
+    data: dashboardDailyRevenueForFinancialViewer(rows, canViewFinancials),
+    canViewFinancials,
+    meta: buildProvenance({ from: q.from, to: q.to, computedAt }),
+  };
   void setAnalyticsCache(cacheKey, payload, 60);
   return c.json(payload);
 });
