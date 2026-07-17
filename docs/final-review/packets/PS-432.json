@@ -5,7 +5,7 @@
   "title": "Sync and fulfillment resilience: data-integrity and retry-safety hardening",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "ba8b8cf08804c97b14ee476cac3b261f503388f1"
+    "reviewedSha": "896ba468b38243b71f989783705a7fed3bc2bdbb"
   },
   "riskDomains": [
     "rate_label",
@@ -80,7 +80,7 @@
       "id": "AC-7",
       "severity": "high",
       "status": "met",
-      "description": "The focused PS-422 quote-authorization, PS-423 provider-operation, PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 45 mandatory source-of-truth guards, runtime-schema readiness audit, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA; later Billing and customer-shipping-money changes were classified as independent backend owners.",
+      "description": "The focused PS-422 quote-authorization, PS-423 provider-operation, PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 46 mandatory source-of-truth guards, runtime-schema readiness audit, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA; later PS-421 authorization work is classified as an independent backend security owner, and the sync-pill correction is presentation-only.",
       "evidenceIds": [
         "rate-label-boundary-regression",
         "ps423-operation-ledger-integration",
@@ -406,12 +406,12 @@
         "scripts/ps-430-print-queue-worker-health-integration.ts"
       ],
       "assertions": [],
-      "proves": "All 45 mandatory source-of-truth, worker, inventory, billing, rate/label, lockdown, lifecycle, migration-frontier, and runtime-readiness guards pass at the exact reviewed SHA with inert local test-only environment values."
+      "proves": "All 46 mandatory source-of-truth, worker, inventory, billing, rate/label, authorization, lockdown, lifecycle, migration-frontier, and runtime-readiness guards pass at the exact reviewed SHA with inert local test-only environment values."
     },
     {
       "id": "current-head-drift-review",
       "classification": "static",
-      "command": "git log --format='%H %s' b91a3493eba26cfe64ea117556125a8c0226965f..ba8b8cf08804c97b14ee476cac3b261f503388f1 && git diff --name-status b91a3493eba26cfe64ea117556125a8c0226965f..ba8b8cf08804c97b14ee476cac3b261f503388f1",
+      "command": "git log --format='%H %s' ba8b8cf08804c97b14ee476cac3b261f503388f1..896ba468b38243b71f989783705a7fed3bc2bdbb && git diff --name-status ba8b8cf08804c97b14ee476cac3b261f503388f1..896ba468b38243b71f989783705a7fed3bc2bdbb",
       "result": "pass",
       "artifactPaths": [
         "src/services/billing-detail-row-sot.ts",
@@ -421,10 +421,15 @@
         "src/services/fulfillment-operation-ledger.ts",
         "src/services/shipping-workflow/shipping-quote-authorization.ts",
         "scripts/ps-422-shipping-quote-authorization-guard.ts",
-        "scripts/ps-423-provider-operation-ledger-integration.ts"
+        "scripts/ps-423-provider-operation-ledger-integration.ts",
+        "src/lib/business-route-policy.ts",
+        "src/services/rate-request-authorization.ts",
+        "scripts/ps-421-method-capability-matrix-guard.ts",
+        "web/src/components/Views/orders-parity.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts"
       ],
       "assertions": [],
-      "proves": "Post-review drift is classified as the prior packet-only refresh, a Billing effective-date query correction, PS-437 canonical customer-shipping-money ownership and read-only reconciliation evidence, PS-423 additive provider-operation durability, and PS-422 immutable quote authorization. PS-422 and PS-423 strengthen the PS-432 purchase/retry boundary; Billing/PS-437 remain independent backend money owners. No frontend became authoritative."
+      "proves": "Drift after the prior PS-422 runtime review is classified as packet-only PS-432/PS-434 evidence, PS-421's deny-by-default backend method-capability-scope authority, and a two-string presentation correction for queued/retrying sync status. PS-421 strengthens authorization without changing PS-432 lifecycle, inventory, provider, purchase, confirmation, or worker owners. The frontend still renders backend sync state and owns no business decision."
     },
     {
       "id": "strict-typecheck",
@@ -453,7 +458,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git show --name-only --format= 612f679664f9993f28b00c4fe6944ec86b92d4be 86f5dfe93c87d21597bcbd009d9e10934c68813d f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e 12223760bf20fd867bc820de98194d11fbbd1d3e 5f494d12dfd84327aa97fc8ce1e85a33992aee5c edf3d4a6f5352792ce0b5ec29e12634f83a48b96 ba8b8cf08804c97b14ee476cac3b261f503388f1",
+      "command": "git show --name-only --format= 612f679664f9993f28b00c4fe6944ec86b92d4be 86f5dfe93c87d21597bcbd009d9e10934c68813d f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e 12223760bf20fd867bc820de98194d11fbbd1d3e 5f494d12dfd84327aa97fc8ce1e85a33992aee5c edf3d4a6f5352792ce0b5ec29e12634f83a48b96 ba8b8cf08804c97b14ee476cac3b261f503388f1 4d10cf8a3cb3df14b240ec4b7d5947697ff0a380 896ba468b38243b71f989783705a7fed3bc2bdbb",
       "result": "pass",
       "artifactPaths": [
         "src/services/fulfillment/inventory-deduction-outbox.ts",
@@ -465,14 +470,18 @@
         "src/services/sync-job-queue.ts",
         "src/services/fulfillment-operation-ledger.ts",
         "src/services/shipping-workflow/shipping-quote-authorization.ts",
+        "src/lib/business-route-policy.ts",
         "drizzle/0070_order_lifecycle_commands.sql",
         "drizzle/0072_external_operations.sql",
         "scripts/ps-424-order-lifecycle-command-integration.ts",
         "scripts/ps-426-consumer-leadership-integration.ts",
-        "scripts/ps-432-sync-fulfillment-resilience-integration.ts"
+        "scripts/ps-432-sync-fulfillment-resilience-integration.ts",
+        "scripts/ps-421-method-capability-matrix-guard.ts",
+        "web/src/components/Views/orders-parity.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts"
       ],
       "assertions": [],
-      "proves": "The reviewed runtime adds durable lifecycle truth, exact fulfillment facts, safe provider retry, immutable quote authorization, durable provider-operation receipts, and single-owner worker leadership. Original override-governed files touched were src/routes/orders.ts, src/services/fulfillment-deductions.ts, and src/services/labels.ts; PS-422 touched the formally locked web/src/components/Views/OrdersView.tsx only to transport backend-issued selectionRef. Required nearby unlock comments and commit override text are present. assertOrderEditable, LOCKED_STATUSES, INVENTORY_AUTO_DEDUCT, shipped/cancelled UI locks, and historical schema protections were not removed or weakened."
+      "proves": "The reviewed runtime adds durable lifecycle truth, exact fulfillment facts, safe provider retry, immutable quote authorization, durable provider-operation receipts, single-owner worker leadership, and later deny-by-default backend authorization. The final sync-pill change only replaces two corrupted display literals and updates their existing PS-426 expectation. Original override-governed files touched were src/routes/orders.ts, src/services/fulfillment-deductions.ts, and src/services/labels.ts; PS-422 touched the formally locked web/src/components/Views/OrdersView.tsx only to transport backend-issued selectionRef. Required nearby unlock comments and commit override text are present. assertOrderEditable, LOCKED_STATUSES, INVENTORY_AUTO_DEDUCT, shipped/cancelled UI locks, and historical schema protections were not removed or weakened."
     }
   ],
   "migrations": {
@@ -504,7 +513,7 @@
   },
   "liveVerification": {
     "status": "verified",
-    "reason": "The previous nine-item provider ambiguity is closed by a production READ ONLY aggregate query: every stale Print Queue sidecar has a durable active shipment provider receipt and no unresolved label-purchase intent exists. Exact reviewed SHA ba8b8cf08804c97b14ee476cac3b261f503388f1 is live on the Render API, sync worker, and print worker. Read-only /health, /health/ready, and /health/deep probes returned HTTP 200 with DB, DB write, Orders, Print Queue, and Print Queue Worker healthy. No provider call, label purchase, marketplace notification, or production write was required or performed.",
+    "reason": "The previous nine-item provider ambiguity is closed by a production READ ONLY aggregate query: every stale Print Queue sidecar has a durable active shipment provider receipt and no unresolved label-purchase intent exists. Exact reviewed SHA 896ba468b38243b71f989783705a7fed3bc2bdbb is live on the Render API (dep-d9dahrn57nvc73fasdu0), sync worker (dep-d9dahrn7f7vs7382v3ag), and print worker (dep-d9dahrl98gpc73efv4j0). Read-only /health, /health/ready, and /health/deep probes returned HTTP 200 with DB, DB write, Orders, Print Queue, and Print Queue Worker healthy; queuedCount and providerPending were both zero. No provider call, label purchase, marketplace notification, or production write was required or performed.",
     "followUpOwner": null,
     "artifactPaths": [
       "docs/final-review/evidence/PS-432-provider-pending-readonly.sql",
