@@ -2537,6 +2537,7 @@ async function ordersListResponse(
       // return. No shipped order, shipment, label, or postage row is modified.
       returnSummaries: returnSummaries.map((summary) => ({
         ...summary,
+        money: canViewFinancials ? summary.money : null,
         returnCustomerShippingRate: canViewFinancials
           ? summary.returnCustomerShippingRate
           : null,
@@ -2544,6 +2545,7 @@ async function ordersListResponse(
       returnSummary: returnSummary
         ? {
             ...returnSummary,
+            money: canViewFinancials ? returnSummary.money : null,
             returnCustomerShippingRate: canViewFinancials
               ? returnSummary.returnCustomerShippingRate
               : null,

@@ -402,6 +402,10 @@ function expandReturnDisplayRows(order: OrderSummaryDto): OrderSummaryDto[] {
     const accountNickname = typeof shipment?.providerAccountNickname === 'string'
       ? shipment.providerAccountNickname
       : null;
+    const returnMoney = toRecordValue(summary.money);
+    const returnSelectedRateCost = toFiniteNumber(returnMoney?.selectedRateCost);
+    const returnCustomerRate = toFiniteNumber(returnMoney?.cShippingRateAmount)
+      ?? summary.returnCustomerShippingRate;
     const returnShipping = shipment
       ? {
           shipmentId: toNumericValue(shipment.shipmentId),
@@ -412,7 +416,7 @@ function expandReturnDisplayRows(order: OrderSummaryDto): OrderSummaryDto[] {
           labelCreatedAt: shipment.labelCreatedAt ?? null,
           providerAccountId,
           accountNickname,
-          selectedRateAmount: summary.returnCustomerShippingRate,
+          selectedRateAmount: returnSelectedRateCost,
           labelCost: null,
           selectedRate: null,
         }
@@ -444,7 +448,7 @@ function expandReturnDisplayRows(order: OrderSummaryDto): OrderSummaryDto[] {
       orderDate: summary.createdAt ?? order.orderDate,
       items,
       orderTotal: null,
-      shippingAmount: summary.returnCustomerShippingRate,
+      shippingAmount: returnCustomerRate,
       weight: weightOz != null ? { value: weightOz, units: 'ounces' } : null,
       rateDims: dimsL != null && dimsW != null && dimsH != null
         ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
@@ -453,7 +457,9 @@ function expandReturnDisplayRows(order: OrderSummaryDto): OrderSummaryDto[] {
       shipping: returnShipping,
       selectedRate: null,
       bestRate: null,
-      bestRateWorkflow: null,
+      // PS-437: a return row consumes the backend-frozen shipment money tuple.
+      // The frontend only adapts the DTO into the existing display envelope.
+      bestRateWorkflow: returnMoney ? { money: returnMoney } : null,
       shippingWorkflowState: null,
       shippedLabelDisplayState: shipment
         ? shipment.voided === true ? 'voided_label' : 'active_label'
@@ -474,7 +480,7 @@ function expandReturnDisplayRows(order: OrderSummaryDto): OrderSummaryDto[] {
             totals: {
               ...(canonicalTotals ?? {}),
               orderTotal: null,
-              shippingAmount: summary.returnCustomerShippingRate,
+              shippingAmount: returnCustomerRate,
             },
           }
         : null,

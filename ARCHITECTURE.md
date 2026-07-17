@@ -83,6 +83,10 @@ treat it as misplaced until proven the backend owner is already correct (Fast re
 - **Print Queue durability** and idempotency
 - **Marketplace confirmation / fulfillment outbox** truth
 - **Billing generated charges** / frozen invoice totals
+- **Customer shipping money snapshots** (`src/services/customer-shipping-money.ts`):
+  exact selected/purchased cost, customer amount, margin, HUGRAB override, and
+  provenance are resolved and frozen here; Client Portal may only consume the
+  policy-versioned shipment tuple or the customer-safe return alias.
 - **Inventory movements** / effective-stock ledger
 - **Auth / RBAC / client / store scope**
 

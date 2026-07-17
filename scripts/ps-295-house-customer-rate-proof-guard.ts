@@ -198,8 +198,8 @@ check(
 const orderCellsSrc = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 check(
   'shipped Orders UI renders House badge and selected-rate tuple only from backend money',
-  /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderHouseBadge\(\)/.test(orderCellsSrc) &&
-    /shippedMoney\?\.markupSource === 'house_account'/.test(orderCellsSrc),
+  /const shippedBackendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCellsSrc) &&
+    /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderHouseBadge\(\)/.test(orderCellsSrc),
 );
 
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
@@ -211,9 +211,10 @@ check(
 );
 check(
   'billing generator persists customer_rate as the shipping line unit/total cost',
-  /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
+    /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
     /cShippingRateAmount,/.test(billingSrc) &&
-    /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
+    /resolveCustomerShippingMoney\(\{/.test(billingSrc) &&
+    /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
     /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc) &&
     /totalCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc),
 );

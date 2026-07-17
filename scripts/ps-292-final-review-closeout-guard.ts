@@ -137,7 +137,7 @@ check(
 
   const billing = decideShippingLineBilling({
     labelCost: 8.5,
-    houseCustomerRate: realized?.customerRate ?? null,
+    cShippingRateAmount: realized?.customerRate ?? null,
     billingMode: 'label_cost',
     isBaselineCarrier: false,
     refUspsRate: 7,
@@ -147,7 +147,7 @@ check(
   });
   check(
     'closeout behavior: billing line uses customer_rate exactly, without carrier markup',
-    billing.billedAmount === 9.64 && billing.source === 'house_customer_rate' && billing.markupApplied === false,
+    billing.billedAmount === 9.64 && billing.source === 'c_shipping_rate' && billing.markupApplied === false,
     JSON.stringify(billing),
   );
 }

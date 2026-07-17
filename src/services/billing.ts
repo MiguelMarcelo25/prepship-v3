@@ -23,7 +23,7 @@ import { roundMoney } from '../lib/money';
 import { logStructured, reportError } from '../lib/structured-log';
 import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
-import { decideShippingLineBilling } from './billing-shipping-line';
+import { resolveCustomerShippingMoney } from './customer-shipping-money';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
 // Slice 2c (fixed): the per-account OVERRIDE is wired via the shipment's providerAccountId — the
@@ -39,7 +39,7 @@ import { resolvePerAccountMarkupRule } from './shipping-workflow/per-account-mar
 // inventory via raw SQL for cubic-feet, which is not box resolution).
 // #798 2c: loadCarrierMarkups is the SOT loader for settings markup.<account> (same map the rate
 // display + orders row-money read) — billing delegates to it rather than re-deriving the rules.
-import { SS_BASELINE_CARRIER_CODES, loadCarrierMarkups } from './rates';
+import { loadCarrierMarkups } from './rates';
 import {
   boxDimsKey,
   decidePackageCostLine,
@@ -1495,27 +1495,25 @@ export async function generateLineItems(input: GenerateInput) {
         clientShippingMarkupPct: toNum(cfg.shippingMarkupPct),
         clientShippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
       });
-      const shippingDecision = decideShippingLineBilling({
-        labelCost,
+      const shippingDecision = resolveCustomerShippingMoney({
+        selectedRateCost: labelCost,
         cShippingRateAmount,
         billingMode: cfg.billingMode,
-        isBaselineCarrier: SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? ''),
+        carrierCode: s.carrierCode,
         refUspsRate: toNum(s.refUspsRate),
         refUpsRate: toNum(s.refUpsRate),
         shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
         shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
         shippingMarkupKind: resolvedShippingMarkup?.adjustmentKind ?? 'customer_profit_markup',
+        clientName: cfg.clientName,
         hugrabShippingRateOverride: {
-          clientName: cfg.clientName,
-          selectedRateCost: labelCost,
-          config: {
-            enabled: cfg.hugrabShippingRateOverrideEnabled,
-            threshold: cfg.hugrabShippingRateOverrideThreshold,
-            amount: cfg.hugrabShippingRateOverrideAmount,
-          },
+          enabled: cfg.hugrabShippingRateOverrideEnabled,
+          threshold: cfg.hugrabShippingRateOverrideThreshold,
+          amount: cfg.hugrabShippingRateOverrideAmount,
         },
       });
-      const billedShippingAmount = shippingDecision.billedAmount;
+      const billedShippingAmount = shippingDecision.cShippingRateAmount;
+      const billingDescriptionSuffix = shippingDecision.billingDescriptionSuffix;
       rows.push({
         clientId,
         orderId: s.orderId,
@@ -1523,7 +1521,7 @@ export async function generateLineItems(input: GenerateInput) {
         shipmentId: s.id,
         shipDate: s.shipDate,
         lineType: 'shipping',
-        description: `Shipping${shippingDecision.descriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
+        description: `Shipping${billingDescriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
         qty: '1',
         unitCost: roundMoney(billedShippingAmount).toFixed(2),
         totalCost: roundMoney(billedShippingAmount).toFixed(2),

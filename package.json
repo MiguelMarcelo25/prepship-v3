@@ -611,6 +611,8 @@
     "test:ps-434-weekend-billing": "tsx scripts/ps-434-weekend-billing-rollforward-guard.ts",
     "test:ps-434-weekend-billing:integration": "tsx scripts/ps-434-weekend-billing-rollforward-integration.ts",
     "test:ps-434-billing-readiness": "tsx scripts/ps-434-billing-rollforward-readiness.ts --self-test",
+    "test:ps-437-customer-shipping-money": "tsx scripts/ps-437-customer-shipping-money-guard.ts",
+    "audit:ps-437-return-money": "tsx scripts/ps-437-return-money-audit.ts",
     "probe:ps-434-billing-readiness": "tsx scripts/ps-434-billing-rollforward-readiness.ts",
     "test:ps-433-frontend-source-of-truth": "tsx scripts/ps-433-frontend-source-of-truth-sweep-guard.ts && npm run test:ps-433-rate-boundary && npm run test:ps-433-billing-boundary",
     "test:ps-335-rate-browser-singleflight": "tsx scripts/ps-335-rate-browser-singleflight-guard.ts",

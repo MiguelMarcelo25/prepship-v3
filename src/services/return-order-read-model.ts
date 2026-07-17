@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
+import { readFrozenCustomerShippingMoney } from './customer-shipping-money-snapshot.js';
 
 export type ReturnOrderItemSummary = {
   sku: string | null;
@@ -31,6 +32,20 @@ export type ReturnOrderSummary = {
   status: string;
   createdAt: string | null;
   returnCustomerShippingRate: number | null;
+  money: {
+    baseAmount: number;
+    markedAmount: number;
+    markupAmount: number;
+    insuranceAddOn: null;
+    marginPercent: number | null;
+    cShippingRateAmount: number;
+    selectedRateCost: number;
+    shippingMarginAmount: number;
+    shippingMarginPct: number | null;
+    customerRateSource: string;
+    source: 'selected_rate';
+    markupSource: 'carrier_markup' | 'house_account';
+  } | null;
   items: ReturnOrderItemSummary[];
   shipment: ReturnOrderShipmentSummary | null;
 };
@@ -42,6 +57,7 @@ type ReturnOrderSummaryRow = {
   status: string;
   createdAt: Date | string | null;
   returnCustomerShippingRate: string | number | null;
+  selectedRateJson: unknown;
   items: unknown;
   shipment: unknown;
 };
@@ -129,6 +145,7 @@ export async function loadReturnOrderSummaries(
       r.status,
       r.created_at as "createdAt",
       r.return_customer_shipping_rate as "returnCustomerShippingRate",
+      s.selected_rate_json as "selectedRateJson",
       coalesce((
         select jsonb_agg(
           jsonb_build_object(
@@ -168,12 +185,36 @@ export async function loadReturnOrderSummaries(
 
   for (const row of rows) {
     const rate = finiteNumberOrNull(row.returnCustomerShippingRate);
+    const frozenMoney = readFrozenCustomerShippingMoney(row.selectedRateJson);
+    const money = frozenMoney
+      ? {
+          baseAmount: frozenMoney.selectedRateCost,
+          markedAmount: frozenMoney.cShippingRateAmount,
+          markupAmount: frozenMoney.shippingMarginAmount,
+          insuranceAddOn: null,
+          marginPercent: Math.abs(frozenMoney.shippingMarginAmount) >= 0.005 && frozenMoney.selectedRateCost > 0
+            ? Math.round((frozenMoney.shippingMarginAmount / frozenMoney.selectedRateCost) * 100)
+            : null,
+          cShippingRateAmount: frozenMoney.cShippingRateAmount,
+          selectedRateCost: frozenMoney.selectedRateCost,
+          shippingMarginAmount: frozenMoney.shippingMarginAmount,
+          shippingMarginPct: frozenMoney.shippingMarginPct,
+          customerRateSource: frozenMoney.customerRateSource,
+          source: 'selected_rate' as const,
+          markupSource: frozenMoney.customerRateSource === 'hugrab_shipping_rate_override'
+            ? 'house_account' as const
+            : 'carrier_markup' as const,
+        }
+      : null;
     const summary: ReturnOrderSummary = {
       returnId: row.returnId,
       returnReference: row.returnReference,
       status: row.status,
       createdAt: isoOrNull(row.createdAt),
-      returnCustomerShippingRate: rate,
+      // Compatibility alias for historical rows remains visible, but all new
+      // PS-437 rows prefer the canonical shipment tuple frozen by PrepShip.
+      returnCustomerShippingRate: frozenMoney?.cShippingRateAmount ?? rate,
+      money,
       items: normalizeItems(row.items),
       shipment: normalizeShipment(row.shipment),
     };

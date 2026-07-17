@@ -289,12 +289,12 @@ const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
 // Repointed (guard rot): e9762409 canonicalized the money vocabulary —
 // houseCustomerRate* became cShippingRate* and the billed amount is hoisted
 // into billedShippingAmount before the line items are built.
-check('billing: the captured customer_rate is loaded by shipment id + fed to the pure shipping-line decision (billed verbatim — proven behaviorally below)',
+check('billing: the captured customer_rate is loaded by shipment id + fed to the canonical customer-money decision (billed verbatim — proven behaviorally below)',
   /cShippingRateByShipmentId/.test(billingSrc) &&
-  /decideShippingLineBilling\(\{[\s\S]*?cShippingRateAmount,/.test(billingSrc));
-check('billing: the sidecar (orderCompetitiveRate / isHouseOrder) supplies the house rate; markup suppression is proven behaviorally (decideShippingLineBilling house => markupApplied=false, suffix empty)',
+  /resolveCustomerShippingMoney\(\{[\s\S]*?cShippingRateAmount,/.test(billingSrc));
+check('billing: the sidecar (orderCompetitiveRate / isHouseOrder) supplies the house rate; markup suppression remains delegated to the shipping-line owner',
   billingSrc.includes('orderCompetitiveRate') && /isHouseOrder/.test(billingSrc) &&
-  /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
+  /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
   /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc));
 
 // ── slice 4 (P7 money tuple): house mapping + carrier-markup suppression ──────
@@ -497,9 +497,9 @@ check('portal serializer: redaction extracted to the pure owner + BOTH detail ro
     houseAboveCost.billedAmount === 9.64);
 }
 const billingDelegateSrc = readFileSync('src/services/billing.ts', 'utf8');
-check('billing.ts delegates the shipping-line amount to the pure decideShippingLineBilling owner (single source of truth)',
-  /import \{ decideShippingLineBilling \}/.test(billingDelegateSrc) &&
-  /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingDelegateSrc) &&
+check('billing.ts delegates the shipping-line amount to the canonical customer shipping money owner',
+  /import \{ resolveCustomerShippingMoney \}/.test(billingDelegateSrc) &&
+  /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingDelegateSrc) &&
   /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingDelegateSrc));
 
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');

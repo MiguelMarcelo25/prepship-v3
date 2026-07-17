@@ -19,6 +19,7 @@ export type ReturnOrderSummaryDto = {
   status: string
   createdAt?: string | null
   returnCustomerShippingRate: number | null
+  money?: AnyRecord | null
   items?: Array<{
     sku: string | null
     name: string

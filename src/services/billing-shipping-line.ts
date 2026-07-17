@@ -47,6 +47,8 @@ export type ShippingLineBillingResult = {
   markupApplied: boolean;
   /** description suffix: '' for house/no-markup; ' (P% + $F.FF)' when a carrier markup applies. */
   descriptionSuffix: string;
+  /** True only when the PrepShip HUGRAB account override replaced the normal result. */
+  hugrabOverrideApplied?: boolean;
 };
 
 function withHugrabShippingRateOverride(
@@ -54,17 +56,20 @@ function withHugrabShippingRateOverride(
   result: ShippingLineBillingResult,
 ): ShippingLineBillingResult {
   const override = input.hugrabShippingRateOverride;
-  if (!override) return result;
+  if (!override) return { ...result, hugrabOverrideApplied: false };
   const decision = resolveHugrabShippingRateOverride({
     clientName: override.clientName,
     customerShippingRate: result.billedAmount,
     selectedRateCost: override.selectedRateCost ?? input.labelCost,
     config: override.config,
   });
-  if (decision.customerShippingRate === result.billedAmount) return result;
+  if (decision.customerShippingRate === result.billedAmount) {
+    return { ...result, hugrabOverrideApplied: decision.overrideApplied };
+  }
   return {
     ...result,
     billedAmount: decision.customerShippingRate,
+    hugrabOverrideApplied: decision.overrideApplied,
   };
 }
 

@@ -39,8 +39,8 @@ check(
     /returnSummaries: returnSummaries\.map/.test(orders),
 );
 check(
-  'financial RBAC redacts every return customer rate',
-  /returnSummaries: returnSummaries\.map[\s\S]{0,220}returnCustomerShippingRate: canViewFinancials/.test(orders),
+  'financial RBAC redacts every return customer rate and money tuple',
+  /returnSummaries: returnSummaries\.map[\s\S]{0,220}money: canViewFinancials[\s\S]{0,120}returnCustomerShippingRate: canViewFinancials/.test(orders),
 );
 check(
   'PrepShip DTO declares distinct order and return display identities',
@@ -57,11 +57,20 @@ check(
     /\.flatMap\(\(row\)/.test(useOrders),
 );
 check(
-  'return rows use returned items and never inherit outbound rate or label money',
+  'return rows use returned items and consume only backend-frozen return money',
   /Array\.isArray\(summary\.items\)/.test(useOrders) &&
+    /const returnMoney = toRecordValue\(summary\.money\)/.test(useOrders) &&
+    /bestRateWorkflow: returnMoney \? \{ money: returnMoney \} : null/.test(useOrders) &&
     /selectedRate: null/.test(useOrders) &&
     /bestRate: null/.test(useOrders) &&
     /cost: null/.test(useOrders),
+);
+check(
+  'return read model exposes the strict PrepShip frozen tuple without pricing',
+  /readFrozenCustomerShippingMoney\(row\.selectedRateJson\)/.test(readModel) &&
+    /selectedRateCost: frozenMoney\.selectedRateCost/.test(readModel) &&
+    /shippingMarginAmount: frozenMoney\.shippingMarginAmount/.test(readModel) &&
+    !/resolveCustomerShippingMoney|decideShippingLineBilling/.test(readModel),
 );
 check(
   'table keys distinguish original and return rows sharing one order id',
