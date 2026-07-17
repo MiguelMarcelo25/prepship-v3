@@ -36,12 +36,15 @@ export type DurableRateBackfillJobPayload = {
 };
 
 export const RATE_BACKFILL_YIELD_PRIORITY = -100;
+export const RATE_BACKFILL_TARGETED_PRIORITY = -50;
+export const RATE_BACKFILL_MANUAL_PRIORITY = -10;
 
 export function rateBackfillPriority(
   payload: DurableRateBackfillJobPayload | null,
 ): number {
-  // PS-436: only a first-chunk operator request may jump operational sync.
-  // Cadence and every continuation yield below order/shipment priority.
+  // PS-436: every rate request remains below order/shipment cadence (priority
+  // zero). First-chunk operator/targeted work stays ordered ahead of passive
+  // cadence, but cannot starve operational freshness.
   if (
     !payload
     || (payload.chunkIndex ?? 0) > 0
@@ -49,8 +52,8 @@ export function rateBackfillPriority(
   ) {
     return RATE_BACKFILL_YIELD_PRIORITY;
   }
-  if (payload.requestedBy === 'manual') return 1_000;
-  return 100;
+  if (payload.requestedBy === 'manual') return RATE_BACKFILL_MANUAL_PRIORITY;
+  return RATE_BACKFILL_TARGETED_PRIORITY;
 }
 
 export function buildCadenceRateBackfillJobPayload(

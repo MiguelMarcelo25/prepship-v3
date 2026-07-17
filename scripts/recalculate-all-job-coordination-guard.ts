@@ -23,6 +23,7 @@ function check(name: string, condition: boolean, detail?: string) {
 
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 const producer = readFileSync('src/services/rate-backfill-job-producer.ts', 'utf8');
+const jobTypes = readFileSync('src/services/rate-backfill-job-types.ts', 'utf8');
 const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
@@ -43,16 +44,18 @@ check(
 );
 
 check(
-  'manual force-live enters the durable worker queue at operator priority',
+  'manual force-live enters the durable worker queue ahead of passive rate work but below operational sync',
   /enqueueBackfillBestRates\(body, 'manual'\)/.test(ratesRoute) &&
-    /payload\.requestedBy === 'manual' \? 1_000 : 100/.test(producer) &&
+    /priority: rateBackfillPriority\(payload\)/.test(producer) &&
+    /RATE_BACKFILL_MANUAL_PRIORITY = -10/.test(jobTypes) &&
+    /RATE_BACKFILL_YIELD_PRIORITY = -100/.test(jobTypes) &&
     /id: payload\.jobId/.test(producer),
 );
 
 check(
   'durable worker executes explicit payloads and awaits their full lifetime',
   /parseDurableRateBackfillJobPayload\(jobData\)/.test(queue) &&
-    /runDurableRateBackfillJob\(explicitRequest\)/.test(queue) &&
+    /runDurableRateBackfillJob\(explicitRequest, signal\)/.test(queue) &&
     /await waitForBackfillJob\(job\.jobId\)/.test(backfill),
 );
 

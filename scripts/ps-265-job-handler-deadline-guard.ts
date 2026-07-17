@@ -102,7 +102,7 @@ async function main() {
   check('active lane remains attached to the original handler promise',
     /void handlerPromise\.then\(clearActiveLane, clearActiveLane\)/.test(q));
   check('deadline waits only for bounded cancellation acknowledgement',
-    /awaitCancellationAcknowledgement\([\s\S]*handlerPromise[\s\S]*SYNC_JOB_CANCELLATION_GRACE_MS/.test(q));
+    /requireCancellationAcknowledgement\(\{[\s\S]*work: handlerPromise[\s\S]*SYNC_JOB_CANCELLATION_GRACE_MS/.test(q));
   check('unacknowledged cancellation terminates the worker while fenced',
     /terminateWorkerForUnacknowledgedCancellation/.test(q));
   check('deadline path does not unconditionally clear a still-running lane',

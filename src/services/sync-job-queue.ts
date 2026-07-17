@@ -6,7 +6,7 @@ import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
 import {
-  awaitCancellationAcknowledgement,
+  requireCancellationAcknowledgement,
   terminateWorkerForUnacknowledgedCancellation,
 } from '../lib/sync-job-cancellation';
 import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
@@ -1197,22 +1197,22 @@ async function registerWorker(
           return { ok: true, durationMs };
         } catch (err) {
           if (err instanceof DeadlineExceededError) {
-            // PS-436: keep the advisory fence while cooperative work receives a
-            // bounded cancellation grace. If it ignores abort, do not return
-            // from this callback (which would release the lane): fail closed by
-            // terminating the worker and let Render/pg-boss recover the job.
-            const cancellation = await awaitCancellationAcknowledgement(
-              handlerPromise,
-              SYNC_JOB_CANCELLATION_GRACE_MS,
-            );
-            if (!cancellation.acknowledged) {
-              await recordWorkerJobFailure(name, startedAt, err).catch(() => undefined);
-              terminateWorkerForUnacknowledgedCancellation({
+            // Per user override unlock shipped data on 2026-07-17 (PS-436):
+            // keep the advisory fence while cooperative work receives a bounded
+            // cancellation grace. If it ignores abort, do not return from this
+            // callback (which would release the lane): fail closed by terminating
+            // the worker and let Render/pg-boss recover the durable job.
+            await requireCancellationAcknowledgement({
+              work: handlerPromise,
+              graceMs: SYNC_JOB_CANCELLATION_GRACE_MS,
+              beforeTerminate: () =>
+                recordWorkerJobFailure(name, startedAt, err).catch(() => undefined),
+              terminate: () => terminateWorkerForUnacknowledgedCancellation({
                 jobName: name,
                 jobId: identity.queueJobId,
                 graceMs: SYNC_JOB_CANCELLATION_GRACE_MS,
-              });
-            }
+              }),
+            });
           }
           const durationMs = Date.now() - startedAt;
           if (name === JOBS.orders) {

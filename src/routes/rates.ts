@@ -22,7 +22,8 @@ import {
   getBackfillJob,
   getBackfillJobSnapshot,
   getLatestBackfillJobSnapshot,
-  getCadenceRateBackfillGenerationState,
+  getRateBackfillGenerationState,
+  reconcileBackfillJobWithGeneration,
   enqueueBackfillBestRates,
 } from '../services/rates-backfill';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
@@ -992,25 +993,26 @@ app.get('/backfill-best/status/:jobId', requireInternalPermission('scope:global'
     }
     return c.json({ error: 'Job not found', durableJob }, 404);
   }
-  return c.json(job);
+  const generation = await getRateBackfillGenerationState(jobId);
+  return c.json(reconcileBackfillJobWithGeneration(job, generation));
 });
 
 app.get('/backfill-best/active', requireInternalPermission('scope:global'), async (c) => {
-  const [durableJob, generation] = await Promise.all([
-    getLatestBackfillJobSnapshot(),
-    getCadenceRateBackfillGenerationState(),
-  ]);
+  const durableJob = await getLatestBackfillJobSnapshot();
+  const generation = durableJob
+    ? await getRateBackfillGenerationState(durableJob.jobId)
+    : null;
   return c.json({
-    job: durableJob?.active || generation?.status === 'active' ? durableJob : null,
+    job: durableJob?.active ? durableJob : null,
     generation: generation?.status === 'active' ? generation : null,
   });
 });
 
 app.get('/backfill-best/latest', requireInternalPermission('scope:global'), async (c) => {
-  const [durableJob, generation] = await Promise.all([
-    getLatestBackfillJobSnapshot(),
-    getCadenceRateBackfillGenerationState(),
-  ]);
+  const durableJob = await getLatestBackfillJobSnapshot();
+  const generation = durableJob
+    ? await getRateBackfillGenerationState(durableJob.jobId)
+    : null;
   return c.json({
     job: durableJob,
     durableJob,
