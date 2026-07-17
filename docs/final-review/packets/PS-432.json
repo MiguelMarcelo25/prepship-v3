@@ -5,7 +5,7 @@
   "title": "Sync and fulfillment resilience: data-integrity and retry-safety hardening",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "b91a3493eba26cfe64ea117556125a8c0226965f"
+    "reviewedSha": "ba8b8cf08804c97b14ee476cac3b261f503388f1"
   },
   "riskDomains": [
     "rate_label",
@@ -38,21 +38,23 @@
       "id": "AC-3",
       "severity": "critical",
       "status": "met",
-      "description": "Shopify and direct label purchase use durable fail-closed intent, reject unsafe or cross-order operator proof, prevent a second purchase after an acknowledged-but-unpersisted result, and fence stale repeated resolution.",
+      "description": "Shopify and direct label purchase use durable fail-closed intent plus an immutable backend quote authorization bound to the exact order, tenant, credential account, environment, package, service, addresses, and purchase facts; mismatches reject before the provider, and acknowledged or ambiguous operations cannot create a second purchase.",
       "evidenceIds": [
         "ps432-provider-adversarial",
         "ps432-failure-injection",
-        "rate-label-boundary-regression"
+        "rate-label-boundary-regression",
+        "ps423-operation-ledger-integration"
       ]
     },
     {
       "id": "AC-4",
       "severity": "critical",
       "status": "met",
-      "description": "ShipStation confirmation retry re-reads upstream shipped truth and leaves the marketplace notification spy at one call after simulated local-settlement loss.",
+      "description": "ShipStation confirmation retry re-reads upstream shipped truth, uses the durable provider-operation ledger for one-effect fencing and reconciliation, and leaves the marketplace notification spy at one call after simulated local-settlement loss.",
       "evidenceIds": [
         "ps432-provider-adversarial",
-        "ps432-failure-injection"
+        "ps432-failure-injection",
+        "ps423-operation-ledger-integration"
       ]
     },
     {
@@ -78,8 +80,10 @@
       "id": "AC-7",
       "severity": "high",
       "status": "met",
-      "description": "The focused PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 45 mandatory source-of-truth guards, runtime-schema readiness audit, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA; later Billing, Returns/Orders read-model, and shipped-margin changes were classified without changing a PS-432 canonical owner.",
+      "description": "The focused PS-422 quote-authorization, PS-423 provider-operation, PS-424 lifecycle, PS-426 worker-leadership, and PS-432 resilience suites, all 45 mandatory source-of-truth guards, runtime-schema readiness audit, strict TypeScript checks, and production frontend build pass at the exact reviewed SHA; later Billing and customer-shipping-money changes were classified as independent backend owners.",
       "evidenceIds": [
+        "rate-label-boundary-regression",
+        "ps423-operation-ledger-integration",
         "ps424-lifecycle-integration",
         "ps426-consumer-leadership",
         "focused-ps432-suite",
@@ -117,6 +121,8 @@
       "src/services/fulfillment-deductions.ts inventory movement, ledger idempotency, and INVENTORY_AUTO_DEDUCT kill switch",
       "src/services/fulfillment/outbox.ts confirmation settlement and succeeded-row reconvergence",
       "src/lib/label-purchase-intent.ts fail-closed purchase intent and scoped operator resolution",
+      "src/services/shipping-workflow/shipping-quote-authorization.ts immutable exact order, tenant, credential, environment, package, address, service, and purchase-fact authorization",
+      "src/services/fulfillment-operation-ledger.ts durable provider-operation reservation, one-effect fencing, unknown-outcome reconciliation, and receipt ownership",
       "src/connectors/store/shipstation.ts upstream confirmation idempotency boundary",
       "src/services/sync-job-queue.ts ShipStationConsumerLeadershipController for single-owner stately consumers"
     ],
@@ -135,6 +141,16 @@
         "path": "label purchase paths that opened intent before fallible local preflight or retried ambiguous provider outcomes",
         "disposition": "delegated",
         "delegatesTo": "src/lib/label-purchase-intent.ts fail-closed purchase boundary"
+      },
+      {
+        "path": "label and Print Queue paths that reconstructed purchase account, package, address, service, or option facts from request and order fallbacks after rate selection",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/shipping-workflow/shipping-quote-authorization.ts immutable selectionRef resolution and exact current-fact comparison"
+      },
+      {
+        "path": "provider-capable retries that relied on workflow-specific in-memory or partial sidecar state to decide whether an external effect already occurred",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/fulfillment-operation-ledger.ts durable reservation, lease, receipt, and reconciliation state"
       },
       {
         "path": "ShipStation retry that blindly repeated markasshipped",
@@ -167,11 +183,16 @@
         "path": "src/services/sync-job-queue.ts scheduled worker startup and shutdown",
         "action": "modified",
         "delegatesTo": "ShipStationConsumerLeadershipController acquisition, loss, reacquisition, and unregister lifecycle"
+      },
+      {
+        "path": "rate, label, Print Queue, and web selectionRef transport",
+        "action": "modified",
+        "delegatesTo": "src/services/shipping-workflow/shipping-quote-authorization.ts; callers transport opaque intent and do not reconstruct purchase authority"
       }
     ],
     "sotBypass": {
       "present": false,
-      "details": "Terminal lifecycle truth, exact fulfillment facts, inventory movement, purchase intent, confirmation settlement, provider notification idempotency, and worker leadership remain in named backend owners. Routes and adapters translate or pass intent; the frontend owns none of these decisions."
+      "details": "Terminal lifecycle truth, exact fulfillment facts, inventory movement, quote authorization, purchase intent, provider-operation reconciliation, confirmation settlement, provider notification idempotency, and worker leadership remain in named backend owners. Routes, adapters, and the frontend transport or display backend-issued intent only and own none of these decisions."
     }
   },
   "evidence": [
@@ -303,12 +324,14 @@
     {
       "id": "rate-label-boundary-regression",
       "classification": "adversarial",
-      "command": "npm run test:ps-433-rate-boundary (executed by npm run test:sot-guard-pack)",
+      "command": "npm run test:ps-422-shipping-quote-authorization",
       "result": "pass",
       "artifactPaths": [
-        "scripts/ps-433-rate-boundary-behavior.ts",
-        "src/services/shipping-workflow/apply-best-rate.ts",
-        "src/services/client-rate-source-policy.ts"
+        "scripts/ps-422-shipping-quote-authorization-guard.ts",
+        "src/services/shipping-workflow/shipping-quote-authorization.ts",
+        "src/routes/labels.ts",
+        "src/routes/print-queue.ts",
+        "src/services/print-queue/queue-send-preflight.ts"
       ],
       "assertions": [
         "cross_order_rejected",
@@ -316,7 +339,31 @@
         "fact_mismatch_rejected",
         "provider_spy_untouched"
       ],
-      "proves": "The adjacent backend rate/label boundary rejects cross-order selected-rate keys, cross-account purchase identity, and mismatched request facts before the provider spy is touched, proving PS-432 did not weaken the broader label purchase boundary."
+      "proves": "The current backend quote authorization rejects order, client/store, credential, environment, origin, destination, package, service, weight, dimensions, residential, confirmation, insurance, and identity mismatches before the provider spy. Direct label and Print Queue callers consume the same opaque selectionRef and cannot reconstruct purchase authority."
+    },
+    {
+      "id": "ps423-operation-ledger-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-423-provider-operation-ledger",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0072_external_operations.sql",
+        "src/db/schema/external-operations.ts",
+        "src/services/fulfillment-operation-ledger.ts",
+        "scripts/ps-423-provider-operation-ledger-guard.ts",
+        "scripts/ps-423-provider-operation-ledger-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "idempotency",
+        "repeat_run",
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "The additive provider-operation ledger runs against a migrated PostgreSQL-compatible fixture with fake providers only. Concurrent reservation, lease loss, acknowledged-provider/local-persistence loss, unknown outcome, restart, and repeat reconciliation preserve one external effect and one durable receipt."
     },
     {
       "id": "inventory-recovery-safety",
@@ -334,9 +381,11 @@
     {
       "id": "focused-ps432-suite",
       "classification": "static",
-      "command": "npm run test:ps-424-order-lifecycle && npm run test:ps-426-awaiting-cursor-manual-sync && npm run test:ps-432-sync-fulfillment-resilience",
+      "command": "npm run test:ps-422-shipping-quote-authorization && npm run test:ps-423-provider-operation-ledger && npm run test:ps-424-order-lifecycle && npm run test:ps-432-sync-fulfillment-resilience; PS-426 runs in npm run test:sot-guard-pack",
       "result": "pass",
       "artifactPaths": [
+        "scripts/ps-422-shipping-quote-authorization-guard.ts",
+        "scripts/ps-423-provider-operation-ledger-integration.ts",
         "scripts/ps-424-order-lifecycle-command-integration.ts",
         "scripts/ps-426-consumer-leadership-integration.ts",
         "scripts/ps-432-sync-fulfillment-resilience-guard.ts",
@@ -344,7 +393,7 @@
         "docs/ps-tickets/ps-432-sync-fulfillment-resilience.md"
       ],
       "assertions": [],
-      "proves": "The lifecycle source-of-truth, worker-leadership, and PS-432 executable failure, retry, concurrency, fencing, purchase, and notification proofs run together at the exact reviewed SHA."
+      "proves": "The quote-authorization, provider-operation, lifecycle, worker-leadership, and PS-432 executable failure, retry, concurrency, fencing, purchase, and notification proofs all pass at the exact reviewed SHA."
     },
     {
       "id": "full-sot-guard-pack",
@@ -357,24 +406,25 @@
         "scripts/ps-430-print-queue-worker-health-integration.ts"
       ],
       "assertions": [],
-      "proves": "All 45 mandatory source-of-truth, worker, inventory, billing, rate/label, lockdown, and lifecycle guards pass at the exact reviewed SHA. The only pre-refresh failure was a stale Print Queue static assertion naming migration 0070; its one-line test-only frontier was advanced to the already-applied additive 0071 migration before this passing run."
+      "proves": "All 45 mandatory source-of-truth, worker, inventory, billing, rate/label, lockdown, lifecycle, migration-frontier, and runtime-readiness guards pass at the exact reviewed SHA with inert local test-only environment values."
     },
     {
       "id": "current-head-drift-review",
       "classification": "static",
-      "command": "git diff --name-status 12223760bf20fd867bc820de98194d11fbbd1d3e b91a3493eba26cfe64ea117556125a8c0226965f -- . ':(exclude)docs/final-review/packets/PS-432.json' && git diff --quiet 946453f82f64cb4c8d3a5eeb32bc8e6f009c7a74 b91a3493eba26cfe64ea117556125a8c0226965f -- src/services/order-lifecycle-command.ts src/db/schema/order-lifecycle.ts drizzle/0070_order_lifecycle_commands.sql src/services/fulfillment/inventory-deduction-outbox.ts src/services/fulfillment-deductions.ts src/services/fulfillment/outbox.ts src/lib/label-purchase-intent.ts src/connectors/store/shipstation.ts src/services/sync-job-queue.ts",
+      "command": "git log --format='%H %s' b91a3493eba26cfe64ea117556125a8c0226965f..ba8b8cf08804c97b14ee476cac3b261f503388f1 && git diff --name-status b91a3493eba26cfe64ea117556125a8c0226965f..ba8b8cf08804c97b14ee476cac3b261f503388f1",
       "result": "pass",
       "artifactPaths": [
-        "src/routes/orders.ts",
-        "src/services/return-order-read-model.ts",
-        "src/services/runtime-schema-readiness.ts",
-        "src/services/billing-calendar-policy.ts",
-        "web/src/components/Views/orders-row-display.tsx",
-        "web/src/components/Views/orders/cells/order-cells.tsx",
-        "scripts/audit-print-queue-merge-durability-guard.ts"
+        "src/services/billing-detail-row-sot.ts",
+        "src/services/customer-shipping-money.ts",
+        "src/services/customer-shipping-money-snapshot.ts",
+        "drizzle/0072_external_operations.sql",
+        "src/services/fulfillment-operation-ledger.ts",
+        "src/services/shipping-workflow/shipping-quote-authorization.ts",
+        "scripts/ps-422-shipping-quote-authorization-guard.ts",
+        "scripts/ps-423-provider-operation-ledger-integration.ts"
       ],
       "assertions": [],
-      "proves": "Post-packet drift was classified as PS-431 documentation, PS-434 Billing policy plus additive migration 0071, read-only Returns/Orders display projection, backend-issued shipped-margin presentation, and a test-only migration-frontier assertion. None of the PS-432 lifecycle, fulfillment-deduction, purchase-intent, confirmation, or worker-leadership canonical owners changed after the prior packet."
+      "proves": "Post-review drift is classified as the prior packet-only refresh, a Billing effective-date query correction, PS-437 canonical customer-shipping-money ownership and read-only reconciliation evidence, PS-423 additive provider-operation durability, and PS-422 immutable quote authorization. PS-422 and PS-423 strengthen the PS-432 purchase/retry boundary; Billing/PS-437 remain independent backend money owners. No frontend became authoritative."
     },
     {
       "id": "strict-typecheck",
@@ -403,7 +453,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git show --name-only --format= 612f679664f9993f28b00c4fe6944ec86b92d4be 86f5dfe93c87d21597bcbd009d9e10934c68813d f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e 12223760bf20fd867bc820de98194d11fbbd1d3e",
+      "command": "git show --name-only --format= 612f679664f9993f28b00c4fe6944ec86b92d4be 86f5dfe93c87d21597bcbd009d9e10934c68813d f568bc5f0ba7bbfa0124b28b9c8503b0294e11bb 0c8246f7ad21419b3af43a9335a78b1cc3cf0f9e 12223760bf20fd867bc820de98194d11fbbd1d3e 5f494d12dfd84327aa97fc8ce1e85a33992aee5c edf3d4a6f5352792ce0b5ec29e12634f83a48b96 ba8b8cf08804c97b14ee476cac3b261f503388f1",
       "result": "pass",
       "artifactPaths": [
         "src/services/fulfillment/inventory-deduction-outbox.ts",
@@ -413,34 +463,40 @@
         "src/services/labels.ts",
         "src/services/order-lifecycle-command.ts",
         "src/services/sync-job-queue.ts",
+        "src/services/fulfillment-operation-ledger.ts",
+        "src/services/shipping-workflow/shipping-quote-authorization.ts",
         "drizzle/0070_order_lifecycle_commands.sql",
+        "drizzle/0072_external_operations.sql",
         "scripts/ps-424-order-lifecycle-command-integration.ts",
         "scripts/ps-426-consumer-leadership-integration.ts",
         "scripts/ps-432-sync-fulfillment-resilience-integration.ts"
       ],
       "assertions": [],
-      "proves": "The reviewed runtime adds durable lifecycle truth, exact fulfillment facts, safe provider retry, and single-owner worker leadership. Override-governed files touched were src/routes/orders.ts, src/services/fulfillment-deductions.ts, and src/services/labels.ts; nearby unlock comments and the 612f6796 override commit text are present. assertOrderEditable, LOCKED_STATUSES, INVENTORY_AUTO_DEDUCT, shipped/cancelled UI locks, and historical schema protections were not removed or weakened. PS-426 changed no formally locked file."
+      "proves": "The reviewed runtime adds durable lifecycle truth, exact fulfillment facts, safe provider retry, immutable quote authorization, durable provider-operation receipts, and single-owner worker leadership. Original override-governed files touched were src/routes/orders.ts, src/services/fulfillment-deductions.ts, and src/services/labels.ts; PS-422 touched the formally locked web/src/components/Views/OrdersView.tsx only to transport backend-issued selectionRef. Required nearby unlock comments and commit override text are present. assertOrderEditable, LOCKED_STATUSES, INVENTORY_AUTO_DEDUCT, shipped/cancelled UI locks, and historical schema protections were not removed or weakened."
     }
   ],
   "migrations": {
     "touched": true,
     "paths": [
-      "drizzle/0070_order_lifecycle_commands.sql"
+      "drizzle/0070_order_lifecycle_commands.sql",
+      "drizzle/0072_external_operations.sql"
     ],
     "verification": {
-      "command": "npm run test:ps-424-order-lifecycle && npm run test:audit-runtime-schema-readiness",
+      "command": "npm run test:ps-423-provider-operation-ledger && npm run test:ps-424-order-lifecycle && npm run test:audit-runtime-schema-readiness (the readiness audit runs in npm run test:sot-guard-pack)",
       "result": "pass",
       "artifactPaths": [
         "drizzle/0070_order_lifecycle_commands.sql",
+        "drizzle/0072_external_operations.sql",
+        "scripts/ps-423-provider-operation-ledger-integration.ts",
         "scripts/ps-424-order-lifecycle-command-integration.ts",
         "scripts/runtime-ddl-guard.mjs",
         "src/services/runtime-schema-readiness.ts"
       ]
     },
-    "rollbackPlan": "If a PS-432 runtime regression is found, prepare a reviewed revert of the original PS-432/PS-424/PS-426 runtime commits while leaving additive lifecycle receipt and claim tables intact. Preserve later independent Billing migration 0071, Returns/Orders display, and shipped-margin work; rollback must never drop append-only evidence or rewrite historical shipped/cancelled meaning."
+    "rollbackPlan": "If a PS-432 runtime regression is found, prepare a reviewed forward revert of the original PS-432/PS-424/PS-426 runtime commits while leaving additive lifecycle and provider-operation receipt tables intact. Preserve later independent Billing/PS-437 work and the PS-422/PS-423 safety owners unless their own reviewed rollback is separately approved; never drop append-only evidence or rewrite historical shipped/cancelled meaning."
   },
   "rollback": {
-    "strategy": "Use a reviewed forward revert of the original PS-432/PS-424/PS-426 runtime changes only; do not reset the branch or roll back later independent Billing, Returns/Orders, or shipping-margin commits. Keep additive 0070 and 0071 sidecars and durable receipts; never delete lifecycle, shipment, intent, outbox, inventory-ledger, package-ledger, or billing history and never mutate shipped/cancelled production records. The integration's injected exception proves the authoritative transaction rolls back all new lifecycle writes before a safe retry.",
+    "strategy": "Use a reviewed forward revert of the original PS-432/PS-424/PS-426 runtime changes only; do not reset the branch or roll back later independent Billing/PS-437 work or the PS-422/PS-423 safety owners. Keep additive 0070, 0071, and 0072 sidecars and durable receipts; never delete lifecycle, provider-operation, shipment, intent, outbox, inventory-ledger, package-ledger, or billing history and never mutate shipped/cancelled production records. The integration's injected exception proves the authoritative transaction rolls back all new lifecycle writes before a safe retry.",
     "tested": true,
     "evidenceIds": [
       "ps424-lifecycle-integration"
@@ -448,7 +504,7 @@
   },
   "liveVerification": {
     "status": "verified",
-    "reason": "The previous nine-item provider ambiguity is closed by a production READ ONLY aggregate query: every stale Print Queue sidecar has a durable active shipment provider receipt and no unresolved label-purchase intent exists. The deployed runtime parent 604e11f66f64849f54fe4c4f78b91253961a5cdf contains the reviewed product behavior; b91a3493eba26cfe64ea117556125a8c0226965f adds only an offline static-guard frontier update. /health/deep still reports the conservative stale sidecar count, but automatic recovery is fenced and no provider outcome remains unknown. No provider call or production write was required or performed.",
+    "reason": "The previous nine-item provider ambiguity is closed by a production READ ONLY aggregate query: every stale Print Queue sidecar has a durable active shipment provider receipt and no unresolved label-purchase intent exists. Exact reviewed SHA ba8b8cf08804c97b14ee476cac3b261f503388f1 is live on the Render API, sync worker, and print worker. Read-only /health, /health/ready, and /health/deep probes returned HTTP 200 with DB, DB write, Orders, Print Queue, and Print Queue Worker healthy. No provider call, label purchase, marketplace notification, or production write was required or performed.",
     "followUpOwner": null,
     "artifactPaths": [
       "docs/final-review/evidence/PS-432-provider-pending-readonly.sql",
