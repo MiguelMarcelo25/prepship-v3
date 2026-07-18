@@ -27,6 +27,10 @@ function check(name: string, cond: boolean): void {
 // Force the flag off and make any accidental DB use fail loudly before importing the module.
 process.env.WORKER_STATUS_EVENTS_DURABLE = 'false';
 process.env.DATABASE_URL = 'postgres://invalid:invalid@127.0.0.1:1/ps256_guard_should_not_connect';
+process.env.SUPABASE_URL = 'https://example.supabase.co';
+process.env.SUPABASE_ANON_KEY = 'anon';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'service';
+process.env.SUPABASE_JWT_SECRET = 'secret';
 
 const mod = await import('../src/services/worker-status-events.js');
 
@@ -104,13 +108,23 @@ check('worker-status abandons stale in-flight persists so heartbeats can recover
   /let persistSnapshotStartedAtMs = 0;/.test(workerStatus) &&
   /ageMs < WORKER_STATUS_PERSIST_ABANDON_MS/.test(workerStatus) &&
   /abandoning stale status persist/.test(workerStatus));
+check('worker-status persistence uses a dedicated one-connection telemetry pool',
+  /function createWorkerStatusSql\(\)/.test(workerStatus) &&
+  /max: 1/.test(workerStatus) &&
+  /max_pipeline: 1/.test(workerStatus) &&
+  /writeWorkerStatusSetting\(/.test(workerStatus) &&
+  !/import \{ getSetting, setSetting \} from '\.\/settings'/.test(workerStatus));
+check('timed-out worker-status persistence terminates and rotates its telemetry connection',
+  /function rotateWorkerStatusSql\(/.test(workerStatus) &&
+  /staleSql\.end\(\{ timeout: 0 \}\)/.test(workerStatus) &&
+  /rotateWorkerStatusSql\(persistenceSql\)/.test(workerStatus));
 // cdf066f5 ("Keep print worker status separate") split the snapshot into a per-mode key
 // plus a scheduler-gated legacy WORKER_STATUS_KEY write, both inside the deferred
 // single-flight IIFE where `await` is syntactically required — so the old naive negative
 // substring can no longer distinguish hot-path blocking from the bounded persist lane.
 check('worker-status writes the legacy WORKER_STATUS_KEY exactly once, only inside the bounded scheduler-gated persist lane (never a direct sync-hot-path await)',
-  (workerStatus.match(/await setSetting\(WORKER_STATUS_KEY/g) ?? []).length === 1 &&
-  /tracked = \(async \(\) => \{[\s\S]*?if \(snapshot\.schedulerEnabled\) \{\s*await setSetting\(WORKER_STATUS_KEY, serialized\);\s*\}[\s\S]*?\}\)\(\)/.test(workerStatus) &&
+  (workerStatus.match(/writeWorkerStatusSetting\(persistenceSql, WORKER_STATUS_KEY/g) ?? []).length === 1 &&
+  /tracked = \(async \(\) => \{[\s\S]*?if \(snapshot\.schedulerEnabled\) \{\s*await writeWorkerStatusSetting\(persistenceSql, WORKER_STATUS_KEY, serialized\);\s*\}[\s\S]*?\}\)\(\)/.test(workerStatus) &&
   /persistSnapshotInFlight = tracked;/.test(workerStatus) &&
   /await withDeadline\(\s*\(\) => tracked,\s*WORKER_STATUS_PERSIST_TIMEOUT_MS/.test(workerStatus));
 check('worker-status documents observability must not hold sync lanes',

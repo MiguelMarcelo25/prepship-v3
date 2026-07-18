@@ -1,6 +1,7 @@
+import postgres from 'postgres';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
-import { getSetting, setSetting } from './settings';
+import { getSetting } from './settings';
 import { recordWorkerStatusEvent } from './worker-status-events';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
@@ -26,6 +27,7 @@ const WORKER_STATUS_PERSIST_ABANDON_MS = Math.max(
 
 type WorkerMode = (typeof WORKER_STATUS_MODES)[number];
 type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
+type WorkerStatusSql = ReturnType<typeof postgres>;
 
 export type WorkerJobSnapshot = {
   name: string;
@@ -83,6 +85,52 @@ const processStartedAt = new Date().toISOString();
 let snapshot: WorkerStatusSnapshot = createSnapshot('disabled');
 let persistSnapshotInFlight: Promise<void> | null = null;
 let persistSnapshotStartedAtMs = 0;
+let persistSnapshotSqlInFlight: WorkerStatusSql | null = null;
+const workerStatusPoolerCompatibility = { max_pipeline: 1 } as const;
+
+function createWorkerStatusSql(): WorkerStatusSql {
+  // Per user override unlock shipped data on 2026-07-18: worker telemetry
+  // must never consume the application pool used by order/shipment sync.
+  // Supavisor can occasionally finish a settings statement server-side while
+  // leaving its client promise unsettled; this isolated pool can be terminated
+  // and replaced without starving authoritative sync work.
+  return postgres(env.DATABASE_URL, {
+    prepare: false,
+    max: 1,
+    idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+    max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
+    connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+    connection: {
+      statement_timeout: Math.max(250, WORKER_STATUS_PERSIST_TIMEOUT_MS - 250),
+    },
+    ...workerStatusPoolerCompatibility,
+  });
+}
+
+let workerStatusSql = createWorkerStatusSql();
+
+async function writeWorkerStatusSetting(
+  persistenceSql: WorkerStatusSql,
+  key: string,
+  value: string,
+): Promise<void> {
+  await persistenceSql`
+    INSERT INTO settings (key, value)
+    VALUES (${key}, ${value})
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+  `;
+}
+
+function rotateWorkerStatusSql(staleSql: WorkerStatusSql | null): void {
+  if (!staleSql || workerStatusSql !== staleSql) return;
+  workerStatusSql = createWorkerStatusSql();
+  void staleSql.end({ timeout: 0 }).catch((err) => {
+    console.warn(
+      '[worker-status] failed to terminate stale telemetry connection:',
+      err instanceof Error ? err.message : err,
+    );
+  });
+}
 
 function workerStatusSnapshotKey(mode: WorkerMode): string {
   return `${WORKER_STATUS_KEY}:${mode}`;
@@ -180,20 +228,28 @@ async function persistSnapshot(): Promise<void> {
     console.warn(
       '[worker-status] abandoning stale status persist; allowing a fresh snapshot write'
     );
+    rotateWorkerStatusSql(persistSnapshotSqlInFlight);
     persistSnapshotInFlight = null;
     persistSnapshotStartedAtMs = 0;
+    persistSnapshotSqlInFlight = null;
   }
 
   // Worker status is observability. A slow settings write must not hold sync lanes.
   let tracked: Promise<void>;
+  const persistenceSql = workerStatusSql;
   persistSnapshotStartedAtMs = Date.now();
+  persistSnapshotSqlInFlight = persistenceSql;
   tracked = (async () => {
     const serialized = JSON.stringify(snapshot);
-    await setSetting(workerStatusSnapshotKey(snapshot.mode), serialized);
+    await writeWorkerStatusSetting(
+      persistenceSql,
+      workerStatusSnapshotKey(snapshot.mode),
+      serialized,
+    );
     // Keep the legacy key as the sync-scheduler view. The dedicated print
     // worker must not overwrite it or /sync/status will report scheduler=false.
     if (snapshot.schedulerEnabled) {
-      await setSetting(WORKER_STATUS_KEY, serialized);
+      await writeWorkerStatusSetting(persistenceSql, WORKER_STATUS_KEY, serialized);
     }
   })()
     .catch((err) => {
@@ -206,6 +262,7 @@ async function persistSnapshot(): Promise<void> {
       if (persistSnapshotInFlight === tracked) {
         persistSnapshotInFlight = null;
         persistSnapshotStartedAtMs = 0;
+        persistSnapshotSqlInFlight = null;
       }
     });
   persistSnapshotInFlight = tracked;
@@ -217,6 +274,9 @@ async function persistSnapshot(): Promise<void> {
       'worker-status persist'
     );
   } catch (err) {
+    // The deadline bounds the caller, while rotating the dedicated pool also
+    // cancels the underlying query so timed-out telemetry cannot accumulate.
+    rotateWorkerStatusSql(persistenceSql);
     console.warn(
       '[worker-status] status persist exceeded deadline; continuing without blocking sync:',
       err instanceof Error ? err.message : err
