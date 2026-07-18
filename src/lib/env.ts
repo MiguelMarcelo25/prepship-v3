@@ -61,10 +61,11 @@ const schema = z.object({
   // (e.g. SHOPIFY_WEBHOOK_SECRET). When unset, the route rejects all events (fail-safe).
   WEBHOOK_SIGNING_SECRET: z.string().optional(),
   SHOPIFY_WEBHOOK_SECRET: z.string().optional(),
-  // Shopify direct store polling (client-submitted store accounts promoted by
-  // operators). Default OFF: deploys never start pulling client stores until DJ
-  // flips this canary in the target environment.
-  SHOPIFY_SYNC_ENABLED: booleanFlag(false),
+  // Shopify direct store polling runs only for store_accounts rows promoted by
+  // operators (source=admin, active=true). An explicit false remains a kill
+  // switch, while the default keeps approved stores from silently never syncing
+  // when the worker environment omits this optional flag.
+  SHOPIFY_SYNC_ENABLED: booleanFlag(true),
   SHIPSTATION_WEBHOOK_SECRET: z.string().optional(),
   WALMART_WEBHOOK_SECRET: z.string().optional(),
   EBAY_WEBHOOK_SECRET: z.string().optional(),
