@@ -12,14 +12,13 @@
 // immediately with zeros, NO DB access, NO mutation, zero cost. DJ flips it on Render.
 //
 // Best-effort everywhere: never throws into the worker boot/scheduler hot path — on any error it
-// logs '[stuck-reaper]' and returns zeros. Mirrors the runtime raw-SQL + swallow-errors pattern of
-// direct-carrier-rate-cache.ts (import { sql as pg } from '../db/client.js').
+// logs '[stuck-reaper]' and returns zeros.
 //
 // SAFETY: this NEVER touches the orders or shipments tables, never marketplace ship-confirms. It
 // only flips orphaned/redundant pgboss queue rows for an explicit ALLOW-LIST of idempotent,
 // side-effect-free sync jobs to 'failed'. Jobs with real side effects (marketplace confirmations,
 // order-state mutation) are EXCLUDED on purpose.
-import { sql as pg } from '../db/client.js';
+import postgres from 'postgres';
 import { env } from '../lib/env.js';
 import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline.js';
 import { syncJobLaneFor, type SyncJobLane } from './sync-job-lanes';
@@ -29,6 +28,20 @@ import {
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
 } from './sync-job-admission.js';
+
+// Queue recovery is control-plane work. It must not wait behind a DB-heavy
+// sync that has consumed the shared application pool, because that sync may
+// be the orphan the reaper needs to clear.
+const reaperTransactionPoolerCompatibility = { max_pipeline: 1 } as const;
+const reaperSql = postgres(env.DATABASE_URL, {
+  prepare: false,
+  max: 1,
+  idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
+  connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+  connection: { statement_timeout: env.DB_STATEMENT_TIMEOUT_MS },
+  ...reaperTransactionPoolerCompatibility,
+});
 
 /**
  * Allow-list of pgboss queue names the reaper may clear. These are idempotent queue jobs where
@@ -187,9 +200,9 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
     // FROM/UPDATE keyword handler and comma-joins the identifiers, throwing at runtime. Verified
     // against node_modules/postgres/cjs/src/{index,types}.js. All data values stay parameterized.
     const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
-    const rows = await pg<StuckJobRow[]>`
+    const rows = await reaperSql<StuckJobRow[]>`
       SELECT id::text AS id, name, state, started_on
-      FROM ${pg(jobTable)}
+      FROM ${reaperSql(jobTable)}
       WHERE state = 'active'
         AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
     `;
@@ -207,8 +220,8 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
     }
 
     const ids = stuck.map((s) => s.id);
-    await pg`
-      UPDATE ${pg(jobTable)}
+    await reaperSql`
+      UPDATE ${reaperSql(jobTable)}
       SET state = 'failed',
           completed_on = now(),
           output = '{"reason":"PS-272 stuck-active reaper"}'::jsonb
@@ -250,7 +263,7 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
 
   try {
     const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
-    const stale = await pg<ReapedJobRow[]>`
+    const stale = await reaperSql<ReapedJobRow[]>`
       WITH normalized AS (
         SELECT
           id::text AS id,
@@ -266,7 +279,7 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
               THEN ${SHIPMENT_REFRESH_SINGLETON_KEY}
             ELSE singleton_key
           END AS logical_singleton_key
-        FROM ${pg(jobTable)}
+        FROM ${reaperSql(jobTable)}
         WHERE state IN ('created', 'retry')
           AND name = ANY(${REAPER_STALE_QUEUED_JOB_NAMES as string[]})
           AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
@@ -293,8 +306,8 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
     }
 
     const ids = stale.map((s) => s.id);
-    const updated = await pg<ReapedJobRow[]>`
-      UPDATE ${pg(jobTable)}
+    const updated = await reaperSql<ReapedJobRow[]>`
+      UPDATE ${reaperSql(jobTable)}
       SET state = 'failed',
           completed_on = now(),
           output = '{"reason":"PS-360/PS-361 stale queued sync reaper"}'::jsonb

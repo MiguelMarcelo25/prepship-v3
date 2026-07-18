@@ -104,7 +104,7 @@ check(
 check(
   'effectful reaper is env-gated default-off and mutates only pgboss job rows',
   /if \(!env\.SYNC_STUCK_JOB_REAPER\)/.test(stuckReaper) &&
-    /UPDATE \$\{pg\(jobTable\)\}/.test(stuckReaper) &&
+    /UPDATE \$\{reaperSql\(jobTable\)\}/.test(stuckReaper) &&
     !/UPDATE\s+(orders|shipments)\b/i.test(stuckReaper),
 );
 

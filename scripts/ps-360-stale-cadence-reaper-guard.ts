@@ -62,6 +62,10 @@ check('stale cadence reaper uses the stale-queued allow-list',
   /name = ANY\(\$\{REAPER_STALE_QUEUED_JOB_NAMES as string\[\]\}\)/.test(reaper));
 check('stale cadence reaper fails pgboss rows rather than deleting data',
   /SET state = 'failed'/.test(reaper) && !/DELETE FROM/.test(reaper));
+check('queue recovery SQL has a dedicated one-connection control-plane client',
+  /reaperTransactionPoolerCompatibility = \{ max_pipeline: 1 \}/.test(reaper) &&
+  /const reaperSql = postgres\(env\.DATABASE_URL,[\s\S]*max: 1,[\s\S]*reaperTransactionPoolerCompatibility/.test(reaper) &&
+  !/from ['"]\.\.\/db\/client/.test(reaper));
 check('stale queued reaper records PS-360/PS-361 reason',
   /PS-360\/PS-361 stale queued sync reaper/.test(reaper));
 check('fulfillment and fee side-effect jobs remain excluded from the active safe allow-list',
