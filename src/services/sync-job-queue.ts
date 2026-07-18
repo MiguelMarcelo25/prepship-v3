@@ -412,6 +412,24 @@ const shipStationConsumerLeaderSql = postgres(
   },
 );
 
+// Leadership handoff is queue control-plane state. Its active-job read must
+// stay available while DB-heavy sync work occupies the shared application
+// pool, otherwise the new deploy owns leadership but never registers the
+// order/shipment consumers.
+const shipStationConsumerStatePoolerCompatibility = { max_pipeline: 1 } as const;
+const shipStationConsumerStateSql = postgres(env.DATABASE_URL, {
+  prepare: false,
+  max: 1,
+  idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
+  connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+  connection: {
+    application_name: 'prepship-shipstation-consumer-state',
+    statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+  },
+  ...shipStationConsumerStatePoolerCompatibility,
+});
+
 function queueOptionsFor(name: JobName): PgBoss.Queue {
   return {
     name,
@@ -1308,9 +1326,9 @@ async function registerWorker(
 
 async function readActiveShipStationSyncJobs(): Promise<ActiveShipStationSyncJob[]> {
   const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
-  return pg<ActiveShipStationSyncJob[]>`
+  return shipStationConsumerStateSql<ActiveShipStationSyncJob[]>`
     SELECT id::text AS id, name
-    FROM ${pg(jobTable)}
+    FROM ${shipStationConsumerStateSql(jobTable)}
     WHERE state = 'active'
       AND name = ANY(${[JOBS.orders, JOBS.shipments] as string[]})
     ORDER BY started_on ASC NULLS LAST

@@ -130,6 +130,11 @@ assert.match(queue, /const reserved = await shipStationConsumerLeaderSql\.reserv
 assert.match(queue, /pg_try_advisory_lock\(hashtext\(\$\{SHIPSTATION_CONSUMER_LEADER_LOCK\}\)\)/);
 assert.match(queue, /async function readActiveShipStationSyncJobs/);
 assert.match(queue, /WHERE state = 'active'[\s\S]*name = ANY/);
+assert.match(queue, /const shipStationConsumerStateSql = postgres\(/);
+assert.match(
+  queue,
+  /readActiveShipStationSyncJobs[\s\S]*return shipStationConsumerStateSql<ActiveShipStationSyncJob\[\]>/,
+);
 assert.match(queue, /await maintainShipStationConsumerLeadership\(\)/);
 assert.match(queue, /await registerShipStationStatelyWorkers\(\)/);
 assert.match(queue, /pg_advisory_unlock\(hashtext\(\$\{SHIPSTATION_CONSUMER_LEADER_LOCK\}\)\)/);
