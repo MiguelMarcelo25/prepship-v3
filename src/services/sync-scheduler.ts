@@ -30,6 +30,11 @@ let shopifyOrderSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
+// Per user override unlock shipped data on 2026-07-18: one durable
+// marketplace-confirmation operation can use its full two-minute provider
+// timeout. Claim one per shared-lane tick so order refresh regains the lane
+// inside its three-minute freshness budget; the minute cadence drains more.
+export const FULFILLMENT_OUTBOX_BATCH_LIMIT = 1;
 let reportingRefreshRunning = false;
 let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
@@ -207,7 +212,9 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
       // Per user override unlock shipped data on 2026-07-14: repair missing
       // deduction intent only; execution remains in the kill-switched owner.
       const inventoryRecovered = await enqueueMissingInventoryDeductions(100);
-      const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
+      const outboxResult = await processFulfillmentOutboxOnce({
+        limit: FULFILLMENT_OUTBOX_BATCH_LIMIT,
+      });
       return { ...outboxResult, autoRecovered: recoveryResult, inventoryRecovered };
     });
     if (!result) return;

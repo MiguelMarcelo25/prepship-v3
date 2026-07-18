@@ -44,6 +44,8 @@ await assert.rejects(blockedAcquire, /order refresh pending/);
 const read = (path: string): string => readFileSync(path, 'utf8');
 const queue = read('src/services/sync-job-queue.ts');
 const v1 = read('src/lib/shipstation/v1-client.ts');
+const laneLock = read('src/services/sync-lane-lock.ts');
+const scheduler = read('src/services/sync-scheduler.ts');
 
 assert.match(
   queue,
@@ -59,7 +61,21 @@ assert.match(
   'priority deferral must preserve the original shipment payload',
 );
 assert.match(v1, /bucket\.acquire\(\{ signal: opts\.signal \}\)/);
+assert.match(
+  laneLock,
+  /SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS = SYNC_JOB_RUNNING_LEASE_MS \+ 5_000/,
+);
+assert.match(
+  laneLock,
+  /idle_in_transaction_session_timeout: SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS/,
+);
 assert.match(queue, /unlock shipped data on 2026-07-18/);
 assert.match(v1, /unlock shipped data on 2026-07-18/);
+assert.match(laneLock, /unlock shipped data on 2026-07-18/);
+assert.match(scheduler, /FULFILLMENT_OUTBOX_BATCH_LIMIT = 1/);
+assert.match(
+  scheduler,
+  /processFulfillmentOutboxOnce\(\{[\s\S]*limit: FULFILLMENT_OUTBOX_BATCH_LIMIT/,
+);
 
 console.log('PASS continuous ShipStation sync self-healing guard');

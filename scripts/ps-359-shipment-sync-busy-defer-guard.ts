@@ -54,6 +54,7 @@ check(
   'cross-process ShipStation lane lock module exists',
   /export async function withSyncLaneAdvisoryLock/.test(laneLock) &&
     /pg_try_advisory_xact_lock/.test(laneLock) &&
+    /idle_in_transaction_session_timeout: SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS/.test(laneLock) &&
     !/pg_advisory_unlock/.test(laneLock),
 );
 check(
