@@ -66,8 +66,10 @@ import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-
 import {
   rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
+  runnableOperationalSyncQueueSizes,
   SHIPSTATION_SYNC_JOBS,
   syncQueuePolicyForJob,
+  type OperationalSyncQueueRow,
   type SyncJobAdmissionIntent,
 } from './sync-job-admission';
 import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
@@ -1125,12 +1127,22 @@ function busyDeferCount(jobData: unknown): number {
 }
 
 async function pendingOperationalBlockerForRateBackfill(): Promise<string | null> {
-  if (!boss) return null;
-  const [orders, shipments] = await Promise.all([
-    boss.getQueueSize(JOBS.orders),
-    boss.getQueueSize(JOBS.shipments),
-  ]);
-  return rateBackfillOperationalBlocker({ orders, shipments });
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  // Per user override unlock shipped data on 2026-07-18: rate admission reads
+  // queue control-plane rows only. Future shipment/order defer wake-ups are not
+  // runnable blockers; active work remains protected by the local/advisory lane.
+  const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
+    SELECT
+      name,
+      state,
+      start_after AS "startAfter"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ANY(${[JOBS.orders, JOBS.shipments] as string[]})
+      AND state IN ('created', 'retry')
+  `;
+  return rateBackfillOperationalBlocker(
+    runnableOperationalSyncQueueSizes(rows),
+  );
 }
 
 async function runShipmentSyncWithOrderPriority(

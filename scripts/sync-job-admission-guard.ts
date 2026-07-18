@@ -6,6 +6,7 @@ import {
   ORDER_REFRESH_SINGLETON_KEY,
   rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
+  runnableOperationalSyncQueueSizes,
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
   STARVATION_RECOVERY_PRIORITY,
@@ -15,6 +16,25 @@ import {
 
 const orders = SHIPSTATION_SYNC_JOBS.orders;
 const shipments = SHIPSTATION_SYNC_JOBS.shipments;
+const now = Date.parse('2026-07-18T06:45:00.000Z');
+
+assert.deepEqual(
+  runnableOperationalSyncQueueSizes([
+    { name: orders, state: 'created', startAfter: new Date(now - 1) },
+    { name: shipments, state: 'retry', startAfter: new Date(now) },
+    { name: shipments, state: 'created', startAfter: new Date(now + 60_000) },
+    { name: orders, state: 'active', startAfter: new Date(now - 60_000) },
+  ], now),
+  { orders: 1, shipments: 1 },
+  'only due created/retry rows are runnable admission blockers',
+);
+assert.deepEqual(
+  runnableOperationalSyncQueueSizes([
+    { name: shipments, state: 'created', startAfter: new Date(now + 60_000) },
+  ], now),
+  { orders: 0, shipments: 0 },
+  'a future shipment defer must not starve rates that can run now',
+);
 
 assert.equal(
   rateBackfillOperationalBlocker({ orders: 1, shipments: 1 }),
@@ -121,6 +141,14 @@ assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(
   queue,
   /name === JOBS\.rateBackfill[\s\S]*pendingOperationalBlockerForRateBackfill\(\)[\s\S]*reason: 'operational_sync_pending'/,
+);
+assert.match(
+  queue,
+  /pendingOperationalBlockerForRateBackfill[\s\S]*start_after AS "startAfter"[\s\S]*runnableOperationalSyncQueueSizes\(rows\)/,
+);
+assert.doesNotMatch(
+  queue,
+  /pendingOperationalBlockerForRateBackfill[\s\S]{0,400}getQueueSize/,
 );
 assert.match(queue, /unlock shipped data on 2026-07-14/);
 assert.match(queue, /SHIPSTATION_CONSUMER_LEADER_LOCK/);

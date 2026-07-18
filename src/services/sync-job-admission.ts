@@ -40,6 +40,35 @@ export type OperationalSyncQueueSizes = {
   shipments: number;
 };
 
+export type OperationalSyncQueueRow = {
+  name: string;
+  state: string;
+  startAfter: Date | string | number | null;
+};
+
+/**
+ * A future busy-defer wake-up is durable intent, not runnable work. Counting
+ * it as pending would let the always-present shipment wake-up starve targeted
+ * rates forever.
+ */
+export function runnableOperationalSyncQueueSizes(
+  rows: ReadonlyArray<OperationalSyncQueueRow>,
+  nowMs: number = Date.now(),
+): OperationalSyncQueueSizes {
+  const sizes: OperationalSyncQueueSizes = { orders: 0, shipments: 0 };
+  for (const row of rows) {
+    if (row.state !== 'created' && row.state !== 'retry') continue;
+    const startAfterMs =
+      row.startAfter instanceof Date
+        ? row.startAfter.getTime()
+        : new Date(row.startAfter ?? 0).getTime();
+    if (!Number.isFinite(startAfterMs) || startAfterMs > nowMs) continue;
+    if (row.name === SHIPSTATION_SYNC_JOBS.orders) sizes.orders += 1;
+    if (row.name === SHIPSTATION_SYNC_JOBS.shipments) sizes.shipments += 1;
+  }
+  return sizes;
+}
+
 /**
  * Cross-queue priority fence. Pg-boss priorities are queue-local, so the
  * lower-priority rate queue must explicitly yield before racing an already
