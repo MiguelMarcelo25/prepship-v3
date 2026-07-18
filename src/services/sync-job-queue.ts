@@ -63,6 +63,7 @@ import {
 } from './shipstation-sync-account-state';
 import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-account-snapshot-worker';
 import {
+  rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
   SHIPSTATION_SYNC_JOBS,
   syncQueuePolicyForJob,
@@ -1090,6 +1091,15 @@ function busyDeferCount(jobData: unknown): number {
   return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
 }
 
+async function pendingOperationalBlockerForRateBackfill(): Promise<string | null> {
+  if (!boss) return null;
+  const [orders, shipments] = await Promise.all([
+    boss.getQueueSize(JOBS.orders),
+    boss.getQueueSize(JOBS.shipments),
+  ]);
+  return rateBackfillOperationalBlocker({ orders, shipments });
+}
+
 // Handler deadline is below pg-boss's 30-minute expiry. Timed-out order work
 // also receives an AbortSignal so stale attempts stop before later persistence.
 async function registerWorker(
@@ -1119,6 +1129,38 @@ async function registerWorker(
       }
 
       const lane = syncJobLaneFor(name);
+      if (name === JOBS.rateBackfill) {
+        const operationalBlocker = await pendingOperationalBlockerForRateBackfill();
+        if (operationalBlocker) {
+          console.log(
+            `[job-queue] ${name} yielded because ${operationalBlocker} is pending in ${lane} lane`
+          );
+          await recordWorkerJobSkipped(
+            name,
+            `${operationalBlocker} pending in ${lane} lane`,
+          );
+          const deferredJobId = await deferBusySyncJob(
+            name,
+            operationalBlocker,
+            lane,
+            busyDeferCount(job?.data),
+            job?.data,
+          );
+          if (!deferredJobId) {
+            throw new Error('durable rate-backfill yield failed; retrying original queue job');
+          }
+          return {
+            ok: true,
+            skipped: true,
+            deferred: true,
+            deferredJobId,
+            blockedBy: operationalBlocker,
+            lane,
+            reason: 'operational_sync_pending',
+          };
+        }
+      }
+
       const blockedBy = getSyncJobLaneBlocker(activeJobsByLane, name);
       if (blockedBy) {
         console.log(

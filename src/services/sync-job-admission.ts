@@ -35,6 +35,24 @@ export type SyncJobAdmission = {
   priority: number;
 };
 
+export type OperationalSyncQueueSizes = {
+  orders: number;
+  shipments: number;
+};
+
+/**
+ * Cross-queue priority fence. Pg-boss priorities are queue-local, so the
+ * lower-priority rate queue must explicitly yield before racing an already
+ * pending order or shipment tick for the shared lane.
+ */
+export function rateBackfillOperationalBlocker(
+  queueSizes: OperationalSyncQueueSizes,
+): string | null {
+  if (queueSizes.orders > 0) return SHIPSTATION_SYNC_JOBS.orders;
+  if (queueSizes.shipments > 0) return SHIPSTATION_SYNC_JOBS.shipments;
+  return null;
+}
+
 export function syncQueuePolicyForJob(name: string): SyncQueuePolicy {
   return name === SHIPSTATION_SYNC_JOBS.orders || name === SHIPSTATION_SYNC_JOBS.shipments
     ? 'stately'

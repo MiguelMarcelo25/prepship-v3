@@ -4,6 +4,7 @@ import {
   MANUAL_FULL_ORDER_SINGLETON_KEY,
   OPERATOR_SYNC_PRIORITY,
   ORDER_REFRESH_SINGLETON_KEY,
+  rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
@@ -14,6 +15,19 @@ import {
 
 const orders = SHIPSTATION_SYNC_JOBS.orders;
 const shipments = SHIPSTATION_SYNC_JOBS.shipments;
+
+assert.equal(
+  rateBackfillOperationalBlocker({ orders: 1, shipments: 1 }),
+  orders,
+);
+assert.equal(
+  rateBackfillOperationalBlocker({ orders: 0, shipments: 2 }),
+  shipments,
+);
+assert.equal(
+  rateBackfillOperationalBlocker({ orders: 0, shipments: 0 }),
+  null,
+);
 
 assert.equal(syncQueuePolicyForJob(orders), 'stately');
 assert.equal(syncQueuePolicyForJob(shipments), 'stately');
@@ -104,6 +118,10 @@ assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'manu
 assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'watchdog-shipment'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
+assert.match(
+  queue,
+  /name === JOBS\.rateBackfill[\s\S]*pendingOperationalBlockerForRateBackfill\(\)[\s\S]*reason: 'operational_sync_pending'/,
+);
 assert.match(queue, /unlock shipped data on 2026-07-14/);
 assert.match(queue, /SHIPSTATION_CONSUMER_LEADER_LOCK/);
 assert.match(queue, /replace\(':6543\/', ':5432\/'\)/);
