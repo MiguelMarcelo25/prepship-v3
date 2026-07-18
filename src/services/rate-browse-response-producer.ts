@@ -85,6 +85,7 @@ export type ProduceRateBrowsePayloadInput = {
   body: RateBrowseBody;
   canViewFinancials: boolean;
   browseStartedAt?: number;
+  signal?: AbortSignal;
 };
 
 function browseSotWritebackEnabled(): boolean {
@@ -182,7 +183,9 @@ export async function produceRateBrowsePayload({
   body,
   canViewFinancials,
   browseStartedAt = Date.now(),
+  signal,
 }: ProduceRateBrowsePayloadInput): Promise<Record<string, unknown>> {
+  signal?.throwIfAborted();
   const {
     forceRefresh,
     forceLive,
@@ -330,8 +333,10 @@ export async function produceRateBrowsePayload({
     }),
     externalOrderId: orderForBrowse?.externalOrderId ?? (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
     orderNumber: orderForBrowse?.orderNumber ?? (rest as { orderNumber?: string | null }).orderNumber ?? null,
+    signal,
     ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),
   } as RateInput & Record<string, any>;
+  signal?.throwIfAborted();
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const resolvedForBrowse = await resolveRateInput(browseRateInput);
   let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
@@ -438,6 +443,7 @@ export async function produceRateBrowsePayload({
       return { result, directRates, shipStationDurationMs, directCarrierDurationMs };
     },
   );
+  signal?.throwIfAborted();
   const limiterAfter = getRateEngineLimiterSnapshot();
   const requestedSet = requestedCarrierIds?.length ? new Set(requestedCarrierIds) : null;
   const filtered = shipStationBlocked

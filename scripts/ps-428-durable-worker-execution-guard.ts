@@ -42,6 +42,13 @@ assert.match(printStore, /WHERE print_queue_merge_jobs\.generation = \$\{snapsho
 assert.match(rateWorker, /runDurableWorkerAttempt/);
 assert.match(rateWorker, /produceRateBrowsePayload/);
 assert.match(rateWorker, /listRecoverableRateBrowseJobIds/);
+assert.match(rateWorker, /supervise: consumerRole/);
+assert.match(rateWorker, /maintenanceIntervalSeconds: 60/);
+assert.match(rateWorker, /execute:\s*async \(signal\)/);
+assert.match(
+  rateWorker,
+  /produceRateBrowsePayload\(\{[\s\S]*?signal,[\s\S]*?\}\)/,
+);
 assert.match(worker, /await startRateBrowseWorker\(\)/);
 
 const startPrint = printService.slice(

@@ -143,6 +143,16 @@ const ratesSource = readFileSync('src/services/rates.ts', 'utf8');
 const modalSource = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 assert.match(workflowSource, /enqueueRateBrowseWorkerJob/, 'workflow must delegate to durable worker scheduling');
 assert.match(workflowWorkerSource, /runDurableWorkerAttempt/, 'worker must own the provider-work deadline');
+assert.match(
+  workflowWorkerSource,
+  /execute:\s*async \(signal\)[\s\S]*?produceRateBrowsePayload\(\{[\s\S]*?signal,/,
+  'worker deadline signal must reach the rate provider producer',
+);
+assert.match(
+  producerSource,
+  /signal\?: AbortSignal[\s\S]*?signal\?\.throwIfAborted\(\)[\s\S]*?const browseRateInput = \{[\s\S]*?signal,/,
+  'rate producer must propagate cancellation into the canonical provider input',
+);
 assert.match(producerSource, /rateBrowseFailure/, 'workflow result must expose actionable all-failed diagnostics');
 assert.ok(
   producerSource.indexOf('evaluateOrderCarrierEligibility') < producerSource.indexOf('runRateBrowseSingleFlight'),

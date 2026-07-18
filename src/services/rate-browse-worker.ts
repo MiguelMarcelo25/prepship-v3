@@ -52,7 +52,11 @@ function createBoss(applicationName: string, consumerRole: boolean): PgBoss {
     expireInSeconds: 30 * 60,
     retentionDays: 7,
     deleteAfterDays: 7,
-    supervise: false,
+    // Rate browse provider work is durable, but the worker process can be
+    // replaced during a deploy. Let pg-boss expire abandoned active claims so
+    // they cannot consume the only browse slot after the replacement starts.
+    supervise: consumerRole,
+    maintenanceIntervalSeconds: 60,
     schedule: false,
     migrate: false,
   });
@@ -166,13 +170,14 @@ async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, u
       requestCancellation: () => requestRateBrowseJobCancellation(running.jobId, claim.generation),
       acknowledgeCancellation: () => acknowledgeRateBrowseJobCancellation(running.jobId, claim.generation),
     },
-    execute: async () => {
+    execute: async (signal) => {
       if (claim.input.includeCachedPartial) {
         try {
           const partial = await produceRateBrowsePayload({
             body: cachedPreviewBody(claim.input.body),
             canViewFinancials: claim.input.canViewFinancials,
             browseStartedAt: Date.now(),
+            signal,
           });
           if (Array.isArray(partial.rates) && partial.rates.length > 0) {
             await persistCurrent(buildRateBrowseResultSnapshot({
@@ -200,6 +205,7 @@ async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, u
         body: claim.input.body,
         canViewFinancials: claim.input.canViewFinancials,
         browseStartedAt: Date.now(),
+        signal,
       });
     },
   });
