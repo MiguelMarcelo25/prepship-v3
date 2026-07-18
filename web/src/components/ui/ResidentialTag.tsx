@@ -84,7 +84,7 @@ export function ResidentialTag({
   // Trusted commercial = green; UNTRUSTED commercial (heuristic/fallback) = amber warning; residential = neutral.
   const tone = isCommercial
     ? trusted
-      ? 'bg-emerald-100 text-emerald-950 ring-emerald-300 dark:bg-emerald-500/25 dark:text-emerald-100 dark:ring-emerald-400/50'
+      ? 'bg-emerald-100 text-emerald-950 ring-emerald-300 dark:bg-emerald-500/25 dark:text-emerald-950 dark:ring-emerald-400/50'
       : 'bg-amber-100/70 text-amber-700 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30'
     : 'bg-surface-2 text-ink-2 ring-line'
 
