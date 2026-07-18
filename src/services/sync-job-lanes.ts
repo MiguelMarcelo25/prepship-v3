@@ -43,6 +43,12 @@ const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
   ['prepship.fees.walmart-sync', 'walmart-fees'],
   ['walmart fees sync', 'walmart-fees'],
 
+  // Queue maintenance is the recovery control plane for orphaned pg-boss
+  // work. It must remain runnable when the DB-heavy ShipStation lane is
+  // blocked by the stale job that maintenance needs to reap.
+  ['prepship.maintenance.job-queue', 'misc'],
+  ['job queue maintenance', 'misc'],
+
   // Per user override unlock shipped data on 2026-07-14: carrier snapshot
   // refresh performs provider reads plus database cache writes. Production
   // proof showed it can wedge the transaction-pool client when it starts in

@@ -40,6 +40,7 @@ const trackingJob = 'prepship.tracking.poll';
 const reportingJob = 'prepship.reporting.refresh';
 const rateBackfillJob = 'prepship.sync.rate-backfill';
 const carrierSnapshotsJob = 'prepship.maintenance.carrier-account-snapshots';
+const queueMaintenanceJob = 'prepship.maintenance.job-queue';
 
 const shipmentsLane = syncJobLaneFor(shipmentsJob);
 const activeShipmentSync = new Map([[shipmentsLane, shipmentsJob]]);
@@ -79,6 +80,11 @@ check(
 check(
   'carrier snapshot refresh shares the DB-heavy lane with shipment sync',
   getSyncJobLaneBlocker(activeShipmentSync, carrierSnapshotsJob) === shipmentsJob
+);
+check(
+  'queue maintenance can reap an orphan blocking the ShipStation sync lane',
+  syncJobLaneFor(queueMaintenanceJob) === 'misc' &&
+    getSyncJobLaneBlocker(activeShipmentSync, queueMaintenanceJob) === null
 );
 check(
   'unclassified maintenance defaults to the DB-heavy lane',
