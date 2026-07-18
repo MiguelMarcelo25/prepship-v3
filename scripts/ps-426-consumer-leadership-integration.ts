@@ -123,6 +123,8 @@ class FakeLeadershipManager {
 function createWorker(workerId: string, manager: FakeLeadershipManager) {
   const clock = new FakeClock();
   let activeJobs: ActiveJob[] = [];
+  let recoverActiveJobs = async (): Promise<void> => undefined;
+  let recoveryCount = 0;
   let registerCount = 0;
   let unregisterCount = 0;
   const diagnostics: string[] = [];
@@ -130,6 +132,10 @@ function createWorker(workerId: string, manager: FakeLeadershipManager) {
   const controller = new ShipStationConsumerLeadershipController(
     {
       reserveConnection: async () => manager.reserve(workerId),
+      recoverActiveJobs: async () => {
+        recoveryCount += 1;
+        await recoverActiveJobs();
+      },
       readActiveJobs: async () => activeJobs,
       registerConsumers: async () => {
         manager.register(workerId);
@@ -156,8 +162,11 @@ function createWorker(workerId: string, manager: FakeLeadershipManager) {
     setActiveJobs(jobs: ActiveJob[]) {
       activeJobs = jobs;
     },
+    setActiveJobRecovery(recovery: () => Promise<void>) {
+      recoverActiveJobs = recovery;
+    },
     counts() {
-      return { registerCount, unregisterCount };
+      return { recoveryCount, registerCount, unregisterCount };
     },
   };
 }
@@ -174,7 +183,7 @@ assert.deepEqual(workerA.controller.snapshot(), {
   consumersRegistered: true,
   scheduledDelayMs: 15,
 });
-assert.deepEqual(workerA.counts(), { registerCount: 1, unregisterCount: 0 });
+assert.deepEqual(workerA.counts(), { recoveryCount: 1, registerCount: 1, unregisterCount: 0 });
 
 await workerB.controller.start();
 assert.equal(workerB.controller.snapshot().ownsLock, false);
@@ -185,7 +194,7 @@ assert.equal(manager.maxRegisteredWorkers, 1, 'two workers must never register t
 await workerA.controller.stop();
 assert.equal(manager.owner, null);
 assert.deepEqual(workerA.clock.pendingDelays(), []);
-assert.deepEqual(workerA.counts(), { registerCount: 1, unregisterCount: 1 });
+assert.deepEqual(workerA.counts(), { recoveryCount: 1, registerCount: 1, unregisterCount: 1 });
 
 workerB.setActiveJobs([{ id: 'old-generation-job', name: 'prepship.sync.orders' }]);
 await workerB.controller.runMaintenanceNow();
@@ -196,18 +205,26 @@ assert.ok(
   workerB.diagnostics.some((entry) => entry.includes('waiting for active deploy handoff')),
   'new leader must report the durable active-job handoff fence',
 );
+assert.equal(workerB.counts().recoveryCount, 1);
 
-workerB.setActiveJobs([]);
+workerB.setActiveJobRecovery(async () => {
+  workerB.setActiveJobs([]);
+});
 await workerB.controller.runMaintenanceNow();
 assert.equal(workerB.controller.snapshot().consumersRegistered, true);
 assert.deepEqual(workerB.clock.pendingDelays(), [15]);
+assert.equal(
+  workerB.counts().recoveryCount,
+  2,
+  'handoff maintenance must recover orphaned rows before reading the active-job fence',
+);
 
 manager.dropLeadershipSession('worker-b');
 await workerB.controller.notifyConnectionClosed();
 assert.equal(workerB.controller.snapshot().ownsLock, false);
 assert.equal(workerB.controller.snapshot().consumersRegistered, false);
 assert.deepEqual(workerB.clock.pendingDelays(), [5]);
-assert.deepEqual(workerB.counts(), { registerCount: 1, unregisterCount: 1 });
+assert.deepEqual(workerB.counts(), { recoveryCount: 2, registerCount: 1, unregisterCount: 1 });
 
 const workerC = createWorker('worker-c', manager);
 await workerC.controller.start();

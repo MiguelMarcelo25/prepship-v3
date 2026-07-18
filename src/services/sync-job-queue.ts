@@ -156,6 +156,7 @@ export type ShipStationConsumerLeadershipConnection = {
 
 type ShipStationConsumerLeadershipDependencies = {
   reserveConnection(): Promise<ShipStationConsumerLeadershipConnection>;
+  recoverActiveJobs(): Promise<void>;
   readActiveJobs(): Promise<ActiveShipStationSyncJob[]>;
   registerConsumers(): Promise<void>;
   unregisterConsumers(): Promise<void>;
@@ -348,6 +349,11 @@ export class ShipStationConsumerLeadershipController {
       }
 
       if (!this.consumersRegistered) {
+        // Per user override unlock shipped data on 2026-07-18: recover only
+        // allow-listed orphaned pg-boss control rows before applying the active
+        // deploy handoff fence. This handoff loop stays alive even when the
+        // queue-maintenance consumer is itself orphaned.
+        await this.dependencies.recoverActiveJobs();
         const activeJobs = await this.dependencies.readActiveJobs();
         if (activeJobs.length > 0) {
           if (!this.handoffLogged) {
@@ -1471,6 +1477,14 @@ function createShipStationConsumerLeadership(): ShipStationConsumerLeadershipCon
         },
         release: () => reserved.release(),
       };
+    },
+    recoverActiveJobs: async () => {
+      const recovery = await reapStuckActiveJobs();
+      if (recovery.reaped > 0) {
+        console.log(
+          `[job-queue] leadership handoff reaper cleared ${recovery.reaped} orphan(s): ${recovery.names.join(', ')}`,
+        );
+      }
     },
     readActiveJobs: readActiveShipStationSyncJobs,
     registerConsumers: async () => {

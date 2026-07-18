@@ -69,6 +69,16 @@ assert.match(
   laneLock,
   /idle_in_transaction_session_timeout: SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS/,
 );
+assert.match(
+  queue,
+  /if \(!this\.consumersRegistered\) \{[\s\S]{0,500}?await this\.dependencies\.recoverActiveJobs\(\);[\s\S]{0,200}?await this\.dependencies\.readActiveJobs\(\)/,
+  'consumer handoff must recover safe orphan rows before applying its active-job fence',
+);
+assert.match(
+  queue,
+  /recoverActiveJobs: async \(\) => \{[\s\S]{0,200}?await reapStuckActiveJobs\(\)/,
+  'the handoff recovery dependency must delegate to the canonical stuck-job reaper',
+);
 assert.match(queue, /unlock shipped data on 2026-07-18/);
 assert.match(v1, /unlock shipped data on 2026-07-18/);
 assert.match(laneLock, /unlock shipped data on 2026-07-18/);
