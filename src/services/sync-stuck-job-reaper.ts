@@ -144,8 +144,12 @@ export function selectStuckActiveJobs(
     const ageMs = opts.nowMs - startedMs;
     const lane = syncJobLaneFor(job.name);
     const laneIsHeld = opts.activeLanesHeld?.has(lane) === true;
-    if (laneIsHeld) continue;
     const pastAgeThreshold = ageMs >= opts.minActiveAgeMs;
+    // A held lane protects the current bounded attempt, but it must not
+    // immortalize older orphan rows from previous worker generations. Every
+    // legitimate handler is terminated before the running lease expires, and
+    // the advisory lock still prevents overlapping business work.
+    if (laneIsHeld && !pastAgeThreshold) continue;
     const laneIsFree = opts.activeLanesHeld != null;
     const orphanedActiveRow = laneIsFree && ageMs >= orphanActiveGraceMs;
     if (!pastAgeThreshold && !orphanedActiveRow) continue;

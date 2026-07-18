@@ -64,7 +64,7 @@ assert.match(pdfStore, /return true/);
 assert.doesNotMatch(pdfStore, /if \(!durablePrintQueuePdfEnabled\(\)\)/);
 
 assert.match(reaper, /REAPER_MIN_ACTIVE_AGE_MS = SYNC_JOB_RUNNING_LEASE_MS/);
-assert.match(reaper, /if \(laneIsHeld\) continue/);
+assert.match(reaper, /if \(laneIsHeld && !pastAgeThreshold\) continue/);
 assert.match(
   syncQueue,
   /err instanceof DeadlineExceededError[\s\S]{0,1400}requireCancellationAcknowledgement\(\{[\s\S]*work: handlerPromise[\s\S]*terminateWorkerForUnacknowledgedCancellation/,
