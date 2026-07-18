@@ -75,9 +75,10 @@ check(
     /import \{ syncOrders \} from '\.\/order-sync';/.test(queue) &&
     /import \{ syncShipments \} from '\.\/shipment-sync';/.test(queue) &&
     /registerWorker\(JOBS\.orders,\s*async \(jobData, \{ identity, signal \}\) => \{[\s\S]*orderSyncOptionsFromJobPayload\(jobData\)[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue) &&
-    /registerWorker\(JOBS\.shipments,\s*\(jobData, \{ signal \}\) =>[\s\S]*syncShipments\(\{ \.\.\.shipmentSyncOptionsFromJobPayload\(jobData\), signal \}\)/.test(queue) &&
-    !/runOrderSync/.test(queue) &&
-    !/runShipmentSync/.test(queue),
+    /registerWorker\(JOBS\.shipments,\s*\(jobData, \{ signal \}\) =>[\s\S]*runShipmentSyncWithOrderPriority\(jobData, signal\)/.test(queue) &&
+    /runShipmentSyncWithOrderPriority[\s\S]*syncShipments\(\{[\s\S]*shipmentSyncOptionsFromJobPayload\(jobData\)[\s\S]*signal: workSignal/.test(queue) &&
+    !/runOrderSync\(/.test(queue) &&
+    !/runShipmentSync\(/.test(queue),
 );
 check(
   'cross-process lane lock miss defers order\/shipment sync instead of running concurrently',

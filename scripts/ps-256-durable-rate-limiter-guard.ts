@@ -62,7 +62,9 @@ check('v2 limiter waits and retries honor caller cancellation',
     /abortableDelay\(backoffMs, opts\.signal\)/.test(v2));
 
 check('rate-limiter exports the shared RateBucket interface',
-  /export interface RateBucket \{[\s\S]*acquire\(\): Promise<void>/.test(readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8')));
+  /export interface RateBucket \{[\s\S]*acquire\(options\?: \{ signal\?: AbortSignal \}\): Promise<void>/.test(readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8')));
+check('v1 limiter waits honor worker cancellation',
+  /bucket\.acquire\(\{ signal: opts\.signal \}\)/.test(v1));
 
 check('package.json wires test:ps-256-durable-rate-limiter',
   /test:ps-256-durable-rate-limiter/.test(readFileSync('package.json', 'utf8')));

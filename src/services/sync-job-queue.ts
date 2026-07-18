@@ -1,5 +1,6 @@
 // Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import PgBoss from 'pg-boss';
 import postgres from 'postgres';
 import { sql as pg } from '../db/client';
@@ -77,6 +78,7 @@ import {
 import { runDurableRateBackfillJob } from './rates-backfill';
 import { runLocalTariffCalibrationTick } from './local-tariff-calibration';
 import {
+  hasPendingOrderSyncWork,
   orderSyncQueueBlocker,
   readOrderSyncQueueTruth,
   type OrderSyncQueueState,
@@ -138,6 +140,7 @@ const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS
 const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
 const SHIPSTATION_CONSUMER_LEADER_RETRY_MS = 5_000;
 const SHIPSTATION_CONSUMER_LEADER_HEALTH_MS = 15_000;
+const ORDER_PRIORITY_PREEMPT_POLL_MS = 5_000;
 
 export type ActiveShipStationSyncJob = {
   id: string;
@@ -929,9 +932,15 @@ async function deferBusySyncJob(
     // replacement pg-boss wake-up when the shared database lane is busy. Rate
     // payloads retain their exact awaiting-only target IDs. This does not touch
     // orders, shipments, labels, postage, or marketplace notifications.
+    const deferredPayload =
+      ratePayload
+        ? { ...ratePayload, ...deferredMetadata }
+        : jobData && typeof jobData === 'object' && !Array.isArray(jobData)
+          ? { ...(jobData as Record<string, unknown>), ...deferredMetadata }
+          : deferredMetadata;
     const id = await boss.sendAfter(
       name,
-      ratePayload ? { ...ratePayload, ...deferredMetadata } : deferredMetadata,
+      deferredPayload,
       {
         singletonKey: admission.singletonKey,
         singletonSeconds: delaySeconds,
@@ -1116,6 +1125,63 @@ async function pendingOperationalBlockerForRateBackfill(): Promise<string | null
     boss.getQueueSize(JOBS.shipments),
   ]);
   return rateBackfillOperationalBlocker({ orders, shipments });
+}
+
+async function runShipmentSyncWithOrderPriority(
+  jobData: unknown,
+  parentSignal: AbortSignal,
+): Promise<unknown> {
+  const preempt = new AbortController();
+  const stopMonitor = new AbortController();
+  const workSignal = AbortSignal.any([parentSignal, preempt.signal]);
+  const monitorSignal = AbortSignal.any([parentSignal, stopMonitor.signal]);
+  const monitor = (async () => {
+    while (!monitorSignal.aborted) {
+      const queueTruth = await readOrderSyncQueueTruth();
+      if (hasPendingOrderSyncWork(queueTruth)) {
+        // Per user override unlock shipped data on 2026-07-18: this cancels
+        // only the current bounded shipment worker attempt. Existing database
+        // transactions finish or roll back normally; no protection is bypassed.
+        preempt.abort(new Error('Shipment sync yielded to pending order refresh'));
+        return;
+      }
+      await sleep(ORDER_PRIORITY_PREEMPT_POLL_MS, undefined, {
+        signal: monitorSignal,
+      });
+    }
+  })();
+
+  try {
+    return await syncShipments({
+      ...shipmentSyncOptionsFromJobPayload(jobData),
+      signal: workSignal,
+    });
+  } catch (err) {
+    if (!preempt.signal.aborted || parentSignal.aborted) throw err;
+    const deferredJobId = await deferBusySyncJob(
+      JOBS.shipments,
+      JOBS.orders,
+      syncJobLaneFor(JOBS.shipments),
+      busyDeferCount(jobData),
+      jobData,
+    );
+    if (!deferredJobId) {
+      throw new Error('Shipment sync priority deferral failed; retrying original queue job');
+    }
+    return {
+      ok: true,
+      skipped: true,
+      deferred: true,
+      deferredJobId,
+      blockedBy: JOBS.orders,
+      reason: 'yielded_to_pending_order_sync',
+    };
+  } finally {
+    stopMonitor.abort();
+    await monitor.catch((err) => {
+      if (!monitorSignal.aborted) throw err;
+    });
+  }
 }
 
 // Handler deadline is below pg-boss's 30-minute expiry. Timed-out order work
@@ -1361,7 +1427,7 @@ async function registerShipStationStatelyWorkers(): Promise<void> {
     // Audit SY-3 (2026-07-13): thread the queue deadline signal into shipment
     // sync so abandoned page walks stop before a retry can become a second writer.
     await registerWorker(JOBS.shipments, (jobData, { signal }) =>
-      syncShipments({ ...shipmentSyncOptionsFromJobPayload(jobData), signal }),
+      runShipmentSyncWithOrderPriority(jobData, signal),
     );
   } catch (err) {
     await Promise.allSettled([

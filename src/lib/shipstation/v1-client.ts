@@ -82,7 +82,10 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
         // worker's deadline owns retries and rate-limit waits at this boundary.
         throwIfRequestAborted(opts.signal);
         attempt += 1;
-        await bucket.acquire();
+        // Per user override unlock shipped data on 2026-07-18: propagate the
+        // worker signal through v1 admission so order-priority preemption can
+        // release the shared lane even while the fleet token bucket is empty.
+        await bucket.acquire({ signal: opts.signal });
         throwIfRequestAborted(opts.signal);
         const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const signal = opts.signal

@@ -37,6 +37,11 @@ export function orderSyncQueueBlocker(
   return jobId ? { state, jobId } : null;
 }
 
+export function hasPendingOrderSyncWork(truth: OrderSyncQueueTruth): boolean {
+  return truth.available
+    && (truth.retryingJobIds.length > 0 || truth.queuedJobIds.length > 0);
+}
+
 const unavailableQueueTruth = (): OrderSyncQueueTruth => ({
   available: false,
   activeJobIds: [],
