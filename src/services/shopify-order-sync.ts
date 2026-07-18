@@ -147,8 +147,8 @@ async function updateAccountProgress(id: number, progress: ShopifySyncProgress):
   await sql`
     UPDATE store_accounts
     SET
-      sync_cursor_at = GREATEST(${progress.syncCursorAt ?? null}::timestamptz, sync_cursor_at),
-      last_synced_at = COALESCE(${progress.lastSyncedAt ?? null}, last_synced_at),
+      sync_cursor_at = GREATEST(${progress.syncCursorAt?.toISOString() ?? null}::timestamptz, sync_cursor_at),
+      last_synced_at = COALESCE(${progress.lastSyncedAt?.toISOString() ?? null}::timestamptz, last_synced_at),
       last_sync_error = ${progress.lastSyncError ?? null},
       active = COALESCE(${progress.active ?? null}, active),
       updated_at = NOW()
