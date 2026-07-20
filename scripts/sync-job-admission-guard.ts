@@ -9,6 +9,7 @@ import {
   runnableOperationalSyncQueueSizes,
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
+  shouldYieldShipmentSyncToOrders,
   STARVATION_RECOVERY_PRIORITY,
   syncQueuePolicyForJob,
   WATCHDOG_SYNC_PRIORITY,
@@ -47,6 +48,22 @@ assert.equal(
 assert.equal(
   rateBackfillOperationalBlocker({ orders: 0, shipments: 0 }),
   null,
+);
+
+assert.equal(
+  shouldYieldShipmentSyncToOrders({ ordersPending: true, priorDeferCount: 0 }),
+  true,
+  'a fresh shipment attempt yields once to pending order work',
+);
+assert.equal(
+  shouldYieldShipmentSyncToOrders({ ordersPending: true, priorDeferCount: 1 }),
+  false,
+  'the durable replacement cannot be preempted by recurring cadence orders',
+);
+assert.equal(
+  shouldYieldShipmentSyncToOrders({ ordersPending: false, priorDeferCount: 0 }),
+  false,
+  'shipment work continues when no order work is pending',
 );
 
 assert.equal(syncQueuePolicyForJob(orders), 'stately');
@@ -138,6 +155,8 @@ assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'manu
 assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'watchdog-shipment'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
+assert.match(queue, /shouldYieldShipmentSyncToOrders\(\{[\s\S]*ordersPending: hasPendingOrderSyncWork\(queueTruth\),[\s\S]*priorDeferCount/);
+assert.match(queue, /return id \?\? `coalesced:\$\{admission\.singletonKey\}`/);
 assert.match(
   queue,
   /name === JOBS\.rateBackfill[\s\S]*pendingOperationalBlockerForRateBackfill\(\)[\s\S]*reason: 'operational_sync_pending'/,

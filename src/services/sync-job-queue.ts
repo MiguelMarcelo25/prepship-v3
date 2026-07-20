@@ -68,6 +68,7 @@ import {
   resolveSyncJobAdmission,
   runnableOperationalSyncQueueSizes,
   SHIPSTATION_SYNC_JOBS,
+  shouldYieldShipmentSyncToOrders,
   syncQueuePolicyForJob,
   type OperationalSyncQueueRow,
   type SyncJobAdmissionIntent,
@@ -969,10 +970,10 @@ async function deferBusySyncJob(
     } else {
       console.log(`[job-queue] ${name} already has a busy-defer job queued`);
     }
-    // PS-436: a null pg-boss id under the rate singleton means the exact
-    // generation/chunk deferral already exists. Treat that as successful
-    // coalescing instead of retrying the active row and creating more wake-ups.
-    return id ?? (isRateBackfill ? `coalesced:${admission.singletonKey}` : null);
+    // A null pg-boss id means the canonical singleton wake-up already exists.
+    // Treat that as successful coalescing instead of retrying the active row
+    // and creating a second source of retry pressure.
+    return id ?? `coalesced:${admission.singletonKey}`;
   } catch (err) {
     console.error(
       `[job-queue] failed to defer ${name}:`,
@@ -1149,6 +1150,7 @@ async function runShipmentSyncWithOrderPriority(
   jobData: unknown,
   parentSignal: AbortSignal,
 ): Promise<unknown> {
+  const priorDeferCount = busyDeferCount(jobData);
   const preempt = new AbortController();
   const stopMonitor = new AbortController();
   const workSignal = AbortSignal.any([parentSignal, preempt.signal]);
@@ -1156,7 +1158,10 @@ async function runShipmentSyncWithOrderPriority(
   const monitor = (async () => {
     while (!monitorSignal.aborted) {
       const queueTruth = await readOrderSyncQueueTruth();
-      if (hasPendingOrderSyncWork(queueTruth)) {
+      if (shouldYieldShipmentSyncToOrders({
+        ordersPending: hasPendingOrderSyncWork(queueTruth),
+        priorDeferCount,
+      })) {
         // Per user override unlock shipped data on 2026-07-18: this cancels
         // only the current bounded shipment worker attempt. Existing database
         // transactions finish or roll back normally; no protection is bypassed.
@@ -1180,7 +1185,7 @@ async function runShipmentSyncWithOrderPriority(
       JOBS.shipments,
       JOBS.orders,
       syncJobLaneFor(JOBS.shipments),
-      busyDeferCount(jobData),
+      priorDeferCount,
       jobData,
     );
     if (!deferredJobId) {

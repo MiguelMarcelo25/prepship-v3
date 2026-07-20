@@ -82,6 +82,21 @@ export function rateBackfillOperationalBlocker(
   return null;
 }
 
+/**
+ * Orders may interrupt a fresh shipment attempt once. The durable replacement
+ * must then finish even if another cadence order wake-up arrives; otherwise a
+ * steady order stream can keep resetting shipment progress forever.
+ */
+export function shouldYieldShipmentSyncToOrders(input: {
+  ordersPending: boolean;
+  priorDeferCount: number;
+}): boolean {
+  const priorDeferCount = Number.isFinite(input.priorDeferCount)
+    ? Math.max(0, Math.trunc(input.priorDeferCount))
+    : 0;
+  return input.ordersPending && priorDeferCount === 0;
+}
+
 export function syncQueuePolicyForJob(name: string): SyncQueuePolicy {
   return name === SHIPSTATION_SYNC_JOBS.orders || name === SHIPSTATION_SYNC_JOBS.shipments
     ? 'stately'
