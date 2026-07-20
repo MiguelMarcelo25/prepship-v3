@@ -106,6 +106,8 @@ const allowedPoolConstructors = [
   'src/services/shipstation-carrier-account-snapshot-worker.ts',
   'src/services/sync-job-queue.ts',
   'src/services/sync-lane-lock.ts',
+  'src/services/sync-stuck-job-reaper.ts',
+  'src/services/worker-status.ts',
 ].sort();
 check(
   'only the app pool and explicitly isolated health/worker/session-lock pools construct connections',
@@ -116,6 +118,16 @@ check(
   'sync queue isolated pool is a one-connection consumer-leadership advisory-lock session',
   /shipStationConsumerLeaderSql = postgres\([\s\S]*max: 1[\s\S]*application_name: 'prepship-shipstation-consumer-leader'/.test(syncJobQueue) &&
     /pg_try_advisory_lock\(hashtext\(\$\{SHIPSTATION_CONSUMER_LEADER_LOCK\}\)\)/.test(syncJobQueue),
+);
+const syncStuckJobReaper = read('src/services/sync-stuck-job-reaper.ts');
+check(
+  'stuck-job recovery uses an isolated one-connection control-plane pool',
+  /reaperSql = postgres\([\s\S]*max: 1[\s\S]*reaperTransactionPoolerCompatibility/.test(syncStuckJobReaper),
+);
+const workerStatus = read('src/services/worker-status.ts');
+check(
+  'worker telemetry uses a replaceable isolated one-connection pool',
+  /createWorkerStatusSql\(\)[\s\S]*return postgres\([\s\S]*max: 1[\s\S]*workerStatusPoolerCompatibility/.test(workerStatus),
 );
 
 const credentialSchema = read('src/services/credential-account-schema.ts');
