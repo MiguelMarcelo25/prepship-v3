@@ -58,9 +58,11 @@ import {
   fetchRecalculateAllJob,
   fetchLatestRecalculateAllJob,
   isRecalculateAllJobDone,
+  isManualRecalculateAllJob,
   startFullLiveRecalculateAllBestRates,
   startRecalculateAllBestRates,
   summarizeRecalculateAllJob,
+  type RecalculateAllProgressState,
 } from './orders-recalculate-all'
 import { apiClient } from '../../api/client'
 import { isDirectCarrierId } from '../../lib/v2-apiClient'
@@ -513,26 +515,68 @@ export default function OrdersView({
   // whole feature lives in ./orders-recalculate-all (kept out of this file by
   // design). Rows light up pending/rating via PS-120 while it runs.
   const [recalcAllJobId, setRecalcAllJobId] = useState<string | null>(null)
-  const [recalcAllSummary, setRecalcAllSummary] = useState<string | null>(null)
+  const [recalcAllProgress, setRecalcAllProgress] = useState<RecalculateAllProgressState | null>(null)
+  // Distinguishes an operator-started job from cadence/sync work. Passive jobs
+  // still refresh rows, but only manual jobs may surface as a clicked toolbar job.
+  const recalcAllUserInitiatedRef = useRef(false)
+  const recalcAllProgressDismissTimerRef = useRef<number | null>(null)
+  const recalcAllBusy = recalcAllProgress != null
+    && !recalcAllProgress.statusError
+    && (recalcAllProgress.job == null || !isRecalculateAllJobDone(recalcAllProgress.job))
+
+  function clearRecalcAllProgressDismissTimer() {
+    if (recalcAllProgressDismissTimerRef.current == null) return
+    window.clearTimeout(recalcAllProgressDismissTimerRef.current)
+    recalcAllProgressDismissTimerRef.current = null
+  }
+
+  function dismissRecalcAllProgressAfter(jobId: string, delayMs: number) {
+    clearRecalcAllProgressDismissTimer()
+    recalcAllProgressDismissTimerRef.current = window.setTimeout(() => {
+      setRecalcAllProgress((current) => current?.job?.jobId === jobId ? null : current)
+      recalcAllProgressDismissTimerRef.current = null
+    }, delayMs)
+  }
+
+  useEffect(() => () => {
+    if (recalcAllProgressDismissTimerRef.current != null) {
+      window.clearTimeout(recalcAllProgressDismissTimerRef.current)
+    }
+  }, [])
+
   async function handleRecalculateAll() {
+    const preparingMessage = 'Preparing cache-first recalculation'
     try {
+      clearRecalcAllProgressDismissTimer()
       recalcAllUserInitiatedRef.current = true
+      setRecalcAllProgress({ job: null, preparingMessage })
       const { jobId } = await startRecalculateAllBestRates()
       setRecalcAllJobId(jobId)
-      setRecalcAllSummary('starting…')
+      setRecalcAllProgress({
+        job: { jobId, status: 'pending', message: preparingMessage },
+        preparingMessage,
+      })
     } catch (error) {
       recalcAllUserInitiatedRef.current = false
+      setRecalcAllProgress(null)
       showToast(error instanceof Error ? error.message : 'Failed to start Recalculate All', 'error')
     }
   }
   async function handleFullLiveRecalculateAll() {
+    const preparingMessage = 'Preparing full live audit'
     try {
+      clearRecalcAllProgressDismissTimer()
       recalcAllUserInitiatedRef.current = true
+      setRecalcAllProgress({ job: null, preparingMessage })
       const { jobId } = await startFullLiveRecalculateAllBestRates()
       setRecalcAllJobId(jobId)
-      setRecalcAllSummary('full live audit starting...')
+      setRecalcAllProgress({
+        job: { jobId, status: 'pending', message: preparingMessage },
+        preparingMessage,
+      })
     } catch (error) {
       recalcAllUserInitiatedRef.current = false
+      setRecalcAllProgress(null)
       showToast(error instanceof Error ? error.message : 'Failed to start Full Live Recalculate', 'error')
     }
   }
@@ -555,14 +599,22 @@ export default function OrdersView({
         // PS-345 follow-up: this poller handles operator-started Recalculate All AND backend/sync-started
         // rate backfill jobs discovered through /rates/backfill-best/latest. It only observes/refetches;
         // it never starts hidden frontend live-rate work.
-        if (recalcAllUserInitiatedRef.current) setRecalcAllSummary(summarizeRecalculateAllJob(job))
+        if (recalcAllUserInitiatedRef.current) setRecalcAllProgress({ job })
         if (isRecalculateAllJobDone(job)) {
+          const userInitiated = recalcAllUserInitiatedRef.current
           setRecalcAllJobId(null)
           recalcAllUserInitiatedRef.current = false
-          if (job.failed) {
+          if (userInitiated) {
+            setRecalcAllProgress({ job })
+            const completedCleanly = job.status === 'done'
+              && typeof job.total === 'number'
+              && typeof job.processed === 'number'
+              && job.processed >= job.total
+            dismissRecalcAllProgressAfter(job.jobId, completedCleanly ? 4_000 : 8_000)
+          }
+          if (job.status === 'error' || job.failed) {
             showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, 'error')
           }
-          setRecalcAllSummary(null)
           await refetchOrders()
           // RC5 settle-poll: the backend finalizes the last rows from a few ms up to a couple MINUTES after
           // the job reports done — a slow/retried ShipStation carrier (RC1) can land a rate well after the
@@ -590,11 +642,19 @@ export default function OrdersView({
         if (cancelled) return
         recalcAllPollFailures += 1
         if (recalcAllPollFailures >= 3) {
+          const userInitiated = recalcAllUserInitiatedRef.current
           setRecalcAllJobId(null)
           recalcAllUserInitiatedRef.current = false
-          setRecalcAllSummary('status unavailable')
+          if (userInitiated) {
+            const statusError = 'Status unavailable. Refresh to reattach, or retry recalculation.'
+            setRecalcAllProgress((current) => ({
+              job: current?.job ?? { jobId: recalcAllJobId, status: 'unknown' },
+              preparingMessage: current?.preparingMessage,
+              statusError,
+            }))
+            dismissRecalcAllProgressAfter(recalcAllJobId, 8_000)
+          }
           showToast('Recalculate All status unavailable — refresh and retry if needed', 'error')
-          setTimeout(() => setRecalcAllSummary(null), 8000)
         }
       }
     }
@@ -638,7 +698,12 @@ export default function OrdersView({
         const job = await fetchLatestRecalculateAllJob()
         if (cancelled) return
         if (job && (job.status === 'pending' || job.status === 'running' || job.status === 'queued')) {
-          recalcAllUserInitiatedRef.current = false
+          const manualJob = isManualRecalculateAllJob(job)
+          recalcAllUserInitiatedRef.current = manualJob
+          if (manualJob) {
+            clearRecalcAllProgressDismissTimer()
+            setRecalcAllProgress({ job })
+          }
           setRecalcAllJobId(job.jobId)
           return
         }
@@ -968,9 +1033,6 @@ export default function OrdersView({
     () => buildBatchRecalculateProgress(batchRecalculateRows),
     [batchRecalculateRows],
   )
-  // Distinguishes a MANUAL Recalculate All click (operator wants a visible spinner + progress chip)
-  // from future non-UI callers. Set true ONLY in handleRecalculateAll; gates the chip/spinner.
-  const recalcAllUserInitiatedRef = useRef(false)
   // Tracks whether the user has *manually* edited weight or any dim in the
   // panel since the current order was loaded. The auto-rate-refresh effect
   // only fires when this is true. Reset to false whenever panelOrderId
@@ -6568,8 +6630,8 @@ export default function OrdersView({
             selectedOrderIds,
             onRecalculateAll: handleRecalculateAll,
             onFullLiveRecalculateAll: handleFullLiveRecalculateAll,
-            recalcAllJobId,
-            recalcAllSummary,
+            recalcAllProgress,
+            recalcAllBusy,
             batchRecalculateProgress,
             onToggleSkuSort: toggleSkuSort,
             skuSortActive,

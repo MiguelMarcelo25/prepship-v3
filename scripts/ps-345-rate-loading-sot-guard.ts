@@ -57,6 +57,11 @@ const browseRatesFunction = sliceBetween(
   'async function browseRates(',
   '\n  function filterBySvcClass(',
 );
+const recalculateAllHandler = sliceBetween(
+  ordersView,
+  'async function handleRecalculateAll()',
+  '\n  async function handleFullLiveRecalculateAll()',
+);
 
 check(
   'OrdersView removed browser-owned passive live rate constants and counters',
@@ -76,7 +81,7 @@ check(
 
 check(
   'OrdersView still keeps explicit manual Recalculate All backend-owned',
-  /async function handleRecalculateAll\(\)[\s\S]{0,260}startRecalculateAllBestRates\(\)/.test(ordersView),
+  /startRecalculateAllBestRates\(\)/.test(recalculateAllHandler),
 );
 
 check(

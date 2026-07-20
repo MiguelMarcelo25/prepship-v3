@@ -33,6 +33,11 @@ import type { OrdersDateFilter } from './orders-view-filters'
 import type { ColumnPrefs, ResolvedColumnPrefs } from './orders-parity'
 import type { TableColumnKey } from './orders-table-columns'
 import type { BatchRecalculateScope } from './orders-parity'
+import {
+  buildRecalculateAllProgressView,
+  type RecalculateAllProgressState,
+} from './orders-recalculate-all-progress'
+import { OrdersRecalculationProgress } from './OrdersRecalculationProgress'
 
 type QueueToolbarProgress = {
   label: string
@@ -230,8 +235,8 @@ export type OrdersFilterToolbarBatchControlsProps = {
   selectedOrderIds: number[]
   onRecalculateAll: () => void
   onFullLiveRecalculateAll: () => void
-  recalcAllJobId: string | null
-  recalcAllSummary: string | null
+  recalcAllProgress: RecalculateAllProgressState | null
+  recalcAllBusy: boolean
   batchRecalculateProgress: BatchRecalculateProgressLike
   onToggleSkuSort: () => void
   skuSortActive: boolean
@@ -257,13 +262,24 @@ export function OrdersFilterToolbarBatchControls({
   selectedOrderIds,
   onRecalculateAll,
   onFullLiveRecalculateAll,
-  recalcAllJobId,
-  recalcAllSummary,
+  recalcAllProgress,
+  recalcAllBusy,
   batchRecalculateProgress,
   onToggleSkuSort,
   skuSortActive,
   onPrintPicklist,
 }: OrdersFilterToolbarBatchControlsProps) {
+  const recalcAllProgressView = recalcAllProgress
+    ? buildRecalculateAllProgressView(recalcAllProgress)
+    : null
+  const recalcAllDetail = recalcAllProgressView
+    ? [
+        `Updated ${recalcAllProgressView.updated.toLocaleString()}`,
+        recalcAllProgressView.failed > 0 ? `Failed ${recalcAllProgressView.failed.toLocaleString()}` : '',
+        recalcAllProgressView.skipped > 0 ? `Skipped ${recalcAllProgressView.skipped.toLocaleString()}` : '',
+      ].filter(Boolean).join(' · ')
+    : ''
+
   return (
     <>
       {/* Lockdown — Select All hidden in Shipped/Cancelled views.
@@ -338,7 +354,7 @@ export function OrdersFilterToolbarBatchControls({
       )}
 
       {currentStatus === 'awaiting_shipment' ? (
-        <div className="inline-flex items-center gap-1.5" aria-label="Strict live best-rate recalculation">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5" aria-label="Strict live best-rate recalculation">
           <button
             type="button"
             onClick={() => void onStartBatchRecalculateBestRates('selected')}
@@ -360,35 +376,32 @@ export function OrdersFilterToolbarBatchControls({
           <button
             type="button"
             onClick={() => void onRecalculateAll()}
-            // Busy state keys off recalcAllSummary (set ONLY for a manual click), not recalcAllJobId.
-            // Backend/sync-started rate backfill can be observed by OrdersView for row refresh without
-            // turning this operator button into a hidden background-job spinner.
-            disabled={recalcAllSummary != null || total === 0}
+            disabled={recalcAllBusy || total === 0}
             title="Fast cache-first refresh: reuse exact current rate tuples, live-rate only misses or stale rows"
             className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1
               text-[12px] font-medium
               transition-all duration-150
-              ${recalcAllSummary != null || total === 0
+              ${recalcAllBusy || total === 0
                 ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                 : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
             `}
           >
-            {recalcAllSummary != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
+            {recalcAllBusy ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
             Recalculate All
           </button>
           <button
             type="button"
             onClick={() => void onFullLiveRecalculateAll()}
-            disabled={recalcAllSummary != null || total === 0}
+            disabled={recalcAllBusy || total === 0}
             title="Full Live Recalculate audit: slow force-live check across all eligible awaiting rows"
             className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1
               text-[12px] font-medium
               transition-all duration-150
-              ${recalcAllSummary != null || total === 0
+              ${recalcAllBusy || total === 0
                 ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                 : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
             `}
@@ -396,35 +409,30 @@ export function OrdersFilterToolbarBatchControls({
             <RefreshCcw size={12.5} strokeWidth={2.25} />
             Full Live Audit
           </button>
-          {recalcAllSummary ? (
-            <span
-              data-recalculate-all-progress
-              className="inline-flex items-center h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] font-mono tabular-nums text-ink-2"
-              title="Backend best-rate backfill over all awaiting orders"
-            >
-              {recalcAllSummary}
-            </span>
+          {recalcAllProgressView ? (
+            <OrdersRecalculationProgress
+              kind="all"
+              label={recalcAllProgressView.label}
+              percent={recalcAllProgressView.percent}
+              completed={recalcAllProgressView.completed}
+              remaining={recalcAllProgressView.remaining}
+              total={recalcAllProgressView.total}
+              detail={recalcAllDetail}
+              statusMessage={recalcAllProgressView.statusMessage}
+              tone={recalcAllProgressView.tone}
+            />
           ) : null}
           {batchRecalculateProgress.total > 0 ? (
-            <div
-              data-batch-recalculate-progress
-              className="inline-flex items-center gap-2 h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] text-ink-2"
-              title="Strict live only: no cached or stale fallback rates are accepted"
-            >
-              <span className="font-mono font-semibold tabular-nums">{batchRecalculateProgress.percent}%</span>
-              <span className="relative w-20 h-1.5 rounded-full bg-line overflow-hidden" aria-hidden>
-                <span
-                  className="absolute inset-y-0 left-0 rounded-full bg-brand transition-all duration-200"
-                  style={{ width: `${batchRecalculateProgress.percent}%` }}
-                />
-              </span>
-              <span className="font-mono tabular-nums">
-                {batchRecalculateProgress.completed}/{batchRecalculateProgress.total}
-              </span>
-              <span className="text-ink-3">
-                Updated {batchRecalculateProgress.updated} · Retry {batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}
-              </span>
-            </div>
+            <OrdersRecalculationProgress
+              kind="selected"
+              label="Recalculating selected"
+              percent={batchRecalculateProgress.percent}
+              completed={batchRecalculateProgress.completed}
+              remaining={Math.max(batchRecalculateProgress.total - batchRecalculateProgress.completed, 0)}
+              total={batchRecalculateProgress.total}
+              detail={`Updated ${batchRecalculateProgress.updated} · Retry ${batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}`}
+              statusMessage="Strict live only: no cached or stale fallback rates are accepted"
+            />
           ) : null}
         </div>
       ) : null}
