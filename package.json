@@ -329,6 +329,7 @@
     "test:audit-structured-money-logging": "tsx scripts/audit-structured-money-logging-guard.ts",
     "test:audit-orders-bulk-snapshot": "tsx scripts/audit-orders-bulk-snapshot-guard.ts",
     "test:audit-order-editable-write": "tsx scripts/audit-order-editable-write-guard.ts",
+    "test:ps-451-order-editable-write": "tsx scripts/ps-451-order-editable-write-integration.ts",
     "test:audit-print-queue-lifecycle": "tsx scripts/audit-print-queue-lifecycle-guard.ts",
     "test:audit-sync-watchdog-lifecycle": "tsx scripts/audit-sync-watchdog-lifecycle-guard.ts",
     "test:audit-billing-cross-period-reconciliation": "tsx scripts/audit-billing-cross-period-reconciliation-guard.ts",

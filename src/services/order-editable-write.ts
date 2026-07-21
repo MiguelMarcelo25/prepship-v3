@@ -26,6 +26,42 @@ export type OrderEditWriteFailure =
 
 export type OrderEditWriteResult<T> = { ok: true; value: T } | OrderEditWriteFailure;
 
+// Per user override unlock shipped data on 2026-07-21: expose the existing
+// transaction-time guard as a testable boundary without changing its policy.
+// The production wrapper below still opens the transaction; callers still
+// write only after this function locks and rechecks the canonical lifecycle.
+export async function withOrderEditableWriteInTransaction<T>(
+  tx: OrderEditWriteTransaction,
+  orderId: number,
+  authorization: OrderEditWriteAuthorization,
+  write: (tx: OrderEditWriteTransaction) => Promise<T>,
+): Promise<OrderEditWriteResult<T>> {
+  const [row] = await tx
+    .select({
+      id: orders.id,
+      orderStatus: orders.orderStatus,
+      canonicalStatus: orders.canonicalStatus,
+      externallyShipped: orders.externallyShipped,
+    })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1)
+    .for('update');
+
+  if (!row) return { ok: false, reason: 'not_found' };
+
+  const lifecycle = resolveOrderLifecycleStatus({
+    orderStatus: row.orderStatus,
+    canonicalStatus: row.canonicalStatus,
+    externallyShipped: row.externallyShipped === true,
+  });
+  if (lifecycle.isTerminal && !authorization.allowTerminal) {
+    return { ok: false, reason: 'locked', lifecycle };
+  }
+
+  return { ok: true, value: await write(tx) };
+}
+
 /**
  * Serialize an order edit with lifecycle transitions and re-check the canonical
  * effective lifecycle after the row lock is acquired. A concurrent label
@@ -36,30 +72,6 @@ export async function withOrderEditableWrite<T>(
   authorization: OrderEditWriteAuthorization,
   write: (tx: OrderEditWriteTransaction) => Promise<T>,
 ): Promise<OrderEditWriteResult<T>> {
-  return db.transaction(async (tx) => {
-    const [row] = await tx
-      .select({
-        id: orders.id,
-        orderStatus: orders.orderStatus,
-        canonicalStatus: orders.canonicalStatus,
-        externallyShipped: orders.externallyShipped,
-      })
-      .from(orders)
-      .where(eq(orders.id, orderId))
-      .limit(1)
-      .for('update');
-
-    if (!row) return { ok: false, reason: 'not_found' };
-
-    const lifecycle = resolveOrderLifecycleStatus({
-      orderStatus: row.orderStatus,
-      canonicalStatus: row.canonicalStatus,
-      externallyShipped: row.externallyShipped === true,
-    });
-    if (lifecycle.isTerminal && !authorization.allowTerminal) {
-      return { ok: false, reason: 'locked', lifecycle };
-    }
-
-    return { ok: true, value: await write(tx) };
-  });
+  return db.transaction(async (tx) =>
+    withOrderEditableWriteInTransaction(tx, orderId, authorization, write));
 }

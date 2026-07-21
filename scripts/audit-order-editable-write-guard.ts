@@ -36,6 +36,8 @@ assert.equal(
 
 assert.match(writeOwner, /db\.transaction\(async \(tx\) =>/,
   'final editability check and write must share one DB transaction');
+assert.match(writeOwner, /withOrderEditableWriteInTransaction\(tx, orderId, authorization, write\)/,
+  'production edits must delegate to the transaction-time boundary used by behavioral proof');
 assert.match(writeOwner, /\.for\('update'\)/,
   'final editability owner must lock the order row before deciding');
 assert.match(writeOwner, /resolveOrderLifecycleStatus\(\{/,
@@ -58,6 +60,26 @@ assert.ok(
   (route.match(/guard\.writeAuthorization/g) ?? []).length >= 9,
   'every guarded order command must carry its authorization into the final write boundary',
 );
+
+const guardedRouteBlocks = [
+  ["app.patch('/:id{[0-9]+}'", '// v2-parity POST aliases', 'PATCH /:id'],
+  ["'/:id{[0-9]+}/residential'", "'/:id{[0-9]+}/selected-pid'", 'POST /:id/residential'],
+  ["'/:id{[0-9]+}/selected-pid'", "'/:id{[0-9]+}/apply-best-rate'", 'POST /:id/selected-pid'],
+  ["'/:id{[0-9]+}/selected-package-id'", '// PS-037:', 'POST /:id/selected-package-id'],
+  ["'/:id{[0-9]+}/best-rate'", "'/:id{[0-9]+}/shipped-external'", 'POST /:id/best-rate'],
+  ["'/:id{[0-9]+}/shipped-external'", 'const saveDimsBody', 'POST /:id/shipped-external'],
+  ["'/:id{[0-9]+}/save-dims'", "app.get('/:id{[0-9]+}/dims'", 'POST /:id/save-dims'],
+] as const;
+for (const [startMarker, endMarker, label] of guardedRouteBlocks) {
+  const start = route.indexOf(startMarker);
+  const end = route.indexOf(endMarker, start + startMarker.length);
+  assert.ok(start >= 0 && end > start, `${label} route block must be discoverable`);
+  const block = route.slice(start, end);
+  assert.match(block, /assertOrderEditable\(c, id\)/,
+    `${label} must retain the fast-path editability guard`);
+  assert.match(block, /guard\.writeAuthorization/,
+    `${label} must carry authorization into its atomic final write owner`);
+}
 
 const patchStart = route.indexOf("app.patch('/:id{[0-9]+}'");
 const patchEnd = route.indexOf('// v2-parity POST aliases', patchStart);

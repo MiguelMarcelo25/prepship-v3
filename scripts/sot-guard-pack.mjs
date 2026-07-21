@@ -42,6 +42,7 @@ const REQUIRED_GUARDS = [
   'test:audit-structured-money-logging',
   'test:audit-orders-bulk-snapshot',
   'test:audit-order-editable-write',
+  'test:ps-451-order-editable-write',
   'test:audit-print-queue-lifecycle',
   'test:audit-sync-watchdog-lifecycle',
   'test:audit-billing-cross-period-reconciliation',
