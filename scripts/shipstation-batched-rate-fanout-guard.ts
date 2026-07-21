@@ -117,6 +117,16 @@ assert.match(
   'live comparison probe must fail rollout on attributed batch-vs-single drift',
 );
 assert.match(
+  liveProbeSource,
+  /moneySignature\(rate\.shipping_amount\)[\s\S]*moneySignature\(rate\.other_amount\)[\s\S]*moneySignature\(rate\.insurance_amount\)[\s\S]*moneySignature\(rate\.confirmation_amount\)/,
+  'live comparison probe must compare every money component independently',
+);
+assert.match(
+  liveProbeSource,
+  /MIN_PRIMARY_UPS_ACCOUNTS\s*=\s*6[\s\S]*sourceKey !== 'env:primary'[\s\S]*requires at least \$\{MIN_PRIMARY_UPS_ACCOUNTS\} live UPS accounts/,
+  'DR PREPPER auto-selection must require six live UPS accounts before rollout',
+);
+assert.match(
   packageJson,
   /"probe:shipstation-batched-rate-estimate"\s*:\s*"tsx scripts\/probe-batched-rate-estimate\.ts"/,
   'package.json must expose the operator-only live probe',
