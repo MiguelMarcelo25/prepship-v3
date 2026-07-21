@@ -143,6 +143,16 @@ const migrationOwnership = [
       'external_operations_state_lease_idx',
     ],
   ],
+  [
+    'drizzle/0073_inventory_quantity_sot.sql',
+    [
+      'inventory_ledger_source_identity_unq',
+      'inventory_ledger_prepare_insert',
+      'inventory_ledger_block_mutations',
+      'inventory_ledger_no_update_delete',
+      'inventory_ledger_no_truncate',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -209,6 +219,12 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(externalOperationsMigration),
   '0072 adds the provider-operation sidecar without mutating or destructively altering orders/shipments',
 );
+const inventoryQuantityMigration = read('drizzle/0073_inventory_quantity_sot.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(inventoryQuantityMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(inventoryQuantityMigration),
+  '0073 changes only inventory source-of-truth structures and never mutates orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -218,7 +234,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0072_external_operations.sql',
+  '0073_inventory_quantity_sot.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

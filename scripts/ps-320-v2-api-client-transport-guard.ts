@@ -190,10 +190,12 @@ check('fetchCarriersForStore is a backend-only compatibility read shim with exac
 check('v2-apiClient contains no frontend direct-carrier account authorization shim',
   !/directCarrierVisibleForScope|directCarrierAccountVisibleForOrder|fetchDirectCarrierAccountRows/.test(apiClientCode + sharedCode));
 
-check('shared inventory shim requires backend canonical stockStatus without recomputing thresholds',
+check('shared inventory normalizer consumes backend canonical stock status without local threshold truth',
+  !shared.includes("import { classifyStockStatus") &&
+  !/export function inventoryStatus/.test(shared) &&
+  /const inventoryQuantity = parseFiniteNumber\(row\.inventoryQuantity\)/.test(shared) &&
   /if \(!\['in', 'low', 'out'\]\.includes\(row\.stockStatus\)\)/.test(shared) &&
-  /status: row\.stockStatus === 'in' \? 'ok' : row\.stockStatus/.test(shared) &&
-  !/classifyStockStatus\(|function inventoryStatus\(/.test(shared));
+  /status: row\.stockStatus === 'in' \? 'ok' : row\.stockStatus/.test(shared));
 
 check('legacy classifyLabelEndpoint is absent from v2-apiClient',
   !/\bclassifyLabelEndpoint\b/.test(apiClientCode));
