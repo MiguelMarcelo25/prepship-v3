@@ -105,7 +105,7 @@ assert.ok(
   'watchdog status payload must expose order freshness, status backlog, and blocker details',
 );
 assert.ok(
-  queue.includes('ORDER_STARVATION_DEFER_THRESHOLD') &&
+  queue.includes('SYNC_STARVATION_DEFER_THRESHOLD') &&
     queue.includes('ORDER_STARVATION_DEFER_SECONDS') &&
     queue.includes('deferCount') &&
     queue.includes("kind: 'busy-defer'") &&

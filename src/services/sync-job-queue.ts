@@ -64,11 +64,13 @@ import {
 } from './shipstation-sync-account-state';
 import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-account-snapshot-worker';
 import {
+  FULFILLMENT_OUTBOX_JOB_NAME,
   rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
   runnableOperationalSyncQueueSizes,
   SHIPSTATION_SYNC_JOBS,
   shipmentSyncRequestHasRecoveryPriority,
+  shouldYieldOrderSyncToFulfillmentOutbox,
   shouldYieldOrderSyncToShipmentRecovery,
   shouldYieldShipmentSyncToOrders,
   SYNC_STARVATION_DEFER_THRESHOLD,
@@ -109,7 +111,7 @@ const JOBS = {
   rateBackfill: RATE_BACKFILL_JOB_NAME,
   inventoryImport: 'prepship.sync.inventory-import',
   syncProducts: 'prepship.sync.products',
-  fulfillmentOutbox: 'prepship.sync.fulfillment-outbox',
+  fulfillmentOutbox: FULFILLMENT_OUTBOX_JOB_NAME,
   reportingRefresh: 'prepship.reporting.refresh',
   externalShippedClassifier: 'prepship.shipping.external-shipped-classifier',
   shipmentTracking: 'prepship.tracking.poll',
@@ -141,11 +143,16 @@ let shipStationConsumerLeadership: ShipStationConsumerLeadershipController | nul
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
-const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS.rateBackfill]);
+const BUSY_DEFER_JOB_NAMES = new Set<JobName>([
+  JOBS.orders,
+  JOBS.shipments,
+  JOBS.rateBackfill,
+  JOBS.fulfillmentOutbox,
+]);
 const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
 const SHIPSTATION_CONSUMER_LEADER_RETRY_MS = 5_000;
 const SHIPSTATION_CONSUMER_LEADER_HEALTH_MS = 15_000;
-const ORDER_PRIORITY_PREEMPT_POLL_MS = 5_000;
+const SHARED_LANE_PRIORITY_POLL_MS = 5_000;
 
 export type ActiveShipStationSyncJob = {
   id: string;
@@ -429,7 +436,7 @@ const shipStationConsumerLeaderSql = postgres(
 // Leadership handoff is queue control-plane state. Its active-job read must
 // stay available while DB-heavy sync work occupies the shared application
 // pool, otherwise the new deploy owns leadership but never registers the
-// order/shipment consumers.
+// order/shipment/outbox consumers.
 const shipStationConsumerStatePoolerCompatibility = { max_pipeline: 1 } as const;
 const shipStationConsumerStateSql = postgres(env.DATABASE_URL, {
   prepare: false,
@@ -462,7 +469,7 @@ async function ensureQueue(targetBoss: PgBoss, name: JobName): Promise<void> {
   if (options.policy !== 'stately') return;
   // Per user override unlock shipped data on 2026-07-14: createQueue is a
   // no-op for existing pg-boss queues, so updateQueue is required to move the
-  // two ShipStation queues to the canonical stately coalescing policy.
+  // shared-lane control queues to the canonical stately coalescing policy.
   await targetBoss.updateQueue(name, options);
 }
 
@@ -916,6 +923,8 @@ async function deferBusySyncJob(
     const deferCount = Math.max(0, Math.trunc(priorDeferCount)) + 1;
     const orderStarvation =
       name === JOBS.orders && deferCount >= SYNC_STARVATION_DEFER_THRESHOLD;
+    const fulfillmentOutboxRecovery = name === JOBS.fulfillmentOutbox;
+    const recoveryPriority = orderStarvation || fulfillmentOutboxRecovery;
     const delaySeconds = orderStarvation ? ORDER_STARVATION_DEFER_SECONDS : BUSY_DEFER_SECONDS;
     const isRateBackfill = name === JOBS.rateBackfill;
     const ratePayload = isRateBackfill
@@ -930,7 +939,7 @@ async function deferBusySyncJob(
         }
       : resolveSyncJobAdmission(name, {
           kind: 'busy-defer',
-          orderStarvation,
+          recoveryPriority,
         });
     const deferredMetadata = {
       requestedAt: new Date().toISOString(),
@@ -938,11 +947,15 @@ async function deferBusySyncJob(
       deferredLane: lane,
       deferCount,
       orderStarvation,
+      fulfillmentOutboxRecovery,
     };
-    // Per user override unlock shipped data on 2026-07-15: this only creates a
-    // replacement pg-boss wake-up when the shared database lane is busy. Rate
-    // payloads retain their exact awaiting-only target IDs. This does not touch
-    // orders, shipments, labels, postage, or marketplace notifications.
+    // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+    // 2026-07-21; this only creates a coalesced replacement pg-boss wake-up
+    // when the shared database lane is busy. The stately outbox key permits one
+    // created replacement beside the active attempt; no provider handler runs
+    // here. Rate payloads retain their
+    // exact awaiting-only target IDs. This does not touch orders, shipments,
+    // labels, postage, or marketplace notifications.
     const deferredPayload =
       ratePayload
         ? { ...ratePayload, ...deferredMetadata }
@@ -982,6 +995,21 @@ async function deferBusySyncJob(
       err instanceof Error ? err.message : err
     );
     return null;
+  }
+}
+
+// Per user override unlock shipped data on 2026-05-23: queue-control fail-closed
+// assertion only; it cannot call fulfillment providers or mutate order data.
+function assertDurableBusyDeferral(
+  name: JobName,
+  deferredJobId: string | null,
+): void {
+  if (deferredJobId) return;
+  if (name === JOBS.rateBackfill) {
+    throw new Error('durable rate-backfill deferral failed; retrying original queue job');
+  }
+  if (name === JOBS.fulfillmentOutbox) {
+    throw new Error('durable fulfillment-outbox deferral failed; retrying original queue job');
   }
 }
 
@@ -1166,6 +1194,94 @@ async function pendingShipmentRecoveryBlockerForOrders(): Promise<string | null>
     : null;
 }
 
+async function pendingFulfillmentOutboxBlockerForOrders(): Promise<string | null> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
+    SELECT
+      name,
+      state,
+      start_after AS "startAfter",
+      priority,
+      data->>'deferCount' AS "deferCount"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ${JOBS.fulfillmentOutbox}
+      AND state IN ('active', 'created', 'retry')
+  `;
+  return shouldYieldOrderSyncToFulfillmentOutbox(rows)
+    ? JOBS.fulfillmentOutbox
+    : null;
+}
+
+async function runOrderSyncWithOutboxPriority(
+  jobData: unknown,
+  identity: ShipStationSyncRunIdentity,
+  parentSignal: AbortSignal,
+): Promise<unknown> {
+  const priorDeferCount = busyDeferCount(jobData);
+  const preempt = new AbortController();
+  const stopMonitor = new AbortController();
+  const workSignal = AbortSignal.any([parentSignal, preempt.signal]);
+  const monitorSignal = AbortSignal.any([parentSignal, stopMonitor.signal]);
+  const monitor = (async () => {
+    while (!monitorSignal.aborted) {
+      const outboxBlocker = await pendingFulfillmentOutboxBlockerForOrders();
+      if (outboxBlocker) {
+        // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+        // 2026-07-21; cooperatively stop only this bounded order attempt so the
+        // already-durable outbox wake-up gets the shared lane. Order cursors and
+        // normal transaction boundaries remain authoritative; no shipped lock
+        // is bypassed.
+        preempt.abort(new Error('Order sync yielded to pending fulfillment outbox'));
+        return;
+      }
+      await sleep(SHARED_LANE_PRIORITY_POLL_MS, undefined, {
+        signal: monitorSignal,
+      });
+    }
+  })();
+
+  try {
+    const options = orderSyncOptionsFromJobPayload(jobData);
+    if (isDeferredShipStationOrderSync(jobData)) {
+      // Per user override unlock shipped data on 2026-05-23, reconfirmed on
+      // 2026-07-07: a busy-defer row is just a retry wake-up after the
+      // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
+      // wake-ups cannot become another long status catch-up that starves labels.
+      options.skipStatusPasses = true;
+    }
+    // Per user override unlock shipped data on 2026-07-14: order ingestion no
+    // longer starts a detached broad rate backfill outside its durable queue
+    // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
+    // owns both that targeted handoff and the separate broad cadence.
+    return await syncOrders({ ...options, runIdentity: identity, signal: workSignal });
+  } catch (err) {
+    if (!preempt.signal.aborted || parentSignal.aborted) throw err;
+    const deferredJobId = await deferBusySyncJob(
+      JOBS.orders,
+      JOBS.fulfillmentOutbox,
+      syncJobLaneFor(JOBS.orders),
+      priorDeferCount,
+      jobData,
+    );
+    if (!deferredJobId) {
+      throw new Error('Order sync outbox-priority deferral failed; retrying original queue job');
+    }
+    return {
+      ok: true,
+      skipped: true,
+      deferred: true,
+      deferredJobId,
+      blockedBy: JOBS.fulfillmentOutbox,
+      reason: 'yielded_to_pending_fulfillment_outbox',
+    };
+  } finally {
+    stopMonitor.abort();
+    await monitor.catch((err) => {
+      if (!monitorSignal.aborted) throw err;
+    });
+  }
+}
+
 async function runShipmentSyncWithOrderPriority(
   jobData: unknown,
   parentSignal: AbortSignal,
@@ -1190,7 +1306,7 @@ async function runShipmentSyncWithOrderPriority(
         preempt.abort(new Error('Shipment sync yielded to pending order refresh'));
         return;
       }
-      await sleep(ORDER_PRIORITY_PREEMPT_POLL_MS, undefined, {
+      await sleep(SHARED_LANE_PRIORITY_POLL_MS, undefined, {
         signal: monitorSignal,
       });
     }
@@ -1258,15 +1374,19 @@ async function registerWorker(
       }
 
       if (name === JOBS.orders) {
-        const shipmentBlocker = await pendingShipmentRecoveryBlockerForOrders();
-        if (shipmentBlocker) {
-          // Per user override unlock shipped data on 2026-07-21: this yields
-          // only the queue attempt. The canonical sync handlers and shipped /
-          // cancelled protections remain unchanged.
-          await recordWorkerJobSkipped(name, `${shipmentBlocker} recovery pending`);
+        const fulfillmentOutboxBlocker = await pendingFulfillmentOutboxBlockerForOrders();
+        const shipmentBlocker = fulfillmentOutboxBlocker
+          ? null
+          : await pendingShipmentRecoveryBlockerForOrders();
+        const recoveryBlocker = fulfillmentOutboxBlocker ?? shipmentBlocker;
+        if (recoveryBlocker) {
+          // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+          // 2026-07-21; this yields only the queue attempt. The canonical sync
+          // handlers and shipped / cancelled protections remain unchanged.
+          await recordWorkerJobSkipped(name, `${recoveryBlocker} recovery pending`);
           const deferredJobId = await deferBusySyncJob(
             name,
-            shipmentBlocker,
+            recoveryBlocker,
             syncJobLaneFor(name),
             busyDeferCount(job?.data),
             job?.data,
@@ -1279,8 +1399,10 @@ async function registerWorker(
             skipped: true,
             deferred: true,
             deferredJobId,
-            blockedBy: shipmentBlocker,
-            reason: 'shipment_recovery_pending',
+            blockedBy: recoveryBlocker,
+            reason: fulfillmentOutboxBlocker
+              ? 'fulfillment_outbox_recovery_pending'
+              : 'shipment_recovery_pending',
           };
         }
       }
@@ -1331,9 +1453,7 @@ async function registerWorker(
           busyDeferCount(job?.data),
           job?.data,
         );
-        if (name === JOBS.rateBackfill && !deferredJobId) {
-          throw new Error('durable rate-backfill deferral failed; retrying original queue job');
-        }
+        assertDurableBusyDeferral(name, deferredJobId);
         return {
           ok: true,
           skipped: true,
@@ -1444,9 +1564,7 @@ async function registerWorker(
           busyDeferCount(job?.data),
           job?.data,
         );
-        if (name === JOBS.rateBackfill && !deferredJobId) {
-          throw new Error('durable rate-backfill deferral failed; retrying original queue job');
-        }
+        assertDurableBusyDeferral(name, deferredJobId);
         return {
           ok: true,
           skipped: true,
@@ -1469,7 +1587,7 @@ async function readActiveShipStationSyncJobs(): Promise<ActiveShipStationSyncJob
     SELECT id::text AS id, name
     FROM ${shipStationConsumerStateSql(jobTable)}
     WHERE state = 'active'
-      AND name = ANY(${[JOBS.orders, JOBS.shipments] as string[]})
+      AND name = ANY(${[JOBS.orders, JOBS.shipments, JOBS.fulfillmentOutbox] as string[]})
     ORDER BY started_on ASC NULLS LAST
   `;
 }
@@ -1482,30 +1600,24 @@ async function registerShipStationStatelyWorkers(): Promise<void> {
     // queue locking, deadlines, and worker-status writes. Call the canonical
     // ShipStation sync services directly so queued mode does not also take the
     // legacy interval-scheduler advisory lock and starve worker heartbeats.
-    await registerWorker(JOBS.orders, async (jobData, { identity, signal }) => {
-      const options = orderSyncOptionsFromJobPayload(jobData);
-      if (isDeferredShipStationOrderSync(jobData)) {
-        // Per user override unlock shipped data on 2026-05-23, reconfirmed on
-        // 2026-07-07: a busy-defer row is just a retry wake-up after the
-        // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
-        // wake-ups cannot become another long status catch-up that starves labels.
-        options.skipStatusPasses = true;
-      }
-      // Per user override unlock shipped data on 2026-07-14: order ingestion no
-      // longer starts a detached broad rate backfill outside its durable queue
-      // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
-      // owns both that targeted handoff and the separate broad cadence.
-      return syncOrders({ ...options, runIdentity: identity, signal });
-    });
+    // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+    // 2026-07-21; one leadership owner consumes all stately shared-lane queues,
+    // including the outbox. This avoids deploy-overlap consumer races while
+    // provider execution remains inside the unchanged fulfillment handler.
+    await registerWorker(JOBS.orders, (jobData, { identity, signal }) =>
+      runOrderSyncWithOutboxPriority(jobData, identity, signal),
+    );
     // Audit SY-3 (2026-07-13): thread the queue deadline signal into shipment
     // sync so abandoned page walks stop before a retry can become a second writer.
     await registerWorker(JOBS.shipments, (jobData, { signal }) =>
       runShipmentSyncWithOrderPriority(jobData, signal),
     );
+    await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
   } catch (err) {
     await Promise.allSettled([
       boss.offWork(JOBS.orders),
       boss.offWork(JOBS.shipments),
+      boss.offWork(JOBS.fulfillmentOutbox),
     ]);
     throw err;
   }
@@ -1516,6 +1628,7 @@ async function unregisterShipStationStatelyWorkers(): Promise<void> {
   await Promise.allSettled([
     boss.offWork(JOBS.orders),
     boss.offWork(JOBS.shipments),
+    boss.offWork(JOBS.fulfillmentOutbox),
   ]);
 }
 
@@ -1631,7 +1744,6 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   );
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
-  await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
   // Per user override unlock shipped data on 2026-07-02: queued mode already
   // owns the external-shipped lane via pg-boss + advisory locks. Call the

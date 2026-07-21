@@ -153,7 +153,7 @@ assert.doesNotMatch(postRoute, /syncOrders\(|startBackfillBestRates\(/);
 assert.match(route, /status: result\.queueState/);
 assert.match(admission, /ORDER_REFRESH_SINGLETON_KEY/);
 assert.match(queue, /orderSyncQueueBlocker\(await readOrderSyncQueueTruth\(\)\)/);
-assert.match(queue, /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/);
+assert.match(queue, /runOrderSyncWithOutboxPriority[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal: workSignal \}\)/);
 assert.match(queue, /class ShipStationConsumerLeadershipController/);
 assert.match(queue, /onclose:[\s\S]*notifyConnectionClosed\(\)/);
 assert.match(queue, /await this\.unregisterConsumers\(\)[\s\S]*connection\.release\(\)/);

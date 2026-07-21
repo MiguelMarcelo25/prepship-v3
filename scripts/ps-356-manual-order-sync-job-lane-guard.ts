@@ -83,9 +83,10 @@ check(
 );
 check(
   'queued order worker consumes payload and propagates attempt cancellation context',
-  /await registerWorker\(JOBS\.orders, async \(jobData, \{ identity, signal \}\) => \{/.test(queue) &&
+  /await registerWorker\(JOBS\.orders, \(jobData, \{ identity, signal \}\) =>/.test(queue) &&
+    /runOrderSyncWithOutboxPriority\(jobData, identity, signal\)/.test(queue) &&
     /const options = orderSyncOptionsFromJobPayload\(jobData\);/.test(queue) &&
-    /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue),
+    /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal: workSignal \}\)/.test(queue),
 );
 check(
   'deferred order sync wake-ups use the awaiting-freshness path',

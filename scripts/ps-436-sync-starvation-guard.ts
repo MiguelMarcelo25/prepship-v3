@@ -23,8 +23,11 @@ import {
   syncJobLaneFor,
 } from '../src/services/sync-job-lanes';
 import {
+  FULFILLMENT_OUTBOX_JOB_NAME,
+  FULFILLMENT_OUTBOX_SINGLETON_KEY,
   resolveSyncJobAdmission,
   SHIPSTATION_SYNC_JOBS,
+  shouldYieldOrderSyncToFulfillmentOutbox,
   shouldYieldOrderSyncToShipmentRecovery,
   SYNC_STARVATION_DEFER_THRESHOLD,
 } from '../src/services/sync-job-admission';
@@ -316,6 +319,35 @@ assert.equal(shouldYieldOrderSyncToShipmentRecovery([{
   deferCount: SYNC_STARVATION_DEFER_THRESHOLD,
 }], fairnessNowMs), true);
 
+// A minute-cadence fulfillment wake-up must not wait behind consecutive long
+// order scans. Model the worst local race: the outbox worker records one skip,
+// creates a stately replacement, and the five-second order monitor then yields.
+const fulfillmentAdmission = resolveSyncJobAdmission(
+  FULFILLMENT_OUTBOX_JOB_NAME,
+  { kind: 'busy-defer', recoveryPriority: true },
+);
+assert.equal(fulfillmentAdmission.policy, 'stately');
+assert.equal(fulfillmentAdmission.singletonKey, FULFILLMENT_OUTBOX_SINGLETON_KEY);
+assert.equal(shouldYieldOrderSyncToFulfillmentOutbox([{
+  name: FULFILLMENT_OUTBOX_JOB_NAME,
+  state: 'created',
+  startAfter: new Date(fairnessNowMs),
+  priority: fulfillmentAdmission.priority,
+  deferCount: 1,
+}], fairnessNowMs), true);
+const observedLongOrderSeconds = 174;
+const outboxCadenceSeconds = 60;
+const outboxRecoveryDelaySeconds = 60;
+const orderMonitorPollSeconds = 5;
+const orderYieldSeconds = Math.ceil(outboxCadenceSeconds / orderMonitorPollSeconds)
+  * orderMonitorPollSeconds;
+const outboxRecoveryAtSeconds = outboxCadenceSeconds + outboxRecoveryDelaySeconds;
+const nextOrderCadenceSeconds = 3 * 60;
+const maxConsecutiveOutboxSkips = 1;
+assert.ok(orderYieldSeconds < observedLongOrderSeconds);
+assert.ok(outboxRecoveryAtSeconds < nextOrderCadenceSeconds);
+assert.ok(maxConsecutiveOutboxSkips < 3, 'outbox recovery must stay below deep-health threshold');
+
 type SimulatedJob = {
   kind: 'orders' | 'shipments' | 'rate';
   arrivalAtSeconds: number;
@@ -478,7 +510,10 @@ assert.match(queue, /terminateWorkerForUnacknowledgedCancellation/);
 assert.match(queue, /runDurableRateBackfillJob\(explicitRequest, signal\)/);
 assert.match(queue, /runBackfillTick\(identity\.queueJobId, signal\)/);
 assert.match(queue, /priority: rateBackfillPriority\(ratePayload\)/);
-assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*reason: 'shipment_recovery_pending'/);
+assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*'shipment_recovery_pending'/);
+assert.match(queue, /runOrderSyncWithOutboxPriority[\s\S]*yielded_to_pending_fulfillment_outbox/);
+assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows\)/);
+assert.match(queue, /JOBS\.fulfillmentOutbox,[\s\S]*runFulfillmentOutboxTick/);
 assert.match(backfill, /RATE_BACKFILL_DURABLE_CHUNK_SIZE = 2/);
 assert.match(backfill, /currentJobId: payload\.jobId,[\s\S]{0,300}nextPayload: payload/);
 assert.match(backfill, /persistRateBackfillGenerationState[\s\S]*enqueueDurableRateBackfillJob\(nextPayload\)/);
@@ -500,6 +535,7 @@ console.log(JSON.stringify({
   cadenceWakeupsCoalesced: 101,
   operationalJobsCompleted: completedOperationalJobs,
   maxOperationalAgeSeconds,
+  maxConsecutiveOutboxSkips,
   freshnessBudgetSeconds: 13 * 60,
   durableChunkSize: RATE_BACKFILL_DURABLE_CHUNK_SIZE,
   databaseConnections: 0,

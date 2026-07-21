@@ -11,8 +11,11 @@ export const SHIPSTATION_SYNC_JOBS = {
   shipments: 'prepship.sync.shipments',
 } as const;
 
+export const FULFILLMENT_OUTBOX_JOB_NAME = 'prepship.sync.fulfillment-outbox';
+
 export const ORDER_REFRESH_SINGLETON_KEY = 'order-refresh';
 export const SHIPMENT_REFRESH_SINGLETON_KEY = 'shipment-refresh';
+export const FULFILLMENT_OUTBOX_SINGLETON_KEY = 'fulfillment-outbox';
 export const MANUAL_FULL_ORDER_SINGLETON_KEY = 'manual-full';
 
 export const OPERATOR_SYNC_PRIORITY = 1_000;
@@ -20,6 +23,7 @@ export const WATCHDOG_SYNC_PRIORITY = 500;
 export const STARVATION_RECOVERY_PRIORITY = 100;
 export const SYNC_STARVATION_DEFER_THRESHOLD = 3;
 export const STARVED_SHIPMENT_LOOKAHEAD_MS = 60_000;
+export const FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS = 60_000;
 
 export type SyncQueuePolicy = 'standard' | 'stately';
 
@@ -29,7 +33,7 @@ export type SyncJobAdmissionIntent =
   | { kind: 'watchdog-order' }
   | { kind: 'manual-shipment' }
   | { kind: 'watchdog-shipment' }
-  | { kind: 'busy-defer'; orderStarvation: boolean };
+  | { kind: 'busy-defer'; recoveryPriority: boolean };
 
 export type SyncJobAdmission = {
   policy: SyncQueuePolicy;
@@ -121,6 +125,34 @@ export function shouldYieldOrderSyncToShipmentRecovery(
   });
 }
 
+/**
+ * Per user override unlock shipped data on 2026-05-23: reconfirmed on
+ * 2026-07-21; the fulfillment outbox gets one bounded shared-lane turn when it
+ * is due or has a durable retry approaching. This is queue control-plane state
+ * only; it never reads or mutates orders, shipments, labels, postage, or
+ * marketplace state.
+ */
+export function shouldYieldOrderSyncToFulfillmentOutbox(
+  rows: ReadonlyArray<OperationalSyncQueueRow>,
+  nowMs: number = Date.now(),
+): boolean {
+  return rows.some((row) => {
+    if (row.name !== FULFILLMENT_OUTBOX_JOB_NAME) return false;
+    if (row.state === 'active') return true;
+    if (row.state !== 'created' && row.state !== 'retry') return false;
+
+    const startAfterMs = row.startAfter instanceof Date
+      ? row.startAfter.getTime()
+      : new Date(row.startAfter ?? 0).getTime();
+    if (!Number.isFinite(startAfterMs)) return false;
+    if (startAfterMs <= nowMs) return true;
+    if (startAfterMs > nowMs + FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS) return false;
+
+    return nonnegativeInteger(row.priority) >= STARVATION_RECOVERY_PRIORITY
+      || nonnegativeInteger(row.deferCount) > 0;
+  });
+}
+
 export function shipmentSyncRequestHasRecoveryPriority(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const requestedBy = (data as { requestedBy?: unknown }).requestedBy;
@@ -145,7 +177,9 @@ export function shouldYieldShipmentSyncToOrders(input: {
 }
 
 export function syncQueuePolicyForJob(name: string): SyncQueuePolicy {
-  return name === SHIPSTATION_SYNC_JOBS.orders || name === SHIPSTATION_SYNC_JOBS.shipments
+  return name === SHIPSTATION_SYNC_JOBS.orders
+    || name === SHIPSTATION_SYNC_JOBS.shipments
+    || name === FULFILLMENT_OUTBOX_JOB_NAME
     ? 'stately'
     : 'standard';
 }
@@ -153,6 +187,7 @@ export function syncQueuePolicyForJob(name: string): SyncQueuePolicy {
 function refreshSingletonKey(name: string): string {
   if (name === SHIPSTATION_SYNC_JOBS.orders) return ORDER_REFRESH_SINGLETON_KEY;
   if (name === SHIPSTATION_SYNC_JOBS.shipments) return SHIPMENT_REFRESH_SINGLETON_KEY;
+  if (name === FULFILLMENT_OUTBOX_JOB_NAME) return FULFILLMENT_OUTBOX_SINGLETON_KEY;
   throw new Error(`Job ${name} does not use the shared ShipStation refresh lane`);
 }
 
@@ -214,6 +249,6 @@ export function resolveSyncJobAdmission(
   return {
     policy,
     singletonKey: refreshSingletonKey(name),
-    priority: intent.orderStarvation ? STARVATION_RECOVERY_PRIORITY : 0,
+    priority: intent.recoveryPriority ? STARVATION_RECOVERY_PRIORITY : 0,
   };
 }

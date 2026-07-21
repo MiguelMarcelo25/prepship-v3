@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  FULFILLMENT_OUTBOX_JOB_NAME,
+  FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS,
+  FULFILLMENT_OUTBOX_SINGLETON_KEY,
   MANUAL_FULL_ORDER_SINGLETON_KEY,
   OPERATOR_SYNC_PRIORITY,
   ORDER_REFRESH_SINGLETON_KEY,
@@ -10,6 +13,7 @@ import {
   shipmentSyncRequestHasRecoveryPriority,
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
+  shouldYieldOrderSyncToFulfillmentOutbox,
   shouldYieldOrderSyncToShipmentRecovery,
   shouldYieldShipmentSyncToOrders,
   STARVED_SHIPMENT_LOOKAHEAD_MS,
@@ -21,6 +25,7 @@ import {
 
 const orders = SHIPSTATION_SYNC_JOBS.orders;
 const shipments = SHIPSTATION_SYNC_JOBS.shipments;
+const fulfillmentOutbox = FULFILLMENT_OUTBOX_JOB_NAME;
 const now = Date.parse('2026-07-18T06:45:00.000Z');
 
 assert.deepEqual(
@@ -148,8 +153,58 @@ assert.equal(
   'fresh cadence work retains the existing orders-first behavior',
 );
 
+const outboxRecovery = {
+  name: fulfillmentOutbox,
+  state: 'created',
+  startAfter: new Date(now + FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS),
+  priority: STARVATION_RECOVERY_PRIORITY,
+  deferCount: '1',
+};
+assert.equal(
+  shouldYieldOrderSyncToFulfillmentOutbox([outboxRecovery], now),
+  true,
+  'an approaching durable outbox recovery blocks another long order refresh',
+);
+assert.equal(
+  shouldYieldOrderSyncToFulfillmentOutbox([{
+    ...outboxRecovery,
+    startAfter: new Date(now + FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS + 1),
+  }], now),
+  false,
+  'a far-future outbox recovery does not block current order work',
+);
+assert.equal(
+  shouldYieldOrderSyncToFulfillmentOutbox([{
+    ...outboxRecovery,
+    startAfter: new Date(now),
+    priority: 0,
+    deferCount: '0',
+  }], now),
+  true,
+  'a due cadence outbox wake-up receives the shared lane',
+);
+assert.equal(
+  shouldYieldOrderSyncToFulfillmentOutbox([{
+    ...outboxRecovery,
+    state: 'active',
+    startAfter: new Date(now + FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS + 1),
+  }], now),
+  true,
+  'an active outbox attempt wins the shared-lane race',
+);
+assert.equal(
+  shouldYieldOrderSyncToFulfillmentOutbox([{
+    ...outboxRecovery,
+    priority: 0,
+    deferCount: '0',
+  }], now),
+  false,
+  'a not-yet-due cadence row does not preempt order work',
+);
+
 assert.equal(syncQueuePolicyForJob(orders), 'stately');
 assert.equal(syncQueuePolicyForJob(shipments), 'stately');
+assert.equal(syncQueuePolicyForJob(fulfillmentOutbox), 'stately');
 assert.equal(syncQueuePolicyForJob('prepship.reporting.refresh'), 'standard');
 
 assert.deepEqual(resolveSyncJobAdmission(orders, { kind: 'cadence' }), {
@@ -180,7 +235,7 @@ assert.deepEqual(resolveSyncJobAdmission(orders, { kind: 'watchdog-order' }), {
 });
 assert.deepEqual(resolveSyncJobAdmission(orders, {
   kind: 'busy-defer',
-  orderStarvation: true,
+  recoveryPriority: true,
 }), {
   policy: 'stately',
   singletonKey: ORDER_REFRESH_SINGLETON_KEY,
@@ -191,7 +246,7 @@ for (const intent of [
   { kind: 'cadence' } as const,
   { kind: 'manual-shipment' } as const,
   { kind: 'watchdog-shipment' } as const,
-  { kind: 'busy-defer', orderStarvation: false } as const,
+  { kind: 'busy-defer', recoveryPriority: false } as const,
 ]) {
   assert.equal(
     resolveSyncJobAdmission(shipments, intent).singletonKey,
@@ -208,6 +263,20 @@ assert.equal(
 );
 assert.ok(OPERATOR_SYNC_PRIORITY > WATCHDOG_SYNC_PRIORITY);
 assert.ok(WATCHDOG_SYNC_PRIORITY > STARVATION_RECOVERY_PRIORITY);
+
+assert.deepEqual(resolveSyncJobAdmission(fulfillmentOutbox, { kind: 'cadence' }), {
+  policy: 'stately',
+  singletonKey: FULFILLMENT_OUTBOX_SINGLETON_KEY,
+  priority: 0,
+});
+assert.deepEqual(resolveSyncJobAdmission(fulfillmentOutbox, {
+  kind: 'busy-defer',
+  recoveryPriority: true,
+}), {
+  policy: 'stately',
+  singletonKey: FULFILLMENT_OUTBOX_SINGLETON_KEY,
+  priority: STARVATION_RECOVERY_PRIORITY,
+});
 
 assert.throws(
   () => resolveSyncJobAdmission(shipments, { kind: 'manual-order', mode: 'incremental' }),
@@ -239,7 +308,10 @@ assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(queue, /shouldYieldShipmentSyncToOrders\(\{[\s\S]*ordersPending: hasPendingOrderSyncWork\(queueTruth\),[\s\S]*priorDeferCount/);
 assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*shouldYieldOrderSyncToShipmentRecovery\(rows\)/);
-assert.match(queue, /name === JOBS\.orders[\s\S]*reason: 'shipment_recovery_pending'/);
+assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows\)/);
+assert.match(queue, /name === JOBS\.orders[\s\S]*fulfillment_outbox_recovery_pending[\s\S]*shipment_recovery_pending/);
+assert.match(queue, /runOrderSyncWithOutboxPriority[\s\S]*yielded_to_pending_fulfillment_outbox/);
+assert.match(queue, /registerWorker\(JOBS\.fulfillmentOutbox, runFulfillmentOutboxTick\)/);
 assert.match(queue, /return id \?\? `coalesced:\$\{admission\.singletonKey\}`/);
 assert.match(
   queue,

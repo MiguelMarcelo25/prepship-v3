@@ -108,10 +108,10 @@ check(
   /activeJobsByLane/.test(queue) && !/let activeJobName/.test(queue)
 );
 check(
-  'pg-boss admission prevents duplicate order/shipment backlog across workers',
+  'pg-boss admission prevents duplicate order/shipment/outbox backlog across workers',
   /await targetBoss\.updateQueue\(name, options\)/.test(queue) &&
     /policy: syncQueuePolicyForJob\(name\)/.test(queue) &&
-    /return name === SHIPSTATION_SYNC_JOBS\.orders \|\| name === SHIPSTATION_SYNC_JOBS\.shipments[\s\S]*\? 'stately'/.test(admission)
+    /name === SHIPSTATION_SYNC_JOBS\.orders[\s\S]*name === SHIPSTATION_SYNC_JOBS\.shipments[\s\S]*name === FULFILLMENT_OUTBOX_JOB_NAME[\s\S]*\? 'stately'/.test(admission)
 );
 
 const scheduler = read('src/services/sync-scheduler.ts');
