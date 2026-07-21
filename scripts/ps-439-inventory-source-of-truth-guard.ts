@@ -32,7 +32,8 @@ assert.equal(storage.segments[0]?.balance, -2);
 assert.equal(storage.segments[0]?.billedQty, 0, 'only storage charging clamps negatives');
 assert.equal(storage.cuFtDays, 21, 'actual January days after the receive are billed');
 
-const migration = read('drizzle/0073_inventory_quantity_sot.sql');
+const preparationMigration = read('drizzle/0073_inventory_quantity_sot.sql');
+const cutoverMigration = read('drizzle/0074_inventory_quantity_cutover.sql');
 const schema = read('src/db/schema/inventory.ts');
 const movementOwner = read('src/services/inventory-movement.ts');
 const quantityOwner = read('src/services/inventory-stock-math.ts');
@@ -43,12 +44,32 @@ const uiAdapter = read('web/src/hooks/useInventory.ts');
 const uiHelpers = read('web/src/components/Views/inventory-stock-helpers.ts');
 const inventoryView = read('web/src/components/Views/InventoryView.tsx');
 
-assert.match(migration, /PS439_INVENTORY_CUTOVER_BLOCKED/);
-assert.match(migration, /inventory_ledger_no_update_delete/);
-assert.match(migration, /inventory_ledger_no_truncate/);
-assert.match(migration, /DROP COLUMN IF EXISTS stock_qty/);
-assert.match(migration, /inventory_ledger_source_identity_unq/);
-assert.match(migration, /inventory_ledger_nonzero_qty_chk/);
+assert.doesNotMatch(preparationMigration, /PS439_INVENTORY_CUTOVER_BLOCKED/);
+assert.doesNotMatch(preparationMigration, /DROP COLUMN/i);
+assert.doesNotMatch(preparationMigration, /^\s*(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO|TRUNCATE\s+TABLE)\b/im);
+assert.match(preparationMigration, /inventory_ledger_no_update_delete/);
+assert.match(preparationMigration, /inventory_ledger_no_truncate/);
+assert.match(preparationMigration, /inventory_ledger_source_identity_unq/);
+assert.match(preparationMigration, /inventory_ledger_nonzero_qty_chk/);
+assert.match(cutoverMigration, /PS439_INVENTORY_CUTOVER_SCHEMA_NOT_READY/);
+assert.match(cutoverMigration, /PS439_INVENTORY_CUTOVER_BLOCKED/);
+assert.match(cutoverMigration, /PS439_INVENTORY_CUTOVER_ZERO_MOVEMENT/);
+assert.match(cutoverMigration, /VALIDATE CONSTRAINT inventory_ledger_nonzero_qty_chk/);
+assert.match(cutoverMigration, /DROP COLUMN IF EXISTS stock_qty/);
+assert.doesNotMatch(cutoverMigration, /ADD COLUMN|CREATE (?:OR REPLACE )?FUNCTION|CREATE TRIGGER|CREATE (?:UNIQUE )?INDEX/i);
+assert.doesNotMatch(cutoverMigration, /^\s*(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO|TRUNCATE\s+TABLE)\b/im);
+for (const migration of [preparationMigration, cutoverMigration]) {
+  assert.doesNotMatch(
+    migration,
+    /ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i,
+    'PS-439 migrations never alter locked order or shipment structures',
+  );
+}
+assert(
+  cutoverMigration.indexOf('PS439_INVENTORY_CUTOVER_BLOCKED') <
+    cutoverMigration.indexOf('DROP COLUMN IF EXISTS stock_qty'),
+  'the discrepancy gate runs before the destructive quantity cutover',
+);
 assert.doesNotMatch(schema, /stockQty:/);
 assert.match(schema, /sourceEntity: text\('source_entity'\)/);
 assert.match(movementOwner, /onConflictDoNothing\(\)/);

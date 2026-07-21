@@ -34,14 +34,29 @@ async function main(): Promise<void> {
       created_by text, effective_at timestamptz, idempotency_key text,
       created_at timestamptz not null default now()
     );
+    create unique index inventory_ledger_idempotency_key_unq
+      on inventory_ledger (idempotency_key);
     create table inventory_risk_metrics (stock_qty integer, effective_stock integer);
   `);
   await client.exec(`insert into inventory (id, sku, stock_qty) values (1, 'PS439', 0)`);
-  const migration = readFileSync('drizzle/0073_inventory_quantity_sot.sql', 'utf8')
-    .split('ALTER TABLE IF EXISTS public.inventory_risk_metrics')[0]!;
-  await client.exec(`${migration} ALTER TABLE public.inventory DROP COLUMN IF EXISTS stock_qty;`);
+  const preparationMigration = readFileSync('drizzle/0073_inventory_quantity_sot.sql', 'utf8');
+  const cutoverMigration = readFileSync('drizzle/0074_inventory_quantity_cutover.sql', 'utf8');
+  await assert.rejects(
+    () => client.exec(cutoverMigration),
+    /PS439_INVENTORY_CUTOVER_SCHEMA_NOT_READY/,
+    'cutover requires the additive identity and immutability stage first',
+  );
+  await client.exec(preparationMigration);
+  await client.exec(preparationMigration);
 
-  const move = (qty: number, key: string, type: 'receive' | 'ship') =>
+  let columnResult = await pg.execute<{ count: number }>(sql`
+    select count(*)::int as count from information_schema.columns
+    where table_name = 'inventory' and column_name = 'stock_qty'
+  `);
+  let [column] = (columnResult as unknown as { rows: Array<{ count: number }> }).rows;
+  assert.equal(Number(column?.count), 1, 'the additive preparation keeps legacy stock_qty');
+
+  const move = (qty: number, key: string, type: 'receive' | 'ship' | 'adjust') =>
     pg.transaction((tx) => applyInventoryMovementInTransaction(tx as never, {
       inventoryId: 1,
       type,
@@ -72,6 +87,17 @@ async function main(): Promise<void> {
   [quantity] = await pg.select({ total: sql<number>`coalesce(sum(${inventoryLedger.qty}), 0)::int` }).from(inventoryLedger);
   assert.equal(quantity.total, -1, 'replayed ship deducts exactly once');
 
+  await assert.rejects(
+    () => client.exec(cutoverMigration),
+    /PS439_INVENTORY_CUTOVER_BLOCKED/,
+    'cutover fails closed while the legacy quantity differs from the ledger',
+  );
+  await move(1, 'ps439:reviewed-correction:1', 'adjust');
+  [quantity] = await pg.select({ total: sql<number>`coalesce(sum(${inventoryLedger.qty}), 0)::int` }).from(inventoryLedger);
+  assert.equal(quantity.total, 0, 'reviewed correction is an append-only movement');
+  await client.exec(cutoverMigration);
+  await client.exec(cutoverMigration);
+
   await assert.rejects(() => pg.update(inventoryLedger).set({ qty: 999 }).where(eq(inventoryLedger.id, 1)));
   await assert.rejects(() => pg.delete(inventoryLedger).where(eq(inventoryLedger.id, 1)));
   await assert.rejects(() => client.exec(`
@@ -79,11 +105,11 @@ async function main(): Promise<void> {
       inventory_id, type, qty, created_by, effective_at, idempotency_key, source_entity, source_id
     ) values (1, 'adjust', 0, 'ps439-test', now(), 'zero', 'ps439_test', 'zero')
   `));
-  const columnResult = await pg.execute<{ count: number }>(sql`
+  columnResult = await pg.execute<{ count: number }>(sql`
     select count(*)::int as count from information_schema.columns
     where table_name = 'inventory' and column_name = 'stock_qty'
   `);
-  const [column] = (columnResult as unknown as { rows: Array<{ count: number }> }).rows;
+  [column] = (columnResult as unknown as { rows: Array<{ count: number }> }).rows;
   assert.equal(Number(column?.count), 0);
 
   await client.close();

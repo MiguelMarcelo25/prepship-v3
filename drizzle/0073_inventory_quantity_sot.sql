@@ -1,26 +1,7 @@
--- PS-439: one ledger-derived inventory quantity and immutable movement history.
--- This migration never invents opening balances. It stops before dropping the legacy
--- cache if the read-only comparison finds any mismatch, so a reviewed movement plan is
--- required before cutover rather than silently choosing a legacy winner.
-
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'inventory' AND column_name = 'stock_qty'
-  ) AND EXISTS (
-    SELECT 1
-    FROM public.inventory i
-    LEFT JOIN (
-      SELECT inventory_id, COALESCE(SUM(qty), 0)::int AS inventory_quantity
-      FROM public.inventory_ledger
-      GROUP BY inventory_id
-    ) ledger ON ledger.inventory_id = i.id
-    WHERE i.stock_qty IS DISTINCT FROM COALESCE(ledger.inventory_quantity, 0)
-  ) THEN
-    RAISE EXCEPTION 'PS439_INVENTORY_CUTOVER_BLOCKED: run the read-only discrepancy report and obtain approval for any opening/correction movements';
-  END IF;
-END $$;
+-- PS-439 phase 1: prepare immutable, identity-complete inventory movements.
+-- Additive only: this file never repairs balances, rewrites ledger history, or drops
+-- the legacy stock_qty cache. Apply it immediately before deploying the PS-439 runtime;
+-- older runtimes do not provide the movement identity required by the insert guard.
 
 ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS client_id integer REFERENCES public.clients(id);
 ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS sku text;
@@ -89,7 +70,3 @@ FOR EACH STATEMENT EXECUTE FUNCTION public.inventory_ledger_block_mutations();
 CREATE UNIQUE INDEX IF NOT EXISTS inventory_ledger_source_identity_unq
 ON public.inventory_ledger (source_entity, source_id, inventory_id, type)
 WHERE source_entity IS NOT NULL AND source_id IS NOT NULL;
-
-ALTER TABLE IF EXISTS public.inventory_risk_metrics DROP COLUMN IF EXISTS stock_qty;
-ALTER TABLE IF EXISTS public.inventory_risk_metrics DROP COLUMN IF EXISTS effective_stock;
-ALTER TABLE public.inventory DROP COLUMN IF EXISTS stock_qty;
