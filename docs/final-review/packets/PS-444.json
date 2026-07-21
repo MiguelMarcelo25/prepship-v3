@@ -5,7 +5,7 @@
   "title": "Crash-safe Print Queue mixed-batch recovery and provider outcome fencing",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "38b2cd119f0f8ab0fda0bcc0ac597eb487fd8a8b"
+    "reviewedSha": "1771781f3235daf9a46bdf42b8e6f1e923715e62"
   },
   "riskDomains": [
     "rate_label",
@@ -60,14 +60,14 @@
       "severity": "high",
       "status": "met",
       "description": "The focused Print Queue, provider-ledger, mixed-success, durable recovery, rate-authority, label URL, invalid-label, strict TypeScript, production frontend build, browser, and all 49 mandatory source-of-truth gates pass at the reviewed SHA.",
-      "evidenceIds": ["ps444-recovery-unit", "ps444-browser-e2e", "full-sot-guard-pack", "strict-typecheck", "frontend-build", "label-regressions"]
+      "evidenceIds": ["ps444-recovery-unit", "ps444-browser-e2e", "full-sot-guard-pack", "strict-typecheck", "frontend-build", "label-regressions", "ps439-forward-revert-proof"]
     },
     {
       "id": "AC-8",
       "severity": "critical",
       "status": "met",
       "description": "Shipped/cancelled edit locks, schemas, inventory deduction kill switch, and read-only UI protections were not weakened; verification bought no postage, called no live carrier mutation, notified no marketplace, and performed no production order, shipment, billing, or inventory mutation.",
-      "evidenceIds": ["lockdown-proof", "implementation-scope-proof", "full-sot-guard-pack"]
+      "evidenceIds": ["lockdown-proof", "implementation-scope-proof", "ps439-forward-revert-proof", "full-sot-guard-pack"]
     }
   ],
   "architecture": {
@@ -237,7 +237,7 @@
       "result": "pass",
       "artifactPaths": ["vite.config.ts", "web/src"],
       "assertions": [],
-      "proves": "The production Vite bundle builds successfully with 2,977 modules transformed."
+      "proves": "The production Vite bundle builds successfully with 2,979 modules transformed."
     },
     {
       "id": "label-regressions",
@@ -263,9 +263,23 @@
       "proves": "Shipped/cancelled backend and frontend edit protections remain present and active."
     },
     {
+      "id": "ps439-forward-revert-proof",
+      "classification": "integration",
+      "command": "npm run test:inventory-source-of-truth && npm run test:inventory-auto-deduct && npm run test:ps-247-inventory-deduct-atomic && npm run test:ps-324-inventory-readmodel && npm run test:ps-325-dashboard-inventory-snapshot && npm run test:ps-414-inventory-ledger && npm run test:ps-427-inventory-reconciliation && npm run test:audit-runtime-schema-readiness && npm run test:ps-320-v2-api-client-transport",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/fulfillment-deductions.ts",
+        "src/services/runtime-schema-readiness.ts",
+        "scripts/inventory-auto-deduct-guard.mjs",
+        "scripts/ps-320-v2-api-client-transport-guard.ts"
+      ],
+      "assertions": ["stock_qty_compatible_runtime_restored", "inventory_kill_switch_preserved", "ps424_fulfillment_facts_guarded", "runtime_schema_0072_compatible"],
+      "proves": "The release restores the last production-compatible inventory runtime after PS-439's read-only discrepancy gate blocked cutover, preserves the INVENTORY_AUTO_DEDUCT kill switch and PS-424 fulfillment-facts boundary, and requires only the already-live schema through 0072. The tests use local/injected databases only and perform no production mutation."
+    },
+    {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status ffbcd76d5c65a170be711af7fa77b7e7b526a012..38b2cd119f0f8ab0fda0bcc0ac597eb487fd8a8b",
+      "command": "git diff --name-status 6a9faa1aa59f78c123fe27064a867913b3ade783..1771781f3235daf9a46bdf42b8e6f1e923715e62",
       "result": "pass",
       "artifactPaths": [
         "src/services/print-queue-worker.ts",
@@ -277,7 +291,7 @@
         "web/src/components/Views/OrdersView.tsx"
       ],
       "assertions": [],
-      "proves": "No migration, orders/shipments schema, order edit route, inventory deduction switch, marketplace notification owner, or production data script changed. Shipping-sensitive changes are bounded to durable queue recovery, receipt validation, and thin outcome rendering."
+      "proves": "Against the last proven production SHA, the target contains PS-444 durable queue recovery plus a required override comment in the restored kill-switch-protected inventory deduction path. It contains no migration, orders/shipments schema change, order edit route change, marketplace notification change, or production data script; shipping-sensitive changes remain bounded to durable queue recovery, receipt validation, and thin outcome rendering."
     }
   ],
   "migrations": {
@@ -288,10 +302,10 @@
       "result": "not-applicable",
       "artifactPaths": []
     },
-    "rollbackPlan": "No schema or data rollback is required. Forward-revert the PS-444 implementation, browser-proof, and packet commits, redeploy the prior stable SHA, and preserve all durable queue, provider receipt, shipment, and order history."
+    "rollbackPlan": "No schema or data rollback is required. PS-439 migration 0073 was never applied in production and is absent from this target, which retains runtime readiness through 0072. If PS-444 must roll back, deploy the prior proven SHA and preserve all durable queue, provider receipt, shipment, and order history."
   },
   "rollback": {
-    "strategy": "Forward-revert the PS-444 packet, browser-proof, and implementation commits, then redeploy frontend, API, and Print Queue worker at the prior compatible stable SHA. Never delete provider receipts, replay provider-pending work, or rewrite shipped/cancelled history during rollback.",
+    "strategy": "Forward-revert only the PS-444 implementation and packet, or redeploy frontend, API, and workers at prior proven SHA 6a9faa1aa59f78c123fe27064a867913b3ade783. Do not restore the blocked PS-439 cutover. Never delete provider receipts, replay provider-pending work, or rewrite shipped/cancelled history during rollback.",
     "tested": false,
     "evidenceIds": []
   },
