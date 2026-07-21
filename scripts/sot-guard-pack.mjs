@@ -30,6 +30,7 @@ const REQUIRED_GUARDS = [
   'test:ps-321-ratebrowsermodal-thin-ui',
   'test:ps-329-orders-wrapper-sot-cleanup',
   'test:ps-412-finalized-billing',
+  'test:ps-449-billing-finalization',
   'test:audit-money-rounding',
   'test:audit-orders-service-boundary',
   'test:audit-pg-boss-inventory-outbox',

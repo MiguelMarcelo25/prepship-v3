@@ -80,6 +80,9 @@ async function setup(page) {
     if (path === '/billing/config') return route.fulfill(json([]))
     if (path === '/billing/package-prices') return route.fulfill(json({ data: [] }))
     if (path === '/billing/fetch-ref-rates/status') return route.fulfill(json({ status: 'idle' }))
+    if (path === '/billing/preset-window') {
+      return route.fulfill(json({ from: '2026-07-01', to: '2026-07-15' }))
+    }
     if (path === '/billing/summary') {
       return route.fulfill(json({
         clients: [{
