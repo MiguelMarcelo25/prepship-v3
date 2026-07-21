@@ -5,7 +5,7 @@
   "title": "Canonical inventory ledger quantity, phase-1 operator, correction gate, and tested rollback",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "4493f9d3d77ae898d25d257c1907dfe3d1a75711"
+    "reviewedSha": "943494f46c7f5c16086cd9e8a6e8feb3d81ce916"
   },
   "riskDomains": [
     "billing_inventory_lifecycle"
@@ -254,7 +254,7 @@
         "correction_csv_sha_verified",
         "production_mutation_zero"
       ],
-      "proves": "The ignored PS-462 packet at reviewed SHA 4493f9d3 has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. No apply mode or production DML ran."
+      "proves": "The ignored PS-462 packet at reviewed SHA 943494f4 has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. No apply mode or production DML ran."
     },
     {
       "id": "inventory-browser-e2e",
@@ -358,7 +358,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status 7d1360fc9ca1500c3df5df095e9ced21145566c2..4493f9d3d77ae898d25d257c1907dfe3d1a75711",
+      "command": "git diff --name-status 7d1360fc9ca1500c3df5df095e9ced21145566c2..943494f46c7f5c16086cd9e8a6e8feb3d81ce916",
       "result": "pass",
       "artifactPaths": [
         "drizzle/0073_inventory_quantity_sot.sql",
