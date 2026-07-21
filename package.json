@@ -336,6 +336,7 @@
     "test:audit-api-process-lifecycle": "tsx scripts/audit-api-process-lifecycle-guard.ts",
     "test:audit-print-queue-small-fixes": "tsx scripts/audit-print-queue-small-fixes-guard.ts",
     "test:audit-backfill-diagnostics": "tsx scripts/audit-backfill-diagnostics-guard.ts",
+    "test:ps-445-backfill-diagnostics": "tsx scripts/audit-backfill-diagnostics-guard.ts",
     "test:audit-rate-on-ingest": "tsx scripts/audit-rate-on-ingest-guard.ts",
     "test:audit-local-tariff-calibration": "tsx scripts/audit-local-tariff-calibration-guard.ts",
     "test:audit-multi-instance-readiness": "tsx scripts/audit-multi-instance-readiness-guard.ts",
