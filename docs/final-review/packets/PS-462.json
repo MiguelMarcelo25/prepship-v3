@@ -1,0 +1,414 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-462",
+  "title": "Canonical inventory ledger quantity, correction gate, and tested forward rollback",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "528b6cefe16a2695fd35d875d2ad809dd270d846"
+  },
+  "riskDomains": [
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 74,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Inventory quantity is owned by immutable signed movements and the backend read model; routes and React render backend inventoryQuantity and stockStatus without owning balance truth.",
+      "evidenceIds": [
+        "inventory-migrated-db",
+        "inventory-browser-e2e",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Additive preparation and destructive cutover remain separate, repeatable, and fail closed when identity, immutability, nonzero movement, or exact legacy-to-ledger parity is absent.",
+      "evidenceIds": [
+        "inventory-migrated-db",
+        "inventory-adversarial"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "A tested emergency forward rollback recreates the legacy cache from the immutable ledger, restores prior-runtime insert compatibility only for identified movements, tolerates replay, and preserves ledger immutability.",
+      "evidenceIds": [
+        "forward-rollback-proof",
+        "inventory-adversarial"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "The correction packet is regenerated from the canonical read-only plan at the exact implementation SHA, SHA-verifies its CSV, and exposes no apply mode.",
+      "evidenceIds": [
+        "production-readonly-correction"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "PS-462 is reserved in the repository ticket ledger, while historical ps-439-inventory aliases are documented as compatibility breadcrumbs and advisory-lock PS-439 is unchanged.",
+      "evidenceIds": [
+        "ticket-identity-proof"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "Strict typecheck, production frontend build, all 49 source-of-truth gates, inventory kill switch, shipped/cancelled locks, Print Queue recovery, and sync checkpoint regressions pass without live side effects.",
+      "evidenceIds": [
+        "strict-typecheck",
+        "frontend-build",
+        "full-sot-guard-pack",
+        "safety-regressions"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "blocked",
+      "description": "Production movement and cutover are not authorized: the current read-only plan still has 49 mismatches requiring 49 append-only movements totaling +1,000, and production is missing the additive 0073 identity and immutability surface.",
+      "evidenceIds": [
+        "production-readonly-correction"
+      ]
+    },
+    {
+      "id": "AC-8",
+      "severity": "high",
+      "status": "blocked",
+      "description": "The numbered 0073 and 0074 files are outside drizzle/meta/_journal.json, so production sequencing needs an explicit, separately approved migration mechanism and operator runbook.",
+      "evidenceIds": [
+        "migration-static-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/inventory-stock-math.ts owns signed ledger-derived quantity reads",
+      "src/services/inventory-movement.ts#applyInventoryMovementInTransaction owns append-only idempotent movements",
+      "src/services/inventory-reconciliation.ts#buildInventoryReconciliationPlan owns read-only discrepancy planning",
+      "drizzle/0073_inventory_quantity_sot.sql and drizzle/0074_inventory_quantity_cutover.sql own ordered schema preparation and cutover",
+      "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql owns emergency post-cutover compatibility restoration"
+    ],
+    "oldOwners": [
+      {
+        "path": "inventory.stock_qty legacy mutable balance cache",
+        "disposition": "retained-with-caveat",
+        "delegatesTo": "inventory_ledger sum after approved phase-2 cutover; recreated only for emergency prior-runtime compatibility"
+      },
+      {
+        "path": "frontend effectiveStock and stockQty fallbacks",
+        "disposition": "delegated",
+        "delegatesTo": "backend inventoryQuantity and stockStatus DTO fields"
+      },
+      {
+        "path": "destructive cache repair",
+        "disposition": "deleted",
+        "delegatesTo": "read-only reconciliation plus separately approved append-only movements"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/inventory.ts",
+        "action": "modified",
+        "delegatesTo": "inventory movement, quantity read-model, and reconciliation owners"
+      },
+      {
+        "path": "web/src/lib/v2-apiClient/shared.ts and web/src/hooks/useInventory.ts",
+        "action": "modified",
+        "delegatesTo": "backend inventoryQuantity and stockStatus"
+      },
+      {
+        "path": "scripts/ps-462-inventory-correction-packet.ts",
+        "action": "added",
+        "delegatesTo": "buildInventoryReconciliationPlan and a read-only schema preflight"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The signed ledger remains canonical. The emergency cache is rebuilt from that ledger under maintenance and only supports a prior runtime; the rollback never edits ledger history or becomes normal runtime truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "inventory-migrated-db",
+      "classification": "integration",
+      "command": "npm run test:inventory-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-462-inventory-forward-rollback-integration.ts",
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql",
+        "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "concurrent_movements_compose"
+      ],
+      "proves": "PGlite applies both rollout phases, composes concurrent signed movements, deduplicates replay, applies append-only correction, removes the cache, and runs the emergency forward rollback twice."
+    },
+    {
+      "id": "inventory-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:inventory-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-462-inventory-forward-rollback-integration.ts",
+        "scripts/ps-462-inventory-forward-rollback-guard.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "cutover_before_prepare_rejected",
+        "balance_mismatch_rejected",
+        "rollback_before_cutover_rejected",
+        "unidentified_legacy_movement_rejected",
+        "ledger_update_delete_truncate_rejected"
+      ],
+      "proves": "Invalid phase order, mismatched balances, unidentified legacy writes, and immutable-ledger mutations fail closed; the rollback cannot replace the normal pre-cutover guard."
+    },
+    {
+      "id": "forward-rollback-proof",
+      "classification": "integration",
+      "command": "npm run test:ps-462-inventory-forward-rollback",
+      "result": "pass",
+      "artifactPaths": [
+        "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql",
+        "scripts/ps-462-inventory-forward-rollback-guard.ts",
+        "scripts/ps-462-inventory-forward-rollback-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "cache_backfilled_from_ledger",
+        "prior_runtime_identity_compatibility",
+        "ledger_update_delete_truncate_rejected"
+      ],
+      "proves": "The forward rollback is idempotent, derives compatibility quantities from the ledger, accepts identified prior-runtime movements, and preserves exact cache-to-ledger parity."
+    },
+    {
+      "id": "production-readonly-correction",
+      "classification": "live",
+      "command": "npm run inventory:correction-packet:prepare && npm run inventory:reconcile:dry-run",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-462-inventory-correction-packet.ts",
+        "scripts/ps-462-inventory-correction-packet-guard.ts",
+        "scripts/ps-439-inventory-discrepancy-report.ts"
+      ],
+      "assertions": [
+        "read_only_transaction",
+        "canonical_plan_hash",
+        "correction_csv_sha_verified",
+        "production_mutation_zero"
+      ],
+      "proves": "The ignored PS-462 packet at reviewed SHA 528b6cef has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. No apply mode or production DML ran."
+    },
+    {
+      "id": "inventory-browser-e2e",
+      "classification": "e2e",
+      "command": "npm run test:ps-324-inventory-proof:browser",
+      "result": "pass",
+      "artifactPaths": [
+        "web/e2e/inventory-ps324-proof.spec.js",
+        "web/src/components/Views/InventoryView.tsx",
+        "web/src/hooks/useInventory.ts"
+      ],
+      "assertions": [
+        "backend_inventory_quantity_rendered",
+        "backend_stock_status_rendered",
+        "provider_spy_untouched"
+      ],
+      "proves": "Two Playwright tests render the backend-owned inventory tuple and verify no real postage or marketplace host is contacted."
+    },
+    {
+      "id": "migration-static-proof",
+      "classification": "static",
+      "command": "npm run test:audit-runtime-schema-readiness through npm run test:sot-guard-pack; inspect drizzle/meta/_journal.json",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/runtime-ddl-guard.mjs",
+        "src/services/runtime-schema-readiness.ts",
+        "drizzle/meta/_journal.json",
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql"
+      ],
+      "assertions": [],
+      "proves": "Runtime DDL is absent and readiness owns the 0073 frontier. The handwritten 0073/0074 files are not journal entries, so filename-only production sequencing is not assumed."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 49 mandatory architecture, authorization, durable-worker, lifecycle, billing, inventory, and safety gates pass."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass at the reviewed SHA."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully with 2,989 modules transformed."
+    },
+    {
+      "id": "safety-regressions",
+      "classification": "unit",
+      "command": "npm run test:inventory-auto-deduct && npm run test:order-editable-lockdown && npm run test:ps-444-print-queue-recovery && npm run test:ps-409-status-catchup-backlog",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/inventory-auto-deduct-guard.mjs",
+        "scripts/order-editable-lockdown-guard.mjs",
+        "scripts/ps-444-print-queue-recovery-guard.ts",
+        "scripts/ps-409-status-catchup-backlog-guard.ts"
+      ],
+      "assertions": [
+        "inventory_kill_switch_preserved",
+        "shipped_cancelled_locks_preserved",
+        "print_queue_recovery_preserved",
+        "sync_checkpoint_preserved"
+      ],
+      "proves": "Inventory auto-deduction remains kill-switch protected, shipped/cancelled locks remain active, and Print Queue plus sync reliability regressions stay green."
+    },
+    {
+      "id": "ticket-identity-proof",
+      "classification": "static",
+      "command": "read-only Trello inventory plus rg -n 'PS-439|PS-462' docs/ps-tickets/ps-ledger.md docs/ps-tickets/ps-462-inventory-quantity-rollout.md",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/ps-ledger.md",
+        "docs/ps-tickets/ps-462-inventory-quantity-rollout.md"
+      ],
+      "assertions": [],
+      "proves": "Trello shows PS-446 through PS-461 occupied and the inventory/advisory-lock PS-439 collision. Repository and branch searches found PS-462 unused, so the local ledger reserves it for inventory without mutating Trello."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git diff --name-status 53ceb3ad0fb4063922a739b4dd27394750a7e330..528b6cefe16a2695fd35d875d2ad809dd270d846",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql",
+        "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql",
+        "scripts/ps-462-inventory-correction-packet.ts"
+      ],
+      "assertions": [],
+      "proves": "The candidate contains the ledger-only rollout, migration split, test-fixture repair, PS-462 identity, read-only correction generator, and emergency forward rollback. No production movement, migration, push, or deployment is included."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0073_inventory_quantity_sot.sql",
+      "drizzle/0074_inventory_quantity_cutover.sql",
+      "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql"
+    ],
+    "verification": {
+      "command": "npm run test:inventory-source-of-truth && npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-462-inventory-forward-rollback-integration.ts",
+        "scripts/runtime-ddl-guard.mjs"
+      ]
+    },
+    "rollbackPlan": "Stop API and worker inventory writes, set INVENTORY_AUTO_DEDUCT=false, apply the emergency forward rollback in one transaction, deploy prior compatible runtime SHA 53ceb3ad0fb4063922a739b4dd27394750a7e330, verify stock_qty equals the immutable ledger, then reopen traffic. Correction rollback is append-only inverse movement only."
+  },
+  "rollback": {
+    "strategy": "Use ops/rollback/ps-462_inventory_quantity_forward_rollback.sql only after phase 2 and while writes are stopped. It recreates and ledger-populates compatibility columns, preserves immutable triggers, admits only deterministic legacy identities, and is followed immediately by the prior runtime. Never update, delete, or truncate ledger history.",
+    "tested": true,
+    "evidenceIds": [
+      "forward-rollback-proof",
+      "inventory-adversarial"
+    ]
+  },
+  "liveVerification": {
+    "status": "unverified",
+    "reason": "Only production read-only reconciliation and schema preflight were run. No correction, migration, Render deployment, commit-parity check, or post-deploy health verification is authorized or complete.",
+    "followUpOwner": "DJ",
+    "artifactPaths": []
+  },
+  "caveats": [
+    {
+      "id": "production-correction-not-approved",
+      "severity": "critical",
+      "status": "open",
+      "description": "Production has 49 mismatches. The ignored packet proposes 49 append-only movements totaling +1,000 and requires a fresh plan-hash check plus explicit movement approval.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Review the PS-462 correction manifest and separately authorize or reject the exact append-only production movement transaction."
+    },
+    {
+      "id": "additive-schema-not-applied",
+      "severity": "critical",
+      "status": "open",
+      "description": "Production lacks client_id, sku, source_entity, source_id, the source-identity index, and all three PS-462 ledger triggers.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Approve and apply additive 0073 under a reviewed migration procedure before any correction movement."
+    },
+    {
+      "id": "historical-ledger-and-billing-gaps",
+      "severity": "high",
+      "status": "open",
+      "description": "The current read-only aggregate reports 33,193 missing shipped-order movements, 189 negative balances, and 1,287 billing-display mismatches; these require classification before historical completeness is claimed.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Classify legacy/pre-feature gaps and define a separately reviewed remediation threshold."
+    },
+    {
+      "id": "migration-ledger-outside-journal",
+      "severity": "high",
+      "status": "open",
+      "description": "Handwritten 0073/0074 are outside drizzle/meta/_journal.json, so production tooling cannot be assumed to discover or order them.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Approve a canonical migration application mechanism with transaction, lock timeout, backup, parity, and rollback checks."
+    },
+    {
+      "id": "trello-title-still-duplicate",
+      "severity": "medium",
+      "status": "open",
+      "description": "The repository reserves PS-462, but the external Trello card title still says PS-439 because no Trello mutation was authorized.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Approve renaming the existing inventory Trello card to PS-462 without creating a new card."
+    }
+  ]
+}
