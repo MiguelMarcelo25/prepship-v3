@@ -5,7 +5,7 @@
   "title": "Orders read-model and command-service extraction",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "45263746f4c0c3047a2433fcad9377de5ec768c7"
+    "reviewedSha": "94c6b40fd044e010a2ffdcd9bdba980e5c8aab50"
   },
   "riskDomains": [
     "rate_label"
