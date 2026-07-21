@@ -87,7 +87,7 @@ treat it as misplaced until proven the backend owner is already correct (Fast re
   exact selected/purchased cost, customer amount, margin, HUGRAB override, and
   provenance are resolved and frozen here; Client Portal may only consume the
   policy-versioned shipment tuple or the customer-safe return alias.
-- **Inventory movements** / effective-stock ledger
+- **Inventory quantity** / immutable signed movement ledger
 - **Auth / RBAC / client / store scope**
 
 > **Frontend Boundary Law — enforcement (PS-305).** The list above is not advisory.
@@ -174,7 +174,7 @@ The frontend may *display* backend-provided state for these, but the backend mus
 - shipped / cancelled / source-shipped safety locks
 - marketplace / source confirmation truth; duplicate-shipment prevention
 - billing generated totals / invoice truth
-- inventory ledger / effective-stock truth
+- inventory ledger / signed `inventoryQuantity` truth
 - tenant / client / store scope or permissions
 - connector / provider capability truth
 
@@ -239,7 +239,7 @@ pure UI/display helpers in the frontend:
 | Label purchase / Print Queue | send operator intent, show progress | purchase orchestration, duplicate-label guard, queue durability, idempotency |
 | Marketplace / source sync | show source status and alerts | webhooks, polling/reconciliation, external shipped/cancelled truth |
 | Billing | edit drafts, show generated rows | generated line items, totals, margins, frozen invoice truth |
-| Inventory / packages | show stock / read-model state, draft adjustments | ledger movements, effective stock, package-stock truth |
+| Inventory / packages | show quantity / read-model state, draft adjustments | immutable ledger movements, signed inventory quantity, package-stock truth |
 | Dashboard / analytics | render charts and filters | aggregates, cancelled/shipped filtering semantics, read models |
 | Carrier / store integrations | render forms and capability UI | provider capability registry, credential validation, account scope |
 | Walmart purchaseOrderId (PS-199) | display the resolution source badge | `src/services/walmart-po-resolution.ts` — the LIVE Walmart Marketplace lookup OWNS customerOrderId→purchaseOrderId translation; `store_orders` is a cache in front of it (read-before, upsert-after). Quote and label paths consume the same resolver; real orders never borrow another order's PO. |

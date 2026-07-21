@@ -1,13 +1,13 @@
 // PS-373 — canonical prorated cubic-foot-day storage billing calculator.
 //
 // v2/older v4 billed storage from the CURRENT end-of-period inventory snapshot
-// (Σ stock_qty × cuFtPerUnit × monthlyRate). That over/under-bills: a unit
+// (a current-balance snapshot × cuFtPerUnit × monthlyRate). That over/under-bills: a unit
 // received mid-month or shipped mid-month is billed as if held the whole month,
 // and retroactive receive dates were ignored.
 //
 // This owner rebuilds each SKU's on-hand timeline from the canonical inventory
 // LEDGER (src/db/schema/inventory.ts inventory_ledger — the same signed-delta
-// source stock_qty and computeEffectiveStockForIds are built on) and integrates
+// source the canonical inventory quantity is built on) and integrates
 // cubic-foot-DAYS over the billing month, prorated by the actual number of days
 // in that month. billing.ts delegates the storage line to this module; nothing
 // here reads or writes shipped/cancelled order/shipment rows.
@@ -30,7 +30,7 @@ export type StorageLedgerMovement = {
   type: string;
   /** signed delta (receive/return +, ship/pick/damage −, adjust ±) — same sign convention as applyMovement. */
   qty: number | string | null | undefined;
-  /** the order a ship belongs to; used to de-dupe idempotent ship writes (min qty per order). */
+  /** optional source order identity; insertion owns exactly-once enforcement. */
   orderId: number | string | null | undefined;
   /** when the movement took effect — a retroactive receive carries its entered date here. */
   effectiveAt: Date | string | number;
@@ -79,40 +79,15 @@ function isoDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-// De-dupe idempotent ship writes: the ship path can record the same order's ship
-// more than once, so — exactly like computeEffectiveStockForIds — collapse ship
-// rows that carry an orderId to ONE effective movement per order of min(qty) (the
-// most-negative = the real ship), dated at that order's earliest ship day. Ships
-// without an orderId and all non-ship movements pass through untouched.
-export function dedupeShipMovements(
+// Storage consumes the same persisted movement sequence as Inventory. Duplicate
+// prevention belongs to the ledger insert constraint, never a billing-only fallback.
+export function normalizeStorageMovements(
   movements: StorageLedgerMovement[],
 ): Array<{ dayMs: number; qty: number }> {
-  const shipByOrder = new Map<string, { qty: number; dayMs: number }>();
-  const out: Array<{ dayMs: number; qty: number }> = [];
-
-  for (const move of movements) {
-    const qty = toNum(move.qty);
-    const dayMs = utcDayStartMs(move.effectiveAt);
-    const type = String(move.type ?? '').toLowerCase();
-    const orderId = move.orderId == null ? '' : String(move.orderId).trim();
-
-    if (type === 'ship' && orderId) {
-      const existing = shipByOrder.get(orderId);
-      if (!existing) {
-        shipByOrder.set(orderId, { qty, dayMs });
-      } else {
-        shipByOrder.set(orderId, {
-          qty: Math.min(existing.qty, qty),
-          dayMs: Math.min(existing.dayMs, dayMs),
-        });
-      }
-      continue;
-    }
-    out.push({ dayMs, qty });
-  }
-
-  for (const ship of shipByOrder.values()) out.push({ dayMs: ship.dayMs, qty: ship.qty });
-  return out;
+  return movements.map((movement) => ({
+    dayMs: utcDayStartMs(movement.effectiveAt),
+    qty: toNum(movement.qty),
+  }));
 }
 
 /**
@@ -139,7 +114,7 @@ export function computeSkuStorageCuFtDays(input: {
     return { ...base, segments: [], cuFtDays: 0, hadNegativeBalance: false, negativeDays: 0 };
   }
 
-  const effective = dedupeShipMovements(input.movements);
+  const effective = normalizeStorageMovements(input.movements);
 
   // Starting on-hand at the first day of the period.
   let startingBalance = 0;

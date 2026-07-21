@@ -63,7 +63,14 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'provider_receipt',
     'local_result',
   ],
-  inventory_ledger: ['effective_at', 'idempotency_key'],
+  inventory_ledger: [
+    'effective_at',
+    'idempotency_key',
+    'client_id',
+    'sku',
+    'source_entity',
+    'source_id',
+  ],
   orders: [
     'selling_fee',
     'selling_fee_breakdown',
@@ -127,6 +134,7 @@ const REQUIRED_INDEXES = [
   'external_operations_subject_idx',
   'inventory_ledger_effective_at_idx',
   'inventory_ledger_idempotency_key_unq',
+  'inventory_ledger_source_identity_unq',
   'label_purchase_intents_unresolved_idx',
   'label_purchase_locks_expires_at_idx',
   'order_competitive_rate_house_idx',
@@ -179,6 +187,8 @@ const REQUIRED_INDEXES = [
 
 const REQUIRED_FUNCTIONS = [
   'audit_log_block_mutations',
+  'inventory_ledger_prepare_insert',
+  'inventory_ledger_block_mutations',
   'billing_line_item_group_is_finalized',
   'billing_line_item_group_key',
   'order_lifecycle_events_block_mutations',
@@ -194,6 +204,9 @@ const REQUIRED_FUNCTIONS = [
 
 const REQUIRED_TRIGGERS = [
   'audit_log_no_update_delete',
+  'inventory_ledger_prepare_insert_guard',
+  'inventory_ledger_no_update_delete',
+  'inventory_ledger_no_truncate',
   'billing_line_items_finalized_guard',
   'order_lifecycle_events_no_update_delete',
   'billing_line_items_finalized_truncate_guard',
@@ -291,7 +304,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0072_external_operations.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0073_inventory_quantity_sot.sql (including 0072_external_operations.sql). Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

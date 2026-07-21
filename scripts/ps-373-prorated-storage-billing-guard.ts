@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import {
   computeClientStorageBilling,
   computeSkuStorageCuFtDays,
-  dedupeShipMovements,
+  normalizeStorageMovements,
   type StorageLedgerMovement,
 } from '../src/services/billing-storage';
 
@@ -127,17 +127,17 @@ function skuBilling(cuFtPerUnit: number, movements: StorageLedgerMovement[], per
     b.amount === sumOfRows, `line=${b.amount} rows=${sumOfRows}`);
 }
 
-// ── ship de-dupe: an order's ship recorded twice counts ONCE (min qty per order) ──
+// ── persisted movements are consumed exactly as stored; insert-time identity prevents replay ──
 {
-  const deduped = dedupeShipMovements([
+  const normalized = normalizeStorageMovements([
     mv('receive', 100, '2026-01-01'),
     mv('ship', -1, '2026-01-16', 900),
     mv('ship', -1, '2026-01-17', 900), // idempotent double-write of the SAME order
   ]);
-  const shipTotal = deduped.filter((d) => d.qty < 0).reduce((a, d) => a + d.qty, 0);
-  check('ship de-dupe: double-recorded order ship counts once (−1, not −2)', shipTotal === -1);
+  const shipTotal = normalized.filter((d) => d.qty < 0).reduce((a, d) => a + d.qty, 0);
+  check('persisted movement sequence is not silently de-duplicated at read time', shipTotal === -2);
   const b = skuBilling(1, [mv('receive', 100, '2026-01-01'), mv('ship', -1, '2026-01-16', 900), mv('ship', -1, '2026-01-17', 900)]);
-  check('ship de-dupe: balance drops by 1 (not 2) after the deduped ship', b.skuProofs[0]?.segments.at(-1)?.billedQty === 99);
+  check('storage uses both persisted rows; duplicate prevention belongs to ledger insertion', b.skuProofs[0]?.segments.at(-1)?.billedQty === 98);
 }
 
 function round2(n: number): number { return Math.round((n + Number.EPSILON) * 100) / 100; }

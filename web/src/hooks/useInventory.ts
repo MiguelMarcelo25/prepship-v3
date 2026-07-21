@@ -8,7 +8,7 @@ import { activeClientRowsQueryOptions } from '../lib/client-query';
 // InventoryItemDto. v4's schema is a subset of v2's, so fields v4 doesn't
 // carry (baseUnitQty, units_per_pack, product-vs-package dim split,
 // packageId, cuFtOverride, parent/package name joins, lastMovement) are
-// defaulted/null. `status` is computed from stockQty vs reorderLevel.
+// defaulted/null. Quantity and status are authoritative backend fields.
 // Also fetches /clients (deduped via shared key) to resolve `clientName`.
 // ──────────────────────────────────────────────────────────────────
 
@@ -37,8 +37,7 @@ export interface InventoryItemDto {
   packageDimWidth: number | null;
   packageDimHeight: number | null;
   parentName: string | null;
-  currentStock: number;
-  cachedStockQty?: number;
+  inventoryQuantity: number;
   lastMovement: number | null;
   imageUrl: string | null;
   baseUnits: number;
@@ -47,14 +46,13 @@ export interface InventoryItemDto {
   // 2026-05-13: effective-stock fields surface "what's REALLY on
   // hand" computed from the source-of-truth (received ledger −
   // total sold across all orders), independent of the cached
-  // stockQty field. Used by the Inventory page's STOCK column so
+  // ledger balance. Used by the Inventory page's STOCK column so
   // the value matches operator expectations ("sold 85 → stock −85").
   // Optional because the backend exposes them only on the list
   // endpoint right now; other endpoints (POST/PATCH responses) may
   // not include them.
   totalReceived?: number;
   totalSoldAllTime?: number;
-  effectiveStock?: number;
 }
 
 export interface UseInventoryOptions {
@@ -79,11 +77,11 @@ type V4InventoryRow = {
   sku: string;
   name: string | null;
   imageUrl: string | null;
-  stockQty: number;
+  inventoryQuantity: number;
+  stockStatus: 'in' | 'low' | 'out';
   soldLast30Days?: number;
   totalReceived?: number;
   totalSoldAllTime?: number;
-  effectiveStock?: number;
   reorderLevel: number;
   weightOz: number | null;
   length: number | null;
@@ -92,15 +90,6 @@ type V4InventoryRow = {
   parentSkuId: number | null;
   active: boolean;
 };
-
-function statusOf(
-  stockQty: number,
-  reorderLevel: number
-): 'ok' | 'low' | 'out' {
-  if (stockQty <= 0) return 'out';
-  if (stockQty <= reorderLevel) return 'low';
-  return 'ok';
-}
 
 function transformInventoryRowV4toV2(
   row: V4InventoryRow,
@@ -111,9 +100,7 @@ function transformInventoryRowV4toV2(
   const w = row.width ?? 0;
   const h = row.height ?? 0;
   const baseUnitQty = 1;
-  const cachedStockQty = row.stockQty;
-  const effectiveStock =
-    typeof row.effectiveStock === 'number' ? row.effectiveStock : cachedStockQty;
+  const inventoryQuantity = row.inventoryQuantity;
 
   return {
     id: row.id,
@@ -140,16 +127,14 @@ function transformInventoryRowV4toV2(
     packageDimWidth: null,
     packageDimHeight: null,
     parentName: null,
-    currentStock: effectiveStock,
-    cachedStockQty,
+    inventoryQuantity,
     lastMovement: null,
     imageUrl: row.imageUrl,
-    baseUnits: effectiveStock * baseUnitQty,
-    status: statusOf(effectiveStock, row.reorderLevel),
+    baseUnits: inventoryQuantity * baseUnitQty,
+    status: row.stockStatus === 'in' ? 'ok' : row.stockStatus,
     soldLast30Days: row.soldLast30Days ?? 0,
     totalReceived: row.totalReceived,
     totalSoldAllTime: row.totalSoldAllTime,
-    effectiveStock: row.effectiveStock,
   };
 }
 

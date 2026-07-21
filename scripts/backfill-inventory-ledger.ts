@@ -1,9 +1,7 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, sql } from 'drizzle-orm';
 import { db } from '../src/db/client';
 import { inventory, inventoryLedger } from '../src/db/schema/inventory';
 import { orders } from '../src/db/schema/orders';
-import { deductInventoryForOrder } from '../src/services/fulfillment-deductions';
-import { ensureInventoryLedgerSchema } from '../src/services/inventory-ledger-schema';
 
 type Args = {
   sku?: string;
@@ -50,12 +48,6 @@ function parseArgs(argv: string[]): Args {
     }
   }
   return args;
-}
-
-function asDate(value: Date | string | null | undefined) {
-  if (!value) return undefined;
-  const parsed = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
 function skuPredicate(sku: string | undefined) {
@@ -134,24 +126,6 @@ async function getSummary(sku: string | undefined, since: Date | undefined) {
   return summary;
 }
 
-async function alignExistingLedgerDates(sku: string | undefined, since: Date | undefined) {
-  const sinceIso = since?.toISOString();
-  const rows = await db.execute<{ id: number }>(sql`
-    update ${inventoryLedger} ledger
-    set effective_at = ${orders.orderDate}
-    from ${orders}, ${inventory}
-    where ledger.order_id = ${orders.id}
-      and ledger.inventory_id = ${inventory.id}
-      and ledger.type = 'ship'
-      and ${orders.orderDate} is not null
-      ${sku ? sql`and lower(${inventory.sku}) = lower(${sku})` : sql``}
-      ${sinceIso ? sql`and ${orders.updatedAt} >= ${sinceIso}::timestamptz` : sql``}
-      and ledger.effective_at is distinct from ${orders.orderDate}
-    returning ledger.id
-  `);
-  return rows.length;
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.sku && !args.all) {
@@ -172,59 +146,9 @@ async function main() {
     console.log('Dry run only. No rows changed.');
     return;
   }
-  await ensureInventoryLedgerSchema();
-
-  const filters = [
-    eq(orders.orderStatus, 'shipped'),
-    args.since ? sql`${orders.updatedAt} >= ${args.since.toISOString()}::timestamptz` : undefined,
-    args.sku
-      ? sql`exists (
-          select 1
-          from jsonb_array_elements(${orders.items}) item
-          where item ? 'sku'
-            and lower(item->>'sku') = lower(${args.sku})
-            and coalesce(item->>'adjustment', 'false') <> 'true'
-        )`
-      : undefined,
-  ].filter(<T>(value: T | undefined): value is T => value !== undefined);
-
-  let query = db
-    .select()
-    .from(orders)
-    .where(and(...filters))
-    .orderBy(asc(orders.orderDate), asc(orders.id));
-
-  if (args.limit) {
-    query = query.limit(args.limit) as typeof query;
-  }
-
-  const orderRows = await query;
-  let deductedUnits = 0;
-  let skippedUnits = 0;
-  let touchedOrders = 0;
-
-  for (const order of orderRows) {
-    const result = await deductInventoryForOrder(order, {
-      source: 'retroactive_order_backfill',
-      effectiveAt: asDate(order.orderDate) ?? asDate(order.updatedAt) ?? new Date(),
-      skus: args.sku ? [args.sku] : undefined,
-    });
-    deductedUnits += result.deducted ?? 0;
-    skippedUnits += result.skippedUnits ?? 0;
-    if ((result.deducted ?? 0) > 0) touchedOrders += 1;
-  }
-
-  const normalizedDates = await alignExistingLedgerDates(args.sku, args.since);
-  const after = await getSummary(args.sku, args.since);
-
-  console.log('Backfill:', JSON.stringify({
-    scannedOrders: orderRows.length,
-    touchedOrders,
-    deductedUnits,
-    skippedUnits,
-    normalizedDates,
-  }));
-  console.log('After:', JSON.stringify(after));
+  // Per user override unlock shipped data on 2026-07-21: PS-439 removes
+  // shipped-order backfill mutation; this compatibility path is report-only.
+  throw new Error('PS439_INVENTORY_LEDGER_IMMUTABLE: apply mode was removed; use the read-only discrepancy report and a separately reviewed append-only movement plan');
 }
 
 main()

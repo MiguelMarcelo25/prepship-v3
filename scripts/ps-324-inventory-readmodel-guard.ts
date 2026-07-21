@@ -59,15 +59,13 @@ check('stock-status owner exports classifyStockStatus (the single threshold)',
   /if \(stock <= 0\) return 'out'/.test(statusOwner));
 
 const helpers = read('web/src/components/Views/inventory-stock-helpers.ts');
-check('getInventoryDisplayStatus imports + delegates to the canonical classifier',
-  /import \{ classifyStockStatus \} from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/inventory-stock-status'/.test(helpers) &&
-  /classifyStockStatus\(getInventoryDisplayStock\(row\), toSortNumber\(row\.minStock\)\)/.test(helpers));
+check('getInventoryDisplayStatus renders the backend-owned status field',
+  /return row\.status/.test(helpers));
 check('anti-vacuous: getInventoryDisplayStatus no longer DEFINES the inline threshold',
   !helpers.includes("if (stock <= 0) return 'out'"));
 
-check('apiClient inventoryStatus imports + delegates to the canonical classifier',
-  /import \{ classifyStockStatus \} from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/inventory-stock-status'/.test(apiShared) &&
-  /const status = classifyStockStatus\(stockQty, reorderLevel\)/.test(apiShared));
+check('apiClient maps the backend-owned stockStatus without recalculating it',
+  /status: row\.stockStatus === 'in' \? 'ok' : row\.stockStatus/.test(apiShared));
 check('anti-vacuous: inventoryStatus no longer DEFINES the inline threshold',
   !apiShared.includes("if (stockQty <= 0) return 'out'"));
 
