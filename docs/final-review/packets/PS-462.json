@@ -5,7 +5,7 @@
   "title": "Canonical inventory ledger quantity, correction gate, and tested forward rollback",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "528b6cefe16a2695fd35d875d2ad809dd270d846"
+    "reviewedSha": "a80fcdea6eb7f8a8bd00d4e498bc00f728d85561"
   },
   "riskDomains": [
     "billing_inventory_lifecycle"
@@ -221,7 +221,7 @@
         "correction_csv_sha_verified",
         "production_mutation_zero"
       ],
-      "proves": "The ignored PS-462 packet at reviewed SHA 528b6cef has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. No apply mode or production DML ran."
+      "proves": "The ignored PS-462 packet at reviewed SHA a80fcdea has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. No apply mode or production DML ran."
     },
     {
       "id": "inventory-browser-e2e",
@@ -325,7 +325,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status 53ceb3ad0fb4063922a739b4dd27394750a7e330..528b6cefe16a2695fd35d875d2ad809dd270d846",
+      "command": "git diff --name-status 0767ffb8be805da51b335528c466b2f487c7af0b..a80fcdea6eb7f8a8bd00d4e498bc00f728d85561",
       "result": "pass",
       "artifactPaths": [
         "drizzle/0073_inventory_quantity_sot.sql",
@@ -353,7 +353,7 @@
         "scripts/runtime-ddl-guard.mjs"
       ]
     },
-    "rollbackPlan": "Stop API and worker inventory writes, set INVENTORY_AUTO_DEDUCT=false, apply the emergency forward rollback in one transaction, deploy prior compatible runtime SHA 53ceb3ad0fb4063922a739b4dd27394750a7e330, verify stock_qty equals the immutable ledger, then reopen traffic. Correction rollback is append-only inverse movement only."
+    "rollbackPlan": "Stop API and worker inventory writes, set INVENTORY_AUTO_DEDUCT=false, apply the emergency forward rollback in one transaction, deploy prior compatible runtime SHA 0767ffb8be805da51b335528c466b2f487c7af0b, verify stock_qty equals the immutable ledger, then reopen traffic. Correction rollback is append-only inverse movement only."
   },
   "rollback": {
     "strategy": "Use ops/rollback/ps-462_inventory_quantity_forward_rollback.sql only after phase 2 and while writes are stopped. It recreates and ledger-populates compatibility columns, preserves immutable triggers, admits only deterministic legacy identities, and is followed immediately by the prior runtime. Never update, delete, or truncate ledger history.",
