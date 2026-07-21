@@ -2,10 +2,10 @@
   "$schema": "../evidence-packet.schema.json",
   "schemaVersion": 1,
   "taskId": "PS-436",
-  "title": "Durable fulfillment recovery priority on the shared sync lane",
+  "title": "Durable fulfillment priority with resumable order status catch-up",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8"
+    "reviewedSha": "1faddd0175fd948ec6774ce0764dd7e53a4cf546"
   },
   "riskDomains": [
     "provider_durable_job"
@@ -85,12 +85,24 @@
         "provider-retry-integration",
         "full-sot-guard-pack"
       ]
+    },
+    {
+      "id": "AC-8",
+      "severity": "critical",
+      "status": "met",
+      "description": "Durable cadence and watchdog order retries preserve status-catch-up scope instead of being downgraded to Awaiting-only, while explicit manual incremental refresh retains its intentional Awaiting-only scope and the cooperative outbox monitor remains the starvation guard.",
+      "evidenceIds": [
+        "order-retry-scope-unit",
+        "starvation-failure-injection",
+        "implementation-scope-proof"
+      ]
     }
   ],
   "architecture": {
     "canonicalOwners": [
       "src/services/sync-job-admission.ts for stately queue policy, singleton identity, recovery priority, and due-outbox yield decisions",
       "src/services/sync-job-queue.ts for pg-boss admission, durable busy deferral, shared-lane scheduling, cooperative cancellation, consumer leadership, and worker execution boundaries",
+      "src/services/manual-order-sync-job.ts orderSyncOptionsFromJobPayload for preserving the originating order-sync scope across durable retries",
       "src/services/fulfillment-outbox.ts for the unchanged canonical fulfillment provider handler and durable operation semantics"
     ],
     "oldOwners": [
@@ -103,6 +115,11 @@
         "path": "src/services/sync-job-queue.ts order sync execution without due-outbox cooperative yield",
         "disposition": "delegated",
         "delegatesTo": "src/services/sync-job-admission.ts shouldYieldOrderSyncToFulfillmentOutbox and src/services/sync-job-queue.ts runOrderSyncWithOutboxPriority"
+      },
+      {
+        "path": "src/services/sync-job-queue.ts unconditional Awaiting-only override for every deferred order retry",
+        "disposition": "deleted",
+        "delegatesTo": "src/services/manual-order-sync-job.ts orderSyncOptionsFromJobPayload, which preserves explicit manual scope while cadence and watchdog retries retain status catch-up"
       }
     ],
     "wrappers": [
@@ -138,6 +155,23 @@
         "future_nonrecovery_not_preempted"
       ],
       "proves": "The canonical owner assigns fulfillment work one stately singleton and yields orders only for active, due, or bounded recovery-priority outbox rows, not arbitrary future cadence rows."
+    },
+    {
+      "id": "order-retry-scope-unit",
+      "classification": "unit",
+      "command": "npm run test:ps-356-manual-order-sync-job-lane",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-356-manual-order-sync-job-lane-guard.ts",
+        "src/services/manual-order-sync-job.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "cadence_retry_preserves_status_catchup",
+        "watchdog_retry_preserves_status_catchup",
+        "manual_incremental_remains_awaiting_only"
+      ],
+      "proves": "Executable payload-owner assertions prove that deferred cadence and watchdog retries do not set skipStatusPasses, while an explicit manual incremental payload preserves skipStatusPasses=true; the queue no longer re-owns or overrides that scope."
     },
     {
       "id": "provider-retry-integration",
@@ -269,7 +303,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git show --name-only --format= 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8",
+      "command": "git show --name-only --format= 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8 1faddd0175fd948ec6774ce0764dd7e53a4cf546",
       "result": "pass",
       "artifactPaths": [
         "src/services/sync-job-admission.ts",
@@ -284,21 +318,21 @@
         "scripts/sync-job-admission-guard.ts"
       ],
       "assertions": [],
-      "proves": "The reviewed commit changes two backend queue-control owners and eight offline guards only. It changes no schema, migration, frontend, provider adapter, fulfillment handler, order/shipment table logic, label/postage path, or protected shipped/cancelled file."
+      "proves": "The reviewed commits change two backend queue-control owners and offline guards only. The follow-up deletes the queue-level forced Awaiting-only override and adds executable retry-scope proof. There is no schema, migration, frontend, provider adapter, fulfillment handler, order/shipment table logic, label/postage path, or protected shipped/cancelled file change."
     }
   ],
   "migrations": {
     "touched": false,
     "paths": [],
     "verification": {
-      "command": "git diff --name-only 4ee244fa487d6d5bffd8cff09b06ba107c919ae2..27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8 -- drizzle",
+      "command": "git diff --name-only 4ee244fa487d6d5bffd8cff09b06ba107c919ae2..1faddd0175fd948ec6774ce0764dd7e53a4cf546 -- drizzle",
       "result": "not-applicable",
       "artifactPaths": []
     },
-    "rollbackPlan": "No database migration is involved. If the rollout regresses worker availability, forward-revert the packet commit and reviewed implementation commit, redeploy the prior known-good revision 4ee244fa487d6d5bffd8cff09b06ba107c919ae2, and preserve all durable queue, provider-operation, order, shipment, inventory, and billing records."
+    "rollbackPlan": "No database migration is involved. If status-catch-up retry scope regresses worker availability, forward-revert 1faddd0175fd948ec6774ce0764dd7e53a4cf546 and redeploy the prior release tip 71e032057992eded6a1a725349c1604f41c3a0a3. A full PS-436 rollback additionally reverts 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8 while preserving all durable queue, provider-operation, order, shipment, inventory, and billing records."
   },
   "rollback": {
-    "strategy": "Use a reviewed forward revert of the packet-only commit followed by 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8, then redeploy prepshipv4-stable. Do not reset history, delete pg-boss rows, replay provider operations, or mutate shipped/cancelled production data. The previous runtime revision is 4ee244fa487d6d5bffd8cff09b06ba107c919ae2.",
+    "strategy": "First forward-revert 1faddd0175fd948ec6774ce0764dd7e53a4cf546 and redeploy 71e032057992eded6a1a725349c1604f41c3a0a3 if only the retry-scope follow-up regresses. For a full PS-436 rollback, then forward-revert 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8. Do not reset history, delete pg-boss rows, replay provider operations, or mutate shipped/cancelled production data.",
     "tested": false,
     "evidenceIds": []
   },
