@@ -36,7 +36,7 @@ const pkg = read('package.json');
 const processBlock = blockBetween(
   printQueue,
   'async function processQueueSendOrder',
-  '// ─── CRUD',
+  'export async function addToQueue',
 );
 const addToQueueBlock = blockBetween(
   printQueue,
@@ -47,7 +47,7 @@ const addToQueueBlock = blockBetween(
 check(
   'queue-send checks existing queued/shipment labels before createLabelV2',
   processBlock.indexOf('findExistingQueueSendLabel(order)') >= 0 &&
-    processBlock.indexOf('createLabelV2({') > processBlock.indexOf('findExistingQueueSendLabel(order)'),
+    processBlock.indexOf('createLabelV2(') > processBlock.indexOf('findExistingQueueSendLabel(order)'),
 );
 
 check(
