@@ -136,7 +136,14 @@ async function main(): Promise<void> {
       },
       dependencies,
     ),
-    /timeout after request submission/,
+    (error: unknown) => {
+      assert.ok(
+        error instanceof ledger.FulfillmentOperationHeldError,
+        'ambiguous post-dispatch failures must surface as a durable reconciliation hold',
+      );
+      assert.equal(error.operation.operationKey, unknownClaim.lease.operationKey);
+      return true;
+    },
   );
   const heldRetry = await ledger.acquireFulfillmentOperation(unknownInput, dependencies);
   assert.equal(heldRetry.kind, 'reconcile_required', 'ambiguous provider outcome is operator-held');

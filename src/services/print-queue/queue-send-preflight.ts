@@ -2,7 +2,14 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { orderOverrides, orders as ordersTable } from '../../db/schema/orders';
 import { shipments } from '../../db/schema/shipments';
-import { assertLabelPurchaseRateSelection } from '../shipping-workflow/rate-quote-snapshot-store';
+import {
+  assertLabelPurchaseRateSelection,
+  RateProofValidationUnavailableError,
+} from '../shipping-workflow/rate-quote-snapshot-store';
+import { SelectedRateProofError } from '../shipping-workflow/rate-fingerprint';
+import { ShippingQuoteAuthorizationError } from '../shipping-workflow/shipping-quote-authorization';
+import { getActiveLabelPurchaseLockOrderIds } from '../../lib/label-purchase-lock';
+import { getHeldLabelOperationOrderIds } from '../fulfillment-operation-ledger';
 import type { QueueSendJobItemInput } from './queue-send-item-state';
 import type { PrintQueueListScope, QueueSendJobResult, QueueSendOrderInput } from '../print-queue';
 
@@ -13,6 +20,8 @@ export type QueueSendPreflightBlockReason =
   | 'missing_label_payload'
   | 'missing_rate_proof'
   | 'stale_or_mismatched_rate_proof'
+  | 'rate_proof_check_unavailable'
+  | 'label_purchase_reconciliation_required'
   | 'missing_weight'
   | 'missing_package'
   | 'missing_address'
@@ -73,6 +82,10 @@ function blockMessage(reason: QueueSendPreflightBlockReason, order: QueueSendOrd
       return `Order ${ref} is missing backend selected-rate proof before label purchase.`;
     case 'stale_or_mismatched_rate_proof':
       return `Order ${ref} has stale or mismatched selected-rate proof. Re-rate before Send to Queue.`;
+    case 'rate_proof_check_unavailable':
+      return `Order ${ref} could not validate selected-rate proof because the rate authority is temporarily unavailable. Retry later without changing the selected rate.`;
+    case 'label_purchase_reconciliation_required':
+      return `Order ${ref} already has an active or unresolved label purchase. Reconcile that provider outcome before attempting another purchase.`;
     case 'missing_weight':
       return `Order ${ref} is missing package weight.`;
     case 'missing_package':
@@ -88,7 +101,9 @@ function blockedResult(
   order: QueueSendOrderInput,
   reason: QueueSendPreflightBlockReason,
 ): QueueSendJobResult {
-  const retryable = reason === 'missing_rate_proof' || reason === 'stale_or_mismatched_rate_proof';
+  const retryable = reason === 'missing_rate_proof'
+    || reason === 'stale_or_mismatched_rate_proof'
+    || reason === 'rate_proof_check_unavailable';
   return {
     orderId: order.orderId,
     orderNumber: order.orderNumber ?? null,
@@ -236,8 +251,20 @@ async function classifyRateProof(
       return 'stale_or_mismatched_rate_proof';
     }
     return null;
-  } catch {
-    return 'stale_or_mismatched_rate_proof';
+  } catch (error) {
+    if (error instanceof RateProofValidationUnavailableError) {
+      return 'rate_proof_check_unavailable';
+    }
+    if (error instanceof SelectedRateProofError || error instanceof ShippingQuoteAuthorizationError) {
+      return 'stale_or_mismatched_rate_proof';
+    }
+    const structured = error as { name?: unknown; code?: unknown } | null;
+    console.warn('[print-queue-preflight] selected-rate proof check unavailable', {
+      orderId: order.orderId,
+      errorName: typeof structured?.name === 'string' ? structured.name : 'UnknownError',
+      errorCode: typeof structured?.code === 'string' ? structured.code : null,
+    });
+    return 'rate_proof_check_unavailable';
   }
 }
 
@@ -245,6 +272,7 @@ async function classifyOrder(
   order: QueueSendOrderInput,
   fact: QueueSendPreflightOrderFact | null,
   hasActiveLabel: boolean,
+  hasHeldLabelOperation: boolean,
   scope: PrintQueueListScope | undefined,
 ): Promise<QueueSendPreflightBlockReason | null> {
   if (!fact) return 'order_not_found';
@@ -258,6 +286,7 @@ async function classifyOrder(
   const status = String(fact.orderStatus ?? '').toLowerCase();
   if (status === 'cancelled') return 'order_not_editable';
   if (order.labelUrl) return null;
+  if (hasHeldLabelOperation) return 'label_purchase_reconciliation_required';
   if (status === 'shipped') return hasActiveLabel ? null : 'order_not_editable';
   if (LOCKED_ORDER_STATUSES.has(status)) return 'order_not_editable';
   if (!order.label) return 'missing_label_payload';
@@ -278,9 +307,11 @@ export async function preflightQueueSendOrders(
   scope?: PrintQueueListScope,
 ): Promise<QueueSendPreflightResult> {
   const orderIds = inputOrders.map((order) => order.orderId);
-  const [facts, activeLabelOrderIds] = await Promise.all([
+  const [facts, activeLabelOrderIds, activeLockOrderIds, heldOperationOrderIds] = await Promise.all([
     loadOrderFacts(orderIds),
     loadOrderIdsWithActiveLabels(orderIds),
+    getActiveLabelPurchaseLockOrderIds(orderIds),
+    getHeldLabelOperationOrderIds(orderIds),
   ]);
   const readyOrders: QueueSendOrderInput[] = [];
   const blockedResults: QueueSendJobResult[] = [];
@@ -291,6 +322,7 @@ export async function preflightQueueSendOrders(
       order,
       facts.get(order.orderId) ?? null,
       activeLabelOrderIds.has(order.orderId),
+      activeLockOrderIds.has(order.orderId) || heldOperationOrderIds.has(order.orderId),
       scope,
     );
     if (reason) {

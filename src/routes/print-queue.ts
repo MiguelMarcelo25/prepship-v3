@@ -35,6 +35,8 @@ import {
   type QueueSendJobSnapshot,
 } from '../services/print-queue';
 import { deriveQueueSendSnapshotStatus } from '../services/print-queue/queue-send-status';
+import { projectQueueSendOrderOutcomes } from '../services/print-queue/queue-send-outcomes';
+import { resumeQueueSendWorkerJob } from '../services/print-queue-worker';
 import { deriveMergeJobSnapshotStatus } from '../services/print-queue/merge-job-status';
 import { readDurableStatusWithTimeout } from '../services/print-queue/durable-status-read';
 import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
@@ -722,6 +724,11 @@ app.get('/batch-send/status/:jobId', async (c) => {
       // returns full per-order batch results; resultSamples remains a compact
       // legacy preview for older UI/debug consumers.
       const durableResults = queueSendSnapshotResults(durableJob);
+      const outcomes = projectQueueSendOrderOutcomes({
+        workerOrders: durableJob.workerOrders,
+        itemStates: durableJob.itemStates,
+        results: durableResults,
+      });
       return c.json({
         job_id: durableJob.jobId,
         status: durableStatus.status,
@@ -745,6 +752,9 @@ app.get('/batch-send/status/:jobId', async (c) => {
         results: durableResults,
         result_samples: durableJob.resultSamples,
         item_states: durableJob.itemStates ?? [],
+        outcomes,
+        can_resume: durableStatus.status === 'interrupted'
+          && outcomes.some((outcome) => outcome.outcome === 'ready' || outcome.outcome === 'in_progress'),
         error: durableStatus.errorMessage,
         stale: durableStatus.staleReason != null,
         stale_reason: durableStatus.staleReason,
@@ -758,6 +768,11 @@ app.get('/batch-send/status/:jobId', async (c) => {
   }
   const jobStatus = deriveQueueSendSnapshotStatus(job, {
     inMemoryJobPresent: true,
+  });
+  const outcomes = projectQueueSendOrderOutcomes({
+    workerOrders: job.workerOrders ?? [],
+    itemStates: job.itemStates,
+    results: job.results,
   });
   return c.json({
     job_id: job.jobId,
@@ -781,10 +796,41 @@ app.get('/batch-send/status/:jobId', async (c) => {
     queued_entry_ids: job.queuedEntryIds,
     results: job.results,
     item_states: job.itemStates,
+    outcomes,
+    can_resume: jobStatus.status === 'interrupted'
+      && outcomes.some((outcome) => outcome.outcome === 'ready' || outcome.outcome === 'in_progress'),
     error: jobStatus.errorMessage,
     stale: false,
     stale_reason: null,
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
+  });
+});
+
+app.post('/batch-send/:jobId/resume', async (c) => {
+  const jobId = c.req.param('jobId');
+  const scope = printQueueScopeFromContext(c);
+  const snapshot = await getQueueSendJobSnapshot(jobId);
+  if (!snapshot || !(await canViewQueueSendSnapshot(snapshot, scope))) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
+  const result = await resumeQueueSendWorkerJob(jobId);
+  if (!result.queued) {
+    return c.json({
+      error: result.providerPendingCount > 0
+        ? 'Only provider-pending orders remain. Reconcile those outcomes before retrying.'
+        : 'This job has no safe interrupted orders available to resume.',
+      code: result.providerPendingCount > 0
+        ? 'PRINT_QUEUE_PROVIDER_RECONCILIATION_REQUIRED'
+        : 'PRINT_QUEUE_RESUME_NOT_AVAILABLE',
+      provider_pending: result.providerPendingCount,
+      safe_orders: result.safeOrderCount,
+    }, 409);
+  }
+  return c.json({
+    job_id: jobId,
+    resumed: true,
+    safe_orders: result.safeOrderCount,
+    provider_pending: result.providerPendingCount,
   });
 });
 

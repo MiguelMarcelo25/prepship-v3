@@ -1,4 +1,4 @@
-import { ssRequest } from './client.js';
+import { ShipStationError, ssRequest } from './client.js';
 import { ssV1Request } from './v1-client.js';
 import { normalizeShippingOptions } from '../shipping-options.js';
 import type { Address } from './types.js';
@@ -181,6 +181,11 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
   return pick(labelDownload);
 }
 
+export function normalizeShipStationExternalShipmentId(value: unknown): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized ? normalized.slice(0, 50) : null;
+}
+
 // PS-204 defense-in-depth: synthetic direct-account ids (se-1xxxxxxx
 // carrier_accounts / se-2xxxxxxx store_accounts) are PrepShip-internal — they
 // do not exist at ShipStation, which rejects them ("carrier_id 10000025 not
@@ -241,13 +246,55 @@ export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
       confirmation: options.confirmation,
       ...(hasInsurance ? { insurance_provider: options.insuranceProvider } : {}),
       external_order_id: input.orderNumber ?? undefined,
-      external_shipment_id: input.externalShipmentId ?? undefined,
+      external_shipment_id: normalizeShipStationExternalShipmentId(input.externalShipmentId) ?? undefined,
     },
     is_return_label: false,
     label_layout: '4x6',
     label_format: 'pdf',
     label_download_type: 'url',
   };
+}
+
+export async function ssGetLabelByExternalShipmentId(
+  externalShipmentId: string,
+  options: { apiKeyV2?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<{ status: string | null; label: CreatedExternalLabel } | null> {
+  const normalizedId = normalizeShipStationExternalShipmentId(externalShipmentId);
+  if (!normalizedId) throw new Error('ShipStation external shipment id is required');
+  try {
+    const payload = await ssRequest<Record<string, unknown>>(
+      `/v2/labels/external_shipment_id/${encodeURIComponent(normalizedId)}`,
+      {
+        apiKey: options.apiKeyV2,
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+        dedupeKey: `label:external-shipment:${normalizedId}`,
+      },
+    );
+    const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
+    const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
+    const insuranceCost = payload.insurance_cost as Record<string, unknown> | undefined;
+    return {
+      status: payload.status ? String(payload.status) : null,
+      label: {
+        labelId: payload.label_id ? String(payload.label_id) : null,
+        shipmentId: stripSePrefix(payload.shipment_id) ?? 0,
+        trackingNumber: payload.tracking_number ? String(payload.tracking_number) : null,
+        labelUrl: extractShipstationLabelUrl(labelDownload),
+        labelFormat: payload.label_format ? String(payload.label_format) : null,
+        cost: Number(shipmentCost?.amount ?? 0),
+        insuranceCost: Number(insuranceCost?.amount ?? 0),
+        voided: Boolean(payload.voided),
+        carrierCode: payload.carrier_code ? String(payload.carrier_code) : null,
+        serviceCode: payload.service_code ? String(payload.service_code) : '',
+        shipDate: payload.ship_date ? String(payload.ship_date) : '',
+        providerAccountId: stripSePrefix(payload.carrier_id),
+      },
+    };
+  } catch (error) {
+    if (error instanceof ShipStationError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {

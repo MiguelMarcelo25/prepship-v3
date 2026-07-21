@@ -15,13 +15,19 @@ import {
 } from './print-queue/merge-job-store';
 import {
   claimRecoverableQueueSendJobRecords,
+  claimQueueSendJobManualResume,
+  getQueueSendJobItemRecords,
   getQueueSendJobRecord,
   interruptExhaustedQueueSendJobs,
   markQueueSendJobWorkerClaimed,
   markQueueSendJobInterrupted,
+  markQueueSendJobReconciliationWaiting,
   persistQueueSendJobRecord,
   readQueueSendJobRecoverySafety,
+  updateQueueSendJobItemState,
 } from './print-queue/queue-send-job-store';
+import { planQueueSendRecovery } from './print-queue/queue-send-recovery';
+import { reconcileQueueShipStationOperation } from './print-queue/shipstation-operation-reconciler';
 import { QUEUE_SEND_DURABLE_STALE_AFTER_MS } from './print-queue/queue-send-status';
 import {
   planQueueSendWorkerChunks,
@@ -164,9 +170,11 @@ async function ensurePrintQueueQueues(targetBoss: PgBoss): Promise<void> {
   await Promise.all([
     targetBoss.createQueue(PRINT_QUEUE_SEND_JOB_NAME, {
       name: PRINT_QUEUE_SEND_JOB_NAME,
-      retryLimit: 1,
-      retryDelay: 30,
-      retryBackoff: true,
+      // Per user override unlock shipped data on 2026-07-21: PS-444 disables
+      // pg-boss redelivery for postage-capable chunks. The durable recovery
+      // planner alone may schedule a new generation after provider-pending
+      // items have been fenced, preventing overlap after DB-time expiry.
+      retryLimit: 0,
       expireInSeconds: 30 * 60,
       retentionDays: 7,
     }),
@@ -246,9 +254,7 @@ async function sendQueueSendChunk(
     {
       singletonKey: queueSendChunkSingletonKey(payload),
       singletonSeconds: PRINT_QUEUE_SEND_SINGLETON_SECONDS,
-      retryLimit: 1,
-      retryDelay: 30,
-      retryBackoff: true,
+      retryLimit: 0,
       expireInMinutes: 30,
       retentionDays: 7,
     },
@@ -334,6 +340,69 @@ export async function enqueuePrintMergeWorkerJob(
   }
 }
 
+export async function resumeQueueSendWorkerJob(jobId: string): Promise<{
+  queued: boolean;
+  safeOrderCount: number;
+  providerPendingCount: number;
+}> {
+  const snapshot = await claimQueueSendJobManualResume(
+    jobId,
+    PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS,
+  );
+  if (!snapshot) {
+    return { queued: false, safeOrderCount: 0, providerPendingCount: 0 };
+  }
+  const itemStates = await getQueueSendJobItemRecords(jobId);
+  const plan = planQueueSendRecovery({
+    workerOrders: recoverableOrders(snapshot.workerOrders),
+    itemStates,
+    results: snapshot.results,
+  });
+  if (plan.safeOrders.length === 0) {
+    await markQueueSendJobInterrupted(
+      jobId,
+      plan.providerPendingOrderIds.length > 0
+        ? `Resume waiting: ${plan.providerPendingOrderIds.length} provider outcome(s) require reconciliation; protected orders were not resent.`
+        : 'No safe incomplete orders remain to resume.',
+    );
+    return {
+      queued: false,
+      safeOrderCount: 0,
+      providerPendingCount: plan.providerPendingOrderIds.length,
+    };
+  }
+  const recoveryAttempt = Math.max(1, Math.floor(snapshot.recoveryAttempts ?? 1));
+  let pgBossJobId: string | null = null;
+  try {
+    pgBossJobId = await sendQueueSendChunk(await getPrintQueueEnqueueBoss(), {
+      jobId,
+      orders: plan.safeOrders.slice(0, PRINT_QUEUE_SEND_CHUNK_SIZE),
+      concurrency: snapshot.workerConcurrency ?? undefined,
+      scope: snapshot.workerScope ?? {},
+      requestedAt: new Date().toISOString(),
+      chunkSequence: 1,
+      recoveryAttempt,
+    });
+  } catch (error) {
+    await markQueueSendJobInterrupted(
+      jobId,
+      `Safe-order resume could not be queued: ${error instanceof Error ? error.message : String(error)}`,
+    ).catch(() => undefined);
+    throw error;
+  }
+  if (!pgBossJobId) {
+    await markQueueSendJobInterrupted(
+      jobId,
+      'Safe-order resume was deduplicated; verify worker health and retry.',
+    );
+  }
+  return {
+    queued: Boolean(pgBossJobId),
+    safeOrderCount: plan.safeOrders.length,
+    providerPendingCount: plan.providerPendingOrderIds.length,
+  };
+}
+
 async function markRecoverableJobInterrupted(
   snapshot: Awaited<ReturnType<typeof claimRecoverableQueueSendJobRecords>>[number],
 ): Promise<void> {
@@ -372,28 +441,85 @@ async function recoverStaleQueueSendJobs(targetBoss: PgBoss): Promise<QueueSendW
       interrupted += 1;
       continue;
     }
-    if (!canAutomaticallyRecoverQueueSendJob(recoverySafety.providerPendingCount)) {
-      // Per user override unlock shipped data on 2026-07-15: PS-430 blocks
-      // automatic recovery while a provider outcome is unknown. The durable
-      // metadata is interrupted; no provider call, label repurchase, or order
-      // mutation is performed here.
-      await markQueueSendJobInterrupted(
-        snapshot.jobId,
-        `Recovery blocked: ${recoverySafety.providerPendingCount} provider outcome(s) require reconciliation before retrying.`,
-      );
-      interrupted += 1;
-      continue;
-    }
     const orders = recoverableOrders(snapshot.workerOrders);
     if (!orders.length) {
       await markRecoverableJobInterrupted(snapshot);
       interrupted += 1;
       continue;
     }
-    const completedOrderIds = new Set(
-      (snapshot.results ?? []).map((result) => result.orderId),
+    let itemStates = await getQueueSendJobItemRecords(snapshot.jobId);
+    const ordersById = new Map(orders.map((order) => [order.orderId, order]));
+    for (const item of itemStates) {
+      if (item.state !== 'provider_pending' && item.state !== 'provider_pending_recovery') continue;
+      const order = ordersById.get(item.orderId);
+      if (!order) continue;
+      try {
+        const reconciliation = await reconcileQueueShipStationOperation(
+          order,
+          snapshot.workerScope ?? {},
+        );
+        if (reconciliation.status === 'recovered') {
+          await updateQueueSendJobItemState(snapshot.jobId, order.orderId, {
+            clientId: order.clientId,
+            state: 'shipment_persisted',
+            blockedReason: null,
+            errorMessage: null,
+            trackingNumber: reconciliation.trackingNumber,
+          });
+        } else if (reconciliation.status === 'no_effect') {
+          await updateQueueSendJobItemState(snapshot.jobId, order.orderId, {
+            clientId: order.clientId,
+            state: 'ready',
+            blockedReason: null,
+            errorMessage: null,
+          });
+        }
+      } catch (error) {
+        console.warn(
+          `[print-queue-worker] exact provider reconciliation held jobId=${snapshot.jobId} orderId=${order.orderId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+    itemStates = await getQueueSendJobItemRecords(snapshot.jobId);
+    try {
+      recoverySafety = await readQueueSendJobRecoverySafety(snapshot.jobId);
+    } catch (error) {
+      await markQueueSendJobInterrupted(
+        snapshot.jobId,
+        'Recovery safety state could not be refreshed after provider reconciliation.',
+      ).catch(() => undefined);
+      interrupted += 1;
+      continue;
+    }
+    const recoveryPlan = planQueueSendRecovery({
+      workerOrders: orders,
+      itemStates,
+      results: snapshot.results,
+    });
+    const providerPendingPresent = !canAutomaticallyRecoverQueueSendJob(
+      recoverySafety.providerPendingCount,
     );
-    const remainingOrders = orders.filter((order) => !completedOrderIds.has(order.orderId));
+    if (providerPendingPresent !== (recoveryPlan.providerPendingOrderIds.length > 0)) {
+      await markQueueSendJobInterrupted(
+        snapshot.jobId,
+        'Recovery safety state changed while the job was being planned; retry after the next durable recovery pass.',
+      );
+      interrupted += 1;
+      continue;
+    }
+    const remainingOrders = recoveryPlan.safeOrders;
+    if (!remainingOrders.length && recoveryPlan.providerPendingOrderIds.length > 0) {
+      // Per user override unlock shipped data on 2026-07-21: PS-444 keeps only
+      // unknown provider outcomes fenced. It never resends those orders, while
+      // unrelated safe orders in the same batch are allowed to continue.
+      await markQueueSendJobReconciliationWaiting(
+        snapshot.jobId,
+        `Recovery waiting: ${recoveryPlan.providerPendingOrderIds.length} provider outcome(s) require reconciliation; no safe orders remain.`,
+      );
+      interrupted += 1;
+      continue;
+    }
     if (!remainingOrders.length) {
       const now = new Date().toISOString();
       await persistQueueSendJobRecord({
@@ -431,7 +557,10 @@ async function recoverStaleQueueSendJobs(targetBoss: PgBoss): Promise<QueueSendW
           active: true,
           message:
             `Recovery attempt ${recoveryAttempt}/${PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS} ` +
-            `queued for ${Math.min(remainingOrders.length, PRINT_QUEUE_SEND_CHUNK_SIZE)} remaining orders`,
+            `queued for ${Math.min(remainingOrders.length, PRINT_QUEUE_SEND_CHUNK_SIZE)} safe remaining orders` +
+            (recoveryPlan.providerPendingOrderIds.length > 0
+              ? `; ${recoveryPlan.providerPendingOrderIds.length} provider outcome(s) remain fenced`
+              : ''),
           updatedAt: now,
           persistedAt: now,
         });
@@ -574,12 +703,22 @@ async function enqueueNextQueueSendChunk(
 ): Promise<void> {
   const snapshot = await getQueueSendJobRecord(payload.jobId);
   if (!snapshot || snapshot.status === 'done' || snapshot.status === 'error') return;
-  const completedOrderIds = new Set(
-    (snapshot.results ?? []).map((result) => result.orderId),
-  );
-  const remainingOrders = recoverableOrders(snapshot.workerOrders)
-    .filter((order) => !completedOrderIds.has(order.orderId));
-  if (!remainingOrders.length) return;
+  const itemStates = await getQueueSendJobItemRecords(payload.jobId);
+  const recoveryPlan = planQueueSendRecovery({
+    workerOrders: recoverableOrders(snapshot.workerOrders),
+    itemStates,
+    results: snapshot.results,
+  });
+  const remainingOrders = recoveryPlan.safeOrders;
+  if (!remainingOrders.length) {
+    if (recoveryPlan.providerPendingOrderIds.length > 0) {
+      await markQueueSendJobInterrupted(
+        payload.jobId,
+        `Queue batch paused with ${recoveryPlan.providerPendingOrderIds.length} provider outcome(s) awaiting reconciliation; protected orders were not resent.`,
+      );
+    }
+    return;
+  }
 
   const nextPayload: QueueSendWorkerPayload = {
     jobId: snapshot.jobId,

@@ -90,10 +90,10 @@ assert.match(store, /END < \$\{maxAttempts\}/,
   'recovery claims must enforce the attempt cap');
 assert.match(store, /export async function interruptExhaustedQueueSendJobs/,
   'exhausted jobs must become visibly interrupted');
-assert.equal((store.match(/'message', \$\{message\}::text/g) ?? []).length, 2,
-  'both recovery messages embedded in JSONB must have an explicit PostgreSQL text type');
-assert.equal((store.match(/'errorMessage', \$\{message\}::text/g) ?? []).length, 2,
-  'both recovery error messages embedded in JSONB must have an explicit PostgreSQL text type');
+assert.equal((store.match(/'message', \$\{message\}::text/g) ?? []).length, 3,
+  'all recovery messages embedded in JSONB must have an explicit PostgreSQL text type');
+assert.equal((store.match(/'errorMessage', \$\{message\}::text/g) ?? []).length, 3,
+  'all recovery error messages embedded in JSONB must have an explicit PostgreSQL text type');
 assert.doesNotMatch(store, /export async function getRecoverableQueueSendJobRecords/,
   'the old non-claiming recovery reader must not remain as a second owner');
 
@@ -121,8 +121,8 @@ assert.match(service, /return runQueueSendSingleFlight\(payload\.jobId/,
   'worker retries must use the parent-job re-entry guard');
 assert.match(service, /await runQueueSendPool\([\s\S]*?signal/,
   'per-order admission must receive the parent cancellation signal');
-assert.match(service, /job\.status = job\.current >= job\.total \? 'done' : 'pending'/,
-  'a successful intermediate chunk must leave the parent pending');
+assert.match(service, /job\.status = providerPendingCount > 0[\s\S]*?\? 'interrupted'[\s\S]*?: job\.current >= job\.total[\s\S]*?\? 'done'[\s\S]*?: 'pending'/,
+  'safe intermediate chunks stay pending, while provider-ambiguous orders interrupt the parent');
 assert.match(service, /err instanceof QueueSendJobInterruptedError/,
   'cancelled parents must persist interruption rather than generic failure');
 assert.match(execution, /while \(!signal\?\.aborted && running\.size < maxConcurrent/,

@@ -40,6 +40,7 @@ const packageJson = read('package.json');
 const ratesBackfill = read('src/services/rates-backfill.ts');
 const syncScheduler = read('src/services/sync-scheduler.ts');
 const syncJobQueue = read('src/services/sync-job-queue.ts');
+const rateBackfillJobTypes = read('src/services/rate-backfill-job-types.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const policySource = maybeRead('src/services/rate-preexpiry-refresh-policy.ts');
 const proofSource = maybeRead('src/services/rate-preexpiry-refresh-proof.ts');
@@ -118,12 +119,13 @@ const checks: Check[] = [
   ),
   ok(
     'scheduler runs the rate backfill as explicit pre-expiry refresh, not manual force-live',
-    /startBackfillBestRates\(\{\s*mode:\s*['"]preexpiry_refresh['"]\s*\}\)/.test(syncScheduler),
+    /buildCadenceRateBackfillJobPayload/.test(syncScheduler) &&
+      /requestedBy:\s*['"]cadence['"][\s\S]*options:\s*\{\s*mode:\s*['"]preexpiry_refresh['"]/.test(rateBackfillJobTypes),
   ),
   ok(
     'pg-boss scheduler still delegates to runBackfillTick for one backend-owned refresh path',
     // Audit 5.5 added explicit durable payloads; cadence payloads still take runBackfillTick.
-    /registerWorker\(JOBS\.rateBackfill,[\s\S]{0,350}explicitRequest[\s\S]{0,180}runBackfillTick\(\)/.test(syncJobQueue),
+    /registerWorker\(JOBS\.rateBackfill,[\s\S]*explicitRequest[\s\S]*runBackfillTick\(identity\.queueJobId, signal\)/.test(syncJobQueue),
   ),
   ok(
     'pre-expiry refresh is scheduler-scoped and forces live only for backend-selected non-fresh rows',
@@ -171,6 +173,7 @@ if (policySource) {
     cacheKey: 'fp',
     rateQuoteId: 'rq_1',
     selectedRateKey: 'srk_1',
+    selectionRef: 'qsel.rq_1.srk_1',
     isComplete: true,
     cShippingRateAmount: 12,
     selectedRateCost: 10,
@@ -182,6 +185,7 @@ if (policySource) {
     cacheKey: 'fp',
     rateQuoteId: 'rq_1',
     selectedRateKey: 'srk_1',
+    selectionRef: 'qsel.rq_1.srk_1',
     isComplete: true,
     cShippingRateAmount: 12,
     selectedRateCost: 10,
@@ -193,6 +197,7 @@ if (policySource) {
     cacheKey: 'fp',
     rateQuoteId: 'rq_1',
     selectedRateKey: 'srk_1',
+    selectionRef: 'qsel.rq_1.srk_1',
     isComplete: true,
     cShippingRateAmount: 12,
     cacheExpiresAt: new Date(now + 2 * 60 * 60 * 1000).toISOString(),

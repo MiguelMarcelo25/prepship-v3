@@ -154,6 +154,7 @@ async function acquireShipStationV2Budget(
 }
 
 export class ShipStationError extends Error {
+  code?: string;
   constructor(
     public readonly status: number,
     message: string,
@@ -162,6 +163,15 @@ export class ShipStationError extends Error {
     super(message);
     this.name = 'ShipStationError';
   }
+}
+
+function shipStationError(status: number, message: string, body?: unknown): ShipStationError {
+  const error = new ShipStationError(status, message, body);
+  const detail = extractShipStationMessage(body) ?? '';
+  if (/insufficient[^.]{0,40}balance|balance[^.]{0,40}insufficient/i.test(detail)) {
+    error.code = 'SHIPSTATION_INSUFFICIENT_BALANCE';
+  }
+  return error;
 }
 
 type RequestOpts = {
@@ -255,7 +265,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
             body = await res.text();
           }
           const detail = extractShipStationMessage(body);
-          throw new ShipStationError(
+          throw shipStationError(
             res.status,
             `ShipStation ${res.status}: ${detail ?? res.statusText}`,
             body

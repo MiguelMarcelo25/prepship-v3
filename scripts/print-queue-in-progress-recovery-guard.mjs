@@ -26,12 +26,12 @@ const checks = [
       /code === 'LABEL_PURCHASE_IN_PROGRESS'/.test(service),
   },
   {
-    name: 'queue-send reports active label-purchase locks as retryable in-progress failures',
+    name: 'queue-send fences active label-purchase locks from manual or automatic repurchase',
     pass:
       /const labelPurchaseInProgress = isLabelPurchaseInProgressError\(err\)/.test(service) &&
-      /const retryEligible = staleLabelAttempt \|\| labelPurchaseInProgress \|\| retry\.retryEligible/.test(service) &&
-      /label_purchase_in_progress/.test(service) &&
-      /state: retryEligible \? 'failed_retryable' : 'failed_terminal'/.test(service),
+      /const retryEligible = !labelPurchaseInProgress/.test(service) &&
+      /label_purchase_reconciliation_required/.test(service) &&
+      /'provider_pending_recovery'/.test(service),
   },
   {
     name: 'queue-send waits for the first purchase to persist a queueable label before failing',
@@ -55,7 +55,7 @@ const checks = [
       /PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS/.test(env) &&
       /withDeadline\(/.test(worker) &&
       /env\.PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS/.test(worker) &&
-      /runQueueSendJobFromWorker\(payload, \{ signal: abortController\.signal \}\)/.test(worker) &&
+      /runQueueSendJobFromWorker\(payload, \{[\s\S]*?signal: abortController\.signal,[\s\S]*?\}\)/.test(worker) &&
       /onTimeout: \(\) => abortController\.abort\(\)/.test(worker),
   },
   {

@@ -74,7 +74,8 @@ assert(
 );
 assert(
   mergeJobStoreSource.includes('INSERT INTO print_queue_merge_jobs') &&
-    mergeJobStoreSource.includes('WHERE print_queue_merge_jobs.updated_at <= ${snapshot.persistedAt}'),
+    mergeJobStoreSource.includes('WHERE print_queue_merge_jobs.generation = ${snapshot.generation}') &&
+    mergeJobStoreSource.includes('print_queue_merge_jobs.snapshot_updated_at <= ${snapshot.persistedAt}'),
   'PDF-merge snapshots persist per job and reject older racing writes',
 );
 assert(

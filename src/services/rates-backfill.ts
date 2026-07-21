@@ -2,8 +2,15 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
+import { packages } from '../db/schema/packages';
 import { settings } from '../db/schema/settings';
-import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getDirectCarrierRatesForRateInput, getRates } from './rates';
+import {
+  CACHE_TTL_MS,
+  RATE_FETCH_CONCURRENCY,
+  getDirectCarrierRatesForRateInput,
+  getRates,
+  resolveRateInput,
+} from './rates';
 import { combineCarrierUniverses } from './rates-combined';
 import {
   buildResidentialEvidenceFromOrder,
@@ -57,6 +64,17 @@ import {
   toGetRatesOptions,
 } from './rate-preexpiry-refresh-request';
 import { env } from '../lib/env';
+import { getDefaultShipFrom } from '../lib/ship-from';
+import { normalizeShippingOptions } from '../lib/shipping-options';
+import { resolveOutboundPackageSelection } from './package-consumption';
+import { resolveCarrierRecipientName } from './carrier-recipient-name';
+import { getDefaultLocation } from './locations';
+import {
+  normalizeShippingQuoteAddress,
+  shippingProviderIdFromAuthorizedRate,
+  type ShippingQuoteAuthorizationContext,
+} from './shipping-workflow/shipping-quote-authorization';
+import { shipStationQuoteAccountAuthorizations } from './shipping-workflow/quote-account-authorization';
 import {
   resolveRateBackfillConcurrency,
   resolveRateBackfillDbWriteConcurrency,
@@ -908,6 +926,7 @@ async function runBackfill(
         or nullif(${orderOverrides.bestRateJson}->>'cacheKey', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'rateQuoteId', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'selectedRateKey', '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'selectionRef', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'cShippingRateAmount', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'selectedRateCost', '') is null
       )
@@ -935,6 +954,10 @@ async function runBackfill(
         orderNumber: orders.orderNumber,
         clientId: orders.clientId,
         storeId: orders.storeId,
+        sourceProvider: orders.sourceProvider,
+        sourceAccountId: orders.sourceAccountId,
+        sourceOrderId: orders.sourceOrderId,
+        customerEmail: orders.customerEmail,
         weightOz: orders.weightOz,
         rateWeightOz: orderOverrides.rateWeightOz,
         shipToPostalCode: orders.shipToPostalCode,
@@ -1203,7 +1226,13 @@ async function runBackfill(
           dimsH: dims.height,
           storeId: row.storeId,
           clientId: row.clientId,
+          orderId: row.id,
+          orderNumber: row.orderNumber ?? null,
+          sourceProvider: row.sourceProvider,
+          sourceAccountId: row.sourceAccountId,
+          rawOrder: row.raw,
         };
+        const resolvedRateInput = await resolveRateInput(rateInput);
         const rateFetchDecision = buildBackfillRateFetchDecision({
           liveRecalculate,
           mode: opts.mode,
@@ -1216,13 +1245,13 @@ async function runBackfill(
         // fail-closed handler deadline. Do not use a promise-race timeout that
         // can detach live rate/cache work before the shared lane is released.
         const shipStationWork = context.durableChunk
-          ? getRates(rateInput, toGetRatesOptions(rateFetchDecision))
+          ? getRates(resolvedRateInput, toGetRatesOptions(rateFetchDecision))
           : runWithTimeoutAndRetry(
               // PS-350: this background backfill is lower-priority bulk work; manual Rate Browser
               // and Print Queue preflight attach to the backend job owner ahead of this lane.
               // PS-perf: the best-rate backfill is bulk BACKGROUND work — it yields ShipStation
               // budget + fan-out permits to interactive Browse Rates clicks (the limiter priority lane).
-              () => getRates(rateInput, toGetRatesOptions(rateFetchDecision)),
+              () => getRates(resolvedRateInput, toGetRatesOptions(rateFetchDecision)),
               {
                 timeoutMs: perOrderTimeoutMs,
                 maxRetries: rateFetchDecision.forceRefresh ? LIVE_MAX_RETRIES : 0,
@@ -1241,7 +1270,7 @@ async function runBackfill(
         // A wholesale direct-fetch failure marks the universe incomplete (a
         // synthetic failed diagnostic) instead of self-certifying SS-only.
         const directCarrierWork = getDirectCarrierRatesForRateInput({
-            ...rateInput,
+            ...resolvedRateInput,
             includeVisibleDirectCarriers: true,
             orderId: row.id,
             orderNumber: row.orderNumber ?? undefined,
@@ -1262,6 +1291,7 @@ async function runBackfill(
           rates: [],
           errors: [],
           metas: [],
+          authorizationAccounts: [],
           diagnostics: [{
             carrierId: 'se-direct-fetch',
             carrierCode: 'direct',
@@ -1310,6 +1340,91 @@ async function runBackfill(
             delete rawAmountSecondBest.original_amount;
             delete rawAmountSecondBest.markup;
           }
+          const packageSelection = await resolveOutboundPackageSelection({
+            orderId: row.id,
+            selectedPackageId: null,
+            dimensions: dims,
+          });
+          const packageId = packageSelection.status === 'matched'
+            ? packageSelection.packageId
+            : null;
+          const [packageRow] = packageId == null
+            ? []
+            : await db
+                .select({ id: packages.id, type: packages.type, packageCode: packages.packageCode })
+                .from(packages)
+                .where(eq(packages.id, packageId))
+                .limit(1);
+          const rawShipTo = raw.shipTo && typeof raw.shipTo === 'object'
+            ? raw.shipTo as Record<string, unknown>
+            : {};
+          const recipient = resolveCarrierRecipientName({
+            name: typeof rawShipTo.name === 'string' ? rawShipTo.name : row.shipToName,
+            company: typeof rawShipTo.company === 'string' ? rawShipTo.company : null,
+            customerEmail: row.customerEmail,
+          });
+          const defaultLocation = await getDefaultLocation().catch(() => null);
+          const shipFrom = resolvedRateInput.shipFrom ?? await getDefaultShipFrom();
+          const options = normalizeShippingOptions(resolvedRateInput);
+          const authorizationContext: ShippingQuoteAuthorizationContext = {
+            version: 1,
+            order: {
+              orderId: row.id,
+              clientId: row.clientId,
+              storeId: row.storeId,
+              sourceProvider: row.sourceProvider,
+              sourceAccountId: row.sourceAccountId,
+              sourceOrderId: row.sourceOrderId,
+            },
+            shipment: {
+              shipFromLocationId: defaultLocation?.id ?? null,
+              shipFrom: normalizeShippingQuoteAddress(shipFrom),
+              shipTo: normalizeShippingQuoteAddress({
+                ...rawShipTo,
+                name: recipient.name,
+                company: recipient.company,
+                city: rawShipTo.city ?? row.shipToCity,
+                state: rawShipTo.state ?? row.shipToState,
+                postalCode: rawShipTo.postalCode ?? rawShipTo.postal_code ?? row.shipToPostalCode,
+                country: rawShipTo.country ?? toCountry,
+              }),
+              package: {
+                id: packageRow?.id ?? packageId,
+                type: packageRow?.type ?? null,
+                code: packageRow?.packageCode ?? null,
+              },
+              weightOz: Number(resolvedRateInput.weightOz),
+              dimensions: dims,
+              residential: resolvedRateInput.residential === true,
+              confirmation: options.confirmation,
+              insuranceProvider: options.insuranceProvider,
+              insuredValue: Number(options.insuredValue ?? 0) || 0,
+            },
+          };
+          const presentProviderIds = new Set(
+            combined.combinedRates
+              .map((rate) => shippingProviderIdFromAuthorizedRate(rate as Record<string, unknown>))
+              .filter((id): id is number => id != null),
+          );
+          const authorizationAccounts = [
+            ...shipStationQuoteAccountAuthorizations({
+              rates: combined.combinedRates as Array<Record<string, unknown>>,
+              clientId: resolvedRateInput.clientId ?? null,
+              sourceClientId: resolvedRateInput.sourceClientId ?? null,
+              apiKeyV2: resolvedRateInput.apiKeyV2 ?? null,
+            }),
+            ...(directResult.authorizationAccounts ?? []),
+          ].filter((account, index, list) =>
+            presentProviderIds.has(account.shippingProviderId)
+            && list.findIndex((candidate) =>
+              candidate.shippingProviderId === account.shippingProviderId
+              && candidate.providerFamily === account.providerFamily,
+            ) === index,
+          );
+          const quoteAuthorization = {
+            context: authorizationContext,
+            accounts: authorizationAccounts,
+          };
           // PS-174 (Phase 2): stamp the backend quote snapshot ref + proof marker —
           // the SAME finalization /rates/browse performs — so the persisted best
           // rate is snapshot-purchasable on reload without a re-browse. Best-effort
@@ -1336,6 +1451,7 @@ async function runBackfill(
             cacheKey: combined.combinedRequestKey,
             bestRateComplete: combined.bestRateComplete,
             fetchedAt: result.fetchedAt,
+            authorization: quoteAuthorization,
           });
           assertBackfillCanContinue(jobId, context.signal, `post-quote snapshot order ${row.id}`);
           // PS-203 (stage 4): persist the RAW carrier amount, never the marked-up

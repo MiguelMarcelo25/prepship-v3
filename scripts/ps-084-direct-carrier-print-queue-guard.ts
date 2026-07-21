@@ -42,7 +42,7 @@ check(
 
 check(
   'v4 label owner creates a separate carrierShipTo payload',
-  /const carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/.test(labelsSvc),
+  /(?:const|let) carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/.test(labelsSvc),
 );
 
 check(
@@ -65,13 +65,13 @@ check(
     /if \(mode === 'queue'\)[\s\S]*?await sendOrdersToQueueBackend\(batchOrders/.test(ordersView),
 );
 
-// PS-317 A4 (re-pointed to the INTENT payload): the canonical account-binding + rate proof
-// the deleted FE buy used to carry is now SENT to the backend in the queue-send intent
+// PS-317 A4 / PS-422 (re-pointed to the INTENT payload): the canonical account binding and
+// opaque backend selectionRef are SENT to the backend in the queue-send intent
 // (buildQueueSendOrderPayload), not used to buy a label on the client. The backend owner
 // (createLabelV2) derives the carrier-safe shipTo and runs the proof/eligibility gate.
 check(
   'queue-send intent payload carries provider-account binding + selected-rate proof to the backend',
-  /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildQueuePayloadFn) &&
+  !buildQueuePayloadFn.includes('selectedRateProof:') &&
     /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildQueuePayloadFn) &&
     /shippingProviderId: shippingProviderId \?\? undefined/.test(buildQueuePayloadFn),
 );

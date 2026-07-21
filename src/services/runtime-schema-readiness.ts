@@ -304,7 +304,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0073_inventory_quantity_sot.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0073_inventory_quantity_sot.sql (including 0072_external_operations.sql). Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

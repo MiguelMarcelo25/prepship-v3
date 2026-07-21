@@ -862,6 +862,10 @@ export default function OrdersView({
   const [queueEntriesClientId, setQueueEntriesClientId] = useState<number | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
   const [queueActionProgress, setQueueActionProgress] = useState<QueueActionProgress | null>(null)
+  // Per user override unlock shipped data on 2026-07-21: PS-444 preserves and
+  // renders backend-owned queue recovery outcomes. This does not re-enable any
+  // shipped/cancelled edit, selection, or batch mutation control.
+  const [queueRecoveryStatus, setQueueRecoveryStatus] = useState<any>(null)
   const [queuePrintMessage, setQueuePrintMessage] = useState<string | null>(null)
   const [queuePrintProgress, setQueuePrintProgress] = useState<number | null>(null)
   const [queuePrintInFlight, setQueuePrintInFlight] = useState(false)
@@ -2982,7 +2986,10 @@ export default function OrdersView({
         : active
       )
 
-      if (status.status === 'done') return status
+      if (status.status === 'done') {
+        setQueueRecoveryStatus(null)
+        return status
+      }
       if (status.status === 'interrupted') {
         setQueueActionProgress((active) => active
           ? {
@@ -2996,7 +3003,9 @@ export default function OrdersView({
           : active
         )
         const interrupted = new Error(status.message || 'Queue job interrupted before it could finish')
-        ;(interrupted as Error & { code?: string }).code = 'QUEUE_SEND_INTERRUPTED'
+        ;(interrupted as Error & { code?: string; status?: unknown }).code = 'QUEUE_SEND_INTERRUPTED'
+        ;(interrupted as Error & { status?: unknown }).status = status
+        setQueueRecoveryStatus(status)
         throw interrupted
       }
       if (status.status === 'error') {
@@ -3019,6 +3028,26 @@ export default function OrdersView({
       setQueueOpen(true)
     } finally {
       setQueueLoading(false)
+    }
+  }
+
+  async function resumeInterruptedQueueFromPanel() {
+    const jobId = toStringValue(queueRecoveryStatus?.job_id)
+    if (!jobId || queueRecoveryStatus?.can_resume !== true) return
+    const total = toNumberValue(queueRecoveryStatus?.total) ?? 1
+    startQueueActionProgress(total, 'Resuming safe queue items', toNumberValue(queueRecoveryStatus?.current) ?? 0)
+    try {
+      await apiClient.resumeQueueSendJob(jobId)
+      const status = await pollBackendQueueSendJob(jobId, total)
+      await refreshQueueAfterBackendStatus(status)
+      await refetchOrders()
+      const persisted = readPersistentQueueJob()
+      if (persisted?.backendJobId === jobId) clearPersistentQueueJob(persisted.id)
+      setQueueRecoveryStatus(null)
+      finishQueueActionProgress('Queue updated')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Safe queue resume failed', 'error')
+      finishQueueActionProgress('Queue resume failed', { complete: false })
     }
   }
 
@@ -3141,6 +3170,9 @@ export default function OrdersView({
           )
         } catch (error) {
           queueInterrupted = (error as { code?: unknown } | null)?.code === 'QUEUE_SEND_INTERRUPTED'
+          if (queueInterrupted) {
+            finalStatus = (error as { status?: unknown } | null)?.status ?? null
+          }
           throw error
         }
         await refreshQueueAfterBackendStatus(finalStatus)
@@ -3158,7 +3190,7 @@ export default function OrdersView({
       }
     } finally {
       setQueueLoading(false)
-      finishPersistentQueueJob(queueJobId)
+      if (!queueInterrupted) finishPersistentQueueJob(queueJobId)
       const queued = toNumberValue(finalStatus?.queued) ?? 0
       finishQueueActionProgress(
         queueInterrupted ? 'Queue interrupted' : queued > 0 ? 'Queue updated' : 'Queue checked',
@@ -3208,10 +3240,11 @@ export default function OrdersView({
     // PS-191: backend-owned retry eligibility per failed order. Callers use
     // this to PROMPT a re-rate (operator reviews + clicks again) — never to
     // auto-repurchase.
+    const backendOutcomes = (finalStatus?.outcomes ?? []) as Array<Record<string, unknown>>
     const retryEligibleOrderIds = new Set(
-      backendResults
-        .filter((result) => result.success === false && result.retryEligible === true)
-        .map((result) => toNumberValue(result.orderId ?? result.order_id))
+      backendOutcomes
+        .filter((outcome) => outcome.nextAction === 'rerate')
+        .map((outcome) => toNumberValue(outcome.orderId ?? outcome.order_id))
         .filter((orderId): orderId is number => orderId != null),
     )
 
@@ -5204,8 +5237,17 @@ export default function OrdersView({
       activePersistentQueueJobIdRef.current = job.id
       startQueueActionProgress(progress.total, 'Resuming queue', progress.completed, progress.failed)
       showToast(`Resuming queue send (${progress.completed}/${progress.total})`)
+      let completed = false
       try {
-        const status = await pollBackendQueueSendJob(job.backendJobId, progress.total)
+        let status: any
+        try {
+          status = await pollBackendQueueSendJob(job.backendJobId, progress.total)
+        } catch (error) {
+          const interruptedStatus = (error as { status?: any } | null)?.status
+          if (!interruptedStatus?.can_resume) throw error
+          await apiClient.resumeQueueSendJob(job.backendJobId)
+          status = await pollBackendQueueSendJob(job.backendJobId, progress.total)
+        }
         await refreshQueueAfterBackendStatus(status)
         await refetchOrders()
         const queued = toNumberValue(status?.queued) ?? 0
@@ -5218,11 +5260,13 @@ export default function OrdersView({
           failed > 0 ? 'error' : skipped > 0 ? 'info' : queued > 0 ? 'success' : 'info',
         )
         finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
+        setQueueRecoveryStatus(null)
+        completed = true
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Failed to resume queue send', 'error')
         finishQueueActionProgress('Queue resume failed')
       } finally {
-        clearPersistentQueueJob(job.id)
+        if (completed) clearPersistentQueueJob(job.id)
         activePersistentQueueJobIdRef.current = null
         resumePersistentQueueJobIdRef.current = null
       }
@@ -6646,6 +6690,38 @@ export default function OrdersView({
             onExportCsv: handleExportCsv,
           }}
         />
+
+        {queueRecoveryStatus ? (
+          <section className="mx-4 mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-ink shadow-sm dark:border-amber-700 dark:bg-amber-950/30" aria-label="Print Queue recovery details">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">Print Queue needs attention</h3>
+                <p className="mt-1 text-xs text-ink-muted">
+                  {toStringValue(queueRecoveryStatus.message) ?? 'Some queue items require recovery.'}
+                </p>
+              </div>
+              {queueRecoveryStatus.can_resume === true ? (
+                <button
+                  type="button"
+                  className="rounded-md bg-brand px-3 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                  onClick={() => void resumeInterruptedQueueFromPanel()}
+                  disabled={queueActionProgress != null}
+                >
+                  Resume safe items
+                </button>
+              ) : null}
+            </div>
+            <div className="mt-3 max-h-64 overflow-auto rounded-md border border-amber-200 bg-surface dark:border-amber-800">
+              {(Array.isArray(queueRecoveryStatus.outcomes) ? queueRecoveryStatus.outcomes : []).map((outcome: any) => (
+                <div key={String(outcome.orderId)} className="grid gap-1 border-b border-line px-3 py-2 text-xs last:border-b-0 sm:grid-cols-[minmax(8rem,0.7fr)_minmax(10rem,1fr)_minmax(12rem,2fr)]">
+                  <span className="font-medium">Order {toStringValue(outcome.orderNumber) ?? toStringValue(outcome.orderId) ?? 'Unknown'}</span>
+                  <span>{toStringValue(outcome.nextAction)?.replaceAll('_', ' ') ?? 'none'}</span>
+                  <span className="text-ink-muted">{toStringValue(outcome.reason) ?? toStringValue(outcome.state) ?? 'No additional details'}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         {/* PS-166 (Wave 3, JSX-safe): the daily-stats strip renders from
             OrdersDailyStrip with byte-identical markup (the whole

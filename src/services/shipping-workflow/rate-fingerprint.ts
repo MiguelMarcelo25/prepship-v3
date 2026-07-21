@@ -540,6 +540,9 @@ export function classifyLabelPurchaseRetry(err: unknown): {
     | { code?: unknown; name?: unknown; status?: unknown; details?: { reason?: unknown } }
     | null
     | undefined;
+  if (!!e && String(e.code) === 'SHIPSTATION_INSUFFICIENT_BALANCE') {
+    return { retryEligible: false, retryReason: 'insufficient_account_balance' };
+  }
   // Audit PQ-5 (2026-07-13): PRE-PURCHASE-PROVABLE transport failures are retry
   // eligible — the provider never processed the request, so a retry cannot
   // double-buy. Circuit-open: the request never left the process. 429: ShipStation

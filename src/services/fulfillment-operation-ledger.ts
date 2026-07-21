@@ -481,8 +481,38 @@ export async function dispatchFulfillmentOperation<T>(
   } catch (error) {
     const state = input.classifyError?.(error) ?? 'reconcile_required';
     await markFulfillmentOperationOutcome(input.lease, state, error, injected);
+    if (state === 'reconcile_required') {
+      // Per user override unlock shipped data on 2026-07-21: expose the durable hold instead of
+      // leaking a provider error that a caller could mistake for a safe automatic label retry.
+      throw new FulfillmentOperationHeldError({
+        id: input.lease.operationId,
+        operationKey: input.lease.operationKey,
+        generation: input.lease.generation,
+        state,
+      });
+    }
     throw error;
   }
+}
+
+export async function getHeldLabelOperationOrderIds(orderIds: number[]): Promise<Set<number>> {
+  const unique = [...new Set(orderIds.filter((orderId) => Number.isInteger(orderId) && orderId > 0))];
+  if (unique.length === 0) return new Set();
+  await assertRuntimeSchemaReady();
+  const rows = await db
+    .select({ subjectId: externalOperations.subjectId })
+    .from(externalOperations)
+    .where(and(
+      eq(externalOperations.subjectType, 'order'),
+      inArray(externalOperations.subjectId, unique.map(String)),
+      inArray(externalOperations.kind, ['forward_label', 'shopify_label']),
+      inArray(externalOperations.state, ['in_flight', 'reconcile_required']),
+    ));
+  return new Set(
+    rows
+      .map((row) => Number(row.subjectId))
+      .filter((orderId) => Number.isInteger(orderId) && orderId > 0),
+  );
 }
 
 export async function consumeFulfillmentOperation<T extends Record<string, unknown>>(
@@ -601,6 +631,35 @@ export async function listHeldFulfillmentOperations(
     .where(and(...conditions))
     .orderBy(externalOperations.createdAt)
     .limit(Math.max(1, Math.min(200, input.limit ?? 100)));
+}
+
+export async function getActiveOrHeldLabelOperationForOrder(
+  orderId: number,
+  injected: FulfillmentOperationDependencies = {},
+): Promise<ExternalOperation | null> {
+  const dependencies = dependenciesFor(injected);
+  await dependencies.ensureSchema();
+  const [operation] = await dependencies.database
+    .select()
+    .from(externalOperations)
+    .where(and(
+      eq(externalOperations.subjectType, 'order'),
+      eq(externalOperations.subjectId, String(orderId)),
+      inArray(externalOperations.kind, ['forward_label', 'shopify_label']),
+      inArray(externalOperations.state, ['in_flight', 'reconcile_required']),
+    ))
+    .orderBy(sql`${externalOperations.semanticGeneration} desc`, sql`${externalOperations.id} desc`)
+    .limit(1);
+  if (!operation) return null;
+  if (
+    operation.state === 'in_flight'
+    && (!operation.leaseExpiresAt || operation.leaseExpiresAt.getTime() <= dependencies.now().getTime())
+  ) {
+    return holdExpiredFulfillmentOperationForReconciliation(operation.id, {
+      note: 'Expired Print Queue provider attempt requires exact provider reconciliation',
+    }, injected);
+  }
+  return operation;
 }
 
 /**

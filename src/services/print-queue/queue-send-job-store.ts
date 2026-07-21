@@ -363,6 +363,50 @@ export async function claimRecoverableQueueSendJobRecords(options: {
   }
 }
 
+/** Atomically claim an operator-requested resume of safe, non-provider-pending items. */
+export async function claimQueueSendJobManualResume(
+  jobId: string,
+  maxAttempts: number,
+): Promise<QueueSendJobSnapshot | null> {
+  if (!jobId) return null;
+  await ensureQueueSendJobStoreSchema();
+  const boundedMaxAttempts = Math.max(1, Math.floor(maxAttempts));
+  // Per user override unlock shipped data on 2026-07-21: PS-444 updates only
+  // durable Print Queue orchestration metadata. Provider-pending orders are
+  // filtered by the worker planner before any provider-capable module runs.
+  const rows = await pg<{ snapshot: unknown }[]>`
+    UPDATE print_queue_send_jobs
+    SET
+      status = 'pending',
+      active = true,
+      message = 'Safe-order resume requested',
+      snapshot = snapshot || jsonb_build_object(
+        'status', 'pending',
+        'active', true,
+        'message', 'Safe-order resume requested',
+        'errorMessage', null,
+        'recoveryAttempts',
+          CASE
+            WHEN coalesce(snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+              THEN (snapshot->>'recoveryAttempts')::integer + 1
+            ELSE 1
+          END,
+        'updatedAt', now(),
+        'persistedAt', now()
+      ),
+      updated_at = now()
+    WHERE job_id = ${jobId}
+      AND status = 'interrupted'
+      AND CASE
+        WHEN coalesce(snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+          THEN (snapshot->>'recoveryAttempts')::integer
+        ELSE 0
+      END < ${boundedMaxAttempts}
+    RETURNING snapshot
+  `;
+  return parseQueueSendJobSnapshot(rows[0]?.snapshot);
+}
+
 export async function readQueueSendJobRecoverySafety(jobId: string): Promise<{
   providerPendingCount: number;
 }> {
@@ -438,6 +482,45 @@ export async function markQueueSendJobInterrupted(
         'active', false,
         'message', ${message}::text,
         'errorMessage', ${message}::text,
+        'updatedAt', now(),
+        'persistedAt', now()
+      ),
+      updated_at = now()
+    WHERE job_id = ${jobId}
+      AND status IN ('pending', 'running', 'interrupted')
+    RETURNING job_id
+  `;
+  return rows.length > 0;
+}
+
+export async function markQueueSendJobReconciliationWaiting(
+  jobId: string,
+  message: string,
+): Promise<boolean> {
+  if (!jobId) return false;
+  await ensureQueueSendJobStoreSchema();
+  // Provider reconciliation is a read-only observation pass, not a replay
+  // attempt. Undo the claim's attempt increment so periodic exact-ID polling
+  // continues without exhausting the bounded mutation-recovery budget.
+  const rows = await pg<{ job_id: string }[]>`
+    UPDATE print_queue_send_jobs
+    SET
+      status = 'interrupted',
+      active = false,
+      message = ${message},
+      snapshot = snapshot || jsonb_build_object(
+        'status', 'interrupted',
+        'active', false,
+        'message', ${message}::text,
+        'errorMessage', ${message}::text,
+        'recoveryAttempts', greatest(
+          CASE
+            WHEN coalesce(snapshot->>'recoveryAttempts', '') ~ '^[0-9]+$'
+              THEN (snapshot->>'recoveryAttempts')::integer - 1
+            ELSE 0
+          END,
+          0
+        ),
         'updatedAt', now(),
         'persistedAt', now()
       ),

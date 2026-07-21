@@ -456,6 +456,17 @@ export type CreateLabelResponseDto = {
   timings?: LabelCreateTimingBreakdown;
 };
 
+export class LabelArtifactMissingAfterPurchaseError extends Error {
+  readonly code = 'LABEL_ARTIFACT_MISSING_AFTER_PURCHASE' as const;
+  constructor(provider: string) {
+    super(
+      `${provider} accepted the label purchase but did not return a usable label artifact. ` +
+      'The provider receipt is held for reconciliation and must not be purchased again.',
+    );
+    this.name = 'LabelArtifactMissingAfterPurchaseError';
+  }
+}
+
 export type CreateShopifyShippingLabelInputDto = {
   orderId: number;
   weightOz?: number;
@@ -2796,6 +2807,21 @@ async function createLabelV2Impl(
         created.trackingNumber,
         clientId ?? null,
       )) ?? created.providerAccountNickname ?? null;
+  }
+
+  if (
+    directProviderKey === 'walmart_shipping'
+    && (
+      typeof created.labelUrl !== 'string'
+      || !created.labelUrl.trim()
+      || created.labelUrl.trim() === '[object Object]'
+    )
+  ) {
+    // Per user override unlock shipped data on 2026-07-21: PS-444 validates
+    // the Walmart artifact only after its provider receipt is durable and
+    // before shipment/order persistence. Retry therefore reuses the receipt
+    // and cannot issue a second purchase POST.
+    throw new LabelArtifactMissingAfterPurchaseError('Walmart Shipping');
   }
 
   // PS-370: ensure the additive selected_rate_cost column exists BEFORE the

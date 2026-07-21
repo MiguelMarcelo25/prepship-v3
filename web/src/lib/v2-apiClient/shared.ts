@@ -20,10 +20,9 @@ import { buildManifestCsv, manifestRowsFromResponse } from '../../components/Vie
 // remained only under `raw`), so every FE save persisted best_rate_json without the tuple and the
 // Awaiting/Rate-Browser UI had nothing to render. Pass them through via the single FE owner.
 import { houseTuplePassThrough } from '../rate-browser-house-tuple';
-// PS-324: the out/low/in stock-status THRESHOLD is owned in one place
-// (src/lib/inventory-stock-status.ts classifyStockStatus) — the same definition the
-// Dashboard (PS-325) and storage billing use. The normalizer's status fallback delegates
-// to it so the inventory DTO can never carry a different threshold than the rest of the app.
+// PS-439: the backend inventory read model owns stock-status classification. This
+// transport normalizer requires its canonical stockStatus DTO and only maps `in`
+// to the legacy display alias `ok`; it never recomputes threshold truth.
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const accessToken = await getCachedAuthToken();

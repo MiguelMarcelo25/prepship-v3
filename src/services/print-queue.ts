@@ -17,12 +17,14 @@ import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } fro
 import {
   createLabelV2,
   createShopifyShippingLabelForOrder,
+  LabelArtifactMissingAfterPurchaseError,
   type CreateLabelInputDto,
   type CreateShopifyShippingLabelInputDto,
   type LabelCreateTimingBreakdown,
 } from './labels';
 import { SHOPIFY_SHIPPING_PROVIDER } from './shopify-shipping-labels';
 import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
+import { isLabelPurchaseReconcileRequiredError } from '../lib/label-purchase-intent';
 import type { ClientStoreScope } from '../lib/client-store-scope';
 // Per user override unlock shipped data on 2026-07-07: batch-print pipeline — the merge job's
 // label fetches now go through a bounded prefetch pool (default concurrency 1 = serial, byte-
@@ -31,6 +33,7 @@ import type { ClientStoreScope } from '../lib/client-store-scope';
 import { startLabelPrefetch, type PrefetchResult } from './print-queue-label-prefetch';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
+import { FulfillmentOperationHeldError } from './fulfillment-operation-ledger';
 import { decideShippingSafety } from './fulfillment/shipping-safety';
 import {
   collapseIdentityLines,
@@ -83,6 +86,7 @@ import {
   type QueueSendItemSnapshot,
 } from './print-queue/queue-send-snapshot';
 import { preflightQueueSendOrders } from './print-queue/queue-send-preflight';
+import { planQueueSendRecovery } from './print-queue/queue-send-recovery';
 import {
   enqueuePrintMergeWorkerJob,
   enqueueQueueSendWorkerJob,
@@ -1705,10 +1709,21 @@ export async function runQueueSendJobFromWorker(payload: {
     const job = queueSendJobs.get(payload.jobId) ?? queueSendJobFromSnapshot(durableJob);
     queueSendJobs.set(payload.jobId, job);
 
-    const completedOrderIds = new Set(job.results.map((result) => result.orderId));
-    const remainingOrders = payload.orders.filter((order) => !completedOrderIds.has(order.orderId));
+    const durableItemStates = await getQueueSendJobItemRecords(payload.jobId);
+    const recoveryPlan = planQueueSendRecovery({
+      workerOrders: payload.orders,
+      itemStates: durableItemStates,
+      results: job.results,
+    });
+    const remainingOrders = recoveryPlan.safeOrders;
     if (remainingOrders.length === 0) {
-      if (job.current >= job.total) {
+      if (recoveryPlan.providerPendingOrderIds.length > 0) {
+        job.status = 'interrupted';
+        job.errorMessage =
+          `${recoveryPlan.providerPendingOrderIds.length} provider outcome(s) require reconciliation; protected orders were not resent.`;
+        job.message = job.errorMessage;
+        await persistQueueSendJobSnapshot(job, { required: true });
+      } else if (job.current >= job.total) {
         job.status = 'done';
         updateQueueSendProgress(job);
         await persistQueueSendJobSnapshot(job, { required: true });
@@ -1752,6 +1767,7 @@ async function runQueueSendJob(
       orders,
       async (order) => {
         const orderStartedAt = Date.now();
+        let attemptCompleted = true;
         try {
           const result = await processQueueSendOrder(order, order.scope ?? scope, {
             setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
@@ -1760,6 +1776,7 @@ async function runQueueSendJob(
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);
+          job.results = job.results.filter((existing) => existing.orderId !== order.orderId);
           job.results.push(loggedResult);
           recordQueueSendResultLogs(job, [loggedResult]);
           await setQueueSendItemState(job, order, {
@@ -1768,7 +1785,6 @@ async function runQueueSendJob(
             trackingNumber: result.trackingNumber ?? null,
           });
         } catch (err) {
-          job.failed += 1;
           // PS-191: classify retry eligibility STRUCTURALLY (proof-error code
           // + details.reason) â€” never by parsing the message. The FE surfaces
           // a "refresh the rate and click again" prompt for eligible failures
@@ -1776,11 +1792,30 @@ async function runQueueSendJob(
           const retry = classifyLabelPurchaseRetry(err);
           const staleLabelAttempt = isQueueSendStaleLabelAttemptError(err);
           const labelPurchaseInProgress = isLabelPurchaseInProgressError(err);
-          const retryEligible = staleLabelAttempt || labelPurchaseInProgress || retry.retryEligible;
+          const providerReconciliationRequired = err instanceof FulfillmentOperationHeldError;
+          const labelArtifactMissing = err instanceof LabelArtifactMissingAfterPurchaseError;
+          const legacyReconciliationRequired = isLabelPurchaseReconcileRequiredError(err);
+          const providerPending = labelPurchaseInProgress
+            || providerReconciliationRequired
+            || labelArtifactMissing
+            || legacyReconciliationRequired;
+          if (providerPending) attemptCompleted = false;
+          else job.failed += 1;
+          // Per user override unlock shipped data on 2026-07-21: PS-444 never
+          // presents an active/unknown label purchase as a retryable buy. It is
+          // held for reconciliation so a user retry cannot double-purchase.
+          const retryEligible = !labelPurchaseInProgress
+            && !providerReconciliationRequired
+            && !labelArtifactMissing
+            && !legacyReconciliationRequired
+            && (staleLabelAttempt || retry.retryEligible);
           const retryReason = staleLabelAttempt
             ? err.retryReason
             : labelPurchaseInProgress
-              ? 'label_purchase_in_progress'
+              || providerReconciliationRequired
+              || labelArtifactMissing
+              || legacyReconciliationRequired
+              ? 'label_purchase_reconciliation_required'
               : retry.retryReason;
           const message = err instanceof Error ? err.message : 'Unknown error';
           const failedResult: QueueSendJobResult = {
@@ -1792,15 +1827,20 @@ async function runQueueSendJob(
             retryReason,
             timings: { totalMs: elapsedSince(orderStartedAt), labelSource: 'failed' },
           };
+          job.results = job.results.filter((existing) => existing.orderId !== order.orderId);
           job.results.push(failedResult);
           recordQueueSendResultLogs(job, [failedResult]);
           await setQueueSendItemState(job, order, {
-            state: retryEligible ? 'failed_retryable' : 'failed_terminal',
+            state: providerPending
+              ? 'provider_pending_recovery'
+              : retryEligible
+                ? 'failed_retryable'
+                : 'failed_terminal',
             blockedReason: retryReason ?? null,
             errorMessage: message,
           });
         } finally {
-          job.current += 1;
+          if (attemptCompleted) job.current += 1;
           updateQueueSendProgress(job);
           await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
         }
@@ -1826,8 +1866,20 @@ async function runQueueSendJob(
       await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
     }
     if (job.current > job.total) job.current = job.total;
-    job.status = job.current >= job.total ? 'done' : 'pending';
+    const providerPendingCount = job.itemStates.filter(
+      (item) => item.state === 'provider_pending' || item.state === 'provider_pending_recovery',
+    ).length;
+    job.status = providerPendingCount > 0
+      ? 'interrupted'
+      : job.current >= job.total
+        ? 'done'
+        : 'pending';
     updateQueueSendProgress(job);
+    if (providerPendingCount > 0) {
+      job.errorMessage =
+        `${providerPendingCount} provider outcome(s) require reconciliation; protected orders were not resent.`;
+      job.message = job.errorMessage;
+    }
     await persistQueueSendJobSnapshot(job, { required: true });
   } catch (err) {
     const interrupted = err instanceof QueueSendJobInterruptedError;

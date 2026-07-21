@@ -149,8 +149,9 @@ check('worker calls the backend process and classifies retry eligibility structu
   runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
   runJobBlock.includes('classifyLabelPurchaseRetry(err)') &&
   runJobBlock.includes('const labelPurchaseInProgress = isLabelPurchaseInProgressError(err)') &&
-  runJobBlock.includes('const retryEligible = staleLabelAttempt || labelPurchaseInProgress || retry.retryEligible') &&
-  runJobBlock.includes("? 'label_purchase_in_progress'"));
+  runJobBlock.includes('const providerPending = labelPurchaseInProgress') &&
+  runJobBlock.includes('const retryEligible = !labelPurchaseInProgress') &&
+  runJobBlock.includes("? 'label_purchase_reconciliation_required'"));
 
 const printQueueRoute = read('src/routes/print-queue.ts');
 const batchSendBlock = blockBetween(

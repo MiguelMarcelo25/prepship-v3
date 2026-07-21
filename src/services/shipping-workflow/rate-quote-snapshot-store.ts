@@ -1,6 +1,6 @@
 // Backend-owned rate quote snapshot persistence and strict purchase resolution.
 
-import { getAnalyticsCache, setAnalyticsCache } from '../analytics-cache.js';
+import { getAnalyticsCacheOrThrow, setAnalyticsCacheOrThrow } from '../analytics-cache.js';
 import {
   assertPurchaseAccountMatchesProof,
   assertSelectedRateProofForLabelPurchase,
@@ -32,6 +32,14 @@ export { selectedRateOpaqueKey } from './rate-quote-snapshot.js';
 const RATE_QUOTE_SNAPSHOT_TTL_SECONDS = Math.floor(RATE_QUOTE_SNAPSHOT_TTL_MS / 1000);
 const snapshotCacheKey = (rateQuoteId: string) => `rate_quote:${rateQuoteId}`;
 
+export class RateProofValidationUnavailableError extends Error {
+  readonly code = 'RATE_PROOF_VALIDATION_UNAVAILABLE' as const;
+  constructor() {
+    super('Selected-rate proof validation is temporarily unavailable. Retry later.');
+    this.name = 'RateProofValidationUnavailableError';
+  }
+}
+
 /** Persist a backend-owned quote. Failed writes return null, never a phantom id. */
 export async function storeRateQuoteSnapshot(input: {
   cacheKey: string;
@@ -61,7 +69,7 @@ export async function storeRateQuoteSnapshot(input: {
     authorization: input.authorization ?? null,
   };
   try {
-    await setAnalyticsCache(snapshotCacheKey(rateQuoteId), snapshot, RATE_QUOTE_SNAPSHOT_TTL_SECONDS);
+    await setAnalyticsCacheOrThrow(snapshotCacheKey(rateQuoteId), snapshot, RATE_QUOTE_SNAPSHOT_TTL_SECONDS);
     return rateQuoteId;
   } catch {
     return null;
@@ -173,7 +181,7 @@ export async function loadRateQuoteSnapshot(
 ): Promise<RateQuoteSnapshot | null> {
   const id = typeof rateQuoteId === 'string' ? rateQuoteId.trim() : '';
   if (!id) return null;
-  return getAnalyticsCache<RateQuoteSnapshot>(snapshotCacheKey(id));
+  return getAnalyticsCacheOrThrow<RateQuoteSnapshot>(snapshotCacheKey(id));
 }
 
 export type LabelPurchaseRateSelection = {
@@ -251,7 +259,7 @@ export async function assertLabelPurchaseRateSelection(
   try {
     snapshot = await loadRateQuoteSnapshot(ref.rateQuoteId);
   } catch {
-    snapshot = null;
+    throw new RateProofValidationUnavailableError();
   }
 
   try {
