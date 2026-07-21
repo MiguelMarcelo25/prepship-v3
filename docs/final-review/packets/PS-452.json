@@ -1,0 +1,402 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-452",
+  "title": "Print Queue lifecycle reaper, attempt caps, chunking, and cooperative cancellation",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "cb504c93a486cb6a14de12b2548d6f3c07da68a7"
+  },
+  "riskDomains": [
+    "rate_label",
+    "provider_durable_job",
+    "timing_live"
+  ],
+  "claimedScore": 97,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Queue-send execution owns a durable generation and chunk claim, heartbeats while active, observes cooperative cancellation between orders, and rejects overlapping or stale executors before they can write progress.",
+      "evidenceIds": [
+        "ps452-lifecycle-integration",
+        "ps452-failure-injection",
+        "print-queue-lifecycle-audit"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "The periodic reaper atomically leases interrupted or stale work, increments the durable generation, and parks poison items after three attempts and parent jobs after their bounded recovery budget instead of crash-looping.",
+      "evidenceIds": [
+        "ps452-lifecycle-integration",
+        "ps452-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "A 1,000-order migrated-database certification runs as fifty sequenced chunks of twenty with concurrency four, produces 999 exactly-once queued outcomes, parks one poison order after three attempts, and records zero double sends.",
+      "evidenceIds": [
+        "ps452-lifecycle-integration",
+        "ps452-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Provider-pending work is never blindly replayed: exact durable receipts and shipment artifacts may resume only the bounded local persistence tail, while ambiguous, missing, invalid, or inconsistent effects remain held with provider dispatch disabled.",
+      "evidenceIds": [
+        "ps423-ledger-adversarial",
+        "rate-boundary-adversarial",
+        "print-queue-provider-regressions"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "The card-required PS-400, PS-401 mixed-success, PS-403 worker recovery, PS-420 progress, durable queue, and PS-053 atomic recovery guards all pass at the reviewed SHA, along with strict TypeScript and the production web build.",
+      "evidenceIds": [
+        "ticket-legacy-guard-pack",
+        "release-build-gates"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "The shipped-data override is narrow and documented. Existing shipped/cancelled edit locks, read-only UI gates, inventory kill switch, orders/shipments schemas, provider one-effect fences, and fail-closed label behavior were not weakened; verification performed no live label purchase, postage charge, marketplace notification, or production order/shipment mutation.",
+      "evidenceIds": [
+        "implementation-scope",
+        "source-of-truth-pack",
+        "ps423-ledger-adversarial"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "met",
+      "description": "Migration 0073 was applied before runtime deployment, all fourteen sidecar objects are present, the exact reviewed SHA is live on the Render API, sync worker, and Print Queue worker, and Vercel has a Ready production deployment built from that exact SHA with healthy API readiness and Print Queue worker telemetry.",
+      "evidenceIds": [
+        "migration-production-verification",
+        "exact-sha-live-release"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/print-queue/queue-send-job-store.ts plus print_queue_send_jobs and print_queue_batch_job_items own durable generation, claim, heartbeat, chunk sequence, attempt caps, stale-job leasing, and terminal parking",
+      "src/services/print-queue/queue-send-execution.ts owns cooperative cancellation, exact generation/chunk execution admission, heartbeat renewal, bounded chunk concurrency, and stale executor rejection",
+      "src/services/fulfillment-operation-ledger.ts and src/services/print-queue/shipstation-operation-reconciler.ts own provider one-effect fencing, exact receipt reconciliation, and bounded local-tail recovery",
+      "src/services/print-queue.ts remains the backend orchestration owner that delegates durable lifecycle state, provider recovery, and queue insertion to those canonical owners"
+    ],
+    "oldOwners": [
+      {
+        "path": "boot-only Print Queue recovery and its six-hour singleton",
+        "disposition": "delegated",
+        "delegatesTo": "periodic durable recovery claims in queue-send-job-store plus print-queue-worker reaper cadence"
+      },
+      {
+        "path": "deadline Promise.race without cooperative work cancellation",
+        "disposition": "delegated",
+        "delegatesTo": "queue-send-execution durable cancel request, heartbeat, and exact claim fencing"
+      },
+      {
+        "path": "one monolithic in-memory send job for the entire batch",
+        "disposition": "delegated",
+        "delegatesTo": "durable parent generation and sequenced twenty-order chunk claims"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/print-queue.ts",
+        "action": "modified",
+        "delegatesTo": "backend durable job creation and lifecycle owners after request scope validation"
+      },
+      {
+        "path": "web/src/components/Views/OrdersView.tsx",
+        "action": "modified",
+        "delegatesTo": "backend can_resume, attempt counts, terminal outcomes, and next actions; it only renders and suppresses Resume at the backend cap"
+      },
+      {
+        "path": "src/services/labels.ts",
+        "action": "modified",
+        "delegatesTo": "the fulfillment-operation ledger and provider-specific receipt readers with allowProviderDispatch=false on receipt-only recovery"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Durable backend rows and provider-operation receipts remain authoritative. Routes, provider adapters, and React do not calculate recovery eligibility, mint provider truth, rank rates, or authorize a second label purchase."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps452-lifecycle-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-452-print-queue-lifecycle",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-452-print-queue-lifecycle-integration.ts",
+        "drizzle/0073_print_queue_send_execution_fences.sql",
+        "src/services/print-queue/queue-send-job-store.ts",
+        "src/services/print-queue/queue-send-execution.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "concurrency_single_effect"
+      ],
+      "proves": "The migrated PGlite workflow enforces exact generation/chunk claims and completes a 1,000-order parent as fifty bounded chunks with 999 queued, one terminal poison item, and zero duplicate effects."
+    },
+    {
+      "id": "ps452-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-452-print-queue-lifecycle",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-452-print-queue-lifecycle-integration.ts",
+        "src/services/print-queue-worker.ts",
+        "src/services/print-queue/queue-send-execution.ts",
+        "src/services/print-queue/queue-send-job-store.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Deterministic interruption, expired-heartbeat, overlapping generation, stale completion, timeout cancellation, and poison-order faults recover through the reaper without a second executor or an unbounded retry loop."
+    },
+    {
+      "id": "ps423-ledger-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-423-provider-operation-ledger",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-423-provider-operation-ledger-integration.ts",
+        "src/services/fulfillment-operation-ledger.ts",
+        "src/services/print-queue/shipstation-operation-reconciler.ts",
+        "src/services/labels.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "provider_spy_untouched"
+      ],
+      "proves": "Fake-provider adversarial cases hold ambiguous operations, recover exact durable receipts once, reject stale or inconsistent shipment facts, and leave the provider mutation spy untouched during reconciliation."
+    },
+    {
+      "id": "rate-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-frontend-source-of-truth through npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "src/services/shipping-workflow/rate-quote-snapshot-store.ts",
+        "src/services/shipping-workflow/shipping-quote-authorization.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Backend-selected rate authorization rejects cross-order, cross-account, and shipment-fact drift before any provider call."
+    },
+    {
+      "id": "print-queue-provider-regressions",
+      "classification": "integration",
+      "command": "npm run test:ps-444-print-queue-recovery && npm run test:ps-403-print-queue-worker-recovery",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-444-print-queue-recovery-guard.ts",
+        "scripts/ps-403-print-queue-worker-recovery-guard.ts",
+        "src/services/print-queue.ts",
+        "src/services/print-queue/queue-send-preflight.ts"
+      ],
+      "assertions": [
+        "restart_idempotency",
+        "provider_spy_untouched",
+        "no_side_effect_on_rejection"
+      ],
+      "proves": "Existing mixed-success, duplicate-postage, receipt-hold, shipped-label recovery, and worker restart contracts remain intact after the lifecycle changes."
+    },
+    {
+      "id": "ticket-legacy-guard-pack",
+      "classification": "static",
+      "command": "npm run test:ps-400-print-queue-retry-recovery && npm run test:ps-401-print-queue-mixed-success && npm run test:ps-403-print-queue-worker-recovery && npm run test:ps-420-print-queue-progress && npm run test:print-queue-durable && npm run test:ps-053-print-queue-atomic",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-400-print-queue-retry-recovery-guard.ts",
+        "scripts/ps-401-print-queue-mixed-success-guard.ts",
+        "scripts/ps-403-print-queue-worker-recovery-guard.ts",
+        "scripts/ps-420-print-queue-progress-guard.ts",
+        "scripts/print-queue-durable-guard.mjs",
+        "scripts/ps-053-print-queue-atomic-recovery-guard.mjs"
+      ],
+      "assertions": [],
+      "proves": "Every legacy regression guard named by the Trello card passes at the reviewed SHA, including existing-label recovery before purchase and after conflicts."
+    },
+    {
+      "id": "print-queue-lifecycle-audit",
+      "classification": "static",
+      "command": "npm run test:audit-print-queue-lifecycle",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-print-queue-lifecycle-guard.ts",
+        "src/services/print-queue-worker.ts",
+        "src/services/print-queue/queue-send-job-store.ts",
+        "src/services/print-queue/queue-send-execution.ts"
+      ],
+      "assertions": [],
+      "proves": "The PQ-1, PQ-2, and PQ-3 audit boundaries require cancellation, periodic recovery, attempt caps, chunking, and durable execution fences."
+    },
+    {
+      "id": "source-of-truth-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/runtime-ddl-guard.mjs",
+        "scripts/ps-305-authority-drift-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 53 mandatory backend-truth, rate, label, provider, durable-worker, auth, billing, inventory, lifecycle, migration-readiness, and governance commands pass."
+    },
+    {
+      "id": "release-build-gates",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "Strict backend/frontend TypeScript passes and the Vite production build succeeds with 2,979 modules transformed."
+    },
+    {
+      "id": "migration-production-verification",
+      "classification": "live",
+      "command": "npm run migrate:ps-452-print-queue-lifecycle -- --apply --confirm=apply-ps-452-print-queue-fences-0073, followed by the guarded dry run",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0073_print_queue_send_execution_fences.sql",
+        "scripts/apply-ps-452-print-queue-lifecycle-migration.ts",
+        "src/services/runtime-schema-readiness.ts"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "migration_applied_before_runtime",
+        "orders_shipments_unchanged"
+      ],
+      "proves": "All nine columns, four constraints, and the recovery index were applied before runtime deployment; a subsequent dry run reports all fourteen objects present and already_applied=true without changing orders or shipments."
+    },
+    {
+      "id": "exact-sha-live-release",
+      "classification": "live",
+      "command": "Render deploys dep-d9fl19ernols73c73450, dep-d9fl19n7f7vs73bcra90, dep-d9fl19rbc2fs73bdlev0; Vercel deployment dpl_3ar315EgegqTyjaCLsKAtNPMS6LF; GET /health, /health/ready, /health/deep; post-live Render log queries",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-452.md",
+        "src/services/print-queue-worker.ts",
+        "src/services/print-queue/queue-send-job-store.ts",
+        "web/src/components/Views/OrdersView.tsx"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_implementation_sha_live",
+        "render_api_live",
+        "render_worker_live",
+        "readiness_http_200",
+        "zero_github_actions_runs",
+        "no_provider_or_data_mutation"
+      ],
+      "proves": "Exact SHA cb504c93a486cb6a14de12b2548d6f3c07da68a7 is live on all three Render services and has a Ready Vercel production deployment. API health and readiness are HTTP 200; Print Queue worker health is OK with a fresh heartbeat, zero failed or provider-pending jobs, and zero post-live worker errors or warnings. Both GitHub repositories report zero Actions runs for the SHA."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git diff --name-status d18d6b01..cb504c93a486cb6a14de12b2548d6f3c07da68a7",
+      "result": "pass",
+      "artifactPaths": [
+        "src/routes/print-queue.ts",
+        "src/services/fulfillment-operation-ledger.ts",
+        "src/services/labels.ts",
+        "src/services/print-queue-worker.ts",
+        "src/services/print-queue.ts",
+        "src/services/print-queue/queue-send-execution.ts",
+        "src/services/print-queue/queue-send-job-store.ts",
+        "src/services/print-queue/queue-send-preflight.ts",
+        "src/services/print-queue/shipstation-operation-reconciler.ts",
+        "web/src/components/Views/OrdersView.tsx"
+      ],
+      "assertions": [],
+      "proves": "The override is limited to Print Queue lifecycle, exact provider receipt recovery, runtime readiness, thin route/UI consumers, additive sidecars, and tests. It does not change order or shipment schemas, fulfillment deductions, terminal edit locks, or destructive shipped/cancelled controls."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0073_print_queue_send_execution_fences.sql"
+    ],
+    "verification": {
+      "command": "npm run migrate:ps-452-print-queue-lifecycle -- --apply --confirm=apply-ps-452-print-queue-fences-0073; npm run migrate:ps-452-print-queue-lifecycle",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0073_print_queue_send_execution_fences.sql",
+        "scripts/apply-ps-452-print-queue-lifecycle-migration.ts",
+        "scripts/ps-452-print-queue-lifecycle-integration.ts"
+      ]
+    },
+    "rollbackPlan": "Leave additive migration 0073 in place and redeploy the prior application SHA. Do not drop the sidecar columns, constraints, or index and do not rewrite historical orders, shipments, provider receipts, or queue outcomes. The prior 8475828275320dece368b2a0c4175a59666ad79c application was live and healthy against 0073 before this reviewed test-only follow-up SHA."
+  },
+  "rollback": {
+    "strategy": "Redeploy prior live SHA 8475828275320dece368b2a0c4175a59666ad79c across Vercel, API, sync worker, and Print Queue worker while preserving additive schema 0073 and all durable sidecars. This exact rollback target already ran successfully after 0073 was applied. A broader feature rollback must likewise leave 0073 and history in place.",
+    "tested": true,
+    "evidenceIds": [
+      "migration-production-verification",
+      "exact-sha-live-release"
+    ]
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "The exact reviewed SHA is live on Render API, sync worker, and Print Queue worker and has a Ready Vercel production deployment. Public API health/readiness are 200 and Print Queue worker deep health is OK. Verification was read-only and did not submit a live queue job, buy postage, call a provider mutation, notify a marketplace, or mutate production order/shipment history.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/ps-tickets/PS-452.md",
+      "src/services/print-queue-worker.ts",
+      "src/services/print-queue/queue-send-job-store.ts",
+      "src/services/runtime-schema-readiness.ts"
+    ]
+  },
+  "caveats": [
+    {
+      "id": "deterministic-worker-termination",
+      "severity": "low",
+      "status": "closed",
+      "description": "The failure-injection suite interrupts the durable execution boundary deterministically instead of killing a production OS process. Exact-SHA worker restart, migration readiness, heartbeat, and reaper startup were then verified from live service logs without risking a real label or customer order.",
+      "followUpOwner": null,
+      "followUpTask": null
+    },
+    {
+      "id": "unrelated-order-sync-freshness",
+      "severity": "medium",
+      "status": "closed",
+      "description": "The aggregate deep endpoint remains degraded because two order-sync accounts are stale or failed. This condition predates and is outside PS-452; Print Queue worker, fulfillment outbox, database, order reads, and event loop are healthy, so it does not block the Print Queue lifecycle release.",
+      "followUpOwner": "Operations",
+      "followUpTask": "Investigate the two stale order-sync accounts independently without mutating shipped/cancelled order history."
+    }
+  ]
+}
