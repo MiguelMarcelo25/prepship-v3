@@ -2,7 +2,11 @@ import PgBoss from 'pg-boss';
 import { z } from 'zod';
 import { env } from '../lib/env';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
-import { PRINT_QUEUE_WORKER_HANDLER_TIMEOUT_MS } from '../lib/print-queue-worker-deadline';
+import {
+  PRINT_QUEUE_MERGE_HEARTBEAT_INTERVAL_MS,
+  PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
+  PRINT_QUEUE_WORKER_HANDLER_TIMEOUT_MS,
+} from '../lib/print-queue-worker-deadline';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
 import type { PrintQueueListScope, QueueSendOrderInput } from './print-queue';
 import { runDurableWorkerAttempt } from './durable-worker-attempt';
@@ -60,6 +64,13 @@ import {
 export { planQueueSendWorkerChunks } from './print-queue/queue-send-execution';
 
 export { PRINT_QUEUE_SEND_JOB_NAME } from './print-queue-worker-policy';
+// Per user override unlock shipped data on 2026-07-21: PS-453 shares the
+// merge heartbeat thresholds with the backend status owner so a missing
+// worker is visible without weakening generation fences or touching labels.
+export {
+  PRINT_QUEUE_MERGE_HEARTBEAT_INTERVAL_MS,
+  PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
+} from '../lib/print-queue-worker-deadline';
 const PRINT_QUEUE_SEND_SINGLETON_SECONDS = jobSingletonSeconds(24 * 60 * 60 * 1000);
 export const PRINT_QUEUE_SEND_CHUNK_SIZE = QUEUE_SEND_EXECUTION_CHUNK_SIZE;
 export const PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS = 3;
@@ -67,8 +78,6 @@ export const PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS = QUEUE_SEND_MAX_PARE
 export const PRINT_QUEUE_SEND_HEARTBEAT_INTERVAL_MS = QUEUE_SEND_HEARTBEAT_INTERVAL_MS;
 export const PRINT_QUEUE_SEND_RECOVERY_INTERVAL_MS = 60_000;
 export const PRINT_QUEUE_MERGE_JOB_NAME = 'prepship.print-queue.merge';
-export const PRINT_QUEUE_MERGE_HEARTBEAT_INTERVAL_MS = 15_000;
-export const PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS = 60_000;
 
 const scopeSchema = z.object({
   scopeClientIds: z.array(z.number().int().positive()).optional(),

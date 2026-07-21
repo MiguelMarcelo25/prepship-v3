@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  MERGE_JOB_DURABLE_INTERRUPTED_AFTER_MS,
   deriveMergeJobSnapshotStatus,
   MERGE_JOB_DURABLE_STALE_AFTER_MS,
 } from '../src/services/print-queue/merge-job-status.js';
@@ -21,9 +22,20 @@ const baseSnapshot = {
   persistedAt: '2026-07-14T00:00:00.000Z',
 };
 
-check('missing worker plus stale active snapshot derives a terminal error', () => {
+check('missing heartbeat derives stale visibility within the recovery window', () => {
   const result = deriveMergeJobSnapshotStatus(baseSnapshot, {
     now: Date.parse(baseSnapshot.persistedAt) + MERGE_JOB_DURABLE_STALE_AFTER_MS + 1,
+    inMemoryJobPresent: false,
+  });
+  assert.equal(result.status, 'running');
+  assert.equal(result.active, true);
+  assert.equal(result.staleReason, 'worker_heartbeat_stale');
+  assert.match(result.message, /interrupted|stale/i);
+});
+
+check('missing worker beyond the generation lease derives a terminal error', () => {
+  const result = deriveMergeJobSnapshotStatus(baseSnapshot, {
+    now: Date.parse(baseSnapshot.persistedAt) + MERGE_JOB_DURABLE_INTERRUPTED_AFTER_MS + 1,
     inMemoryJobPresent: false,
   });
   assert.equal(result.status, 'error');
@@ -46,7 +58,7 @@ check('terminal done snapshot is never reclassified stale', () => {
   const result = deriveMergeJobSnapshotStatus(
     { ...baseSnapshot, status: 'done' },
     {
-      now: Date.parse(baseSnapshot.persistedAt) + MERGE_JOB_DURABLE_STALE_AFTER_MS * 10,
+      now: Date.parse(baseSnapshot.persistedAt) + MERGE_JOB_DURABLE_INTERRUPTED_AFTER_MS * 10,
       inMemoryJobPresent: false,
     },
   );
@@ -62,6 +74,8 @@ const worker = read('src/services/print-queue-worker.ts');
 const route = read('src/routes/print-queue.ts');
 const readiness = read('src/services/runtime-schema-readiness.ts');
 const pdfStore = read('src/services/print-queue-pdf-store.ts');
+const workerDeadline = read('src/lib/print-queue-worker-deadline.ts');
+const env = read('src/lib/env.ts');
 
 check('migration owns per-job merge snapshots and their lookup index', () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS print_queue_merge_jobs/);
@@ -123,6 +137,9 @@ check('status route reads the requested job and derives staleness in the backend
   assert.match(route, /deriveMergeJobSnapshotStatus\(durableJob/);
   assert.match(route, /stale_reason: durableStatus\.staleReason/);
   assert.match(route, /Per user override unlock shipped data on 2026-07-14/);
+  assert.match(workerDeadline, /PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS = 60_000/);
+  assert.match(worker, /PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS/);
+  assert.match(env, /DURABLE_PRINT_QUEUE_PDF: booleanFlag\(true\)/);
 });
 
 check('durable PDF chunks are mandatory for worker-owned merge completion', () => {
