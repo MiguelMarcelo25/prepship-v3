@@ -1,7 +1,7 @@
 # PS-462 — Canonical inventory ledger quantity and immutable storage billing
 
 PS-462 is the collision-free repository identity for the inventory work on
-[the Trello card still titled duplicate PS-439](https://trello.com/c/9LO26Gtc).
+[the PS-462 Trello card](https://trello.com/c/9LO26Gtc).
 PS-439 remains assigned to pool-safe worker advisory-lock ownership.
 
 Historical `ps-439-inventory-*` script names and error codes are retained as
@@ -30,3 +30,6 @@ correction-packet, and forward-rollback evidence uses PS-462.
 The rollback restores a derived compatibility cache from the immutable ledger; it never
 updates, deletes, truncates, or reconstructs ledger history. Production correction,
 migration application, push, and deployment each require separate approval.
+
+Use `docs/runbooks/ps-462-inventory-preparation.md` for the fail-closed phase-1
+maintenance, application, verification, and pre-cutover compatibility rollback procedure.
