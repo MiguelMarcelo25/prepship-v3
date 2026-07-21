@@ -1,7 +1,5 @@
 # PrepShip Reconciliation Reports Plan
 
-> PS-439 supersedes legacy ledger/cache/effective-stock reconciliation. Use the canonical read-only `npm run audit:ps-439-inventory-discrepancies`; corrections remain separately reviewed append-only movements.
-
 ## Executive Summary
 
 This Phase 12 deliverable scopes the reconciliation reports PrepShip needs before it can be called enterprise-ready. Reconciliation is different from normal page loading: it proves that local PrepShip data agrees with canonical external systems, generated outputs, and internal ledgers.

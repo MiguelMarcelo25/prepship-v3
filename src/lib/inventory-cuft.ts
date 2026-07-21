@@ -4,7 +4,7 @@
 // (web/src/components/Views/inventory-parity.ts `getInventoryCuFt`), making React a
 // second source of truth for a billing number. The same formula is what storage line
 // items are billed on — src/services/billing.ts computes storage as
-// `Σ positive ledger occupancy × cuFtPerUnit × daily storage rate`
+// `Σ stock_qty × (cuFtOverride ‖ (length×width×height)/1728) × storageFeePerCuFt`
 // (see the storage block around billing.ts ~1283 and the schema note in
 // src/db/schema/billing.ts: "cuFtOverride (or default L×W×H/1728)").
 //

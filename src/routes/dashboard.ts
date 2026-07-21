@@ -3,7 +3,7 @@ import { intArraySql } from '../lib/scope-sql';
 import { msSince } from '../lib/route-timing';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, getTableColumns, gte, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
@@ -12,11 +12,7 @@ import { orders } from '../db/schema/orders';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
-import {
-  computeInventoryQuantityForIds,
-  inventoryQuantitySql,
-  type InventoryQuantityEntry,
-} from '../services/inventory-stock-math';
+import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
 import { summarizeInventorySnapshot, type InventorySnapshot } from '../lib/inventory-stock-status';
 import { buildProvenance, markCached, type DashboardProvenance } from '../lib/analytics-provenance';
@@ -750,10 +746,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
   );
 
   const rows = await db
-    .select({
-      ...getTableColumns(inventory),
-      inventoryQuantity: inventoryQuantitySql(inventory.id),
-    })
+    .select()
     .from(inventory)
     .where(where)
     .orderBy(desc(inventory.updatedAt))
@@ -764,39 +757,47 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
   if (ids.length && shouldRunLiveMetrics) await ensureInventoryLedgerSchema();
   const soldRows = ids.length && shouldRunLiveMetrics
     ? await db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
+        with ship_rows as (
+          select l.inventory_id, l.order_id, min(l.qty)::int as qty
+          from ${inventoryLedger} l
+          where l.inventory_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+            and l.type = 'ship'
+            and l.order_id is not null
+            and coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
+          group by l.inventory_id, l.order_id
+        )
         select
-          l.inventory_id,
-          abs(coalesce(sum(l.qty), 0))::int as sold_last_30_days
-        from ${inventoryLedger} l
-        where l.inventory_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
-          and l.type = 'ship'
-          and coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
-        group by l.inventory_id
+          ship_rows.inventory_id,
+          abs(coalesce(sum(ship_rows.qty), 0))::int as sold_last_30_days
+        from ship_rows
+        group by ship_rows.inventory_id
       `)
     : [];
   const soldByInventoryId = new Map(
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
   );
 
-  // PS-439: delegate to the canonical signed-ledger quantity owner with no cache or fallback.
-  const quantityByInventoryId = ids.length
-    ? await computeInventoryQuantityForIds(ids)
-    : new Map<number, InventoryQuantityEntry>();
+  // PS-133: delegate to the canonical effective-stock owner. This FIXES the prior drift bug
+  // where effectiveStock = total_received - total_sold, which IGNORED adjust/remove/damage/
+  // pick ledger rows. The owner uses the full ledger_balance (all non-ship rows + dedup ship
+  // rows) with a stock_qty fallback — identical to the inventory list + admin reconcile.
+  const effectiveByInventoryId = ids.length && shouldRunLiveMetrics
+    ? await computeEffectiveStockForIds(ids)
+    : new Map<number, EffectiveStockEntry>();
 
   const items = rows.map((row) => {
-    const inventoryQuantity = quantityByInventoryId.get(row.id)?.inventoryQuantity
-      ?? (Number(row.inventoryQuantity) || 0);
+    const stockQty = Number(row.stockQty ?? 0) || 0;
     const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
     const soldLast30Days = soldByInventoryId.get(row.id) ?? 0;
-    const quantity = quantityByInventoryId.get(row.id) ?? {
+    const eff = effectiveByInventoryId.get(row.id) ?? {
       totalReceived: 0,
-      totalShipped: 0,
-      inventoryQuantity,
+      totalSold: 0,
+      effectiveStock: stockQty,
     };
     // PS-150: reorder policy (velocity model) is owned by src/lib/inventory-reorder-policy — the same
     // owner the Dashboard SKU table delegates to, so the two layers can't drift. minStock falls back to
     // reorderLevel (the inventory schema has no minStock column; mirrors the FE's minStock ?? reorderLevel).
-    const reorder = computeReorderPolicy({ units30: soldLast30Days, stock: inventoryQuantity, minStock: reorderLevel });
+    const reorder = computeReorderPolicy({ units30: soldLast30Days, stock: stockQty, minStock: reorderLevel });
     return {
       ...row,
       soldLast30Days,
@@ -804,9 +805,9 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
       velocityPerDay: reorder.velocityPerDay,
       daysSupply: reorder.daysSupply,
       restockQty: reorder.restockQty,
-      inventoryQuantity: quantity.inventoryQuantity,
-      totalReceived: quantity.totalReceived,
-      totalSoldAllTime: quantity.totalShipped,
+      totalReceived: eff.totalReceived,
+      totalSoldAllTime: eff.totalSold,
+      effectiveStock: eff.effectiveStock,
     };
   });
   const payload = {

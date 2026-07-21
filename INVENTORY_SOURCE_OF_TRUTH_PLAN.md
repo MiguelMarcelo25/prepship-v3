@@ -1,7 +1,5 @@
 # PrepShip Inventory Source-Of-Truth Plan
 
-> PS-439 supersedes the legacy cache/effective-stock model below. Current inventory quantity is the raw signed sum of immutable `inventory_ledger.qty`; `inventory.stock_qty` and order-derived balance fallbacks are removed.
-
 ## Executive Summary
 
 This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities, adds a read-only dry-run reconciliation report with mismatch classification, and points future repair work to `INVENTORY_REPAIR_APPLY_PLAN.md`. It does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.

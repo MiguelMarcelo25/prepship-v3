@@ -1769,7 +1769,7 @@ export async function generateLineItems(input: GenerateInput) {
   // rate, it rebuilds each active positive-volume SKU's on-hand timeline from the
   // canonical inventory_ledger and integrates cubic-foot-DAYS over the billing
   // month, prorated by the actual days in that month — replacing the old
-  // end-of-period balance snapshot. One frozen storage line per client;
+  // end-of-period Σ stock_qty × cuFt snapshot. One frozen storage line per client;
   // per-unit volume via cuFtPerUnit(); rate from billing_config. Reads inventory /
   // inventory_ledger only (never mutates order/shipment rows).
   const periodStart = new Date(input.dateFrom);

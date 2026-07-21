@@ -5,10 +5,14 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } 
 // operator Refresh button's invalidate.
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
+// PS-150: reorder policy (velocity model) is owned by the backend layer (src/lib); the Dashboard
+// delegates so the restock/days-supply math can't drift from the dashboard /inventory-risk route.
+import { computeReorderPolicy } from '../../../../src/lib/inventory-reorder-policy'
 // PS-325: In/Low/Out-of-Stock thresholds + the inventory snapshot are backend-owned. The Dashboard
 // renders the snapshot from /dashboard/inventory-risk; these shared imports give the per-row badge
-// and the deploy-skew fallback the SAME canonical definition (no FE-owned thresholds).
-import type { InventorySnapshot } from '../../../../src/lib/inventory-stock-status'
+// and the deploy-skew fallback the SAME canonical definition (no FE-owned thresholds), exactly like
+// computeReorderPolicy above (PS-150).
+import { classifyStockStatus, summarizeInventorySnapshot, type InventorySnapshot } from '../../../../src/lib/inventory-stock-status'
 // PS-325 (slice 2): the "vs prior period" relative-change rule is backend-owned too — the Dashboard
 // imports the one definition instead of defining it locally.
 import { relativePct } from '../../../../src/lib/kpi-delta'
@@ -96,13 +100,11 @@ type InventoryItem = {
   imageUrl?: string | null
   clientId?: number | null
   clientName?: string | null
-  inventoryQuantity?: number
-  stockStatus?: 'in' | 'low' | 'out'
+  currentStock?: number
+  stockQty?: number
   minStock?: number
   reorderLevel?: number
   soldLast30Days?: number
-  daysSupply?: number | null
-  restockQty?: number
 }
 
 type AnalysisSku = {
@@ -635,6 +637,12 @@ function normalizeDashboardOrderAgg(value: unknown): DashboardOrderAgg {
     bySku,
     dailyRevenue,
   }
+}
+
+// PS-325: per-row status delegates to the canonical backend-owned classifier (src/lib/
+// inventory-stock-status) so the threshold definition lives in exactly one place.
+function stockStatus(stock: number, minStock: number): DashboardSkuRow['status'] {
+  return classifyStockStatus(stock, minStock)
 }
 
 // PS-154: statusLabel moved into web/src/components/StatusBadge.tsx
@@ -2047,12 +2055,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         const units7 = unitsBySku7.get(sku) ?? orderAgg?.units7 ?? 0
         const priorUnits30 = priorUnitsBySku30.get(sku) ?? priorOrderAgg?.units30 ?? 0
         const revenue = orderAgg?.revenue ?? 0
-        const stock = num(inventory?.inventoryQuantity)
+        const stock = num(inventory?.currentStock ?? inventory?.stockQty)
         const minStock = num(inventory?.minStock ?? inventory?.reorderLevel)
-        // PS-439: reporting quantities and reorder outputs render the backend DTO verbatim.
-        const daysSupply = inventory?.daysSupply ?? null
-        const restockQty = num(inventory?.restockQty)
-        const status = inventory?.stockStatus ?? 'out'
+        // PS-150: delegate to the canonical reorder policy owner (same formula + inputs as before).
+        const { daysSupply, restockQty } = computeReorderPolicy({ units30, stock, minStock })
+        const status = stockStatus(stock, minStock)
         const totalShipping = num(analysis?.totalShipping)
         const avgShipping =
           num(analysis?.blendedAvgShipping) ||
@@ -2231,14 +2238,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const priorOrdersRange = sumDailyOrders(priorDailyCounts)
     const currentOrders7 = sumDailyOrders(currentDailyCounts, sevenFrom)
     const priorOrders7 = sumDailyOrders(priorDailyCounts, priorSevenFrom)
-    // Inventory counts are a backend-owned read model. Missing data stays explicitly empty;
-    // the frontend never reconstructs the status thresholds.
-    const snapshot = inventorySnapshot ?? {
-      inStock: 0,
-      lowStock: 0,
-      outOfStock: 0,
-      totalSkus: 0,
-    }
+    // PS-325: In/Low/Out-of-Stock counts are a backend-owned read model. Prefer the snapshot the
+    // /dashboard/inventory-risk endpoint returns; during backend deploy skew (snapshot absent) fall
+    // back to the SAME canonical owner over the fetched rows, so the thresholds are never re-defined
+    // here. The component holds no stock-status rules.
+    const snapshot = inventorySnapshot ?? summarizeInventorySnapshot(inventoryRows)
     const inStock = snapshot.inStock
     const lowStock = snapshot.lowStock
     const outStock = snapshot.outOfStock
@@ -2265,6 +2269,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     currentDailyCounts,
     dashboardWindowQuery.data,
     inventorySnapshot,
+    inventoryRows,
     priorAgg,
     priorDailyCounts,
     rangeDays,

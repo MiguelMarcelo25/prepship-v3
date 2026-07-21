@@ -22,9 +22,13 @@ export function classifyStockStatus(stock: number, minStock: number): StockStatu
   return 'in'
 }
 
-// Inventory rows expose one backend-owned signed ledger quantity and one reorder threshold.
+// Inventory rows from either inventory-risk path expose stock as `currentStock ?? stockQty` and the
+// reorder threshold as `minStock ?? reorderLevel` (mirrors the inventory schema fallbacks). Accept a
+// loose shape so backend drizzle rows and the frontend InventoryItem[] both satisfy it.
 export interface StockCountInput {
-  inventoryQuantity: unknown
+  currentStock?: unknown
+  stockQty?: unknown
+  minStock?: unknown
   reorderLevel?: unknown
 }
 
@@ -57,8 +61,8 @@ export function summarizeInventorySnapshot(
   let lowStock = 0
   let outOfStock = 0
   for (const item of items) {
-    const stock = toNum(item.inventoryQuantity)
-    const minStock = toNum(item.reorderLevel)
+    const stock = toNum(item.currentStock ?? item.stockQty)
+    const minStock = toNum(item.minStock ?? item.reorderLevel)
     const status = classifyStockStatus(stock, minStock)
     if (status === 'out') outOfStock += 1
     else if (status === 'low') lowStock += 1

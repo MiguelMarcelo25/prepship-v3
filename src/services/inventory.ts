@@ -6,7 +6,9 @@ export type StockMovement = InventoryMovementInput;
 
 // Compatibility entry point. Canonical stock/ledger transaction lives in inventory-movement.
 export async function applyMovement(move: StockMovement) {
-  return applyInventoryMovement(move);
+  const result = await applyInventoryMovement(move);
+  if (result.status !== 'applied') throw new Error('Inventory movement already applied');
+  return { inventory: result.inventory, ledger: result.ledger };
 }
 
 export async function inventoryStats(clientId?: number, scopePredicate: SQL = sql`true`) {
@@ -19,15 +21,10 @@ export async function inventoryStats(clientId?: number, scopePredicate: SQL = sq
   }>(sql`
     select
       count(*)::int            as total,
-      count(*) filter (where inventory_quantity <= reorder_level and inventory_quantity > 0)::int as low_stock,
-      count(*) filter (where inventory_quantity <= 0)::int as out_of_stock,
-      coalesce(sum(inventory_quantity), 0)::int as total_units
-    from (
-      select i.*, coalesce(sum(movement.qty), 0)::int as inventory_quantity
-      from inventory i
-      left join inventory_ledger movement on movement.inventory_id = i.id
-      group by i.id
-    ) inventory
+      count(*) filter (where stock_qty <= reorder_level and stock_qty > 0)::int as low_stock,
+      count(*) filter (where stock_qty <= 0)::int                                as out_of_stock,
+      coalesce(sum(stock_qty), 0)::int                                           as total_units
+    from inventory
     where ${where}
       and ${scopePredicate}
       and active = true

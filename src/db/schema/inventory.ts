@@ -21,6 +21,7 @@ export const inventory = pgTable(
     sku: text().notNull(),
     name: text(),
     imageUrl: text(),
+    stockQty: integer().default(0).notNull(),
     reorderLevel: integer().default(0).notNull(),
     weightOz: real().default(0),
     length: real(),
@@ -60,12 +61,6 @@ export const inventoryLedger = pgTable(
     type: text().notNull(),
     qty: integer().notNull(),
     orderId: integer().references(() => orders.id),
-    clientId: integer('client_id').references(() => clients.id),
-    // Legacy movements may predate PS-439 identity fields. The insert guard
-    // requires these fields for every new movement without rewriting history.
-    sku: text(),
-    sourceEntity: text('source_entity'),
-    sourceId: text('source_id'),
     note: text(),
     createdBy: text(),
     effectiveAt: timestamp('effective_at', { withTimezone: true }),
@@ -77,12 +72,6 @@ export const inventoryLedger = pgTable(
     index('inventory_ledger_inv_type_idx').on(t.inventoryId, t.type),
     index('inventory_ledger_effective_at_idx').on(t.effectiveAt),
     uniqueIndex('inventory_ledger_idempotency_key_unq').on(t.idempotencyKey),
-    uniqueIndex('inventory_ledger_source_identity_unq').on(
-      t.sourceEntity,
-      t.sourceId,
-      t.inventoryId,
-      t.type,
-    ),
     index('inventory_ledger_created_idx').on(t.createdAt),
   ]
 );

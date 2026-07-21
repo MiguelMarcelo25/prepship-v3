@@ -5,8 +5,9 @@
  * idempotent per order/inventory row; package consumption is idempotent per outbound shipment key.
  * The remaining PS-247 gap was the cross-order CONCURRENCY race:
  * an un-locked SELECT + a pre-computed balanceAfter write meant two simultaneous ship-deductions both
- * read the same start value and one decrement was LOST. PS-439 supersedes the cache with an
- * immutable signed ledger insert, which composes concurrent deductions and keeps negatives visible.
+ * read the same start value and one decrement was LOST. The fix is an atomic in-DB decrement
+ * (stock_qty - qty), which composes concurrent deductions under the row lock and keeps negative stock
+ * intact (PS-224: negative = intentional backorder, so NO floor).
  *
  *   npx tsx scripts/ps-247-inventory-deduct-atomic-guard.ts
  */
@@ -22,10 +23,9 @@ const ded = readFileSync('src/services/fulfillment-deductions.ts', 'utf8');
 const inventoryMovement = readFileSync('src/services/inventory-movement.ts', 'utf8');
 const packageConsumption = readFileSync('src/services/package-consumption.ts', 'utf8');
 
-check('inventory deduction is one idempotent canonical ledger insert (race-safe, no read-modify-write)',
+check('inventory deduction is an atomic in-DB decrement (race-safe, no read-modify-write)',
   ded.includes('qty: -line.qty') &&
-  inventoryMovement.includes('.insert(inventoryLedger)') &&
-  inventoryMovement.includes('.onConflictDoNothing()'));
+  inventoryMovement.includes('stockQty: sql`${inventory.stockQty} + ${move.qty}`'));
 check('inventory no longer writes a pre-read balanceAfter to stockQty',
   !ded.includes('stockQty: balanceAfter'));
 check('package deduction is an atomic in-DB decrement',

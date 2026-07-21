@@ -1,7 +1,5 @@
 # PrepShip Source-of-Truth and Duplication Audit
 
-> PS-439 update: inventory has one quantity definition—the raw signed immutable ledger sum. The former stock cache and order-derived effective-stock model described in historical phases below are retired.
-
 ## Executive Summary
 
 This is the canonical boss-facing audit for duplicate logic and source-of-truth drift in PrepShip v4. It supersedes `DUPLICATION_OPTIMIZATION_AUDIT.md`.

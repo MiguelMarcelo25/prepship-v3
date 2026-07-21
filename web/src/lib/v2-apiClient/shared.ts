@@ -20,9 +20,11 @@ import { buildManifestCsv, manifestRowsFromResponse } from '../../components/Vie
 // remained only under `raw`), so every FE save persisted best_rate_json without the tuple and the
 // Awaiting/Rate-Browser UI had nothing to render. Pass them through via the single FE owner.
 import { houseTuplePassThrough } from '../rate-browser-house-tuple';
-// PS-439: the backend inventory read model owns stock-status classification. This
-// transport normalizer requires its canonical stockStatus DTO and only maps `in`
-// to the legacy display alias `ok`; it never recomputes threshold truth.
+// PS-324: the out/low/in stock-status THRESHOLD is owned in one place
+// (src/lib/inventory-stock-status.ts classifyStockStatus) — the same definition the
+// Dashboard (PS-325) and storage billing use. The normalizer's status fallback delegates
+// to it so the inventory DTO can never carry a different threshold than the rest of the app.
+import { classifyStockStatus } from '../../../../src/lib/inventory-stock-status';
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const accessToken = await getCachedAuthToken();
@@ -251,13 +253,16 @@ export function normalizeProductDefaultsPayload(data: Record<string, unknown>): 
   return next;
 }
 
+export function inventoryStatus(stockQty: number, reorderLevel: number): 'ok' | 'low' | 'out' {
+  // Delegate the threshold to the single backend owner; translate 'in' → this DTO's 'ok'.
+  // Identical thresholds to the previous inline rule, so the normalized status is unchanged.
+  const status = classifyStockStatus(stockQty, reorderLevel);
+  return status === 'in' ? 'ok' : status;
+}
+
 export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>): any {
   if (!row || typeof row !== 'object') return row;
-  const inventoryQuantity = parseFiniteNumber(row.inventoryQuantity);
-  if (inventoryQuantity == null) throw new Error('Inventory response is missing inventoryQuantity');
-  if (!['in', 'low', 'out'].includes(row.stockStatus)) {
-    throw new Error('Inventory response is missing canonical stockStatus');
-  }
+  const currentStock = parseFiniteNumber(row.currentStock ?? row.stockQty) ?? 0;
   const minStock = parseFiniteNumber(row.minStock ?? row.reorderLevel) ?? 0;
   const unitsPerPack = parseFiniteNumber(row.units_per_pack ?? row.unitsPerPack) ?? 1;
   const length = parseFiniteNumber(row.packageLength ?? row.length) ?? 0;
@@ -269,6 +274,8 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
   // (e.g. older deploy) doesn't return them.
   const totalReceived = parseFiniteNumber(row.totalReceived)
   const totalSoldAllTime = parseFiniteNumber(row.totalSoldAllTime)
+  const effectiveStock = parseFiniteNumber(row.effectiveStock)
+  const displayStock = effectiveStock ?? currentStock
   const clientId = parseFiniteNumber(row.clientId ?? row.client_id) ?? 0;
   const clientName =
     row.clientName ??
@@ -281,9 +288,11 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     clientId,
     clientName,
     minStock,
-    inventoryQuantity,
+    currentStock: displayStock,
+    stockQty: displayStock,
+    cachedStockQty: currentStock,
     reorderLevel: minStock,
-    status: row.stockStatus === 'in' ? 'ok' : row.stockStatus,
+    status: row.status ?? inventoryStatus(displayStock, minStock),
     units_per_pack: unitsPerPack,
     unitsPerPack,
     packageLength: length,
@@ -293,7 +302,7 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     productWidth: parseFiniteNumber(row.productWidth ?? row.width) ?? width,
     productHeight: parseFiniteNumber(row.productHeight ?? row.height) ?? height,
     baseUnitQty: parseFiniteNumber(row.baseUnitQty) ?? 1,
-    baseUnits: inventoryQuantity * (parseFiniteNumber(row.baseUnitQty) ?? 1),
+    baseUnits: displayStock * (parseFiniteNumber(row.baseUnitQty) ?? 1),
     cuFtOverride: parseFiniteNumber(row.cuFtOverride),
     // PS-324: backend-owned per-unit cubic feet (storage-fee input). undefined when an older
     // deploy's /inventory route doesn't stamp it yet — the FE getInventoryCuFt then falls back
@@ -306,6 +315,7 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     soldLast30Days,
     totalReceived,
     totalSoldAllTime,
+    effectiveStock,
   };
 }
 
