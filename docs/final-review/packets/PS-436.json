@@ -1,0 +1,312 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-436",
+  "title": "Durable fulfillment recovery priority on the shared sync lane",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8"
+  },
+  "riskDomains": [
+    "provider_durable_job"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "The backend sync admission owner gives fulfillment-outbox work a canonical stately singleton, coalescing repeated cadence and recovery wake-ups without creating a second queue policy or provider execution path.",
+      "evidenceIds": [
+        "admission-owner-unit",
+        "queue-contention-adversarial"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Busy fulfillment-outbox attempts durably enqueue a replacement through pg-boss, receive recovery priority, and fail closed when replacement admission cannot be proven; the deferral path never invokes the provider handler.",
+      "evidenceIds": [
+        "busy-deferral-adversarial",
+        "starvation-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "A long order sync cooperatively yields to due or recovering fulfillment work through the existing AbortSignal and persists its own replacement before acknowledging the yielded attempt, so the outbox receives a bounded shared-lane turn without overlapping database-heavy work.",
+      "evidenceIds": [
+        "starvation-failure-injection",
+        "leadership-integration"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Order, shipment, and fulfillment-outbox stately consumers share one session-advisory-lock leadership owner, preventing deploy-overlap consumers while retaining the existing shared database-heavy execution lane.",
+      "evidenceIds": [
+        "leadership-integration",
+        "queue-contention-adversarial"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "Lost-response and retry behavior still produces at most one external marketplace notification, and cancellation, retry, restart, concurrency, and stale-worker fencing remain provider-safe.",
+      "evidenceIds": [
+        "provider-retry-integration",
+        "starvation-failure-injection",
+        "leadership-integration"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "Strict TypeScript, production web build, the full 49-command source-of-truth guard pack, and focused sync compatibility guards pass at the exact reviewed SHA.",
+      "evidenceIds": [
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build",
+        "implementation-scope-proof"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "met",
+      "description": "The change modifies queue control-plane code and offline guards only; it does not weaken shipped/cancelled protections, change schema, invoke providers, buy labels or postage, notify marketplaces, or mutate production orders or shipments.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "provider-retry-integration",
+        "full-sot-guard-pack"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/sync-job-admission.ts for stately queue policy, singleton identity, recovery priority, and due-outbox yield decisions",
+      "src/services/sync-job-queue.ts for pg-boss admission, durable busy deferral, shared-lane scheduling, cooperative cancellation, consumer leadership, and worker execution boundaries",
+      "src/services/fulfillment-outbox.ts for the unchanged canonical fulfillment provider handler and durable operation semantics"
+    ],
+    "oldOwners": [
+      {
+        "path": "src/services/sync-job-queue.ts standalone standard fulfillment-outbox consumer registration",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/sync-job-queue.ts single ShipStation stately-consumer leadership owner and src/services/sync-job-admission.ts canonical stately admission policy"
+      },
+      {
+        "path": "src/services/sync-job-queue.ts order sync execution without due-outbox cooperative yield",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/sync-job-admission.ts shouldYieldOrderSyncToFulfillmentOutbox and src/services/sync-job-queue.ts runOrderSyncWithOutboxPriority"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/services/sync-job-queue.ts runOrderSyncWithOutboxPriority",
+        "action": "added",
+        "delegatesTo": "src/services/sync-job-admission.ts for the yield decision, syncOrders for order truth, and pg-boss admission for durable replacement"
+      },
+      {
+        "path": "src/services/sync-job-queue.ts assertDurableBusyDeferral",
+        "action": "added",
+        "delegatesTo": "the canonical pg-boss admission result and only fails closed when durable replacement identity is absent"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "All new decisions remain in backend queue admission and worker owners. The outbox provider handler, fulfillment receipt truth, order/shipment persistence, marketplace confirmation, label/postage behavior, and shipped/cancelled guards are unchanged; no frontend or adapter mints queue or provider truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "admission-owner-unit",
+      "classification": "unit",
+      "command": "npm run test:sync-job-admission",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sync-job-admission-guard.ts",
+        "src/services/sync-job-admission.ts"
+      ],
+      "assertions": [
+        "canonical_stately_singleton",
+        "due_and_recovery_lookahead",
+        "future_nonrecovery_not_preempted"
+      ],
+      "proves": "The canonical owner assigns fulfillment work one stately singleton and yields orders only for active, due, or bounded recovery-priority outbox rows, not arbitrary future cadence rows."
+    },
+    {
+      "id": "provider-retry-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-432-sync-fulfillment-resilience",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-432-sync-fulfillment-resilience-guard.ts",
+        "scripts/ps-432-sync-fulfillment-provider-idempotency-integration.ts",
+        "src/services/fulfillment-outbox.ts",
+        "src/services/provider-operation-ledger.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency"
+      ],
+      "proves": "The mocked provider integration simulates an acknowledged marketplace confirmation followed by lost local settlement; retry reconciles durable provider truth and the notification spy remains at one call. No live provider or database is used."
+    },
+    {
+      "id": "leadership-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-439-session-advisory-locks && npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-session-advisory-locks-guard.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Offline leadership and queued-worker tests retain one session-owned stately consumer leader, reject overlap across handoff, and keep execution separate from foreground admission without provider calls."
+    },
+    {
+      "id": "queue-contention-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:sync-job-admission && npm run test:ps-359-shipment-sync-busy-defer && npm run test:ps-346-shipment-sync-worker-lanes",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sync-job-admission-guard.ts",
+        "scripts/ps-359-shipment-sync-busy-defer-guard.ts",
+        "scripts/ps-346-shipment-sync-worker-lanes-guard.ts",
+        "src/services/sync-job-admission.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "concurrency_single_effect",
+        "provider_spy_untouched"
+      ],
+      "proves": "Concurrent and ambiguous admission outcomes coalesce behind canonical singleton keys; busy deferral schedules through pg-boss, never executes the provider handler, and keeps all database-heavy sync work on one shared lane."
+    },
+    {
+      "id": "busy-deferral-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-359-shipment-sync-busy-defer",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-359-shipment-sync-busy-defer-guard.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "durable_replacement_required",
+        "provider_spy_untouched",
+        "bounded_recovery_priority"
+      ],
+      "proves": "A busy outbox attempt cannot acknowledge success without a durable replacement ID, uses the stately recovery key and priority, and leaves provider execution untouched in the deferral path."
+    },
+    {
+      "id": "starvation-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-436-sync-starvation",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/lib/sync-job-cancellation.ts",
+        "src/services/sync-job-admission.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Injected long-running and non-cooperative work cannot falsely release the shared lane; cooperative order work yields after one bounded skip, durable replacement is required, and stale work remains fenced before recovery continues."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/ps-436-sync-starvation-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 49 mandatory source-of-truth, durable-worker, lifecycle, provider-safety, billing, authorization, and shipped/cancelled safety command groups pass at the exact reviewed SHA."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully even though the implementation contains no frontend change."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/sync-job-admission.ts",
+        "src/services/sync-job-queue.ts",
+        "scripts/ps-272-bounded-sync-closeout-guard.ts",
+        "scripts/ps-346-shipment-sync-worker-lanes-guard.ts",
+        "scripts/ps-356-manual-order-sync-job-lane-guard.ts",
+        "scripts/ps-359-shipment-sync-busy-defer-guard.ts",
+        "scripts/ps-397-order-sync-freshness-guard.ts",
+        "scripts/ps-426-awaiting-cursor-manual-sync-guard.ts",
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "scripts/sync-job-admission-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed commit changes two backend queue-control owners and eight offline guards only. It changes no schema, migration, frontend, provider adapter, fulfillment handler, order/shipment table logic, label/postage path, or protected shipped/cancelled file."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git diff --name-only 4ee244fa487d6d5bffd8cff09b06ba107c919ae2..27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8 -- drizzle",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No database migration is involved. If the rollout regresses worker availability, forward-revert the packet commit and reviewed implementation commit, redeploy the prior known-good revision 4ee244fa487d6d5bffd8cff09b06ba107c919ae2, and preserve all durable queue, provider-operation, order, shipment, inventory, and billing records."
+  },
+  "rollback": {
+    "strategy": "Use a reviewed forward revert of the packet-only commit followed by 27c85cbfbfab9ccbc35aae21d7f188cc1d7716b8, then redeploy prepshipv4-stable. Do not reset history, delete pg-boss rows, replay provider operations, or mutate shipped/cancelled production data. The previous runtime revision is 4ee244fa487d6d5bffd8cff09b06ba107c919ae2.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "Closure is based on deterministic offline queue-control, cancellation, leadership, and mocked-provider evidence at the exact reviewed SHA. No live provider action or production database mutation is necessary or safe for certification. Production deployment parity, read-only health endpoints, and worker logs are a separate post-push rollout gate and are not pre-claimed by this packet.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
