@@ -9,8 +9,8 @@
  *  1. src/lib/inventory-stock-status.ts is the single owner of the stock-status thresholds + snapshot.
  *  2. /dashboard/inventory-risk returns that snapshot (both the admin reporting-metrics path and the
  *     live-compute path) instead of leaving the buckets to the FE.
- *  3. DashboardView RENDERS the backend snapshot (preferring it, falling back to the same shared owner
- *     only during deploy skew) and its per-row badge delegates to the canonical classifier.
+ *  3. DashboardView RENDERS the backend snapshot and per-row backend status. Missing data fails
+ *     closed to an empty snapshot instead of reconstructing business truth in React.
  *  4. Anti-vacuous: the old FE-owned aggregation (`inventoryRows.filter(... ).length` for the buckets)
  *     is GONE — the component no longer defines the thresholds.
  *
@@ -62,12 +62,14 @@ check('DashboardView imports the shared stock-status owner',
 check('DashboardView stores the backend snapshot from /dashboard/inventory-risk',
   /snapshot: \(\(inventoryRes\?\.snapshot as InventorySnapshot \| undefined\) \?\? null\)/.test(dash) &&
   /const inventorySnapshot = inventoryRiskQuery\.data\?\.snapshot \?\? null/.test(dash));
-check('the inventory KPIs PREFER the backend snapshot, falling back to the shared owner only on skew',
-  /const snapshot = inventorySnapshot \?\? summarizeInventorySnapshot\(inventoryRows\)/.test(dash) &&
+check('the inventory KPIs render the backend snapshot and fail closed when it is missing',
+  /const snapshot = inventorySnapshot \?\? \{/.test(dash) &&
+  /totalSkus: 0/.test(dash) &&
   /const inStock = snapshot\.inStock/.test(dash) &&
   /const outStock = snapshot\.outOfStock/.test(dash));
-check('per-row stock status delegates to the canonical classifier',
-  /return classifyStockStatus\(stock, minStock\)/.test(dash));
+check('per-row stock status renders the backend-owned field',
+  /const status = inventory\?\.stockStatus \?\? 'out'/.test(dash) &&
+  !/classifyStockStatus\(/.test(dash));
 
 // 4. Anti-vacuous: the old FE-owned bucket aggregation is gone --------------------------------
 check('DashboardView no longer DEFINES the buckets via inline inventoryRows.filter() thresholds',

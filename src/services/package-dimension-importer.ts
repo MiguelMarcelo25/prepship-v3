@@ -55,7 +55,6 @@ export async function importStandardPackageDimensions(): Promise<PackageDimensio
       height: dimension.height,
       tareWeightOz: 0,
       source: 'custom',
-      stockQty: 0,
       reorderLevel: 10,
     });
   }

@@ -12,10 +12,6 @@ import { packageLedger } from '../db/schema/package-ledger';
 import { billingLineItems } from '../db/schema/billing';
 import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
-import {
-  enqueueManualOrderSyncJob,
-  enqueueManualShipmentSyncJob,
-} from '../services/sync-job-queue';
 import { backfillMissingOrderItems, getOrderItemsBackfillStatus, syncOrderItemOrderFields } from '../services/order-items';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
@@ -27,9 +23,7 @@ import {
   resolveLabelPurchaseIntentByOperator,
 } from '../lib/label-purchase-intent';
 import { auditActorFromContext, recordAuditEvent } from '../services/audit-log';
-import { env } from '../lib/env';
 import {
-  applyInventoryReconciliationPlan,
   buildInventoryReconciliationPlan,
   InventoryReconciliationError,
 } from '../services/inventory-reconciliation';
@@ -331,6 +325,21 @@ app.post('/purge-test-orders', async (c) => {
     .where(inArray(inventory.clientId, ids));
   const inventoryIds = inventoryRows.map((r) => r.id);
 
+  // Per user override unlock shipped data on 2026-07-21: fail before an admin
+  // purge could cascade through immutable shipped inventory movements.
+  const [orderLedgerCount] = orderIds.length
+    ? await db.select({ count: sql<number>`count(*)::int` }).from(inventoryLedger).where(inArray(inventoryLedger.orderId, orderIds))
+    : [{ count: 0 }];
+  const [inventoryLedgerCount] = inventoryIds.length
+    ? await db.select({ count: sql<number>`count(*)::int` }).from(inventoryLedger).where(inArray(inventoryLedger.inventoryId, inventoryIds))
+    : [{ count: 0 }];
+  if (Number(orderLedgerCount?.count ?? 0) + Number(inventoryLedgerCount?.count ?? 0) > 0) {
+    return c.json({
+      error: 'Test-client purge cannot delete immutable inventory history. Use a fresh isolated test client/database.',
+      code: 'PS439_INVENTORY_LEDGER_IMMUTABLE',
+    }, 409);
+  }
+
   // Wrap all deletes in a single transaction so a mid-run failure
   // rolls everything back. Order respects FK constraints (children first).
   const result = await db.transaction(async (tx) => {
@@ -352,12 +361,6 @@ app.post('/purge-test-orders', async (c) => {
         .where(inArray(billingLineItems.orderId, orderIds))
         .returning({ id: billingLineItems.id });
       billing = billingDel.length;
-
-      const ledgerByOrderDel = await tx
-        .delete(inventoryLedger)
-        .where(inArray(inventoryLedger.orderId, orderIds))
-        .returning({ id: inventoryLedger.id });
-      ledgerByOrder = ledgerByOrderDel.length;
 
       const overridesDel = await tx
         .delete(orderOverrides)
@@ -387,16 +390,6 @@ app.post('/purge-test-orders', async (c) => {
       .where(inArray(printQueue.clientId, ids))
       .returning({ id: printQueue.id });
     queueEntries += queueByClientDel.length;
-
-    // Inventory ledger rows that reference test inventory SKUs (separate
-    // from order-linked ledger rows we already deleted above).
-    if (inventoryIds.length) {
-      const ledgerByInvDel = await tx
-        .delete(inventoryLedger)
-        .where(inArray(inventoryLedger.inventoryId, inventoryIds))
-        .returning({ id: inventoryLedger.id });
-      ledgerByInventory = ledgerByInvDel.length;
-    }
 
     if (orderIds.length) {
       const ordersDel = await tx
@@ -839,19 +832,8 @@ app.get('/test-clients', async (c) => {
   return c.json({ data: rows });
 });
 
-// ── Hard reset + fresh sync ─────────────────────────────────────────────
-//
-// Destructive: deletes every synced row (orders, shipments, their billing
-// line items + inventory ledger entries) AND wipes every order/shipment
-// sync watermark so the next sync pulls from DEFAULT_LOOKBACK_MS (30 days).
-//
-// Preserves: clients (with their credentials + storeIds), packages,
-// locations, billing_config, inventory (just not the ledger), settings
-// other than sync watermarks. Test-client seeded orders are also deleted
-// — re-seed from the Settings view after.
-//
-// Pass { lookbackDays: N } to override the default 30-day backfill, or
-// { sync: false } to just wipe without immediately re-syncing.
+// Retained API shape for callers of the retired destructive reset. PS-439
+// returns a structured 409 before reading or mutating any history.
 const resetSyncBody = z
   .object({
     lookbackDays: z.number().int().positive().max(365).optional(),
@@ -860,75 +842,13 @@ const resetSyncBody = z
   .optional();
 
 app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
-  const body = c.req.valid('json') ?? {};
-  const lookbackDays = body.lookbackDays ?? 30;
-  const runSync = body.sync !== false;
-
-  // Count rows BEFORE the delete so we can report what got wiped, then
-  // TRUNCATE — that bypasses row-by-row protocol serialization entirely.
-  // order_overrides is TRUNCATE-cascaded by the FK on order_id.
-  const preCounts = await db.execute<{
-    billing: number;
-    ledger: number;
-    shipments: number;
-    orders: number;
-    watermarks: number;
-  }>(sql`
-    select
-      (select count(*)::int from billing_line_items) as billing,
-      (select count(*)::int from inventory_ledger) as ledger,
-      (select count(*)::int from shipments) as shipments,
-      (select count(*)::int from orders) as orders,
-      (select count(*)::int from settings where key like 'order_sync.%' or key like 'shipment_sync.%') as watermarks
-  `);
-  const pre = preCounts[0] ?? { billing: 0, ledger: 0, shipments: 0, orders: 0, watermarks: 0 };
-
-  // Order matters — child tables first so FK deletes are clean.
-  // RESTART IDENTITY resets the id sequences so the next sync produces
-  // small integer ids again, matching a fresh DB.
-  await db.execute(sql`truncate table billing_line_items restart identity`);
-  await db.execute(sql`truncate table inventory_ledger restart identity cascade`);
-  await db.execute(sql`truncate table shipments restart identity cascade`);
-  await db.execute(sql`truncate table orders restart identity cascade`);
-  await db.execute(sql`
-    delete from settings where key like 'order_sync.%' or key like 'shipment_sync.%'
-  `);
-
-  const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
-  const deleted = {
-    billing_line_items: pre.billing,
-    inventory_ledger: pre.ledger,
-    shipments: pre.shipments,
-    orders: pre.orders,
-    sync_watermarks: pre.watermarks,
-  };
-
-  if (!runSync) {
-    return c.json({ deleted, synced: null });
-  }
-
-  // Per user override unlock shipped data on 2026-07-10: reset recovery now
-  // queues the existing import jobs through the sole pg-boss ShipStation lane.
-  // The reset semantics above are unchanged; this only prevents concurrent
-  // inline order/shipment sync after the explicit admin reset.
-  const ordersResult = await enqueueManualOrderSyncJob({ sinceMs });
-  const shipmentsResult = await enqueueManualShipmentSyncJob({ sinceMs });
-
+  // Per user override unlock shipped data on 2026-07-21: PS-439 makes the
+  // inventory ledger immutable, so destructive resync cannot erase movement,
+  // shipment, order, or finalized billing history.
   return c.json({
-    deleted,
-    synced: {
-      orders: {
-        queued: ordersResult.queued,
-        jobId: ordersResult.jobId,
-        error: ordersResult.error,
-      },
-      shipments: {
-        queued: shipmentsResult.queued,
-        jobId: shipmentsResult.jobId,
-        error: shipmentsResult.error,
-      },
-    },
-  });
+    error: 'Destructive sync reset was retired by PS-439; use scoped reconciliation and normal sync recovery.',
+    code: 'PS439_IMMUTABLE_HISTORY',
+  }, 409);
 });
 
 // ─── /admin/retry-marketplace-notify ──────────────────────────────────────
@@ -1201,18 +1121,8 @@ const inventoryReconciliationQuerySchema = z.object({
   sku: z.string().trim().min(1).max(200).optional(),
 });
 
-const inventoryReconciliationApplySchema = z.object({
-  reviewedPlanHash: z.string().regex(/^[a-f0-9]{64}$/i),
-  confirmation: z.string(),
-  reason: z.string().trim().min(10).max(500),
-  approvalReference: z.string().trim().min(5).max(200),
-});
-
-// PS-427: inventory_ledger is authoritative movement history; stockQty is a
-// cache only. Dry-run stays read-only. Apply delegates to the reconciliation
-// owner, which rebuilds only stockQty and writes append-only audit evidence in
-// the same transaction. The old movement-based path is intentionally removed
-// because adding the same delta to ledger and cache cannot converge.
+// PS-439: the ledger is the only quantity authority. This endpoint is report-only;
+// historical corrections require a separately reviewed append-only movement plan.
 app.post(
   '/reconcile-inventory-stock',
   zValidator('query', inventoryReconciliationQuerySchema),
@@ -1233,38 +1143,19 @@ app.post(
           rowsToAdjust: plan.rowsToAdjust,
           totalDelta: plan.totalDelta,
           blocked: plan.blocked,
-          sampleAdjustments: plan.rows.filter((row) => row.delta !== 0).slice(0, 20),
+          classifications: plan.classifications,
+          sampleAdjustments: plan.rows.filter((row) => row.legacyDelta !== 0).slice(0, 20),
           ambiguousRows: plan.ambiguousRows.slice(0, 20),
           message: plan.blocked
-            ? 'Case-variant duplicate SKUs must be resolved before any cache rebuild.'
+            ? 'Discrepancies require review before the ledger-only cutover.'
             : 'Read-only plan generated; no rows changed.',
         });
       }
 
-      const body = inventoryReconciliationApplySchema.safeParse(
-        await c.req.json().catch(() => null),
-      );
-      if (!body.success) {
-        return c.json({
-          error: 'Unsafe legacy apply is disabled. Run dryRun=1, review the exact plan, then submit the required reviewed apply body.',
-          issues: body.error.issues,
-        }, 400);
-      }
-
-      const result = await applyInventoryReconciliationPlan({
-        scope,
-        reviewedPlanHash: body.data.reviewedPlanHash,
-        confirmation: body.data.confirmation,
-        reason: body.data.reason,
-        approvalReference: body.data.approvalReference,
-        actor: auditActorFromContext(c),
-        applyEnabled: env.INVENTORY_RECONCILIATION_APPLY_ENABLED,
-      });
-      console.info('[admin/reconcile-inventory-stock] cache rebuild complete', {
-        runId: result.runId,
-        rowsAdjusted: result.rowsAdjusted,
-      });
-      return c.json(result);
+      return c.json({
+        error: 'Direct balance repair was removed by PS-439. Use dryRun=1 and submit a separately reviewed append-only movement plan.',
+        code: 'APPLY_REMOVED',
+      }, 409);
     } catch (error) {
       if (error instanceof InventoryReconciliationError) {
         return c.json({ error: error.message, code: error.code }, error.status);

@@ -1,14 +1,21 @@
+import { randomUUID } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
-import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
+import {
+  computeInventoryQuantityForIds,
+  inventoryQuantitySql,
+  type InventoryQuantityEntry,
+} from '../services/inventory-stock-math';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { movementDirectionError } from '../lib/inventory-movement-direction';
 import { resolveReceiveUnits } from '../lib/inventory-receive-units';
+import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
+import { classifyStockStatus } from '../lib/inventory-stock-status';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
@@ -29,7 +36,10 @@ import {
 } from '../middleware/auth';
 import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
 import { applyMovement, inventoryStats } from '../services/inventory';
-import { applyInventoryMovementInTransaction } from '../services/inventory-movement';
+import {
+  applyInventoryMovementInTransaction,
+  type InventoryMovementTransaction,
+} from '../services/inventory-movement';
 import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
 import {
   importSkusFromOrders,
@@ -178,7 +188,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             ilike(inventory.name, `%${q.search}%`)
           )
         : undefined,
-      q.lowStock ? lte(inventory.stockQty, inventory.reorderLevel) : undefined,
+      q.lowStock ? lte(inventoryQuantitySql(inventory.id), inventory.reorderLevel) : undefined,
       // Active filter: applied unless the caller explicitly asks
       // for everything via ?includeInactive=true.
       q.active !== undefined
@@ -192,7 +202,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const [rows, countRows] = await timedInventoryStep(timings, 'pageAndCount', () =>
     Promise.all([
       db
-        .select()
+        .select({
+          ...getTableColumns(inventory),
+          inventoryQuantity: inventoryQuantitySql(inventory.id),
+        })
         .from(inventory)
         .where(where)
         .orderBy(desc(inventory.updatedAt))
@@ -219,20 +232,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const soldRows = rows.length && shouldRunLiveMetrics
     ? await timedInventoryStep(timings, 'soldLast30Days', () =>
         db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
-        with ship_rows as (
-          select l.inventory_id, l.order_id, min(l.qty)::int as qty
-          from ${inventoryLedger} l
-          where l.inventory_id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
-            and l.type = 'ship'
-            and l.order_id is not null
-            and coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
-          group by l.inventory_id, l.order_id
-        )
         select
-          ship_rows.inventory_id,
-          abs(coalesce(sum(ship_rows.qty), 0))::int as sold_last_30_days
-        from ship_rows
-        group by ship_rows.inventory_id
+          l.inventory_id,
+          abs(coalesce(sum(l.qty), 0))::int as sold_last_30_days
+        from ${inventoryLedger} l
+        where l.inventory_id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
+          and l.type = 'ship'
+          and coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
+        group by l.inventory_id
       `)
       )
     : [];
@@ -242,13 +249,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
 
   // 2026-05-13 / refined 2026-05-14 (a+b+c): operator reported the
   // STOCK column shows numbers that don't match -SOLD. Root cause:
-  // `stockQty` is only mutated by the auto-deduct path, which
+  // The former cached balance was only mutated by the auto-deduct path, which
   // didn't track historical orders shipped before the system came
   // online and skips edge cases like external labels.
   //
   // Definition (current — revision (c) 2026-05-14):
   //
-  //   effective_stock = total_received − total_sold_shipped_all_time
+  //   inventory quantity = signed sum of persisted ledger movements
   //
   // The one non-obvious filter on the sold counter:
   //   Only count `order_status = 'shipped'` (NOT "any non-
@@ -279,62 +286,72 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // days regardless of status" window by design, used as a "recent
   // velocity" indicator, not a stock signal.
   //
-  // The cached stockQty stays in the response as `currentStock` for
-  // backward-compat; the new `effectiveStock` is what the operator
-  // sees in the STOCK column. The admin reconciliation endpoint can
-  // produce a read-only plan; PS-427 permits only an exact reviewed,
-  // client+SKU-scoped cache rebuild behind a default-off approval gate.
+  // PS-439 removes the cached balance and exposes the signed ledger sum as
+  // `inventoryQuantity`; reviewed historical correction remains append-only.
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
-  // PS-133: effective stock is owned by computeEffectiveStockForIds (src/services/
-  // inventory-stock-math.ts) so the inventory list, dashboard, and admin reconcile can never
-  // drift. Read-only analytics over inventory_ledger; no locked rows mutated.
-  const effectiveByInventoryId = rows.length
-    ? await timedInventoryStep(timings, 'effectiveStock', () =>
-        computeEffectiveStockForIds(rows.map((r) => r.id)),
+  // The inventory list, dashboard, and discrepancy report delegate to the same owner.
+  const quantityByInventoryId = rows.length
+    ? await timedInventoryStep(timings, 'inventoryQuantity', () =>
+        computeInventoryQuantityForIds(rows.map((row) => row.id)),
       )
-    : new Map<number, EffectiveStockEntry>();
+    : new Map<number, InventoryQuantityEntry>();
 
   const response = paginated(
     rows.map((row) => {
       const metric = metricByInventoryId.get(row.id);
       if (metric) {
-        const liveEff = effectiveByInventoryId.get(row.id);
+        const quantity = quantityByInventoryId.get(row.id);
+        const inventoryQuantity = quantity?.inventoryQuantity ?? (Number(row.inventoryQuantity) || 0);
+        const soldLast30Days = soldByInventoryId.get(row.id) ?? metric.soldLast30Days;
+        const reorder = computeReorderPolicy({
+          units30: soldLast30Days,
+          stock: inventoryQuantity,
+          minStock: Number(row.reorderLevel ?? 0),
+        });
         return {
           ...row,
           soldLast7Days: metric.soldLast7Days,
-          soldLast30Days: soldByInventoryId.get(row.id) ?? metric.soldLast30Days,
-          velocityPerDay: metric.velocityPerDay,
-          daysSupply: metric.daysSupply,
-          restockQty: metric.restockQty,
-          totalReceived: liveEff?.totalReceived ?? metric.totalReceived,
-          totalSoldAllTime: liveEff?.totalSold ?? metric.totalSoldAllTime,
-          effectiveStock: liveEff?.effectiveStock ?? metric.effectiveStock,
+          soldLast30Days,
+          velocityPerDay: reorder.velocityPerDay,
+          daysSupply: reorder.daysSupply,
+          restockQty: reorder.restockQty,
+          inventoryQuantity,
+          stockStatus: classifyStockStatus(inventoryQuantity, Number(row.reorderLevel ?? 0)),
+          totalReceived: quantity?.totalReceived ?? metric.totalReceived,
+          totalSoldAllTime: quantity?.totalShipped ?? metric.totalSoldAllTime,
           // PS-324: per-unit cubic feet is a billing input (storage fee). The backend owns
           // the formula (cuFtPerUnit, mirroring src/services/billing.ts) so the displayed
           // cuFt can't drift from the billed cuFt; the FE renders this instead of computing it.
           cuFt: cuFtPerUnit(row.cuFtOverride, row.length, row.width, row.height),
         };
       }
-      const stockQty = Number(row.stockQty ?? 0) || 0;
+      const inventoryQuantity = Number(row.inventoryQuantity ?? 0) || 0;
       const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
-      const eff = effectiveByInventoryId.get(row.id) ?? {
+      const soldLast30Days = soldByInventoryId.get(row.id) ?? 0;
+      const reorder = computeReorderPolicy({
+        units30: soldLast30Days,
+        stock: inventoryQuantity,
+        minStock: reorderLevel,
+      });
+      const quantity = quantityByInventoryId.get(row.id) ?? {
         totalReceived: 0,
-        totalSold: 0,
-        effectiveStock: stockQty,
+        totalShipped: 0,
+        inventoryQuantity,
       };
       return {
         ...row,
         soldLast7Days: 0,
-        soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
-        velocityPerDay: 0,
-        daysSupply: null,
-        restockQty: Math.max(0, reorderLevel - stockQty),
+        soldLast30Days,
+        velocityPerDay: reorder.velocityPerDay,
+        daysSupply: reorder.daysSupply,
+        restockQty: reorder.restockQty,
         // NEW fields — see comment block above the SQL.
-        totalReceived: eff.totalReceived,
-        totalSoldAllTime: eff.totalSold,
-        effectiveStock: eff.effectiveStock,
+        inventoryQuantity: quantity.inventoryQuantity,
+        stockStatus: classifyStockStatus(quantity.inventoryQuantity, reorderLevel),
+        totalReceived: quantity.totalReceived,
+        totalSoldAllTime: quantity.totalShipped,
         // PS-324: backend-owned per-unit cubic feet (billing storage input); see above branch.
         cuFt: cuFtPerUnit(row.cuFtOverride, row.length, row.width, row.height),
       };
@@ -573,7 +590,6 @@ app.delete(
         qty: inventoryLedger.qty,
         orderId: inventoryLedger.orderId,
         sku: inventory.sku,
-        stockQty: inventory.stockQty,
       })
       .from(inventoryLedger)
       .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
@@ -585,18 +601,20 @@ app.delete(
       return { status: 409 as const, row };
     }
 
-    const [updated] = await tx
-      .update(inventory)
-      .set({
-        stockQty: sql`${inventory.stockQty} - ${row.qty}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(inventory.id, row.inventoryId))
-      .returning({ id: inventory.id, sku: inventory.sku, stockQty: inventory.stockQty });
+    const reversedAt = new Date();
+    const reversal = await applyInventoryMovementInTransaction(tx, {
+      inventoryId: row.inventoryId,
+      type: 'adjust',
+      qty: -row.qty,
+      note: `Reversal of inventory ledger movement ${ledgerId}`,
+      createdBy: email ?? 'manual',
+      effectiveAt: reversedAt,
+      idempotencyKey: `inventory:ledger-reversal:${ledgerId}`,
+      sourceEntity: 'inventory_ledger',
+      sourceId: `reversal:${ledgerId}`,
+    });
 
-    await tx.delete(inventoryLedger).where(eq(inventoryLedger.id, ledgerId));
-
-    return { status: 200 as const, row, inventory: updated };
+    return { status: 200 as const, row, inventory: reversal.inventory, reversal: reversal.ledger };
   });
 
   if (result.status === 404) {
@@ -604,25 +622,26 @@ app.delete(
   }
   if (result.status === 409) {
     return c.json({
-      error: 'Order-linked ship history cannot be deleted from Inventory History.',
+      error: 'Order-linked ship history cannot be reversed from Inventory History.',
       ledgerId,
       type: result.row.type,
       orderId: result.row.orderId,
     }, 409);
   }
 
-  console.info('[inventory:ledger-delete] manual ledger row deleted', {
+  console.info('[inventory:ledger-reversal] immutable reversal appended', {
     ledgerId,
     inventoryId: result.row.inventoryId,
     sku: result.row.sku,
     type: result.row.type,
     qty: result.row.qty,
-    deletedBy: email ?? 'unknown',
+    reversedBy: email ?? 'unknown',
   });
 
   return c.json({
     ok: true,
-    deleted: result.row,
+    reversed: result.row,
+    reversal: result.reversal,
     inventory: result.inventory,
   });
   },
@@ -640,9 +659,7 @@ app.get('/stats', async (c) => {
 });
 
 // v2-parity: GET /inventory/alerts?clientId=N
-// Returns low-stock items (stock_qty <= reorder_level) for the given client.
-// v2 computed stock by summing ledger; v4 stores stock_qty on the row, so
-// the query is a simple compare.
+// Returns low-stock items from the same canonical ledger expression used by the list.
 app.get(
   '/alerts',
   zValidator('query', z.object({ clientId: z.coerce.number().int().optional() })),
@@ -654,7 +671,7 @@ app.get(
         id: inventory.id,
         sku: inventory.sku,
         name: inventory.name,
-        stock: inventory.stockQty,
+        inventoryQuantity: inventoryQuantitySql(inventory.id),
         minStock: inventory.reorderLevel,
         parentSkuId: inventory.parentSkuId,
         clientId: inventory.clientId,
@@ -667,11 +684,11 @@ app.get(
             eq(inventory.active, true),
             activeInventoryClientPredicate,
             inventoryScopePredicate(alertsScope),
-            lte(inventory.stockQty, inventory.reorderLevel),
+            lte(inventoryQuantitySql(inventory.id), inventory.reorderLevel),
           ].filter(<T>(x: T | undefined): x is T => x !== undefined)
         )
       )
-      .orderBy(inventory.stockQty);
+      .orderBy(inventoryQuantitySql(inventory.id));
     return c.json({ data: rows.map((r) => ({ type: 'sku' as const, ...r })) });
   }
 );
@@ -680,7 +697,10 @@ app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const detailScope = inventoryScopeFromContext(c);
   const [row] = await db
-    .select()
+    .select({
+      ...getTableColumns(inventory),
+      inventoryQuantity: inventoryQuantitySql(inventory.id),
+    })
     .from(inventory)
     .where(and(eq(inventory.id, id), inventoryScopePredicate(detailScope)))
     .limit(1);
@@ -1057,7 +1077,7 @@ const createBody = z.object({
   sku: z.string().min(1),
   name: z.string().optional(),
   imageUrl: z.string().url().nullable().optional(),
-  stockQty: z.number().int().nonnegative().optional(),
+  inventoryQuantity: z.number().int().optional(),
   reorderLevel: z.number().int().nonnegative().optional(),
   baseUnitQty: z.number().int().positive().optional(),
   unitsPerPack: z.number().int().positive().optional(),
@@ -1085,18 +1105,24 @@ app.post(
   if (!inventoryClientInScope(inventoryScopeFromContext(c), body.clientId)) {
     return c.json({ error: 'Inventory client out of scope' }, 403);
   }
-  const { stockQty = 0, ...values } = body;
+  const { inventoryQuantity = 0, ...values } = body;
   const email = c.get('email' as never) as string | undefined;
   await ensureInventoryLedgerSchema();
   const row = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(inventory).values({ ...values, stockQty: 0 }).returning();
-    if (!created || stockQty === 0) return created;
+    const [created] = await tx.insert(inventory).values(values).returning();
+    if (!created || inventoryQuantity === 0) {
+      return created ? { ...created, inventoryQuantity: 0 } : created;
+    }
     const movement = await applyInventoryMovementInTransaction(tx, {
       inventoryId: created.id,
       type: 'adjust',
-      qty: stockQty,
+      qty: inventoryQuantity,
       note: 'Opening stock',
       createdBy: email ?? 'manual',
+      effectiveAt: new Date(),
+      idempotencyKey: `inventory:opening:${created.id}`,
+      sourceEntity: 'inventory',
+      sourceId: `opening:${created.id}`,
     });
     if (movement.status !== 'applied') throw new Error('Opening stock movement was not applied');
     return movement.inventory;
@@ -1111,7 +1137,7 @@ app.patch(
   zValidator(
     'json',
     createBody
-      .omit({ sku: true, stockQty: true })
+      .omit({ sku: true, inventoryQuantity: true })
       .partial()
       .extend({ sku: z.string().min(1).optional() })
       .strict(),
@@ -1136,6 +1162,7 @@ app.patch(
 
 const movementBody = z.object({
   qty: z.number().int(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
   note: z.string().optional(),
   orderId: z.number().int().optional(),
   type: z.enum(['receive', 'adjust', 'pick', 'ship', 'return', 'damage']).optional(),
@@ -1147,6 +1174,16 @@ function movementDateFrom(value: string | undefined) {
   if (!value) return undefined;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function movementRequestIdentity(c: Context, prefix: string, bodyKey?: string) {
+  const supplied = bodyKey?.trim() || c.req.header('Idempotency-Key')?.trim();
+  const requestId = supplied || randomUUID();
+  return {
+    idempotencyKey: `${prefix}:${requestId}`,
+    sourceEntity: 'inventory_api',
+    sourceId: `${prefix}:${requestId}`,
+  };
 }
 
 app.post(
@@ -1161,13 +1198,15 @@ app.post(
       return c.json({ error: 'Inventory item not found' }, 404);
     }
     const email = c.get('email' as never) as string | undefined;
+    const identity = movementRequestIdentity(c, `receive:${id}`, body.idempotencyKey);
     const result = await applyMovement({
       inventoryId: id,
       type: 'receive',
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
-      effectiveAt: movementDateFrom(body.receivedAt ?? body.adjustedAt),
+      effectiveAt: movementDateFrom(body.receivedAt ?? body.adjustedAt) ?? new Date(),
+      ...identity,
     });
     return c.json(result);
   }
@@ -1328,13 +1367,15 @@ app.post(
     // damage/ship/pick can only remove stock. Reject a sign that contradicts the type.
     const dirError = movementDirectionError(moveType, body.qty);
     if (dirError) return c.json({ error: dirError }, 400);
+    const identity = movementRequestIdentity(c, `${moveType}:${id}`, body.idempotencyKey);
     const result = await applyMovement({
       inventoryId: id,
       type: moveType,
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
-      effectiveAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
+      effectiveAt: movementDateFrom(body.adjustedAt ?? body.receivedAt) ?? new Date(),
+      ...identity,
     });
     return c.json(result);
   }
@@ -1342,6 +1383,7 @@ app.post(
 
 const bulkReceiveBody = z.object({
   clientId: z.number().int().nullable().optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
   note: z.string().optional(),
   receivedAt: z.string().datetime().optional(),
   items: z
@@ -1369,6 +1411,7 @@ const bulkReceiveBody = z.object({
 });
 
 async function findOrCreateInventoryForReceive(
+  tx: InventoryMovementTransaction | typeof db,
   item: z.infer<typeof bulkReceiveBody>['items'][number],
   clientId: number | null | undefined,
   scope: ClientStoreScope,
@@ -1377,7 +1420,7 @@ async function findOrCreateInventoryForReceive(
   const requestedId = item.invSkuId ?? item.inventoryId;
   if (requestedId != null) {
     // PS-247: a restricted caller may only receive into an inventory row in its own scope.
-    const [row] = await db
+    const [row] = await tx
       .select()
       .from(inventory)
       .where(and(eq(inventory.id, requestedId), inventoryScopePredicate(scope)))
@@ -1389,7 +1432,7 @@ async function findOrCreateInventoryForReceive(
   const sku = item.sku?.trim();
   if (!sku) throw new Error('SKU is required');
   const clientFilter = clientId == null ? isNull(inventory.clientId) : eq(inventory.clientId, clientId);
-  const [existing] = await db
+  const [existing] = await tx
     .select()
     .from(inventory)
     .where(and(clientFilter, sql`lower(${inventory.sku}) = lower(${sku})`))
@@ -1399,13 +1442,12 @@ async function findOrCreateInventoryForReceive(
     throw new Error(`Inventory item ${sku} must exist before warehouse receiving`);
   }
 
-  const [created] = await db
+  const [created] = await tx
     .insert(inventory)
     .values({
       clientId: clientId ?? null,
       sku,
       name: item.name?.trim() || sku,
-      stockQty: 0,
     })
     .returning();
   if (!created) throw new Error(`Could not create inventory item for ${sku}`);
@@ -1414,8 +1456,8 @@ async function findOrCreateInventoryForReceive(
 
 // v2-parity bulk receive: POST /inventory/receive body
 // {clientId, note, receivedAt, items:[{sku|invSkuId, qty, name?, note?}]}.
-// Calls applyMovement per item so every receipt lands in the ledger. Per-item
-// errors are tallied without aborting the batch.
+// The entire batch commits or rolls back together so the API cannot report a
+// partial receive while leaving only some of the requested movements persisted.
 app.post(
   '/receive',
   requireBusinessRoutePolicy('inventory.receive.bulk'),
@@ -1436,26 +1478,26 @@ app.post(
       },
       'settings:write',
     );
-    const receivedAt = movementDateFrom(body.receivedAt);
-    // v2-parity ReceiveInventoryResultDto adds `newStock` per item so
-    // the receiving UI can display the post-receive on-hand total without a
-    // round-trip fetch. applyMovement returns the updated inventory row,
-    // whose stockQty IS the new on-hand total.
+    const receivedAt = movementDateFrom(body.receivedAt) ?? new Date();
+    const batchIdentity = movementRequestIdentity(c, 'receive-batch', body.idempotencyKey);
     const results: Array<{
       invSkuId: number;
       sku?: string | null;
       name?: string | null;
       qty?: number;
       ok: boolean;
-      newStock?: number;
+      inventoryQuantity?: number;
       ledgerId?: number;
       effectiveAt?: Date | null;
       createdAt?: Date;
       error?: string;
     }> = [];
-    for (const item of body.items) {
-      try {
+    try {
+      await ensureInventoryLedgerSchema();
+      await db.transaction(async (tx) => {
+        for (const [itemIndex, item] of body.items.entries()) {
         const inv = await findOrCreateInventoryForReceive(
+          tx,
           item,
           body.clientId,
           scope,
@@ -1465,24 +1507,18 @@ app.post(
         // it from the CANONICAL units_per_pack (the FE sends pack-count intent). Delegated to the
         // resolveReceiveUnits owner; a pre-multiplied `qty` is still honored for back-compat.
         const qty = resolveReceiveUnits(item, inv.unitsPerPack);
-        if (qty <= 0) {
-          results.push({
-            invSkuId: inv.id,
-            sku: inv.sku,
-            name: inv.name,
-            qty,
-            ok: false,
-            error: 'Receive qty must be greater than 0',
-          });
-          continue;
-        }
-        const res = await applyMovement({
+        if (qty <= 0) throw new Error(`Receive qty for ${inv.sku} must be greater than 0`);
+        const movementIdentity = `${itemIndex}:inventory:${inv.id}`;
+        const res = await applyInventoryMovementInTransaction(tx, {
           inventoryId: inv.id,
           type: 'receive',
           qty,
           note: item.note?.trim() || body.note?.trim() || undefined,
           createdBy: email ?? 'manual',
           effectiveAt: receivedAt,
+          idempotencyKey: `${batchIdentity.idempotencyKey}:${movementIdentity}`,
+          sourceEntity: 'inventory_receive_batch',
+          sourceId: `${batchIdentity.sourceId}:${movementIdentity}`,
         });
         results.push({
           invSkuId: inv.id,
@@ -1490,27 +1526,29 @@ app.post(
           name: res.inventory?.name ?? inv.name,
           qty,
           ok: true,
-          newStock: res.inventory?.stockQty ?? 0,
+          inventoryQuantity: res.inventory.inventoryQuantity,
           ledgerId: res.ledger?.id,
           effectiveAt: res.ledger?.effectiveAt,
           createdAt: res.ledger?.createdAt,
         });
-      } catch (err) {
-        results.push({
-          invSkuId: item.invSkuId ?? item.inventoryId ?? 0,
-          sku: item.sku ?? null,
-          qty: item.qty,
-          ok: false,
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
-      }
+        }
+      });
+    } catch (err) {
+      return c.json({
+        ok: false,
+        atomic: true,
+        received: [],
+        failed: body.items.length,
+        total: body.items.length,
+        results: [],
+        error: err instanceof Error ? err.message : 'Receive batch failed',
+      }, 409);
     }
-    const received = results.filter((r) => r.ok);
-    const failed = results.filter((r) => !r.ok);
     return c.json({
-      ok: failed.length === 0,
-      received,
-      failed: failed.length,
+      ok: true,
+      atomic: true,
+      received: results,
+      failed: 0,
       total: results.length,
       results,
     });
@@ -1527,6 +1565,7 @@ app.post(
     z.object({
       invSkuId: z.number().int().positive(),
       qty: z.number().int().refine((v) => v !== 0, 'qty cannot be 0'),
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
       note: z.string().optional(),
       type: z.enum(['receive', 'adjust', 'pick', 'ship', 'return', 'damage']).optional(),
       adjustedAt: z.string().datetime().optional(),
@@ -1544,13 +1583,15 @@ app.post(
     // PS-324: enforce the movement-direction invariant (damage/ship/pick must remove stock).
     const dirError = movementDirectionError(moveType, body.qty);
     if (dirError) return c.json({ error: dirError }, 400);
+    const identity = movementRequestIdentity(c, `${moveType}:${body.invSkuId}`, body.idempotencyKey);
     const result = await applyMovement({
       inventoryId: body.invSkuId,
       type: moveType,
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
-      effectiveAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
+      effectiveAt: movementDateFrom(body.adjustedAt ?? body.receivedAt) ?? new Date(),
+      ...identity,
     });
     return c.json(result);
   }
@@ -1679,7 +1720,7 @@ app.post(
 );
 
 // Pull product catalog from ShipStation v1 /products (every account we
-// know about) and upsert as inventory rows. stockQty stays 0 — the
+// know about) and upsert as inventory rows. Quantity stays ledger-derived — the
 // standard SS API doesn't expose stock levels. Matching:
 //   • Main account products → clientId IS NULL (shared catalog)
 //   • Per-client accounts (e.g. KFG) → clientId = account owner

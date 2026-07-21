@@ -50,7 +50,6 @@ import {
   normalizePackageLedgerEntry,
   normalizePackageMovementResponse,
   normalizeProductDefaultsPayload,
-  inventoryStatus,
   normalizeInventoryDto,
   filterRowsToActiveClients,
   normalizeClientDtoRows,
@@ -1873,7 +1872,7 @@ export const apiClient = {
     //   productHeight    → (dropped)
     //
     // Pass-through (v4 already matches): baseUnitQty, length, width, height,
-    //   weightOz, cuFtOverride, packageId, sku, name, imageUrl, stockQty,
+    //   weightOz, cuFtOverride, packageId, sku, name, imageUrl,
     //   reorderLevel, unitsPerPack, active, clientId.
     const PASS_THROUGH = new Set([
       'baseUnitQty',
@@ -1886,7 +1885,6 @@ export const apiClient = {
       'sku',
       'name',
       'imageUrl',
-      'stockQty',
       'reorderLevel',
       'unitsPerPack',
       'active',
@@ -1922,8 +1920,7 @@ export const apiClient = {
     // the lowStock flag on the list endpoint. Server caps pageSize at 200
     // (see src/lib/pagination.ts) — exceed it and the zod validator 400s.
     //
-    // v2 UI expects enriched rows with clientName + currentStock (the v4
-    // row only has stockQty + clientId). Join /clients here so the alerts
+    // The UI expects enriched rows with clientName. Join /clients here so the alerts
     // banner doesn't render "undefined" for the client label.
     return safe(
       'fetchInventoryAlerts',
@@ -2130,6 +2127,7 @@ export const apiClient = {
     if (Array.isArray((data as any)?.items)) {
       return api.post<any>('/inventory/receive', {
         clientId: (data as any).clientId ?? null,
+        idempotencyKey: (data as any).idempotencyKey,
         note: (data as any).note,
         receivedAt: (data as any).receivedAt,
         items: ((data as any).items as any[]).map((item) => ({
@@ -2151,6 +2149,7 @@ export const apiClient = {
     }
     return api.post<any>(`/inventory/${invId}/receive`, {
       qty: (data as any).qty,
+      idempotencyKey: (data as any).idempotencyKey,
       note: (data as any).note,
       orderId: (data as any).orderId,
       receivedAt: (data as any).receivedAt,
@@ -2177,7 +2176,7 @@ export const apiClient = {
         sku: e?.inventory?.sku ?? e?.sku ?? '',
         name: e?.inventory?.name ?? e?.name ?? '',
         qty: e?.ledger?.qty ?? e?.qty ?? (data as any)?.qty ?? 0,
-        newStock: e?.inventory?.stockQty ?? e?.newStock ?? e?.stockQty ?? 0,
+        inventoryQuantity: e?.inventoryQuantity ?? e?.inventory?.inventoryQuantity ?? 0,
         ledgerId: e?.ledger?.id ?? e?.ledgerId ?? null,
       }));
       const error = failedRows
@@ -2208,16 +2207,16 @@ export const apiClient = {
 
   submitInventoryAdjustment(data: Record<string, unknown>): Promise<any> {
     // v4's POST /inventory/:id/adjust returns {inventory, ledger}. Toast was
-    // reading result.stockQty (undefined on current backend, would be defined
+    // reading a canonical backend quantity.
     // if backend flattened). Check the nested path first, fall back to flat
     // in case the server contract changes.
     return apiClient.adjustInventory(data).then((result) => ({
       ok: true,
-      newStock:
-        (result as any)?.inventory?.stockQty ??
-        (result as any)?.stockQty ??
+      inventoryQuantity:
+        (result as any)?.inventoryQuantity ??
+        (result as any)?.inventory?.inventoryQuantity ??
         0,
-    } as { ok: boolean; newStock: number }));
+    } as { ok: boolean; inventoryQuantity: number }));
   },
 
   populateInventory(): Promise<any> {

@@ -1,18 +1,8 @@
-// PS-154: pure stock-math helpers extracted VERBATIM from InventoryView.tsx
-// so the effective-stock / display-status / stock-tooltip / sort-value
-// computations live in one shared, side-effect-free module instead of
-// inline in the view. No state, no handlers, no money mutation — these
-// are read-only functions over an InventoryItemDto row. InventoryView
-// imports them; behavior is identical to the previous inline definitions.
+// Pure presentation helpers over the backend-owned inventory DTO.
 type InventoryItemDto = any // TODO PS-257: restore real type
 // getInventoryCuFt already lives in the parity module (imported from the
 // same source the view uses) so the 'cuFt' sort branch stays canonical.
 import { getInventoryCuFt } from './inventory-parity'
-// PS-324: the out/low/in stock-status THRESHOLD is owned in exactly one place
-// (src/lib/inventory-stock-status.ts classifyStockStatus), shared with the Dashboard
-// (PS-325) and the storage-billing definition. This view delegates the decision to that
-// owner and only translates its 'in' label to this table's long-standing 'ok' vocabulary.
-import { classifyStockStatus } from '../../../../src/lib/inventory-stock-status'
 
 export type InventorySortDirection = 'asc' | 'desc'
 export type InventorySortKey =
@@ -54,30 +44,22 @@ export function toSortNumber(value: unknown) {
   return Number.isFinite(nextValue) ? nextValue : 0
 }
 
-export function getInventoryDisplayStock(row: InventoryItemDto) {
-  const effectiveStock = Number(row.effectiveStock)
-  return Number.isFinite(effectiveStock) ? effectiveStock : toSortNumber(row.currentStock)
+export function getInventoryQuantity(row: InventoryItemDto) {
+  return toSortNumber(row.inventoryQuantity)
 }
 
 export function getInventoryDisplayStatus(row: InventoryItemDto): 'ok' | 'low' | 'out' {
-  // Delegate the threshold to the single backend owner; translate its 'in' → this view's 'ok'.
-  // Same inputs as before (display/effective stock + minStock), so behavior is identical.
-  const status = classifyStockStatus(getInventoryDisplayStock(row), toSortNumber(row.minStock))
-  return status === 'in' ? 'ok' : status
+  // The backend owns the threshold; this helper only reads its normalized label.
+  return row.status
 }
 
 export function getInventoryStockTooltip(row: InventoryItemDto) {
-  const displayStock = getInventoryDisplayStock(row)
-  const cachedStock = Number((row as any).cachedStockQty)
-  const auditStock = Number.isFinite(cachedStock) ? cachedStock : row.currentStock
+  const inventoryQuantity = getInventoryQuantity(row)
   const tooltipParts = [
     `Received: ${row.totalReceived ?? 0}`,
     `Sold shipped all-time: ${row.totalSoldAllTime ?? 0}`,
-    `Effective stock: ${displayStock}`,
+    `Inventory quantity: ${inventoryQuantity}`,
   ]
-  if (typeof row.effectiveStock === 'number' && row.effectiveStock !== auditStock) {
-    tooltipParts.push(`Cached stockQty: ${auditStock}`)
-  }
   return tooltipParts.join('\n')
 }
 
@@ -112,15 +94,14 @@ export function getInventorySortValue(row: InventoryItemDto, key: InventorySortK
     case 'package':
       return getInventoryPackageSortLabel(row)
     case 'stock':
-      // Sort by the displayed value (effective stock) so the
-      // operator's "sort by stock" matches what they see.
-      return getInventoryDisplayStock(row)
+      // Sort by the same canonical quantity rendered in the table.
+      return getInventoryQuantity(row)
     case 'sold30':
       return toSortNumber(row.soldLast30Days)
     case 'unitsPerPack':
       return toSortNumber(row.units_per_pack)
     case 'totalUnits':
-      return getInventoryDisplayStock(row) * Math.max(1, toSortNumber(row.units_per_pack))
+      return getInventoryQuantity(row) * Math.max(1, toSortNumber(row.units_per_pack))
     case 'min':
       return toSortNumber(row.minStock)
     case 'status':

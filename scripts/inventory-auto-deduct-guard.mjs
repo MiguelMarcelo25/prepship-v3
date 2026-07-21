@@ -21,15 +21,17 @@ assert(
 assert(
   shipmentSync.includes('applyOrderLifecycleCommandInTransaction(tx, {') &&
     shipmentSync.includes("source: 'shipment_sync'") &&
-    shipmentSync.includes('fulfilledLines: exactLines'),
+    shipmentSync.includes("kind: 'exact' as const") &&
+    shipmentSync.includes('fulfillmentFacts,'),
   'shipment sync must create exact lifecycle claims when it marks orders shipped',
 );
 
 assert(
   labels.includes('applyOrderLifecycleCommandInTransaction(tx, {') &&
-    labels.includes('fulfilledLines: order.items') &&
+    labels.includes('fulfillmentFacts:') &&
+    labels.includes("kind: 'exact'") &&
     labels.includes('packageConsumption:'),
-  'label creation must delegate exact inventory intent to the lifecycle owner',
+  'label creation must delegate explicit fulfillment facts and package intent to the lifecycle owner',
 );
 
 assert(
