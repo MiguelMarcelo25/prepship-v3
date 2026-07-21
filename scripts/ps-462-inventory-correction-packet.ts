@@ -1,9 +1,9 @@
 import 'dotenv/config';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
+import { buildInventoryCorrectionPlan } from '../src/services/inventory-correction-plan.js';
 import { buildInventoryReconciliationPlan } from '../src/services/inventory-reconciliation.js';
 
 type SchemaPreflight = {
@@ -25,16 +25,6 @@ const REQUIRED_INDEXES = [
   'inventory_ledger_idempotency_key_unq',
   'inventory_ledger_source_identity_unq',
 ];
-
-function sha256(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function csv(value: unknown): string {
-  if (value == null) return '';
-  const text = String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
 
 function git(...args: string[]): string {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -91,7 +81,6 @@ async function readSchemaPreflight(databaseUrl: string): Promise<SchemaPreflight
 }
 
 function selfTest(): void {
-  if (csv('a,"b"') !== '"a,""b"""') throw new Error('CSV escaping self-test failed');
   const legacyQuantity = 7;
   const inventoryQuantity = 2;
   if (legacyQuantity - inventoryQuantity !== 5) throw new Error('Correction sign self-test failed');
@@ -107,9 +96,7 @@ async function main(): Promise<void> {
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
 
   const plan = await buildInventoryReconciliationPlan({});
-  if (plan.ambiguousRows.length > 0) {
-    throw new Error(`PS462_CORRECTION_PACKET_AMBIGUOUS: ${plan.ambiguousRows.length} rows`);
-  }
+  const correctionPlan = buildInventoryCorrectionPlan(plan);
   const mismatches = plan.rows
     .filter((row) => row.legacyQuantity != null && row.legacyQuantity !== row.inventoryQuantity)
     .sort((left, right) => left.inventoryId - right.inventoryId);
@@ -117,64 +104,10 @@ async function main(): Promise<void> {
   const headSha = git('rev-parse', 'HEAD');
   const branch = git('branch', '--show-current');
 
-  const movementRows = mismatches.map((row, index) => {
-    const correctionQuantity = Number(row.legacyQuantity) - row.inventoryQuantity;
-    const idempotencyKey = `inventory:reconciliation:ps462:${plan.planHash}:${row.inventoryId}`;
-    const sourceId = `ps462:${plan.planHash}:${row.inventoryId}`;
-    const identity = {
-      inventoryId: row.inventoryId,
-      clientId: row.clientId,
-      sku: row.sku,
-      expectedLegacyQuantity: row.legacyQuantity,
-      expectedLedgerQuantity: row.inventoryQuantity,
-      correctionQuantity,
-      expectedPostQuantity: row.legacyQuantity,
-      type: 'adjust',
-      orderId: null,
-      idempotencyKey,
-      sourceEntity: 'inventory_reconciliation',
-      sourceId,
-    };
-    return {
-      sequence: index + 1,
-      ...identity,
-      note: 'PS-462 reviewed legacy opening-balance correction',
-      effectiveAt: 'REQUIRED_AT_APPLY_TIME',
-      createdBy: 'REQUIRED_AT_APPLY_TIME',
-      reviewFingerprint: sha256(JSON.stringify(identity)),
-    };
-  });
-
-  const headers = [
-    'sequence', 'inventory_id', 'client_id', 'sku', 'expected_legacy_quantity',
-    'expected_ledger_quantity', 'correction_quantity', 'expected_post_quantity',
-    'type', 'order_id', 'note', 'idempotency_key', 'source_entity', 'source_id',
-    'effective_at', 'created_by', 'review_fingerprint',
-  ];
-  const movementCsv = [
-    headers.join(','),
-    ...movementRows.map((row) => [
-      row.sequence,
-      row.inventoryId,
-      row.clientId,
-      row.sku,
-      row.expectedLegacyQuantity,
-      row.expectedLedgerQuantity,
-      row.correctionQuantity,
-      row.expectedPostQuantity,
-      row.type,
-      row.orderId,
-      row.note,
-      row.idempotencyKey,
-      row.sourceEntity,
-      row.sourceId,
-      row.effectiveAt,
-      row.createdBy,
-      row.reviewFingerprint,
-    ].map(csv).join(',')),
-  ].join('\n') + '\n';
-  const movementsSha = sha256(movementCsv);
-  const correctionQuantity = movementRows.reduce((sum, row) => sum + row.correctionQuantity, 0);
+  const movementRows = correctionPlan.rows;
+  const movementCsv = correctionPlan.movementCsv;
+  const movementsSha = correctionPlan.movementsSha256;
+  const correctionQuantity = correctionPlan.correctionQuantity;
   const negativeBefore = mismatches.filter((row) => row.inventoryQuantity < 0).length;
   const negativeAfter = mismatches.filter((row) => Number(row.legacyQuantity) < 0).length;
   const byClient = [...movementRows.reduce((groups, row) => {

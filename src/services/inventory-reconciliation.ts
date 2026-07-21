@@ -91,7 +91,7 @@ function volumeMissing(row: ScopedInventoryRow): boolean {
   return ![row.length, row.width, row.height].every((value) => Number(value) > 0);
 }
 
-async function buildPlanInTransaction(
+export async function buildInventoryReconciliationPlanInTransaction(
   tx: InventoryStockTransaction,
   requestedScope: InventoryReconciliationScope,
 ): Promise<InventoryReconciliationPlan> {
@@ -179,7 +179,7 @@ export function buildInventoryReconciliationPlan(
   dependencies: InventoryReconciliationDependencies = {},
 ): Promise<InventoryReconciliationPlan> {
   const database = dependencies.database ?? db;
-  return database.transaction((tx) => buildPlanInTransaction(tx, scope));
+  return database.transaction((tx) => buildInventoryReconciliationPlanInTransaction(tx, scope));
 }
 
 export async function applyInventoryReconciliationPlan(): Promise<never> {
