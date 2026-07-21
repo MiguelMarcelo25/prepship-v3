@@ -1,0 +1,305 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-444",
+  "title": "Crash-safe Print Queue mixed-batch recovery and provider outcome fencing",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "38b2cd119f0f8ab0fda0bcc0ac597eb487fd8a8b"
+  },
+  "riskDomains": [
+    "rate_label",
+    "provider_durable_job"
+  ],
+  "claimedScore": 97,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Recovery plans from durable per-order sidecars, continues unrelated safe orders after a mixed-batch interruption, and never resends provider-pending orders even when the parent result snapshot is stale.",
+      "evidenceIds": ["ps444-recovery-unit", "ps430-worker-integration", "ps444-browser-e2e"]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Ambiguous ShipStation operations are reconciled only by exact normalized external_shipment_id reads; verified receipts resume the existing atomic persistence owner, while absent effects require cancellation acknowledgement plus a consistency grace and no provider POST is issued.",
+      "evidenceIds": ["ps423-ledger-adversarial", "ps430-worker-failure-injection", "ps444-recovery-unit"]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Automatic pg-boss postage-chunk redelivery is disabled, durable recovery is the sole replay owner, and active locks, held operations, missing post-purchase artifacts, and unresolved legacy intents remain non-retryable reconciliation states.",
+      "evidenceIds": ["ps444-recovery-unit", "ps423-ledger-adversarial", "ps430-worker-failure-injection"]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Selected-rate proof storage fails closed on cache/database unavailability, scheduled pre-expiry refresh persists purchase-valid account authorization and selectionRef, and cross-order, cross-account, and shipment-fact mismatches reject before the provider.",
+      "evidenceIds": ["rate-boundary-adversarial", "rate-source-of-truth-pack", "ps444-recovery-unit"]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "The Orders UI renders backend-owned per-order outcomes and next actions, retains interrupted jobs across reload, and sends only an opaque job id with an empty body when an operator resumes safe items.",
+      "evidenceIds": ["ps444-browser-e2e", "ps444-recovery-unit"]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "Carrier outage, insufficient balance, rate-authority outage, stale proof, and provider ambiguity produce distinct backend next actions; only true rate-proof failures request rerating and provider ambiguity is never retry-eligible.",
+      "evidenceIds": ["ps444-recovery-unit", "ps444-browser-e2e"]
+    },
+    {
+      "id": "AC-7",
+      "severity": "high",
+      "status": "met",
+      "description": "The focused Print Queue, provider-ledger, mixed-success, durable recovery, rate-authority, label URL, invalid-label, strict TypeScript, production frontend build, browser, and all 49 mandatory source-of-truth gates pass at the reviewed SHA.",
+      "evidenceIds": ["ps444-recovery-unit", "ps444-browser-e2e", "full-sot-guard-pack", "strict-typecheck", "frontend-build", "label-regressions"]
+    },
+    {
+      "id": "AC-8",
+      "severity": "critical",
+      "status": "met",
+      "description": "Shipped/cancelled edit locks, schemas, inventory deduction kill switch, and read-only UI protections were not weakened; verification bought no postage, called no live carrier mutation, notified no marketplace, and performed no production order, shipment, billing, or inventory mutation.",
+      "evidenceIds": ["lockdown-proof", "implementation-scope-proof", "full-sot-guard-pack"]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/print-queue/queue-send-job-store.ts plus print_queue_send_jobs/print_queue_batch_job_items durable per-order lifecycle and recovery generation",
+      "src/services/print-queue/queue-send-recovery.ts authoritative safe/completed/provider-pending recovery partition",
+      "src/services/fulfillment-operation-ledger.ts durable provider dispatch, receipt, reconciliation, and one-effect fencing",
+      "src/services/print-queue/shipstation-operation-reconciler.ts exact-ID read-only ShipStation outcome reconciliation",
+      "src/services/shipping-workflow/rate-quote-snapshot-store.ts selected-rate proof availability and purchase validation",
+      "src/services/print-queue/queue-send-outcomes.ts backend-owned operator outcome and next-action projection"
+    ],
+    "oldOwners": [
+      {
+        "path": "parent queue-send results used as the recovery completion source",
+        "disposition": "delegated",
+        "delegatesTo": "fresh durable per-order sidecars through planQueueSendRecovery"
+      },
+      {
+        "path": "whole-batch automatic recovery block when any provider outcome was unknown",
+        "disposition": "delegated",
+        "delegatesTo": "per-order provider fencing plus continuation of independently safe orders"
+      },
+      {
+        "path": "frontend retryEligible interpretation for every failed queue item",
+        "disposition": "delegated",
+        "delegatesTo": "backend QueueSendOrderOutcome.nextAction"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/print-queue.ts",
+        "action": "modified",
+        "delegatesTo": "durable job store, backend outcome projection, and worker resume owner after scope validation"
+      },
+      {
+        "path": "src/lib/shipstation/labels.ts",
+        "action": "modified",
+        "delegatesTo": "ShipStation exact external_shipment_id GET translation only; no recovery policy"
+      },
+      {
+        "path": "web/src/components/Views/OrdersView.tsx",
+        "action": "modified",
+        "delegatesTo": "backend outcomes and can_resume without owning retry, provider, or label-purchase truth"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Durable backend sidecars and the provider-operation ledger remain authoritative. Routes and UI transport/render their facts, and the provider adapter only normalizes provider payloads."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps444-recovery-unit",
+      "classification": "unit",
+      "command": "npm run test:ps-444-print-queue-recovery",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-444-print-queue-recovery-guard.ts",
+        "src/services/print-queue/queue-send-recovery.ts",
+        "src/services/print-queue/queue-send-outcomes.ts",
+        "src/services/print-queue/shipstation-operation-reconciler.ts"
+      ],
+      "assertions": ["mixed_batch_32_orders", "sidecar_overrides_stale_snapshot", "provider_pending_fenced", "backend_next_actions"],
+      "proves": "A 32-order mixed fixture resumes 20 independently safe items while fencing three ambiguous provider outcomes, then reports 29 queued and three reconciliation-required outcomes with no retry eligibility."
+    },
+    {
+      "id": "ps444-browser-e2e",
+      "classification": "e2e",
+      "command": "npm run test:ps-444-print-queue-recovery:browser",
+      "result": "pass",
+      "artifactPaths": [
+        "web/e2e/batch-create-print-via-queue.spec.js",
+        "web/src/components/Views/OrdersView.tsx",
+        "web/src/lib/v2-apiClient.ts"
+      ],
+      "assertions": ["backend_outcomes_rendered", "job_id_only_resume", "provider_pending_remains_fenced", "provider_spy_untouched"],
+      "proves": "The real Orders UI renders interrupted per-order outcomes, posts an empty resume body to the job-id route, hides resume when only provider ambiguity remains, and never starts PDF printing or a label request. Every network request is mocked."
+    },
+    {
+      "id": "ps423-ledger-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-423-provider-operation-ledger",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-423-provider-operation-ledger-integration.ts",
+        "src/services/fulfillment-operation-ledger.ts",
+        "drizzle/0072_external_operations.sql"
+      ],
+      "assertions": ["lost_response_reconciliation", "restart_idempotency", "concurrency_single_effect", "provider_spy_untouched"],
+      "proves": "A fake-provider migrated-database integration turns ambiguous post-dispatch failure into a durable hold, blocks redispatch, records an exact receipt, and consumes the local effect once."
+    },
+    {
+      "id": "ps430-worker-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-430-print-queue-worker-health",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-430-print-queue-worker-health-integration.ts",
+        "scripts/ps-430-print-queue-worker-health-guard.ts",
+        "src/services/print-queue-worker.ts"
+      ],
+      "assertions": ["crash_recovery", "restart_idempotency", "concurrency_single_effect", "fencing_stale_worker_rejected"],
+      "proves": "The migrated worker fixture admits one current recovery generation, rejects stale writes and old claims, and distinguishes infrastructure restart from provider reconciliation holds."
+    },
+    {
+      "id": "ps430-worker-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-430-print-queue-worker-health && npm run test:ps-423-provider-operation-ledger",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-430-print-queue-worker-health-guard.ts",
+        "scripts/ps-430-print-queue-worker-health-integration.ts",
+        "scripts/ps-423-provider-operation-ledger-integration.ts"
+      ],
+      "assertions": ["crash_recovery", "lost_response_reconciliation", "restart_idempotency", "concurrency_single_effect", "fencing_stale_worker_rejected"],
+      "proves": "Injected stale claims, timeout/skew faults, ambiguous provider acceptance, local receipt loss, and overlapping recovery generations fail closed and cannot cause a second provider effect."
+    },
+    {
+      "id": "rate-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-frontend-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "src/services/shipping-workflow/rate-quote-snapshot-store.ts",
+        "src/services/shipping-workflow/shipping-quote-authorization.ts"
+      ],
+      "assertions": ["cross_order_rejected", "cross_account_rejected", "fact_mismatch_rejected", "provider_spy_untouched"],
+      "proves": "Backend-issued quote authorization rejects cross-order, cross-account, and shipment-fact drift before the injected provider spy, while one valid exact proof reaches it once."
+    },
+    {
+      "id": "rate-source-of-truth-pack",
+      "classification": "integration",
+      "command": "npm run test:rate-source-of-truth && npm run test:selected-rate-proof-boundary && npm run test:ps-348-pre-expiry-rate-refresh",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-313-rate-source-of-truth-guard.ts",
+        "scripts/selected-rate-proof-purchase-boundary-guard.ts",
+        "scripts/ps-348-pre-expiry-rate-refresh-guard.ts",
+        "src/services/rates-backfill.ts"
+      ],
+      "assertions": ["purchase_boundary_fail_closed", "preexpiry_selection_ref_persisted"],
+      "proves": "The backend remains the sole rate/proof owner, label purchase requires opaque selected-rate authorization, and scheduled refresh treats a missing selectionRef as incomplete."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": ["scripts/sot-guard-pack.mjs", "scripts/ps-335-sot-guard-pack-guard.ts"],
+      "assertions": [],
+      "proves": "All 49 mandatory backend-truth, durable-worker, rate, label, billing, inventory, auth, runtime-schema, and lifecycle guards pass."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": ["tsconfig.json", "web/tsconfig.json"],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": ["vite.config.ts", "web/src"],
+      "assertions": [],
+      "proves": "The production Vite bundle builds successfully with 2,977 modules transformed."
+    },
+    {
+      "id": "label-regressions",
+      "classification": "static",
+      "command": "npm run test:shipstation-label-url && npm run test:print-queue-invalid-label && npm run test:ps-287-print-queue-label-normalization && npm run test:ps-084-direct-carrier-print-queue",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/shipstation-label-url-guard.mjs",
+        "scripts/print-queue-invalid-label-guard.mjs",
+        "scripts/ps-287-print-queue-label-normalization-guard.ts",
+        "scripts/ps-084-direct-carrier-print-queue-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "Label URL extraction, invalid-label rejection, PDF normalization, direct-carrier backend purchase ownership, and existing-label recovery remain intact."
+    },
+    {
+      "id": "lockdown-proof",
+      "classification": "static",
+      "command": "npm run test:order-editable-lockdown",
+      "result": "pass",
+      "artifactPaths": ["scripts/order-editable-lockdown-guard.mjs", "web/src/components/Views/OrdersView.tsx"],
+      "assertions": [],
+      "proves": "Shipped/cancelled backend and frontend edit protections remain present and active."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git diff --name-status ffbcd76d5c65a170be711af7fa77b7e7b526a012..38b2cd119f0f8ab0fda0bcc0ac597eb487fd8a8b",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/print-queue-worker.ts",
+        "src/services/print-queue/queue-send-job-store.ts",
+        "src/services/print-queue/queue-send-recovery.ts",
+        "src/services/print-queue/shipstation-operation-reconciler.ts",
+        "src/services/fulfillment-operation-ledger.ts",
+        "src/services/shipping-workflow/rate-quote-snapshot-store.ts",
+        "web/src/components/Views/OrdersView.tsx"
+      ],
+      "assertions": [],
+      "proves": "No migration, orders/shipments schema, order edit route, inventory deduction switch, marketplace notification owner, or production data script changed. Shipping-sensitive changes are bounded to durable queue recovery, receipt validation, and thin outcome rendering."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "npm run test:audit-runtime-schema-readiness through npm run test:sot-guard-pack",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema or data rollback is required. Forward-revert the PS-444 implementation, browser-proof, and packet commits, redeploy the prior stable SHA, and preserve all durable queue, provider receipt, shipment, and order history."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the PS-444 packet, browser-proof, and implementation commits, then redeploy frontend, API, and Print Queue worker at the prior compatible stable SHA. Never delete provider receipts, replay provider-pending work, or rewrite shipped/cancelled history during rollback.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "Behavioral closure is intentionally offline because a live label/queue mutation could buy postage or alter production order and shipment state. Production deployment is verified separately with credential-free health/readiness and commit-parity checks only.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
