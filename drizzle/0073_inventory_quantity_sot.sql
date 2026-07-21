@@ -1,6 +1,7 @@
--- PS-439 phase 1: prepare immutable, identity-complete inventory movements.
+-- PS-462 phase 1 (renumbered from duplicate PS-439): prepare immutable,
+-- identity-complete inventory movements.
 -- Additive only: this file never repairs balances, rewrites ledger history, or drops
--- the legacy stock_qty cache. Apply it immediately before deploying the PS-439 runtime;
+-- the legacy stock_qty cache. Apply it immediately before deploying the PS-462 runtime;
 -- older runtimes do not provide the movement identity required by the insert guard.
 
 ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS client_id integer REFERENCES public.clients(id);

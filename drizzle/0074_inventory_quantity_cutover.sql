@@ -1,4 +1,5 @@
--- PS-439 phase 2: remove legacy inventory quantity caches only after reconciliation.
+-- PS-462 phase 2 (renumbered from duplicate PS-439): remove legacy inventory
+-- quantity caches only after reconciliation.
 -- This migration never invents or applies a correction. A separately reviewed,
 -- append-only movement packet must make every legacy balance equal the ledger first.
 
