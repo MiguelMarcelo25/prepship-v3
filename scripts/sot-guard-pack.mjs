@@ -25,6 +25,7 @@ const REQUIRED_GUARDS = [
   'test:ps-433-frontend-source-of-truth',
   'test:ps-436-sync-starvation',
   'test:ps-439-session-advisory-locks',
+  'test:ps-450-inventory-outbox',
   'test:sync-continuous-self-healing',
   'test:ps-320-v2-api-client-transport',
   'test:ps-321-ratebrowsermodal-thin-ui',

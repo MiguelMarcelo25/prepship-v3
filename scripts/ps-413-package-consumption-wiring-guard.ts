@@ -24,7 +24,8 @@ assert(labels.includes('packageConsumption: {') && lifecycle.includes('consumeOu
   'label paths must delegate package consumption through lifecycle to the canonical owner');
 assert(labels.includes('voidOrderShipmentLifecycleInTransaction') && lifecycle.includes('reverseOutboundPackageConsumptionInTransaction(input.shipmentId, now, tx)'),
   'label void must delegate package reversal through lifecycle in the local void transaction');
-assert(labels.includes('created.labelId ?? (created.shipmentId || null)'), 'direct labels must retain provider-native identity');
+assert(labels.includes('durableCreated.labelId ?? (durableCreated.shipmentId || null)'),
+  'direct labels must retain provider-native identity from the durable provider receipt');
 assert(labels.includes("source: directProviderKey ?? 'prepship_v2'"), 'shared Shipp/Walmart/ShipStation label tail must preserve source');
 assert(sync.includes('packageConsumption,') && lifecycle.includes('consumeOutboundPackageInTransaction(input.packageConsumption, tx)'),
   'ShipStation sync must delegate package consumption through lifecycle to the canonical owner');
