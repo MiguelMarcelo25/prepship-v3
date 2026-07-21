@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const read = (path: string) => readFileSync(path, 'utf8');
 const report = read('src/services/fulfillment/inventory-deduction-report.ts');
 const reportCli = read('scripts/report-inventory-deductions.ts');
+const inventoryRoute = read('src/routes/inventory.ts');
 const deductionOutbox = read('src/services/fulfillment/inventory-deduction-outbox.ts');
 const deductions = read('src/services/fulfillment-deductions.ts');
 const outbox = read('src/services/fulfillment/outbox.ts');
@@ -20,6 +21,16 @@ assert.match(report, /inventoryAutoDeductEnabled/);
 assert.doesNotMatch(report, /\b(?:UPDATE|DELETE|INSERT INTO)\b/i);
 assert.match(reportCli, /env\.INVENTORY_AUTO_DEDUCT/);
 assert.match(reportCli, /No order, shipment, inventory, ledger, outbox, label, or provider state is changed/);
+assert.match(inventoryRoute, /getInventoryDeductionReport/);
+assert.match(inventoryRoute, /'\/deduction-outbox-report'[\s\S]*requireInternalPermission\('settings:read'\)/);
+assert.match(inventoryRoute, /inventoryAutoDeductEnabled: env\.INVENTORY_AUTO_DEDUCT/);
+assert.doesNotMatch(
+  inventoryRoute.slice(
+    inventoryRoute.indexOf("'/deduction-outbox-report'"),
+    inventoryRoute.indexOf('// v2-parity: GET /inventory/alerts'),
+  ),
+  /\b(?:UPDATE|DELETE|INSERT INTO)\b/i,
+);
 
 const claimOwnerStart = deductions.indexOf('export async function applyInventoryClaimsForLifecycleEvent');
 const claimOwnerEnd = deductions.indexOf('export async function deductInventoryForOrder', claimOwnerStart);

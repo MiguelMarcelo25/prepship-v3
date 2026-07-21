@@ -3,7 +3,8 @@ import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
-import { db } from '../db/client';
+import { db, sql as pg } from '../db/client';
+import { env } from '../lib/env';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
@@ -26,6 +27,7 @@ import {
   hasAppPermission,
   hasInternalAppPermission,
   requireBusinessRoutePolicy,
+  requireInternalPermission,
 } from '../middleware/auth';
 import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
 import { applyMovement, inventoryStats } from '../services/inventory';
@@ -40,6 +42,7 @@ import {
   buildReportingWindow,
   reportingOrderShipmentProjectionJoinSql,
 } from '../services/reporting-projection';
+import { getInventoryDeductionReport } from '../services/fulfillment/inventory-deduction-report';
 
 const app = new Hono();
 
@@ -638,6 +641,23 @@ app.get('/stats', async (c) => {
   );
   return c.json(stats);
 });
+
+const inventoryDeductionReportQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+// PS-450: internal, read-only reconciliation view over parked/failed inventory
+// deduction delivery. The route carries auth + validated input only; outbox
+// classification remains in the backend report owner and no mutation is issued.
+app.get(
+  '/deduction-outbox-report',
+  requireInternalPermission('settings:read'),
+  zValidator('query', inventoryDeductionReportQuery),
+  async (c) => c.json(await getInventoryDeductionReport(pg, {
+    inventoryAutoDeductEnabled: env.INVENTORY_AUTO_DEDUCT,
+    limit: c.req.valid('query').limit,
+  })),
+);
 
 // v2-parity: GET /inventory/alerts?clientId=N
 // Returns low-stock items (stock_qty <= reorder_level) for the given client.

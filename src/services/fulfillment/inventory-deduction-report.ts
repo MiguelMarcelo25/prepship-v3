@@ -1,3 +1,5 @@
+import type postgres from 'postgres';
+
 export const INVENTORY_DEDUCTION_REPORT_EVENT = 'inventory_deduction_requested';
 
 export type InventoryDeductionReportState =
@@ -7,10 +9,7 @@ export type InventoryDeductionReportState =
   | 'retrying'
   | 'exhausted';
 
-type InventoryDeductionReportSql = <T extends unknown[] = Record<string, unknown>[]>(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-) => Promise<T>;
+type InventoryDeductionReportSql = postgres.Sql;
 
 type InventoryDeductionOutboxRow = {
   id: number;

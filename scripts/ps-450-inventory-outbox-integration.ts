@@ -84,7 +84,7 @@ async function main(): Promise<void> {
       ORDER BY id
     `;
     const before = await client.query(snapshotSql);
-    const parked = await getInventoryDeductionReport(executor, {
+    const parked = await getInventoryDeductionReport(executor as never, {
       inventoryAutoDeductEnabled: false,
       now: new Date('2026-07-21T00:00:00.000Z'),
     });
@@ -94,7 +94,7 @@ async function main(): Promise<void> {
     assert.ok(parked.rows.every((row) => row.state === 'parked_kill_switch'));
     assert.equal(parked.rows.find((row) => row.id === 1)?.lifecycleEventId, 450);
 
-    const active = await getInventoryDeductionReport(executor, {
+    const active = await getInventoryDeductionReport(executor as never, {
       inventoryAutoDeductEnabled: true,
       limit: 500,
     });
