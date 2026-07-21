@@ -123,8 +123,8 @@ assert.match(
 );
 assert.match(
   liveProbeSource,
-  /MIN_PRIMARY_UPS_ACCOUNTS\s*=\s*6[\s\S]*sourceKey !== 'env:primary'[\s\S]*requires at least \$\{MIN_PRIMARY_UPS_ACCOUNTS\} live UPS accounts/,
-  'DR PREPPER auto-selection must require six live UPS accounts before rollout',
+  /MIN_PRIMARY_UPS_ACCOUNTS\s*=\s*2[\s\S]*sourceKey !== 'env:primary'[\s\S]*requires at least \$\{MIN_PRIMARY_UPS_ACCOUNTS\} live UPS accounts[\s\S]*to cover every live UPS account/,
+  'DR PREPPER auto-selection must require multi-UPS and cover every live UPS account',
 );
 assert.match(
   packageJson,

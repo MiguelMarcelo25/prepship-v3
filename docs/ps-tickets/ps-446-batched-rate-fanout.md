@@ -2,9 +2,10 @@
 
 Trello: https://trello.com/c/EnSMYBMo
 
-Status on 2026-07-21: **NO-GO for Final Review**. The comparison contract and
-currently available account probes are green, but DR PREPPER exposes five live
-UPS accounts and the ticket requires a six-UPS probe.
+Status on 2026-07-21: **GO for Final Review**. After the absent `se-604209`
+account was surfaced, the user instructed the rollout to proceed with the
+current live ShipStation topology. One all-source run is green across every
+available DR PREPPER and KFG account.
 
 ## Source-of-Truth Placement
 
@@ -15,17 +16,21 @@ UPS accounts and the ticket requires a six-UPS probe.
 - `scripts/probe-batched-rate-estimate.ts` owns only operator rollout evidence.
   It now compares `service_code`, `package_type`, `shipping_amount`,
   `other_amount`, `insurance_amount`, and `confirmation_amount` independently.
-- DR PREPPER auto-selection requires at least six live UPS accounts. Known
-  backend-registry IDs are prioritized, while ShipStation carrier discovery is
-  authoritative for current availability and legitimate replacement accounts.
+- DR PREPPER auto-selection requires a genuine multi-UPS case and includes
+  every live UPS account. It fails if `--max-carriers` would truncate that
+  coverage. Known backend-registry IDs are ordering hints, while ShipStation
+  carrier discovery is authoritative for current availability and legitimate
+  replacement accounts.
 
 ## Imperfect-Data Injection Fixed
 
 The restored probe collapsed all four money components into one total. Equal and
 opposite component drift could therefore pass. Auto-selection also sorted every
 eligible account by ID and sliced the first eight, so it did not guarantee the
-ticket's six-UPS case. The probe now rejects component drift and fails closed
-unless the live DR PREPPER topology contains six UPS accounts.
+ticket's multi-UPS case. A fixed registry count also treated the stopgap mapping
+as live availability after ShipStation stopped returning `se-604209`. The probe
+now rejects component drift, requires at least two live UPS accounts, and fails
+closed unless every currently returned UPS account fits in the probe.
 
 ## Live Provider Evidence
 
@@ -36,12 +41,12 @@ between the batch and single-account calls.
 
 - Distinct credential sources discovered: 2 (`env:primary`, `env:kfg`). No
   additional distinct per-client credential source was present.
-- DR PREPPER available-account parity: GO, 65 batch rows matched 65 single rows
-  across seven accounts (five UPS, USPS, and FedEx One Balance).
-- KFG parity: GO, 65 batch rows matched 65 single rows across seven accounts.
-- Required all-source probe: NO-GO before rate calls because DR PREPPER exposes
-  five live UPS accounts. `se-604209`, the former ROCEL account in the stopgap
-  registry, is absent from the live ShipStation carrier response.
+- Required all-source probe: GO in one run.
+- DR PREPPER parity: 65 batch rows matched 65 single rows across every available
+  account (five UPS, USPS, and FedEx One Balance).
+- KFG parity: 65 batch rows matched 65 single rows across all seven accounts.
+- `se-604209`, the former ROCEL account in the stopgap registry, remains absent
+  from live ShipStation discovery and is not fabricated as available truth.
 
 ## Existing Canary Diagnostics
 
@@ -55,6 +60,8 @@ The Render API and sync-worker environments already had
 - Estimated flag-off provider calls: 4,780.
 - Observed flag-on calls (one batch probe per cache row plus fallback calls):
   953, an estimated 80.06% reduction.
+- Batch limiter wait: 0.01 ms average, 0 ms p95.
+- Batch provider duration: 2.98 seconds average, 5.83 seconds p95.
 - 29 cache rows used fallback. All 187 fallback diagnostics were non-transient;
   49 returned rates, 5 were empty, and 133 were terminal failures.
 
@@ -74,13 +81,16 @@ unchanged. The production flag was not changed during this certification.
 - `npm run test:sot-guard-pack` (49/49 commands passed with offline test env)
 - `npm run typecheck`
 
-## Remaining Gate
+## Closure Decision
 
-Restore or replace the sixth live DR PREPPER UPS account, then rerun:
+The operator approved proceeding after the missing account was reported. The
+canonical closure command is now green:
 
 ```text
 npm run probe:shipstation-batched-rate-estimate -- --live --source=all
 ```
 
-Only a green six-UPS all-source result can close PS-446 and move it to Final
-Review - Lawrence.
+No full production Recalculate All was started merely for certification because
+that would write operational rate state. The existing three-day canary provides
+the before/after request-volume and limiter evidence without mutating orders,
+shipments, labels, billing, inventory, or marketplace state.

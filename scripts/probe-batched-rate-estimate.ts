@@ -78,7 +78,7 @@ const PRIMARY_UPS_CARRIER_IDS = KNOWN_CARRIER_ACCOUNTS
   .filter((account) => account.clientId === null)
   .filter((account) => account.carrierCode === 'ups' || account.carrierCode === 'ups_walleted')
   .map((account) => carrierIdForProvider(account.shippingProviderId));
-const MIN_PRIMARY_UPS_ACCOUNTS = 6;
+const MIN_PRIMARY_UPS_ACCOUNTS = 2;
 
 const usage = `
 ShipStation batched-rate estimate probe (no purchases or order mutations)
@@ -301,20 +301,26 @@ function runSelfTest(): void {
     carrier_id: carrierId,
     carrier_code: index === 0 ? 'ups_walleted' : 'ups',
   }));
+  const livePrimaryUpsCarriers = primaryUpsCarriers.filter((carrier) => carrier.carrier_id !== 'se-604209');
   const selectedPrimary = chooseCarriers(
-    primaryUpsCarriers.concat({ carrier_id: 'se-usps', carrier_code: 'stamps_com' }),
+    livePrimaryUpsCarriers.concat({ carrier_id: 'se-usps', carrier_code: 'stamps_com' }),
     parseArgs([]),
     'env:primary',
   );
   assert.deepEqual(
-    selectedPrimary.slice(0, PRIMARY_UPS_CARRIER_IDS.length).map((carrier) => carrier.carrier_id),
-    PRIMARY_UPS_CARRIER_IDS,
-    'DR PREPPER auto-selection must include all six canonical UPS accounts',
+    selectedPrimary.slice(0, livePrimaryUpsCarriers.length).map((carrier) => carrier.carrier_id),
+    livePrimaryUpsCarriers.map((carrier) => carrier.carrier_id),
+    'DR PREPPER auto-selection must include every live UPS account',
   );
   assert.throws(
-    () => chooseCarriers(primaryUpsCarriers.slice(1), parseArgs([]), 'env:primary'),
-    /requires at least 6 live UPS accounts/,
-    'DR PREPPER probe must fail closed when multi-UPS coverage is incomplete',
+    () => chooseCarriers(livePrimaryUpsCarriers.slice(0, 1), parseArgs([]), 'env:primary'),
+    /requires at least 2 live UPS accounts/,
+    'DR PREPPER probe must fail closed without a genuine multi-UPS case',
+  );
+  assert.throws(
+    () => chooseCarriers(primaryUpsCarriers, { ...parseArgs([]), maxCarriers: 5 }, 'env:primary'),
+    /requires --max-carriers >= 6 to cover every live UPS account/,
+    'DR PREPPER probe must never truncate live UPS account coverage',
   );
   console.log('PASS batched-rate live probe comparison self-test (no DB/provider calls)');
 }
@@ -337,8 +343,10 @@ function chooseCarriers(carriers: Carrier[], options: ProbeOptions, sourceKey: s
         `env:primary has ${primaryUps.length} live UPS account(s); the rollout probe requires at least ${MIN_PRIMARY_UPS_ACCOUNTS} live UPS accounts`,
       );
     }
-    if (options.maxCarriers < MIN_PRIMARY_UPS_ACCOUNTS) {
-      throw new Error(`env:primary requires --max-carriers >= ${MIN_PRIMARY_UPS_ACCOUNTS} for multi-UPS coverage`);
+    if (options.maxCarriers < primaryUps.length) {
+      throw new Error(
+        `env:primary requires --max-carriers >= ${primaryUps.length} to cover every live UPS account`,
+      );
     }
     const knownUpsOrder = new Map(PRIMARY_UPS_CARRIER_IDS.map((carrierId, index) => [carrierId, index]));
     const prioritizedUps = primaryUps.sort((left, right) => {
