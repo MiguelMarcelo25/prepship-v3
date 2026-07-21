@@ -1,0 +1,455 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-439",
+  "title": "Inventory quantity source of truth — duplicate PS-439 release candidate",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "f2823a40d1007d93c769a457372d79ddc5728465"
+  },
+  "riskDomains": [
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 74,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Inventory quantity is owned by the immutable signed movement ledger and its backend read model; routes, adapters, and React render backend inventoryQuantity and stockStatus without owning balance or threshold truth.",
+      "evidenceIds": [
+        "ps439-migrated-db-integration",
+        "full-sot-guard-pack",
+        "inventory-browser-e2e"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Migration 0073 is additive identity and immutability preparation only; migration 0074 owns the separately gated destructive cutover and refuses to drop stock_qty before preparation, zero-movement validation, and exact ledger reconciliation.",
+      "evidenceIds": [
+        "ps439-migrated-db-integration",
+        "ps439-cutover-adversarial",
+        "runtime-migration-static"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "The migrated database fixture proves concurrent signed movements compose, duplicate idempotency keys have one effect, update/delete/truncate are rejected, correction is append-only, and both migration phases tolerate repeat execution.",
+      "evidenceIds": [
+        "ps439-migrated-db-integration",
+        "ps439-cutover-adversarial"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "The Inventory UI renders backend inventoryQuantity, stockStatus, and cuFt from a fully mocked DTO and contacts no real postage or marketplace host.",
+      "evidenceIds": [
+        "inventory-browser-e2e",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "The reconciled candidate retains PS-444 Print Queue recovery, the bounded status-catchup checkpoint, and every mandatory source-of-truth guard after the latest PS-445 remote commits.",
+      "evidenceIds": [
+        "ps444-recovery-regression",
+        "sync-checkpoint-regression",
+        "full-sot-guard-pack",
+        "implementation-scope-proof"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "The INVENTORY_AUTO_DEDUCT kill switch and shipped/cancelled edit protections remain active; verification bought no postage, called no live carrier mutation, sent no marketplace notification, and performed no production mutation.",
+      "evidenceIds": [
+        "inventory-kill-switch-proof",
+        "lockdown-proof",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "blocked",
+      "description": "Production cutover is not authorized: the latest read-only aggregate still reports 49 balance mismatches, 49 direct-stock-write classifications, 189 negative ledger balances, 33,193 shipped-order movement gaps, and 1,289 billing-display mismatches. The ignored correction packet must be regenerated and separately approved before any movement or migration application.",
+      "evidenceIds": [
+        "production-readonly-baseline",
+        "runtime-migration-static"
+      ]
+    },
+    {
+      "id": "AC-8",
+      "severity": "high",
+      "status": "blocked",
+      "description": "The handwritten 0073 and 0074 migrations are outside drizzle/meta/_journal.json and no tested forward rollback exists for restoring stock_qty after phase 2; production migration sequencing and rollback proof remain required.",
+      "evidenceIds": [
+        "runtime-migration-static",
+        "ps439-cutover-adversarial"
+      ]
+    },
+    {
+      "id": "AC-9",
+      "severity": "critical",
+      "status": "blocked",
+      "description": "The canonical PS ticket ledger reserves PS-439 for pool-safe worker advisory-lock ownership and explicitly records the inventory-balance card as a duplicate. This packet is disambiguated by filename but cannot be Final Review green until the inventory work receives a unique ticket identity.",
+      "evidenceIds": [
+        "ticket-ledger-collision-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/inventory-stock-math.ts inventoryLedgerQuantity and computeInventoryQuantityForIds own signed ledger-derived quantity reads",
+      "src/services/inventory-movement.ts applyInventoryMovementInTransaction owns append-only idempotent movement writes",
+      "src/services/inventory-reconciliation.ts buildInventoryReconciliationPlan owns read-only discrepancy planning",
+      "drizzle/0073_inventory_quantity_sot.sql owns additive movement identity and immutability preparation",
+      "drizzle/0074_inventory_quantity_cutover.sql owns the reconciliation-gated legacy cache removal"
+    ],
+    "oldOwners": [
+      {
+        "path": "inventory.stock_qty legacy mutable balance cache",
+        "disposition": "retained-with-caveat",
+        "delegatesTo": "inventory_ledger signed movement sum after approved reconciliation and phase-2 cutover"
+      },
+      {
+        "path": "frontend effectiveStock/stockQty fallback and local threshold classification",
+        "disposition": "delegated",
+        "delegatesTo": "backend inventoryQuantity and stockStatus DTO fields"
+      },
+      {
+        "path": "cache-repair reconciliation that writes stock_qty",
+        "disposition": "deleted",
+        "delegatesTo": "read-only buildInventoryReconciliationPlan plus separately approved append-only movements"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/inventory.ts",
+        "action": "modified",
+        "delegatesTo": "inventory movement, quantity read-model, and reconciliation owners"
+      },
+      {
+        "path": "web/src/lib/v2-apiClient/shared.ts and web/src/hooks/useInventory.ts",
+        "action": "modified",
+        "delegatesTo": "backend inventoryQuantity and stockStatus without local balance or threshold truth"
+      },
+      {
+        "path": "src/services/fulfillment-deductions.ts",
+        "action": "modified",
+        "delegatesTo": "applyInventoryMovementInTransaction while retaining the INVENTORY_AUTO_DEDUCT kill switch"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Signed ledger movements and backend read models remain authoritative. Routes validate and delegate, the frontend renders the DTO, and neither migration applies correction data or silently chooses the legacy cache as truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps439-migrated-db-integration",
+      "classification": "integration",
+      "command": "npm run test:inventory-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-439-inventory-source-of-truth-guard.ts",
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql",
+        "src/services/inventory-movement.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "concurrent_movements_compose",
+        "append_only_correction"
+      ],
+      "proves": "A PGlite migrated-database fixture applies phase 1 twice, composes concurrent receive/ship movements, deduplicates a replay, appends a reviewed correction, and applies phase 2 twice without creating a second effect."
+    },
+    {
+      "id": "ps439-cutover-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:inventory-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-439-inventory-source-of-truth-guard.ts",
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql"
+      ],
+      "assertions": [
+        "cutover_before_prepare_rejected",
+        "balance_mismatch_rejected",
+        "zero_movement_rejected",
+        "ledger_update_delete_truncate_rejected",
+        "orders_shipments_untouched"
+      ],
+      "proves": "Adversarial ordering and data-shape checks fail closed before destructive cutover, reject zero or mutable history, and statically forbid correction DML or orders/shipments schema changes in either migration."
+    },
+    {
+      "id": "inventory-browser-e2e",
+      "classification": "e2e",
+      "command": "npm run test:ps-324-inventory-proof:browser",
+      "result": "pass",
+      "artifactPaths": [
+        "web/e2e/inventory-ps324-proof.spec.js",
+        "web/src/components/Views/InventoryView.tsx",
+        "web/src/hooks/useInventory.ts",
+        "web/src/lib/v2-apiClient/shared.ts"
+      ],
+      "assertions": [
+        "backend_inventory_quantity_rendered",
+        "backend_stock_status_rendered",
+        "provider_spy_untouched"
+      ],
+      "proves": "Two Playwright tests render the backend-owned quantity/status/cuFt tuple and verify that the page contacts no real postage or marketplace host; every request is mocked."
+    },
+    {
+      "id": "production-readonly-baseline",
+      "classification": "live",
+      "command": "npm run inventory:reconcile:dry-run",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-discrepancy-report.ts"
+      ],
+      "assertions": [
+        "read_only_aggregate",
+        "no_apply_mode",
+        "production_cutover_blocked"
+      ],
+      "proves": "The 2026-07-21 read-only aggregate observed 49 balance mismatches, 49 direct-stock-write classifications, 189 negative ledger balances, 33,193 shipped-order movement gaps, zero duplicate ship deductions, zero case-variant collisions, and 1,289 billing-display mismatches. It performed no DML and supports no apply flag."
+    },
+    {
+      "id": "runtime-migration-static",
+      "classification": "static",
+      "command": "npm run test:audit-runtime-schema-readiness through npm run test:sot-guard-pack; inspect drizzle/meta/_journal.json for 0073/0074",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/runtime-ddl-guard.mjs",
+        "src/services/runtime-schema-readiness.ts",
+        "drizzle/meta/_journal.json",
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql"
+      ],
+      "assertions": [],
+      "proves": "Runtime schema readiness owns the 0073 frontier and no runtime DDL exists. The handwritten 0073/0074 files are absent from Drizzle's generated journal, so production application requires an explicit ordered migration procedure rather than filename inference."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 49 mandatory source-of-truth, durable-worker, auth, billing, migration, lifecycle, and safety guards pass on the exact candidate after PS-445 reconciliation."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass on the exact candidate."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production Vite bundle builds successfully with 2,989 modules transformed."
+    },
+    {
+      "id": "inventory-kill-switch-proof",
+      "classification": "static",
+      "command": "npm run test:inventory-auto-deduct",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/inventory-auto-deduct-guard.mjs",
+        "src/services/fulfillment-deductions.ts"
+      ],
+      "assertions": [],
+      "proves": "Both fulfillment deduction entry points still short-circuit through INVENTORY_AUTO_DEDUCT before inventory or ledger writes."
+    },
+    {
+      "id": "lockdown-proof",
+      "classification": "static",
+      "command": "npm run test:order-editable-lockdown",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/order-editable-lockdown-guard.mjs",
+        "src/routes/orders.ts",
+        "web/src/components/Views/OrdersView.tsx"
+      ],
+      "assertions": [],
+      "proves": "Shipped/cancelled backend edit guards and frontend read-only controls remain present and active."
+    },
+    {
+      "id": "ps444-recovery-regression",
+      "classification": "unit",
+      "command": "npm run test:ps-444-print-queue-recovery",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-444-print-queue-recovery-guard.ts",
+        "src/services/print-queue/queue-send-recovery.ts",
+        "src/services/print-queue/queue-send-outcomes.ts"
+      ],
+      "assertions": [
+        "mixed_batch_recovery_preserved",
+        "provider_pending_fenced"
+      ],
+      "proves": "PS-444 mixed-batch recovery and provider-pending fencing remain green after restoring and splitting the inventory source-of-truth rollout."
+    },
+    {
+      "id": "sync-checkpoint-regression",
+      "classification": "unit",
+      "command": "npm run test:ps-409-status-catchup-backlog",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-409-status-catchup-backlog-guard.ts",
+        "src/services/order-sync.ts"
+      ],
+      "assertions": [
+        "page_checkpoint_before_cooperative_yield"
+      ],
+      "proves": "Successfully persisted terminal-status pages are checkpointed before the next provider request can cooperatively yield."
+    },
+    {
+      "id": "dependency-lock-proof",
+      "classification": "static",
+      "command": "npm ci --ignore-scripts --dry-run",
+      "result": "pass",
+      "artifactPaths": [
+        "package.json",
+        "package-lock.json"
+      ],
+      "assertions": [],
+      "proves": "The package manifest and lockfile are install-consistent without executing lifecycle scripts."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git diff --name-status 53ceb3ad0fb4063922a739b4dd27394750a7e330..f2823a40d1007d93c769a457372d79ddc5728465",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql",
+        "src/services/inventory-movement.ts",
+        "src/services/inventory-stock-math.ts",
+        "src/services/inventory-reconciliation.ts",
+        "src/services/fulfillment-deductions.ts",
+        "src/services/order-sync.ts",
+        "web/e2e/inventory-ps324-proof.spec.js"
+      ],
+      "assertions": [],
+      "proves": "The five local commits after the latest remote candidate contain the restored PS-439 runtime, release-guard alignment, sync checkpoint, two-stage migration split, and one test-fixture correction. No dependency, orders/shipments schema, or production correction artifact is included."
+    },
+    {
+      "id": "ticket-ledger-collision-proof",
+      "classification": "static",
+      "command": "rg -n 'PS-439' docs/ps-tickets/ps-ledger.md docs/ps-tickets/ps-439-session-advisory-locks.md",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/ps-ledger.md",
+        "docs/ps-tickets/ps-439-session-advisory-locks.md"
+      ],
+      "assertions": [],
+      "proves": "The canonical ledger assigns PS-439 to pool-safe worker advisory-lock ownership and calls the inventory-balance card a duplicate, so this inventory packet must remain blocked until renumbered."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0073_inventory_quantity_sot.sql",
+      "drizzle/0074_inventory_quantity_cutover.sql"
+    ],
+    "verification": {
+      "command": "npm run test:inventory-source-of-truth && npm run test:audit-runtime-schema-readiness through npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-439-inventory-source-of-truth-guard.ts",
+        "scripts/runtime-ddl-guard.mjs",
+        "drizzle/0073_inventory_quantity_sot.sql",
+        "drizzle/0074_inventory_quantity_cutover.sql"
+      ]
+    },
+    "rollbackPlan": "Do not apply either migration under this packet. Phase 1 must be applied immediately before the new runtime because older runtime writes lack required movement identity. Before phase 2, approve and append corrections, verify zero mismatch and zero invalid movements, and take a database backup. A phase-2 rollback requires a separately reviewed forward migration that re-adds stock_qty, repopulates it from the immutable ledger, restores compatible runtime readiness, and is tested before production use. Never edit or delete ledger history."
+  },
+  "rollback": {
+    "strategy": "No rollback is authorized or claimed as tested. Before production rollout, build a migrated-database forward-rollback fixture for both phases. If phase 1 fails before runtime deployment, restore the prior schema/runtime-compatible trigger state through a reviewed migration. If phase 2 fails, do not deploy an older stock_qty runtime until a reviewed forward migration recreates and ledger-populates that cache. Correction rollback is append-only inverse movements, never UPDATE/DELETE/TRUNCATE.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "unverified",
+    "reason": "Only a read-only production aggregate was verified. No staging or production migration, correction movement, runtime deployment, Render service, frontend deployment, commit parity, or post-deploy health check was authorized or performed.",
+    "followUpOwner": "DJ",
+    "artifactPaths": []
+  },
+  "caveats": [
+    {
+      "id": "ticket-id-collision",
+      "severity": "critical",
+      "status": "open",
+      "description": "PS-439 is already reserved for the advisory-lock ticket; the inventory work needs a unique task ID and canonical packet filename before Final Review closure.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Assign a unique PS ticket ID to the inventory source-of-truth rollout and regenerate this packet under that ID."
+    },
+    {
+      "id": "production-correction-not-approved",
+      "severity": "critical",
+      "status": "open",
+      "description": "Production still has 49 balance mismatches. The ignored correction packet was prepared against an earlier SHA, proposes 49 append-only movements totaling +1,000, and must be regenerated from current data and explicitly approved before application.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Regenerate and review the correction plan hash, row identities, expected pre-balances, billing impact, and append-only application transaction."
+    },
+    {
+      "id": "historical-ledger-and-billing-gaps",
+      "severity": "high",
+      "status": "open",
+      "description": "The live read-only aggregate reports 33,193 shipped-order movement gaps and 1,289 billing-display mismatches. These may include legacy/pre-feature records but require explicit classification before claiming complete historical ledger or billing provenance.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Classify historical movement and billing-display gaps, define the cutover acceptance threshold, and prepare separate reviewed remediation if required."
+    },
+    {
+      "id": "handwritten-migrations-outside-journal",
+      "severity": "high",
+      "status": "open",
+      "description": "Migrations 0073 and 0074 are not represented in drizzle/meta/_journal.json; automated migration tooling cannot be assumed to discover or sequence them.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Choose and document the canonical migration ledger/application mechanism, including phase ordering, transaction boundaries, locks, and commit parity."
+    },
+    {
+      "id": "migration-rollback-untested",
+      "severity": "high",
+      "status": "open",
+      "description": "No tested forward rollback recreates stock_qty and a compatible runtime after phase-2 removal, so the destructive cutover is not release-ready.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Implement and execute an offline migrated-database forward-rollback rehearsal before any production migration approval."
+    }
+  ]
+}
