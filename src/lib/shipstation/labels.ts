@@ -412,6 +412,7 @@ export async function ssListRecentLabels(
         // Per user override unlock shipped data on 2026-07-14: do not let
         // label enrichment swallow the owning shipment-sync cancellation.
         signal: opts.signal,
+        priority: 'background',
       }
     );
     return (payload.labels ?? []).map((label) => {

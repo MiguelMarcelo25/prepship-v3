@@ -1,9 +1,8 @@
 /**
- * PS-perf — REAL EXECUTION test for the interactive-priority rate limiter (QA audit 2026-06-23).
+ * PS-447 — REAL EXECUTION test for the three-tier rate limiter.
  *
  * Proves the concurrency contract of runWithGlobalRateLimiter:
- *   1. an INTERACTIVE fetch that queues AFTER background fetches still runs BEFORE them when a
- *      permit frees (the priority lane — the user's Browse Rates click jumps the queue), and
+ *   1. queued work wakes in strict INTERACTIVE > BATCH > BACKGROUND order, and
  *   2. nothing deadlocks — every queued operation completes and the active count drains to 0.
  *
  * Pure + deterministic (no DB / network — the operations are gate-controlled promises; with only a
@@ -35,9 +34,11 @@ async function main() {
   }
   await tick();
 
-  // 2. Queue two BACKGROUND ops first, then one INTERACTIVE op LAST. All must wait (no free permit).
+  // 2. Queue BACKGROUND first, BATCH second, and INTERACTIVE last.
   const bgA = runWithGlobalRateLimiter(async () => { log.push('bgA'); }, 'background');
   const bgB = runWithGlobalRateLimiter(async () => { log.push('bgB'); }, 'background');
+  const batchA = runWithGlobalRateLimiter(async () => { log.push('batchA'); }, 'batch');
+  const batchB = runWithGlobalRateLimiter(async () => { log.push('batchB'); }, 'batch');
   const interactive = runWithGlobalRateLimiter(async () => { log.push('interactive'); }, 'interactive');
   await tick();
   check('all permits held — no queued op has run yet', log.length === 0, log);
@@ -48,14 +49,20 @@ async function main() {
   await tick();
   await tick();
   check('interactive runs first when a permit frees (priority lane)', log[0] === 'interactive', log);
+  check('batch lane drains before background lane',
+    log.slice(1, 3).every((entry) => entry.startsWith('batch')) &&
+      log.slice(3, 5).every((entry) => entry.startsWith('bg')), log);
 
   // 4. Free the rest — everything drains, nothing deadlocks.
   for (let i = 1; i < releases.length; i += 1) releases[i]();
-  await Promise.all([...holders, bgA, bgB, interactive]);
+  await Promise.all([...holders, bgA, bgB, batchA, batchB, interactive]);
   check('every queued op completed (no deadlock)',
     log.includes('interactive') && log.includes('bgA') && log.includes('bgB'), log);
-  check('interactive was strictly before both background ops',
-    log.indexOf('interactive') < log.indexOf('bgA') && log.indexOf('interactive') < log.indexOf('bgB'), log);
+  check('strict priority order is interactive then batch then background',
+    log.indexOf('interactive') < log.indexOf('batchA') &&
+      log.indexOf('interactive') < log.indexOf('batchB') &&
+      log.indexOf('batchA') < log.indexOf('bgA') &&
+      log.indexOf('batchB') < log.indexOf('bgB'), log);
 
   // 5. The limiter is reusable after draining (active count returned to 0 → a fresh op runs immediately).
   let ran = false;

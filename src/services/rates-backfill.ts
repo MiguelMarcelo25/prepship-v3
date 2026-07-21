@@ -1232,11 +1232,13 @@ async function runBackfill(
           sourceAccountId: row.sourceAccountId,
           rawOrder: row.raw,
         };
-        const resolvedRateInput = await resolveRateInput(rateInput);
         const rateFetchDecision = buildBackfillRateFetchDecision({
           liveRecalculate,
           mode: opts.mode,
           preExpiryRefreshReason,
+        });
+        const resolvedRateInput = await resolveRateInput(rateInput, {
+          priority: rateFetchDecision.priority,
         });
         // #750: retry a TIMED-OUT live fetch once — by the retry the initial burst has drained, so the
         // order that was stuck waiting for a limiter permit now gets its rate. Non-timeout errors throw
@@ -1247,15 +1249,18 @@ async function runBackfill(
         const shipStationWork = context.durableChunk
           ? getRates(resolvedRateInput, toGetRatesOptions(rateFetchDecision))
           : runWithTimeoutAndRetry(
-              // PS-350: this background backfill is lower-priority bulk work; manual Rate Browser
+              // PS-447: this batch backfill is lower-priority bulk work; manual Rate Browser
               // and Print Queue preflight attach to the backend job owner ahead of this lane.
-              // PS-perf: the best-rate backfill is bulk BACKGROUND work — it yields ShipStation
-              // budget + fan-out permits to interactive Browse Rates clicks (the limiter priority lane).
-              () => getRates(resolvedRateInput, toGetRatesOptions(rateFetchDecision)),
+              // stays interactive, while sync/polling remains in the background lane.
+              (_attempt, signal) => getRates(
+                { ...resolvedRateInput, signal },
+                toGetRatesOptions(rateFetchDecision),
+              ),
               {
                 timeoutMs: perOrderTimeoutMs,
                 maxRetries: rateFetchDecision.forceRefresh ? LIVE_MAX_RETRIES : 0,
                 label: `getRates(order=${row.id})`,
+                signal: context.signal,
               },
             );
         const result = await awaitSettledWork(
@@ -1274,7 +1279,7 @@ async function runBackfill(
             includeVisibleDirectCarriers: true,
             orderId: row.id,
             orderNumber: row.orderNumber ?? undefined,
-          }, { priority: 'background' });
+          }, { priority: 'batch' });
         const directResult = await (
           context.durableChunk
             ? awaitSettledWork(

@@ -332,10 +332,10 @@ const RATEABLE_CARRIER_CODES = new Set([
 ]);
 
 let globalRateFetchActive = 0;
-// PS-perf (QA audit 2026-06-23): two waiter queues so an INTERACTIVE fetch (a user's Browse
-// Rates click) jumps ahead of BACKGROUND fetches (the best-rate backfill) instead of waiting
-// FIFO behind them. The active-permit COUNTING is unchanged — only the wake order differs.
+// PS-447: three waiter queues keep operator work ahead of rate batches, and rate batches ahead
+// of background sync/polling. The active-permit counting is unchanged; only wake order differs.
 const interactiveRateFetchWaiters: Array<() => void> = [];
+const batchRateFetchWaiters: Array<() => void> = [];
 const backgroundRateFetchWaiters: Array<() => void> = [];
 
 export type RateEngineLimiterSnapshot = {
@@ -345,6 +345,7 @@ export type RateEngineLimiterSnapshot = {
   directCarrierRateFetchConcurrency: number;
   activeRateFetches: number;
   interactiveWaiters: number;
+  batchWaiters: number;
   backgroundWaiters: number;
   shipStationBudgetWindowMs: number;
   shipStationBudgetUsed: number;
@@ -359,6 +360,7 @@ async function acquireGlobalRateFetchPermit(priority: RateFetchPriority = 'inter
   }
   await new Promise<void>((resolve) => {
     if (priority === 'background') backgroundRateFetchWaiters.push(resolve);
+    else if (priority === 'batch') batchRateFetchWaiters.push(resolve);
     else interactiveRateFetchWaiters.push(resolve);
   });
   globalRateFetchActive += 1;
@@ -366,9 +368,11 @@ async function acquireGlobalRateFetchPermit(priority: RateFetchPriority = 'inter
 
 function releaseGlobalRateFetchPermit() {
   globalRateFetchActive = Math.max(0, globalRateFetchActive - 1);
-  // Drain interactive waiters before background ones (the priority lane); identical counting to
-  // the prior single-queue release, so no permit is lost and active never exceeds the cap.
-  const next = interactiveRateFetchWaiters.shift() ?? backgroundRateFetchWaiters.shift();
+  // Strict priority lane: interactive > batch > background. Counting is unchanged, so no
+  // permit is lost and active never exceeds the cap.
+  const next = interactiveRateFetchWaiters.shift()
+    ?? batchRateFetchWaiters.shift()
+    ?? backgroundRateFetchWaiters.shift();
   if (next) next();
 }
 
@@ -381,6 +385,7 @@ export function getRateEngineLimiterSnapshot(): RateEngineLimiterSnapshot {
     directCarrierRateFetchConcurrency: DIRECT_CARRIER_RATE_FETCH_CONCURRENCY,
     activeRateFetches: globalRateFetchActive,
     interactiveWaiters: interactiveRateFetchWaiters.length,
+    batchWaiters: batchRateFetchWaiters.length,
     backgroundWaiters: backgroundRateFetchWaiters.length,
     shipStationBudgetWindowMs: shipStationLimiter.windowMs,
     shipStationBudgetUsed: shipStationLimiter.budgetUsed,
@@ -389,7 +394,7 @@ export function getRateEngineLimiterSnapshot(): RateEngineLimiterSnapshot {
   };
 }
 
-// Exported for ps-rate-limiter-priority-behavior-test (proves no-deadlock + interactive-first).
+// Exported for ps-rate-limiter-priority-behavior-test (proves strict ordering + no deadlock).
 export async function runWithGlobalRateLimiter<T>(
   operation: () => Promise<T>,
   priority: RateFetchPriority = 'interactive',
@@ -583,8 +588,9 @@ export async function resolveRateInput(
   // forcing ONLY for this read-only reference quote — the label-safe path is untouched, and the
   // route never stamps proof/selection keys on manual-estimate rates, so they are structurally
   // non-purchasable.
-  opts: { rawManualEstimate?: boolean } = {},
+  opts: { rawManualEstimate?: boolean; priority?: RateFetchPriority } = {},
 ): Promise<RateInput> {
+  input.signal?.throwIfAborted();
   const context = await resolveRateCredentialContext(input);
   const automationRules = await loadShippingAutomationRules();
   const isHugrab = isHugrabShippingContext({
@@ -599,7 +605,11 @@ export async function resolveRateInput(
     storeId: context.storeId,
     hugrabDefaultInsuranceEnabled,
   };
-  const discoveredCarriers = await getAllCarriers(context.apiKeyV2);
+  const discoveredCarriers = await getAllCarriers(context.apiKeyV2, {
+    priority: opts.priority,
+    signal: input.signal,
+  });
+  input.signal?.throwIfAborted();
   const candidateCarriers = input.carrierIds?.length
     ? discoveredCarriers.filter((carrier) => input.carrierIds!.includes(carrier.carrier_id))
     : discoveredCarriers;
@@ -1040,7 +1050,11 @@ const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<string, { carrier_code: string; nic
   ]),
 );
 
-async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> {
+async function getAllCarriers(
+  apiKeyV2?: string | null,
+  options: { priority?: RateFetchPriority; signal?: AbortSignal } = {},
+): Promise<CarrierInfo[]> {
+  options.signal?.throwIfAborted();
   const cacheKey = apiKeyCacheKey(apiKeyV2);
   const cached = scopedCarrierCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < CARRIER_CACHE_MS) {
@@ -1051,6 +1065,8 @@ async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> 
     const res = await listCarrierAccounts('shipstation', {
       apiKey: apiKeyV2 ?? undefined,
       dedupeKey: `carriers:list:${cacheKey}`,
+      priority: options.priority,
+      signal: options.signal,
     }) as CarriersResponse;
     carriers = (res.carriers ?? [])
       .filter((c) => !c.disabled_by_billing_plan)
@@ -1064,6 +1080,9 @@ async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> 
         };
       });
   } catch (err) {
+    if (options.signal?.aborted) {
+      throw options.signal.reason ?? err;
+    }
     console.warn(
       '[rates] carrier discovery failed:',
       err instanceof Error ? err.message : err,
@@ -1549,7 +1568,10 @@ export async function fetchLiveRatesWithDiagnostics(
 
   // If the caller restricted carriers via input.carrierIds, filter the
   // discovery list to that set. Otherwise use the full cached list.
-  const allCarriers = await getAllCarriers(input.apiKeyV2);
+  const allCarriers = await getAllCarriers(input.apiKeyV2, {
+    priority,
+    signal: input.signal,
+  });
   const carriers = Array.isArray(input.carrierIds)
     ? allCarriers.filter((c) => input.carrierIds!.includes(c.carrier_id))
     : allCarriers;
@@ -1688,8 +1710,8 @@ type GetRatesOptions = {
   cachedOnly?: boolean;
   // PS-197b: quote the uninsured manual baseline (see resolveRateInput) — reference only.
   rawManualEstimate?: boolean;
-  // Operator-driven routes pass 'interactive' explicitly. Unmarked server jobs keep the exhaustive
-  // background timeout/retry policy and yield ShipStation budget to interactive Browse Rates clicks.
+  // Operator-driven routes pass interactive; recalculation/backfills pass batch; background is
+  // reserved for sync/polling. All tiers share the canonical ShipStation admission owner.
   priority?: RateFetchPriority;
 };
 
@@ -1903,6 +1925,7 @@ export async function getRates(
   input.signal?.throwIfAborted();
   const resolvedInput = await resolveRateInput(input, {
     rawManualEstimate: opts.rawManualEstimate === true,
+    priority: opts.priority,
   });
   input.signal?.throwIfAborted();
   const key = rateCacheKey(resolvedInput);

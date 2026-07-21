@@ -29,12 +29,12 @@ export function buildBackfillRateFetchDecision(input: {
   preExpiryRefreshReason: RatePreExpiryRefreshReason;
 }): BackfillRateFetchDecision {
   if (input.liveRecalculate) {
-    return { forceRefresh: true, priority: 'background', reason: 'manual_force_live' };
+    return { forceRefresh: true, priority: 'batch', reason: 'manual_force_live' };
   }
   if (shouldForcePreExpiryLiveRefresh(input.mode, input.preExpiryRefreshReason)) {
-    return { forceRefresh: true, priority: 'background', reason: 'preexpiry_selected' };
+    return { forceRefresh: true, priority: 'batch', reason: 'preexpiry_selected' };
   }
-  return { forceRefresh: false, priority: 'background', reason: 'cache_allowed' };
+  return { forceRefresh: false, priority: 'batch', reason: 'cache_allowed' };
 }
 
 export function toGetRatesOptions(decision: BackfillRateFetchDecision): {

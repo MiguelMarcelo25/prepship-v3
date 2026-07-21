@@ -1,4 +1,4 @@
-export type RateBrowseExecutionPriority = 'interactive' | 'background';
+export type RateBrowseExecutionPriority = 'interactive' | 'batch' | 'background';
 
 export type RateBrowseProviderExecutionPolicy = {
   timeoutMs: number;

@@ -38,18 +38,41 @@ export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promis
 
 /**
  * Run `operation` under `timeoutMs`, retrying ONLY on timeout up to `maxRetries` times. Non-timeout
- * rejections propagate on the first attempt (no retry). `operation` receives the 0-based attempt index.
+ * rejections propagate on the first attempt (no retry). `operation` receives the 0-based attempt index
+ * and an attempt-scoped AbortSignal. A timeout aborts the live attempt and waits for it to settle before
+ * retrying, so a losing request cannot continue to consume provider permits as a zombie.
  */
 export async function runWithTimeoutAndRetry<T>(
-  operation: (attempt: number) => Promise<T>,
-  opts: { timeoutMs: number; maxRetries: number; label: string },
+  operation: (attempt: number, signal: AbortSignal) => Promise<T>,
+  opts: { timeoutMs: number; maxRetries: number; label: string; signal?: AbortSignal },
 ): Promise<T> {
   const maxRetries = Math.max(0, opts.maxRetries);
   for (let attempt = 0; ; attempt += 1) {
+    opts.signal?.throwIfAborted();
+    const timeoutController = new AbortController();
+    const attemptSignal = opts.signal
+      ? AbortSignal.any([opts.signal, timeoutController.signal])
+      : timeoutController.signal;
+    const timeoutError = new TimeoutError(opts.label, opts.timeoutMs);
+    const operationPromise = Promise.resolve().then(() => operation(attempt, attemptSignal));
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(attemptSignal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+      attemptSignal.addEventListener('abort', onAbort, { once: true });
+    });
+    const timer = setTimeout(() => timeoutController.abort(timeoutError), opts.timeoutMs);
     try {
-      return await withTimeout(operation(attempt), opts.timeoutMs, opts.label);
+      return await Promise.race([operationPromise, aborted]);
     } catch (err) {
+      if (attemptSignal.aborted) {
+        // Provider calls in this path honor the signal. Waiting for settlement before a
+        // retry is what makes the no-overlap/no-zombie guarantee enforceable.
+        await operationPromise.catch(() => undefined);
+      }
       if (!isTimeoutError(err) || attempt >= maxRetries) throw err;
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) attemptSignal.removeEventListener('abort', onAbort);
     }
   }
 }
