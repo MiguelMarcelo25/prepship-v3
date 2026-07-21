@@ -36,6 +36,10 @@ export type QueueSendSnapshotResult = {
 
 export type QueueSendSnapshotJob = {
   jobId: string;
+  // Per user override unlock shipped data on 2026-07-21: PS-452 execution
+  // fences are orchestration metadata; no shipped order truth is stored here.
+  generation?: number;
+  chunkSequence?: number;
   status: QueueSendSnapshotStatus;
   clientIds: number[];
   progress: number;
@@ -63,6 +67,10 @@ export type QueueSendResultSnapshot = QueueSendSnapshotResult;
 export type QueueSendItemSnapshot = {
   orderId: number;
   clientId: number | null;
+  // Per user override unlock shipped data on 2026-07-21: bounded recovery
+  // counters describe the sidecar attempt, not a provider purchase retry.
+  attemptCount: number;
+  generation: number;
   state: QueueSendJobItemState;
   blockedReason: string | null;
   errorMessage: string | null;
@@ -74,6 +82,8 @@ export type QueueSendJobSnapshot = {
   version: 1;
   durableKey: typeof PRINT_QUEUE_SEND_STATUS_KEY;
   jobId: string;
+  generation: number;
+  chunkSequence: number;
   status: QueueSendSnapshotStatus;
   active: boolean;
   clientIds: number[];
@@ -124,6 +134,8 @@ export function toQueueSendItemSnapshot(item: QueueSendJobItemInput): QueueSendI
   return {
     orderId: item.orderId,
     clientId: item.clientId ?? null,
+    attemptCount: Math.max(0, Math.floor(Number(item.attemptCount ?? 0) || 0)),
+    generation: Math.max(0, Math.floor(Number(item.generation ?? 0) || 0)),
     state: item.state,
     blockedReason: item.blockedReason ?? null,
     errorMessage: item.errorMessage ?? null,
@@ -150,6 +162,8 @@ export function toQueueSendSnapshot(
     version: 1,
     durableKey: PRINT_QUEUE_SEND_STATUS_KEY,
     jobId: job.jobId,
+    generation: Math.max(0, Math.floor(Number(job.generation ?? job.recoveryAttempts ?? 0) || 0)),
+    chunkSequence: Math.max(1, Math.floor(Number(job.chunkSequence ?? 1) || 1)),
     status: job.status,
     active: isQueueSendActiveStatus(job.status),
     clientIds: [...job.clientIds],

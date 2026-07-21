@@ -46,7 +46,11 @@ assert.match(service, /resolveFulfillmentOperationNoEffect/);
 assert.match(service, /recordFulfillmentOperationReceiptByOperator/);
 assert.match(service, /holdExpiredFulfillmentOperationForReconciliation/);
 assert.match(readiness, /'external_operations'/);
-assert.match(readiness, /0072_external_operations\.sql/);
+assert.match(
+  readiness,
+  /007[23]_(?:external_operations|print_queue_send_execution_fences)\.sql/,
+  'runtime readiness reports the current additive migration while still requiring external_operations',
+);
 
 for (const kind of [
   'forward_label',

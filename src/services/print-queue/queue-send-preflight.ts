@@ -10,7 +10,10 @@ import { SelectedRateProofError } from '../shipping-workflow/rate-fingerprint';
 import { ShippingQuoteAuthorizationError } from '../shipping-workflow/shipping-quote-authorization';
 import { getActiveLabelPurchaseLockOrderIds } from '../../lib/label-purchase-lock';
 import { getHeldLabelOperationOrderIds } from '../fulfillment-operation-ledger';
-import type { QueueSendJobItemInput } from './queue-send-item-state';
+import {
+  queueSendPreflightHasBlockingOperation,
+  type QueueSendJobItemInput,
+} from './queue-send-item-state';
 import type { PrintQueueListScope, QueueSendJobResult, QueueSendOrderInput } from '../print-queue';
 
 export type QueueSendPreflightBlockReason =
@@ -48,6 +51,13 @@ export type QueueSendPreflightResult = {
   readyOrders: QueueSendOrderInput[];
   blockedResults: QueueSendJobResult[];
   itemStates: QueueSendJobItemInput[];
+};
+
+export type QueueSendPreflightOptions = {
+  // Per user override unlock shipped data on 2026-07-21: ledger-proven local
+  // tails may ignore only an orphaned process lock; every other safety/scope
+  // check and every held provider operation remains authoritative.
+  ignoreActivePurchaseLockOrderIds?: ReadonlySet<number>;
 };
 
 const LOCKED_ORDER_STATUSES = new Set(['shipped', 'cancelled']);
@@ -305,6 +315,7 @@ async function classifyOrder(
 export async function preflightQueueSendOrders(
   inputOrders: QueueSendOrderInput[],
   scope?: PrintQueueListScope,
+  options: QueueSendPreflightOptions = {},
 ): Promise<QueueSendPreflightResult> {
   const orderIds = inputOrders.map((order) => order.orderId);
   const [facts, activeLabelOrderIds, activeLockOrderIds, heldOperationOrderIds] = await Promise.all([
@@ -322,7 +333,12 @@ export async function preflightQueueSendOrders(
       order,
       facts.get(order.orderId) ?? null,
       activeLabelOrderIds.has(order.orderId),
-      activeLockOrderIds.has(order.orderId) || heldOperationOrderIds.has(order.orderId),
+      queueSendPreflightHasBlockingOperation({
+        orderId: order.orderId,
+        hasActivePurchaseLock: activeLockOrderIds.has(order.orderId),
+        hasHeldProviderOperation: heldOperationOrderIds.has(order.orderId),
+        ignoreActivePurchaseLockOrderIds: options.ignoreActivePurchaseLockOrderIds,
+      }),
       scope,
     );
     if (reason) {

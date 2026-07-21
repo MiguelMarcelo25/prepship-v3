@@ -90,6 +90,18 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'cancel_requested_at',
     'cancel_acknowledged_at',
   ],
+  // Per user override unlock shipped data on 2026-07-21: PS-452 fails closed
+  // until the Print Queue execution-fence sidecars are migrated.
+  print_queue_send_jobs: [
+    'generation',
+    'current_chunk_sequence',
+    'snapshot_updated_at',
+    'claimed_at',
+    'heartbeat_at',
+    'cancel_requested_at',
+    'cancel_acknowledged_at',
+  ],
+  print_queue_batch_job_items: ['attempt_count', 'generation'],
   print_queue_pdf_chunks: ['generation'],
   rate_browse_jobs: [
     'request_payload',
@@ -154,6 +166,7 @@ const REQUIRED_INDEXES = [
   'print_queue_merge_jobs_updated_at_idx',
   'print_queue_merge_jobs_recovery_idx',
   'print_queue_send_jobs_updated_at_idx',
+  'print_queue_send_jobs_recovery_idx',
   'rate_browse_job_provider_statuses_status_idx',
   'rate_browse_jobs_order_updated_idx',
   'rate_browse_jobs_request_active_idx',
@@ -175,6 +188,16 @@ const REQUIRED_INDEXES = [
   'webhook_events_source_id_idx',
   'webhook_events_source_lookup_idx',
   'worker_status_events_created_at_idx',
+] as const;
+
+// Per user override unlock shipped data on 2026-07-21: these constraints are
+// part of the PS-452 execution fence. Missing counters must fail boot readiness
+// even when every column and index happens to exist.
+const REQUIRED_CONSTRAINTS = [
+  'print_queue_send_jobs_generation_nonnegative',
+  'print_queue_send_jobs_chunk_sequence_positive',
+  'print_queue_batch_job_items_attempt_count_nonnegative',
+  'print_queue_batch_job_items_generation_nonnegative',
 ] as const;
 
 const REQUIRED_FUNCTIONS = [
@@ -265,6 +288,18 @@ async function verifyRuntimeSchema(): Promise<void> {
     if (!presentIndexes.has(index)) missing.push(`index:${index}`);
   }
 
+  const constraintRows = await pg<Array<{ conname: string }>>`
+    select c.conname
+    from pg_constraint c
+    join pg_namespace n on n.oid = c.connamespace
+    where n.nspname = 'public'
+      and c.conname = any(${[...REQUIRED_CONSTRAINTS]})
+  `;
+  const presentConstraints = new Set(constraintRows.map((row) => String(row.conname)));
+  for (const constraint of REQUIRED_CONSTRAINTS) {
+    if (!presentConstraints.has(constraint)) missing.push(`constraint:${constraint}`);
+  }
+
   const functionRows = await pg<Array<{ proname: string }>>`
     select distinct p.proname
     from pg_proc p
@@ -291,7 +326,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0072_external_operations.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0073_print_queue_send_execution_fences.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

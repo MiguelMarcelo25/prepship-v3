@@ -143,6 +143,19 @@ const migrationOwnership = [
       'external_operations_state_lease_idx',
     ],
   ],
+  [
+    'drizzle/0073_print_queue_send_execution_fences.sql',
+    [
+      'current_chunk_sequence',
+      'attempt_count',
+      'heartbeat_at',
+      'print_queue_send_jobs_generation_nonnegative',
+      'print_queue_send_jobs_chunk_sequence_positive',
+      'print_queue_batch_job_items_attempt_count_nonnegative',
+      'print_queue_batch_job_items_generation_nonnegative',
+      'print_queue_send_jobs_recovery_idx',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -209,16 +222,24 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(externalOperationsMigration),
   '0072 adds the provider-operation sidecar without mutating or destructively altering orders/shipments',
 );
+const printQueueExecutionFenceMigration = read('drizzle/0073_print_queue_send_execution_fences.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(printQueueExecutionFenceMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(printQueueExecutionFenceMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(printQueueExecutionFenceMigration),
+  '0073 changes only Print Queue sidecars and never mutates or destructively alters orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
   'REQUIRED_RELATIONS',
   'REQUIRED_COLUMNS',
   'REQUIRED_INDEXES',
+  'REQUIRED_CONSTRAINTS',
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0072_external_operations.sql',
+  '0073_print_queue_send_execution_fences.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

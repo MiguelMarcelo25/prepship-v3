@@ -151,7 +151,11 @@ check('duplicate-postage safety remains before purchase', () => {
     service.indexOf('async function processQueueSendOrder'),
     service.indexOf('export async function startQueueSendJob'),
   );
-  assert.ok(processBlock.includes('findExistingQueueSendLabel(order)'));
-  assert.ok(processBlock.indexOf('findExistingQueueSendLabel(order)') < processBlock.indexOf('createLabelV2({'));
+  const existingLabelLookup = processBlock.indexOf('findExistingQueueSendLabel(order)');
+  assert.ok(existingLabelLookup >= 0);
+  assert.ok(existingLabelLookup < processBlock.indexOf('createLabelV2(input, labelPurchaseScope)'));
+  assert.ok(existingLabelLookup < processBlock.indexOf('resumeLabelV2FromDurableReceipt(input, labelPurchaseScope)'));
+  assert.ok(existingLabelLookup < processBlock.indexOf('resumeShopifyShippingLabelFromDurableReceipt(input, labelPurchaseScope)'));
+  assert.match(processBlock, /recoveryState === 'shipment_persisted'[\s\S]*?LabelArtifactMissingAfterPurchaseError/);
   assert.ok(processBlock.includes('waitForExistingQueueableLabel(order)'));
 });

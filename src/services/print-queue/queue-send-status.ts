@@ -87,6 +87,9 @@ const QUEUE_SEND_IN_PROGRESS_ITEM_STATES = new Set([
   'acquiring_lock',
   'provider_pending',
   'provider_pending_recovery',
+  // Per user override unlock shipped data on 2026-07-21: a durable receipt is
+  // still bounded in-progress work until its local queue tail settles.
+  'receipt_resume',
   'purchased',
   'shipment_persisted',
 ]);

@@ -61,13 +61,18 @@ async function main(): Promise<void> {
         providerCalls += 1;
         return {
           labelId: 'label-423001',
+          shipmentId: 423001,
           trackingNumber: '9400000000000000042301',
+          labelUrl: 'https://labels.invalid/423001.pdf',
+          serviceCode: 'usps_ground_advantage',
+          shipDate: '2026-07-21T00:00:00.000Z',
+          voided: false,
           idempotencyKey,
           authorization: 'must-not-persist',
         };
       },
       normalizeReceipt: (result) => ({
-        receipt: result,
+        receipt: { created: result },
         providerOperationId: result.labelId,
         providerResultId: result.trackingNumber,
       }),
@@ -92,14 +97,20 @@ async function main(): Promise<void> {
   const localAfterRollback = await client.query(`SELECT * FROM ps423_local_results`);
   assert.equal(localAfterRollback.rows.length, 0, 'failed consumption rolls back the local result atomically');
 
+  const recorded = await ledger.getLatestLabelOperationForOrder(423001, dependencies);
+  assert.equal(recorded?.state, 'receipt_recorded', 'queue recovery can observe a durable receipt before local consumption');
   const resume = await ledger.acquireFulfillmentOperation(forwardInput, dependencies);
   assert.equal(resume.kind, 'resume_receipt', 'retry resumes the durable provider receipt');
   if (resume.kind !== 'resume_receipt') throw new Error('forward receipt was not resumable');
-  assert.equal(resume.receipt.authorization, '[redacted]', 'receipt storage redacts credential-shaped fields');
+  assert.equal(
+    (resume.receipt.created as Record<string, unknown>).authorization,
+    '[redacted]',
+    'receipt storage redacts credential-shaped fields',
+  );
   await ledger.consumeFulfillmentOperation(
     resume.operation.id,
     async (tx, receipt) => {
-      assert.equal(receipt.labelId, 'label-423001');
+      assert.equal((receipt.created as Record<string, unknown>).labelId, 'label-423001');
       await tx.execute(sql`
         INSERT INTO ps423_local_results (operation_id, result_key)
         VALUES (${resume.operation.id}, 'shipment-423001')
@@ -110,6 +121,60 @@ async function main(): Promise<void> {
   );
   const completed = await ledger.acquireFulfillmentOperation(forwardInput, dependencies);
   assert.equal(completed.kind, 'consumed');
+  const latestCompleted = await ledger.getLatestLabelOperationForOrder(423001, dependencies);
+  assert.equal(latestCompleted?.state, 'consumed', 'queue recovery reads canonical consumed local truth');
+  const reconciler = await import('../src/services/print-queue/shipstation-operation-reconciler.js');
+  assert.equal(
+    latestCompleted && reconciler.consumedQueueLabelShipmentId(latestCompleted),
+    423001,
+    'consumed local_result identifies the exact canonical shipment without another provider call',
+  );
+  assert.equal(
+    reconciler.isQueueLabelSafeNoEffect({
+      state: 'failed_pre_dispatch',
+    }),
+    true,
+    'a repeated recovery pass recognizes canonical failed-before-dispatch proof',
+  );
+  assert.equal(
+    reconciler.isQueueLabelSafeNoEffect({
+      state: 'reconcile_required',
+    }),
+    false,
+    'an unknown provider outcome is never confused with safe no-effect proof',
+  );
+  assert.equal(
+    reconciler.isHistoricalConsumedQueueLabelOperation({
+      state: 'consumed',
+      semanticGeneration: 1,
+    }, 2, 'voided'),
+    true,
+    'a consumed operation behind the canonical next generation is historical after its label was voided',
+  );
+  assert.equal(
+    reconciler.isHistoricalConsumedQueueLabelOperation({
+      state: 'consumed',
+      semanticGeneration: 2,
+    }, 2, 'voided'),
+    false,
+    'same-generation consumed truth remains held when its exact shipment cannot be verified',
+  );
+  assert.equal(
+    reconciler.isHistoricalConsumedQueueLabelOperation({
+      state: 'consumed',
+      semanticGeneration: 1,
+    }, 2, 'active_unqueueable'),
+    false,
+    'an active shipment with an invalid queue artifact is never treated as historical',
+  );
+  assert.equal(
+    reconciler.isHistoricalConsumedQueueLabelOperation({
+      state: 'consumed',
+      semanticGeneration: 1,
+    }, 2, 'missing_or_inconsistent'),
+    false,
+    'a missing or inconsistent exact shipment remains held',
+  );
   assert.equal(providerCalls, 1, 'provider success plus local fault causes exactly one provider invocation');
   assert.equal((await client.query(`SELECT * FROM ps423_local_results`)).rows.length, 1);
 

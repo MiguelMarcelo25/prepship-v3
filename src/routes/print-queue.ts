@@ -36,7 +36,10 @@ import {
 } from '../services/print-queue';
 import { deriveQueueSendSnapshotStatus } from '../services/print-queue/queue-send-status';
 import { projectQueueSendOrderOutcomes } from '../services/print-queue/queue-send-outcomes';
-import { resumeQueueSendWorkerJob } from '../services/print-queue-worker';
+import {
+  PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS,
+  resumeQueueSendWorkerJob,
+} from '../services/print-queue-worker';
 import { deriveMergeJobSnapshotStatus } from '../services/print-queue/merge-job-status';
 import { readDurableStatusWithTimeout } from '../services/print-queue/durable-status-read';
 import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
@@ -753,7 +756,10 @@ app.get('/batch-send/status/:jobId', async (c) => {
         result_samples: durableJob.resultSamples,
         item_states: durableJob.itemStates ?? [],
         outcomes,
+        // Per user override unlock shipped data on 2026-07-21: PS-452 exposes
+        // resume only while the backend parent-generation cap permits it.
         can_resume: durableStatus.status === 'interrupted'
+          && durableJob.generation < PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS
           && outcomes.some((outcome) => outcome.outcome === 'ready' || outcome.outcome === 'in_progress'),
         error: durableStatus.errorMessage,
         stale: durableStatus.staleReason != null,
@@ -797,7 +803,10 @@ app.get('/batch-send/status/:jobId', async (c) => {
     results: job.results,
     item_states: job.itemStates,
     outcomes,
+    // Per user override unlock shipped data on 2026-07-21: the in-memory
+    // compatibility response delegates to the same backend cap.
     can_resume: jobStatus.status === 'interrupted'
+      && (job.generation ?? 0) < PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS
       && outcomes.some((outcome) => outcome.outcome === 'ready' || outcome.outcome === 'in_progress'),
     error: jobStatus.errorMessage,
     stale: false,

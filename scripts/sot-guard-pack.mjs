@@ -44,6 +44,7 @@ const REQUIRED_GUARDS = [
   'test:audit-order-editable-write',
   'test:ps-451-order-editable-write',
   'test:audit-print-queue-lifecycle',
+  'test:ps-452-print-queue-lifecycle',
   'test:audit-sync-watchdog-lifecycle',
   'test:audit-billing-cross-period-reconciliation',
   'test:audit-dead-code-cleanup',

@@ -633,7 +633,7 @@ export async function listHeldFulfillmentOperations(
     .limit(Math.max(1, Math.min(200, input.limit ?? 100)));
 }
 
-export async function getActiveOrHeldLabelOperationForOrder(
+export async function getLatestLabelOperationForOrder(
   orderId: number,
   injected: FulfillmentOperationDependencies = {},
 ): Promise<ExternalOperation | null> {
@@ -646,11 +646,14 @@ export async function getActiveOrHeldLabelOperationForOrder(
       eq(externalOperations.subjectType, 'order'),
       eq(externalOperations.subjectId, String(orderId)),
       inArray(externalOperations.kind, ['forward_label', 'shopify_label']),
-      inArray(externalOperations.state, ['in_flight', 'reconcile_required']),
     ))
     .orderBy(sql`${externalOperations.semanticGeneration} desc`, sql`${externalOperations.id} desc`)
     .limit(1);
   if (!operation) return null;
+  // Per user override unlock shipped data on 2026-07-21: PS-452 returns the
+  // latest canonical operation including receipt_recorded/consumed so a stale
+  // queue sidecar can observe already-durable provider/local truth. This is a
+  // read plus the pre-existing expired-lease hold; it never dispatches work.
   if (
     operation.state === 'in_flight'
     && (!operation.leaseExpiresAt || operation.leaseExpiresAt.getTime() <= dependencies.now().getTime())

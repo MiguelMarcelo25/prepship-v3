@@ -1076,7 +1076,7 @@ type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 // Per user override unlock shipped data on 2026-05-23: PS-423 reads historical
 // outbound/return rows only to derive the next semantic label generation. It
 // does not rewrite, delete, or weaken any shipped/cancelled protection.
-async function nextLabelSemanticGeneration(orderId: number, returnForShipmentId?: number): Promise<number> {
+export async function nextLabelSemanticGeneration(orderId: number, returnForShipmentId?: number): Promise<number> {
   const [row] = await db
     .select({ total: sql<number>`count(*)::int` })
     .from(shipments)
@@ -1315,6 +1315,28 @@ export async function createShopifyShippingLabelForOrder(
   } finally {
     await purchaseLock.release();
   }
+}
+
+type LabelProviderDispatchOptions = {
+  allowProviderDispatch?: boolean;
+};
+
+export async function resumeLabelV2FromDurableReceipt(
+  body: CreateLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateLabelResponseDto> {
+  // Per user override unlock shipped data on 2026-07-21: bypass only the
+  // crashed process lock; every provider dispatch branch remains forbidden.
+  return createLabelV2Impl(body, scope, { allowProviderDispatch: false });
+}
+
+export async function resumeShopifyShippingLabelFromDurableReceipt(
+  body: CreateShopifyShippingLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateShopifyShippingLabelResponseDto> {
+  // Per user override unlock shipped data on 2026-07-21: resume/poll an
+  // existing durable receipt without another shippingLabelPurchase mutation.
+  return createShopifyShippingLabelForOrderImpl(body, scope, { allowProviderDispatch: false });
 }
 
 type CompletedShopifyPurchase = Exclude<ShopifyShippingLabelPurchaseResult, { pending: true }>;
@@ -1747,6 +1769,7 @@ export async function pollShopifyShippingLabelPurchase(
 async function createShopifyShippingLabelForOrderImpl(
   body: CreateShopifyShippingLabelInputDto,
   scope: ClientStoreScope,
+  execution: LabelProviderDispatchOptions = {},
 ): Promise<CreateShopifyShippingLabelResponseDto> {
   if (!body.orderId) {
     throw new Error('orderId required');
@@ -1887,7 +1910,31 @@ async function createShopifyShippingLabelForOrderImpl(
     shopifyExternalOperationId = action.operation.id;
     if (action.kind === 'resume_receipt') {
       purchased = shopifyPurchaseFromOperationReceipt(action.receipt);
+      if (purchased.pending) {
+        // Per user override unlock shipped data on 2026-07-21: PS-452 polls the
+        // existing Shopify purchase result carried by the durable receipt. It
+        // cannot call shippingLabelPurchase or create a second label.
+        purchased = await pollShopifyPurchaseToTerminal({
+          accountCredentials: account.credentials,
+          firstResult: purchased,
+          fulfillmentOrderId: fulfillmentOrder.id,
+          orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
+          orderName: order.orderNumber,
+          timer,
+        });
+        await refreshFulfillmentOperationReceipt(action.operation.id, {
+          receipt: shopifyPurchaseReceipt(purchased),
+          providerOperationId: purchased.purchaseResultId,
+          providerResultId: purchased.labelId ?? purchased.purchaseResultId,
+        });
+      }
     } else if (action.kind === 'dispatch') {
+      if (execution.allowProviderDispatch === false) {
+        // Per user override unlock shipped data on 2026-07-21: PS-452 receipt
+        // recovery may outlive the crashed process's purchase lock. Missing
+        // durable receipt truth fails closed and can never become a new POST.
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
       purchased = await dispatchFulfillmentOperation<ShopifyShippingLabelPurchaseResult>({
         lease: action.lease,
         label: `Shopify label order ${order.id}`,
@@ -1997,6 +2044,7 @@ async function createShopifyShippingLabelForOrderImpl(
 async function createLabelV2Impl(
   body: CreateLabelInputDto,
   scope: ClientStoreScope,
+  execution: LabelProviderDispatchOptions = {},
 ): Promise<CreateLabelResponseDto> {
   if (!body.orderId) {
     throw new Error('orderId required');
@@ -2642,6 +2690,12 @@ async function createLabelV2Impl(
         ? { ...(context as Record<string, unknown>), rawOrder: order.raw ?? null } as unknown as DirectWalmartContext
         : null;
     } else if (action.kind === 'dispatch') {
+      if (execution.allowProviderDispatch === false) {
+        // Per user override unlock shipped data on 2026-07-21: the receipt-only
+        // Print Queue recovery path bypasses an orphaned process lock, never the
+        // provider ledger. Dispatch is forbidden if receipt truth is absent.
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
       const direct = await dispatchFulfillmentOperation<DirectPurchaseResult>({
         lease: action.lease,
         label: `forward label order ${order.id} via ${directProviderKey}`,
@@ -2751,6 +2805,11 @@ async function createLabelV2Impl(
     if (action.kind === 'resume_receipt') {
       created = createdLabelFromOperationReceipt(action.receipt);
     } else if (action.kind === 'dispatch') {
+      // Per user override unlock shipped data on 2026-07-21: receipt-only
+      // ShipStation recovery may never cross the provider POST boundary.
+      if (execution.allowProviderDispatch === false) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
       created = await dispatchFulfillmentOperation({
         lease: action.lease,
         label: `forward label order ${order.id} via ShipStation`,

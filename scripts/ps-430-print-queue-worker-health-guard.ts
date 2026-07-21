@@ -189,8 +189,9 @@ check('worker wiring checks generation before importing the provider-capable ser
   assert.match(worker, /process\.exit\(1\)/);
   const store = read('src/services/print-queue/queue-send-job-store.ts');
   assert.match(store, /export async function markQueueSendJobWorkerClaimed/);
-  assert.match(store, /status IN \('pending', 'running'\)/);
-  assert.match(store, /snapshot->>'recoveryAttempts'/);
+  assert.match(store, /AND status = 'pending'/);
+  assert.match(store, /AND generation = \$\{normalizedAttempt\}/);
+  assert.match(store, /AND current_chunk_sequence = \$\{normalizedChunkSequence\}/);
   assert.match(store, /RETURNING job_id/);
 });
 

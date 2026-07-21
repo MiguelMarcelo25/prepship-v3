@@ -3009,7 +3009,14 @@ export default function OrdersView({
         throw interrupted
       }
       if (status.status === 'error') {
-        throw new Error(status.error || status.message || 'Queue send failed')
+        // Per user override unlock shipped data on 2026-07-21: PS-452 keeps
+        // terminal recovery outcomes visible for operator review. This renders
+        // backend-owned sidecar truth only; it cannot edit or resend an order.
+        setQueueRecoveryStatus(status)
+        const terminal = new Error(status.error || status.message || 'Queue send failed')
+        ;(terminal as Error & { code?: string; status?: unknown }).code = 'QUEUE_SEND_TERMINAL'
+        ;(terminal as Error & { status?: unknown }).status = status
+        throw terminal
       }
       await yieldToBrowser(BACKEND_QUEUE_SEND_POLL_MS)
     }

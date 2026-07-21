@@ -45,8 +45,9 @@ assert(
   'print queue persists batch-send job snapshots',
 );
 assert(
-  jobStoreSource.includes('WHERE print_queue_send_jobs.updated_at <= ${snapshot.updatedAt}'),
-  'durable batch-send job snapshots cannot be overwritten by older progress writes',
+  jobStoreSource.includes('WHERE print_queue_send_jobs.generation = ${snapshot.generation}') &&
+    jobStoreSource.includes('<= ${snapshot.persistedAt}'),
+  'durable batch-send job snapshots cannot be overwritten by stale generations or older progress writes',
 );
 assert(
   snapshotSource.includes("PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.'") &&

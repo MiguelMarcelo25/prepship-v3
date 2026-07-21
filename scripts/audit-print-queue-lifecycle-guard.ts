@@ -23,11 +23,11 @@ const guardPack = read('scripts/sot-guard-pack.mjs');
 
 const thousand = Array.from({ length: 1_000 }, (_, index) => index + 1);
 const chunks = planQueueSendWorkerChunks(thousand);
-assert.equal(chunks.length, 10, '1,000 orders must be split into ten worker chunks');
-assert.deepEqual(chunks.map((chunk) => chunk.length), Array(10).fill(100));
+assert.equal(chunks.length, 50, '1,000 orders must be split into deadline-safe chunks');
+assert.deepEqual(chunks.map((chunk) => chunk.length), Array(50).fill(20));
 assert.deepEqual(
-  planQueueSendWorkerChunks(thousand.slice(0, 101)).map((chunk) => chunk.length),
-  [100, 1],
+  planQueueSendWorkerChunks(thousand.slice(0, 21)).map((chunk) => chunk.length),
+  [20, 1],
   'the final chunk must preserve the remainder',
 );
 assert.deepEqual(planQueueSendWorkerChunks([]), [], 'an empty payload must create no work');
@@ -84,9 +84,9 @@ assert.match(store, /export async function claimRecoverableQueueSendJobRecords/,
   'durable store must own atomic recovery claims');
 assert.match(store, /FOR UPDATE SKIP LOCKED/,
   'cross-process reapers must not claim the same parent job');
-assert.match(store, /snapshot->>'recoveryAttempts'[\s\S]*?\+ 1/,
-  'a recovery claim must durably increment its attempt');
-assert.match(store, /END < \$\{maxAttempts\}/,
+assert.match(store, /generation = jobs\.generation \+ 1/,
+  'a recovery claim must durably increment its generation');
+assert.match(store, /candidate\.generation < \$\{maxAttempts\}/,
   'recovery claims must enforce the attempt cap');
 assert.match(store, /export async function interruptExhaustedQueueSendJobs/,
   'exhausted jobs must become visibly interrupted');
@@ -104,7 +104,9 @@ assert.match(worker, /setInterval\(\(\) =>[\s\S]*?runRecoveryPass/,
 assert.match(worker, /const recovery = await runRecoveryPass\(boss\)/,
   'worker boot must also recover stale jobs');
 assert.match(worker, /PRINT_QUEUE_SEND_MAX_RECOVERY_ATTEMPTS = 3/,
-  'recovery attempts must be capped');
+  'per-item recovery attempts must be capped');
+assert.match(worker, /PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS/,
+  'the parent must also have a hard generation cap');
 assert.match(worker, /orders: z\.array\(z\.unknown\(\)\)\.min\(1\)\.max\(PRINT_QUEUE_SEND_CHUNK_SIZE\)/,
   'pg-boss payload admission must enforce the chunk size');
 assert.match(worker, /singletonKey: queueSendChunkSingletonKey\(payload\)/,
@@ -125,8 +127,16 @@ assert.match(service, /job\.status = providerPendingCount > 0[\s\S]*?\? 'interru
   'safe intermediate chunks stay pending, while provider-ambiguous orders interrupt the parent');
 assert.match(service, /err instanceof QueueSendJobInterruptedError/,
   'cancelled parents must persist interruption rather than generic failure');
-assert.match(execution, /while \(!signal\?\.aborted && running\.size < maxConcurrent/,
+assert.match(execution, /!signal\?\.aborted[\s\S]*?firstError === undefined[\s\S]*?running\.size < concurrency/,
   'the execution owner must check cancellation before every new admission');
+assert.match(execution, /if \(firstError !== undefined\) throw firstError/,
+  'the execution owner must drain admitted siblings before surfacing failure');
+assert.match(store, /AND status = 'pending'[\s\S]*?AND generation = \$\{normalizedAttempt\}/,
+  'only one replica may claim an exact pending generation');
+assert.match(worker, /heartbeatQueueSendJobWorkerClaim/,
+  'running generations must heartbeat their durable claim');
+assert.match(service, /claimQueueSendJobItemAttempt[\s\S]*?preflightQueueSendOrders/,
+  'every item is fenced and re-preflighted at execution time');
 
 assert.ok(packageJson.includes('"test:audit-print-queue-lifecycle"'),
   'package must expose the PQ-1/PQ-2/PQ-3 guard');
