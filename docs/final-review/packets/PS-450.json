@@ -5,7 +5,7 @@
   "title": "Inventory deductions via fulfillment outbox and pg-boss consolidation",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "93c095b3ed1739fa9148ea61ed206eda8f06dfda"
+    "reviewedSha": "05f9fadc0dc992cd2b7753ad7aab4403d22029a3"
   },
   "riskDomains": [
     "provider_durable_job",
@@ -29,7 +29,7 @@
       "id": "AC-2",
       "severity": "critical",
       "status": "met",
-      "description": "When INVENTORY_AUTO_DEDUCT is off, the canonical owner returns before opening a transaction, the outbox retains unresolved work, and the new bounded read-only report classifies every unresolved row as parked_kill_switch with zero deduction writes.",
+      "description": "When INVENTORY_AUTO_DEDUCT is off, the canonical owner returns before opening a transaction, the outbox retains unresolved work, and the new bounded read-only report classifies every unresolved row as parked_kill_switch with zero deduction writes. Authenticated internal operators can access the projection through GET /inventory/deduction-outbox-report.",
       "evidenceIds": [
         "ps450-report-integration",
         "ps450-placement-guard"
@@ -85,7 +85,8 @@
       "src/services/fulfillment-deductions.ts remains the unchanged canonical kill-switch, stock-movement, and ledger-idempotency owner",
       "src/services/fulfillment/outbox.ts owns claim leases, retries, failure state, and settlement",
       "src/services/sync-job-queue.ts owns pg-boss cadence and singleton admission",
-      "src/services/fulfillment/inventory-deduction-report.ts owns only the bounded SELECT projection over unresolved work"
+      "src/services/fulfillment/inventory-deduction-report.ts owns only the bounded SELECT projection over unresolved work",
+      "src/routes/inventory.ts is a thin authenticated internal transport that validates the report limit and delegates to the report owner"
     ],
     "oldOwners": [
       {
@@ -114,13 +115,14 @@
       "result": "pass",
       "artifactPaths": [
         "scripts/ps-450-inventory-outbox-guard.ts",
+        "src/routes/inventory.ts",
         "src/services/fulfillment/inventory-deduction-report.ts",
         "src/services/fulfillment/inventory-deduction-outbox.ts",
         "src/services/fulfillment/outbox.ts",
         "src/services/sync-job-queue.ts"
       ],
       "assertions": [],
-      "proves": "The kill switch precedes any inventory transaction; disabled work throws back into durable retry state; stale processing claims are recoverable; inventory settlement cannot update marketplace/order confirmation projections; pg-boss scheduling and singleton admission remain present; and the report contains SELECT only."
+      "proves": "The kill switch precedes any inventory transaction; disabled work throws back into durable retry state; stale processing claims are recoverable; inventory settlement cannot update marketplace/order confirmation projections; pg-boss scheduling and singleton admission remain present; the report contains SELECT only; and its route is internal-authenticated, bounded, and delegates to the canonical report owner."
     },
     {
       "id": "ps450-report-integration",
@@ -278,22 +280,23 @@
         "zero_github_actions_runs",
         "no_provider_or_data_mutation"
       ],
-      "proves": "Render API deploy dep-d9fi4rurnols73c156j0 and fulfillment-worker deploy dep-d9fi4s6rnols73c157vg are live at exact SHA 93c095b3ed1739fa9148ea61ed206eda8f06dfda. Public health is ok and readiness reports db, dbWrite, and eventLoop ok. GitHub Actions reports zero runs. Existing Vercel Production remains Ready and compatible because the implementation changes no frontend or Vercel function runtime."
+      "proves": "Render API deploy dep-d9fi8ljrjlhs73ad5hmg and fulfillment-worker deploy dep-d9fi8lnavr4c73cafcqg are live at exact SHA 05f9fadc0dc992cd2b7753ad7aab4403d22029a3. Public health is ok and readiness reports db, dbWrite, and eventLoop ok. An unauthenticated report request returned HTTP 401 before any report query. GitHub Actions reports zero runs. Existing Vercel Production remains Ready and compatible because the implementation changes no frontend or Vercel function runtime."
     },
     {
       "id": "implementation-scope",
       "classification": "static",
-      "command": "git show --stat --oneline 93c095b3ed1739fa9148ea61ed206eda8f06dfda && git diff --check becf98d1e4e39a1f6d31378f0f0013f6d678455a..93c095b3ed1739fa9148ea61ed206eda8f06dfda",
+      "command": "git log --oneline becf98d1e4e39a1f6d31378f0f0013f6d678455a..05f9fadc0dc992cd2b7753ad7aab4403d22029a3 && git diff --check becf98d1e4e39a1f6d31378f0f0013f6d678455a..05f9fadc0dc992cd2b7753ad7aab4403d22029a3",
       "result": "pass",
       "artifactPaths": [
         "docs/ps-tickets/PS-450.md",
+        "src/routes/inventory.ts",
         "src/services/fulfillment/inventory-deduction-report.ts",
         "scripts/report-inventory-deductions.ts",
         "scripts/ps-450-inventory-outbox-guard.ts",
         "scripts/ps-450-inventory-outbox-integration.ts"
       ],
       "assertions": [],
-      "proves": "The reviewed commit adds a SELECT-only operator projection, safe CLI, offline proof, documentation, and guard wiring. It changes no migration, inventory/outbox writer, shipped/cancelled order path, shipment schema, provider connector, frontend, label purchase, postage, or production repair code."
+      "proves": "The reviewed implementation commits add a SELECT-only operator projection, an authenticated internal route, safe CLI, offline proof, documentation, and guard wiring. They change no migration, inventory/outbox writer, shipped/cancelled order path, shipment schema, provider connector, frontend, label purchase, postage, or production repair code."
     }
   ],
   "migrations": {
@@ -307,13 +310,13 @@
     "rollbackPlan": "No schema or data rollback is required. Forward-revert the PS-450 implementation and packet commits if the report causes an operator regression; never delete outbox, lifecycle, shipment, order, inventory, ledger, or package history."
   },
   "rollback": {
-    "strategy": "Forward-revert only 93c095b3ed1739fa9148ea61ed206eda8f06dfda and its packet commit, then deploy the reviewed revert to the API and fulfillment worker. The report is read-only and has no schema, provider, or data side effect, so rollback must not mutate application rows or replay fulfillment work.",
+    "strategy": "Forward-revert implementation commits 05f9fadc0dc992cd2b7753ad7aab4403d22029a3 and 93c095b3ed1739fa9148ea61ed206eda8f06dfda plus their packet commits, then deploy the reviewed revert to the API and fulfillment worker. The report is read-only and has no schema, provider, or data side effect, so rollback must not mutate application rows or replay fulfillment work.",
     "tested": false,
     "evidenceIds": []
   },
   "liveVerification": {
     "status": "verified",
-    "reason": "The exact reviewed SHA is live on the Render production API and fulfillment worker. Credential-free GET /health and GET /health/ready both returned HTTP 200 with database, write-probe, and event-loop components healthy. No live report query, inventory deduction, label purchase, postage, marketplace notification, billing action, or production application-row mutation was performed.",
+    "reason": "The exact reviewed SHA is live on the Render production API and fulfillment worker. Credential-free GET /health and GET /health/ready both returned HTTP 200 with database, write-probe, and event-loop components healthy. An unauthenticated GET /inventory/deduction-outbox-report?limit=1 returned HTTP 401 before any report query. No live report query, inventory deduction, label purchase, postage, marketplace notification, billing action, or production application-row mutation was performed.",
     "followUpOwner": null,
     "artifactPaths": [
       "docs/final-review/packets/PS-450.json"
