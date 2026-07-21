@@ -209,3 +209,63 @@ test('Create + Print Label with flag ON chains batch-send → print and never bu
   expect(failedResponses, `failed API responses: ${failedResponses.join(', ')}`).toEqual([])
   expect(consoleErrors, `console errors: ${consoleErrors.join(' | ')}`).toEqual([])
 })
+
+test('PS-444 interrupted batch renders backend recovery outcomes and resumes by job id only', async ({ page }) => {
+  let resumed = false
+  let resumeCalls = 0
+  let resumeRequestBody = null
+  let printCalls = 0
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await setup(page)
+  await page.route('**/print-queue/batch-send/status/qs_e2e', async (route) => {
+    const outcomes = resumed
+      ? [
+          { orderId: 990001, orderNumber: 'HARNESS-BATCH-PRINT-1', state: 'queued', outcome: 'queued', reasonCode: null, reason: null, retryEligible: false, nextAction: 'none' },
+          { orderId: 990002, orderNumber: 'HARNESS-BATCH-PRINT-2', state: 'provider_pending_recovery', outcome: 'provider_pending', reasonCode: 'label_purchase_reconciliation_required', reason: 'Carrier outcome remains unknown; protected from repurchase.', retryEligible: false, nextAction: 'reconcile_provider' },
+        ]
+      : [
+          { orderId: 990001, orderNumber: 'HARNESS-BATCH-PRINT-1', state: 'ready', outcome: 'ready', reasonCode: null, reason: 'Safe to resume.', retryEligible: false, nextAction: 'retry_later' },
+          { orderId: 990002, orderNumber: 'HARNESS-BATCH-PRINT-2', state: 'provider_pending_recovery', outcome: 'provider_pending', reasonCode: 'label_purchase_reconciliation_required', reason: 'Carrier outcome remains unknown; protected from repurchase.', retryEligible: false, nextAction: 'reconcile_provider' },
+        ]
+    await route.fulfill(json({
+      job_id: 'qs_e2e', status: 'interrupted', progress: resumed ? 50 : 0, total: 2,
+      current: resumed ? 1 : 0, queued: resumed ? 1 : 0, failed: 0,
+      message: '1 provider outcome requires reconciliation; protected orders were not resent.',
+      client_id: TEST_CLIENT.id, queued_entry_ids: resumed ? ['entry-1'] : [], results: [],
+      outcomes, can_resume: !resumed, error: null,
+    }))
+  })
+  await page.route('**/print-queue/batch-send/qs_e2e/resume', async (route) => {
+    resumeCalls += 1
+    resumeRequestBody = route.request().postDataJSON()
+    resumed = true
+    await route.fulfill(json({ job_id: 'qs_e2e', resumed: true, safe_orders: 1, provider_pending: 1 }))
+  })
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === '/print-queue/print' && request.method() === 'POST') printCalls += 1
+  })
+
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  const checkboxes = page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]')
+  await checkboxes.nth(0).check()
+  await checkboxes.nth(1).check()
+  await page.waitForSelector('[data-testid="orders-selection-toolbar"]', { state: 'visible' })
+  await page.getByRole('button', { name: /Create \+ Print Label/ }).click()
+
+  const panel = page.getByRole('region', { name: 'Print Queue recovery details' })
+  await expect(panel).toBeVisible()
+  await expect(panel).toContainText('Order HARNESS-BATCH-PRINT-1')
+  await expect(panel).toContainText('Order HARNESS-BATCH-PRINT-2')
+  await expect(panel).toContainText('reconcile provider')
+  await expect(panel).toContainText('protected from repurchase')
+
+  await panel.getByRole('button', { name: 'Resume safe items' }).click()
+  await expect.poll(() => resumeCalls).toBe(1)
+  expect(resumeRequestBody).toEqual({})
+  await expect(panel.getByRole('button', { name: 'Resume safe items' })).toHaveCount(0)
+  await expect(panel).toContainText('Carrier outcome remains unknown')
+  expect(printCalls, 'an interrupted recovery must not start PDF printing').toBe(0)
+})
