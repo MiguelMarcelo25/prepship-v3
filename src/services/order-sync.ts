@@ -693,6 +693,20 @@ async function readOrderSyncWatermark(
 // v2-parity: one paginated pass for a (status, since) pair. Factored out so
 // the 3-pass dispatch below can reuse the batched-upsert + inter-page-delay
 // + dedupe-key logic.
+type FetchOrdersPageResult = {
+  synced: number;
+  pages: number;
+  totalOrders: number;
+  startPage: number;
+  pagesProcessed: number;
+  lastPageProcessed: number;
+  complete: boolean;
+  stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'>;
+  resumePage: number | null;
+  liveSourceOrderIds: string[];
+};
+type FetchOrdersPageProgress = Omit<FetchOrdersPageResult, 'liveSourceOrderIds'>;
+
 async function fetchOrdersPage(
   account: SyncAccount,
   storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
@@ -707,21 +721,11 @@ async function fetchOrdersPage(
     startPage?: number;
     expectedTotalOrders?: number;
     probeFirstPageOnResume?: boolean;
+    onPageProcessed?: (result: FetchOrdersPageProgress) => Promise<void>;
     signal?: AbortSignal;
   },
   budget: SyncRunBudget = createSyncRunBudget(),
-): Promise<{
-  synced: number;
-  pages: number;
-  totalOrders: number;
-  startPage: number;
-  pagesProcessed: number;
-  lastPageProcessed: number;
-  complete: boolean;
-  stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'>;
-  resumePage: number | null;
-  liveSourceOrderIds: string[];
-}> {
+): Promise<FetchOrdersPageResult> {
   const sinceParam = formatShipStationV1DateParam(args.sinceMs);
   const startPage = Math.max(1, Math.floor(Number(args.startPage ?? 1) || 1));
   let page = startPage;
@@ -792,6 +796,23 @@ async function fetchOrdersPage(
 
     pagesThisPass += 1;
     lastPageProcessed = Math.max(lastPageProcessed, pageToFetch);
+    if (args.onPageProcessed) {
+      const pageComplete =
+        res.orders.length === 0 ||
+        pageToFetch >= pages ||
+        (pageToFetch === 1 && startPage > pages);
+      await args.onPageProcessed({
+        synced: total,
+        pages,
+        totalOrders,
+        startPage,
+        pagesProcessed: pagesThisPass,
+        lastPageProcessed,
+        complete: pageComplete,
+        stoppedBy: pageComplete ? 'complete' : 'page_budget',
+        resumePage: null,
+      });
+    }
     return { ordersLength: res.orders.length, totalOrders };
   };
 
@@ -1129,7 +1150,7 @@ function statusCatchupEntry(args: {
   sinceMs: number;
   pageSize: number;
   checkedAtMs: number;
-  result?: Awaited<ReturnType<typeof fetchOrdersPage>>;
+  result?: FetchOrdersPageProgress;
   stoppedBy?: StatusCatchupStopReason;
 }): OrderStatusCatchupEntry {
   const totalPages = args.result?.pages ?? null;
@@ -1179,6 +1200,7 @@ async function syncOrdersForAccount(
     skipStatusPasses?: boolean;
     previousStatusCatchup?: OrderStatusCatchupSnapshot;
     activeShipStationCutoverStoreIds?: ReadonlySet<number>;
+    onStatusCatchupProgress?: (entry: OrderStatusCatchupEntry) => Promise<void>;
     signal?: AbortSignal;
   },
   storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
@@ -1377,6 +1399,23 @@ async function syncOrdersForAccount(
         // ShipStation moves them to shipped/cancelled/hold. Pull newest modified
         // rows first so bounded workers do not spend every tick on old history.
         sortDir: 'DESC',
+        // Per user override unlock shipped data on 2026-05-23: checkpoint only
+        // successfully persisted terminal-status pages before the next provider
+        // request can yield to fulfillment. Edit locks and status semantics stay
+        // unchanged; this prevents a cooperative abort from replaying old pages.
+        onPageProcessed: opts.onStatusCatchupProgress
+          ? async (progress) => opts.onStatusCatchupProgress?.(
+              statusCatchupEntry({
+                account,
+                storeId: pass.storeId,
+                orderStatus: pass.orderStatus,
+                sinceMs: pass.sinceMs,
+                pageSize,
+                checkedAtMs: runStartMs,
+                result: progress,
+              }),
+            )
+          : undefined,
         signal: opts.signal,
       }, budget);
       statusCatchupEntries.push(
@@ -1475,7 +1514,26 @@ export async function syncOrders(opts: {
   let grandTotal = 0;
   let maxPages = 1;
   let earliestSinceIso = new Date(runStartMs).toISOString();
-  const statusCatchupEntries: OrderStatusCatchupEntry[] = [];
+  const statusCatchupEntries = new Map<string, OrderStatusCatchupEntry>();
+  const recordStatusCatchupEntry = (entry: OrderStatusCatchupEntry): void => {
+    const key = statusCatchupEntryKey(entry);
+    const existing = statusCatchupEntries.get(key);
+    const merged = mergeOrderStatusCatchupEntries(
+      existing ? [existing] : [],
+      [entry],
+      new Set([key]),
+    )[0];
+    statusCatchupEntries.set(key, merged ?? entry);
+  };
+  const checkpointStatusCatchupEntry = async (entry: OrderStatusCatchupEntry): Promise<void> => {
+    recordStatusCatchupEntry(entry);
+    await persistOrderStatusCatchupSnapshot(
+      [...statusCatchupEntries.values()],
+      runStartMs,
+      previousStatusCatchup,
+      accounts,
+    );
+  };
 
   for (const acct of accounts) {
     throwIfOrderSyncAborted(opts.signal);
@@ -1486,14 +1544,23 @@ export async function syncOrders(opts: {
     try {
       const result = await syncOrdersForAccount(
         acct,
-        { ...opts, previousStatusCatchup, activeShipStationCutoverStoreIds },
+        {
+          ...opts,
+          previousStatusCatchup,
+          activeShipStationCutoverStoreIds,
+          onStatusCatchupProgress: opts.skipStatusPasses
+            ? undefined
+            : checkpointStatusCatchupEntry,
+        },
         storeToClient,
         budget,
       );
       grandTotal += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
       if (result.sinceIso < earliestSinceIso) earliestSinceIso = result.sinceIso;
-      statusCatchupEntries.push(...result.statusCatchupEntries);
+      for (const entry of result.statusCatchupEntries) {
+        recordStatusCatchupEntry(entry);
+      }
       if (result.succeeded) {
         await markShipStationSyncAccountSucceeded(acct, runIdentity, Date.now());
       } else {
@@ -1528,7 +1595,7 @@ export async function syncOrders(opts: {
   if (!opts.skipStatusPasses) {
     try {
       await persistOrderStatusCatchupSnapshot(
-        statusCatchupEntries,
+        [...statusCatchupEntries.values()],
         runStartMs,
         previousStatusCatchup,
         accounts,

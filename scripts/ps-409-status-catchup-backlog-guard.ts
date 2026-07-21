@@ -18,7 +18,58 @@ const {
   evaluateShipmentSyncWatchdog,
   SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 } = await import('../src/services/shipment-sync-watchdog');
-const { prioritizeOrderStatusCatchupPasses } = await import('../src/services/order-sync');
+const {
+  mergeOrderStatusCatchupEntries,
+  nextOrderSyncResumePage,
+  prioritizeOrderStatusCatchupPasses,
+} = await import('../src/services/order-sync');
+
+const resumedAfterProcessedPage = nextOrderSyncResumePage({
+  complete: false,
+  startPage: 11,
+  lastPageProcessed: 15,
+});
+assert.equal(
+  resumedAfterProcessedPage,
+  16,
+  'a cooperative yield after page 15 must durably resume at page 16',
+);
+
+const pageCheckpoint = {
+  accountLabel: 'main',
+  storeId: 378060,
+  orderStatus: 'shipped' as const,
+  sinceIso: '2026-06-15T00:00:00.000Z',
+  sortDir: 'DESC' as const,
+  pageSize: 100,
+  startPage: 11,
+  totalPages: 40,
+  pagesProcessed: 6,
+  lastPageProcessed: 15,
+  nextPage: 16,
+  updatedRows: 0,
+  hasBacklog: true,
+  backlogPages: 25,
+  stoppedBy: 'page_budget' as const,
+  checkedAt: '2026-07-21T00:00:00.000Z',
+};
+const failedCloseout = {
+  ...pageCheckpoint,
+  pagesProcessed: 0,
+  lastPageProcessed: 0,
+  nextPage: null,
+  stoppedBy: 'failed' as const,
+};
+const [checkpointAfterAbort] = mergeOrderStatusCatchupEntries(
+  [pageCheckpoint],
+  [failedCloseout],
+  new Set(['main:378060:shipped']),
+);
+assert.equal(
+  checkpointAfterAbort?.nextPage,
+  16,
+  'an abort closeout must not replace a page-level checkpoint with an empty cursor',
+);
 
 const prioritizedPasses = prioritizeOrderStatusCatchupPasses(
   'main',
@@ -158,13 +209,28 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /if \(startPage > 1[\s\S]*processPage\(1\)/,
+  /if \(\s*startPage > 1[\s\S]*processPage\(1\)/,
   'resumed status catch-up must still probe newest-first page 1 for recent transitions',
 );
 assert.match(
   orderSync,
   /resumes from the stored page cursor so a large history does not restart\s+\/\/ page 1 forever/,
   'order sync must document why the resume cursor exists',
+);
+assert.match(
+  orderSync,
+  /pagesThisPass \+= 1;[\s\S]{0,200}lastPageProcessed = Math\.max[\s\S]{0,700}await args\.onPageProcessed/,
+  'each successfully persisted provider page must checkpoint before the next page request',
+);
+assert.match(
+  orderSync,
+  /onPageProcessed: opts\.onStatusCatchupProgress[\s\S]{0,900}statusCatchupEntry\(/,
+  'terminal status passes must translate page progress through the canonical cursor owner',
+);
+assert.match(
+  orderSync,
+  /checkpointStatusCatchupEntry[\s\S]{0,500}persistOrderStatusCatchupSnapshot\(/,
+  'the run owner must durably persist page progress instead of waiting for account closeout',
 );
 
 const watchdog = readFileSync('src/services/shipment-sync-watchdog.ts', 'utf8');
