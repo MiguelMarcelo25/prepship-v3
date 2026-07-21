@@ -2,6 +2,7 @@ import postgres from 'postgres';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
 import { getSetting } from './settings';
+import { nextWorkerJobSkipSummary } from './worker-job-skip-health';
 import { recordWorkerStatusEvent } from './worker-status-events';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
@@ -453,6 +454,7 @@ export async function recordWorkerJobSkipped(
   reason: string
 ): Promise<void> {
   const now = new Date().toISOString();
+  const prior = snapshot.jobs[name];
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
     name,
@@ -460,7 +462,7 @@ export async function recordWorkerJobSkipped(
     startedAt: null,
     finishedAt: now,
     durationMs: null,
-    summary: { reason },
+    summary: nextWorkerJobSkipSummary(prior, reason, now),
     error: null,
   };
   await persistSnapshot();

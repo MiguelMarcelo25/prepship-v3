@@ -46,6 +46,7 @@ for (const expected of [
   "checkComponent('eventLoop'",
   "name: 'printQueueWorker'",
   "name: 'syncFreshness'",
+  "name: 'fulfillmentOutbox'",
 ]) {
   assert(healthSource.includes(expected), `deep readiness reports ${expected}`);
 }
@@ -71,8 +72,15 @@ assert(
   /const \[db, dbWrite, eventLoop\] = await Promise\.all\(\[/.test(healthSource) &&
     /const \[orders, printQueue, printQueueWorker\] = await Promise\.all\(\[/.test(healthSource) &&
     /const syncFreshness = await checkSyncFreshness\(\)/.test(healthSource) &&
-    /const components = \[[\s\S]*db,[\s\S]*dbWrite,[\s\S]*orders,[\s\S]*printQueue,[\s\S]*printQueueWorker,[\s\S]*syncFreshness,[\s\S]*eventLoop,[\s\S]*\]/.test(healthSource),
+    /const fulfillmentOutbox = await checkFulfillmentOutboxWorker\(\)/.test(healthSource) &&
+    /const components = \[[\s\S]*db,[\s\S]*dbWrite,[\s\S]*orders,[\s\S]*printQueue,[\s\S]*printQueueWorker,[\s\S]*syncFreshness,[\s\S]*fulfillmentOutbox,[\s\S]*eventLoop,[\s\S]*\]/.test(healthSource),
   'deep readiness stages DB probes within the bounded health pool'
+);
+assert(
+  healthSource.includes('evaluateWorkerJobSkipHealth') &&
+    healthSource.includes("worker.status?.jobs['prepship.sync.fulfillment-outbox']") &&
+    !readyHealth.includes('checkFulfillmentOutboxWorker'),
+  'persistent fulfillment-outbox skips degrade deep health without making /ready heavyweight'
 );
 assert(
   /status: health\.verdict\.alert \? 'fail' : 'ok'/.test(healthSource),

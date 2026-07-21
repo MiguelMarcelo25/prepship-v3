@@ -103,7 +103,6 @@ const allowedPoolConstructors = [
   'src/db/client.ts',
   'src/lib/advisory-session-lock.ts',
   'src/routes/health.ts',
-  'src/services/shipstation-carrier-account-snapshot-worker.ts',
   'src/services/sync-job-queue.ts',
   'src/services/sync-lane-lock.ts',
   'src/services/sync-stuck-job-reaper.ts',

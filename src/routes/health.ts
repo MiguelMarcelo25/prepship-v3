@@ -4,6 +4,8 @@ import { performance } from 'node:perf_hooks';
 import { env } from '../lib/env';
 import { readPrintQueueWorkerHealth } from '../services/print-queue-worker-health';
 import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
+import { getPersistedWorkerStatus } from '../services/worker-status';
+import { evaluateWorkerJobSkipHealth } from '../services/worker-job-skip-health';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
@@ -29,6 +31,7 @@ type ReadinessComponentName =
   | 'dbWrite'
   | 'orders'
   | 'syncFreshness'
+  | 'fulfillmentOutbox'
   | 'printQueue'
   | 'printQueueWorker'
   | 'eventLoop';
@@ -160,6 +163,34 @@ async function checkSyncFreshness(): Promise<ReadinessComponent> {
   }
 }
 
+async function checkFulfillmentOutboxWorker(): Promise<ReadinessComponent> {
+  const startedAt = Date.now();
+  try {
+    const worker = await getPersistedWorkerStatus();
+    const health = evaluateWorkerJobSkipHealth(
+      worker.status?.jobs['prepship.sync.fulfillment-outbox'],
+    );
+    return {
+      name: 'fulfillmentOutbox',
+      status: health.status,
+      latencyMs: Date.now() - startedAt,
+      details: {
+        reasonCode: health.reasonCode,
+        consecutiveSkips: health.consecutiveSkips,
+        firstSkippedAt: health.firstSkippedAt ?? 'none',
+        skipAgeSeconds: health.skipAgeSeconds ?? -1,
+      },
+    };
+  } catch {
+    return {
+      name: 'fulfillmentOutbox',
+      status: 'fail',
+      latencyMs: Date.now() - startedAt,
+      details: { reasonCode: 'health_probe_failed' },
+    };
+  }
+}
+
 const checkEventLoopDelay = () =>
   checkComponent('eventLoop', async () => {
     const startedAt = performance.now();
@@ -249,6 +280,7 @@ async function checkDeepReadiness() {
     checkPrintQueueWorker(),
   ]);
   const syncFreshness = await checkSyncFreshness();
+  const fulfillmentOutbox = await checkFulfillmentOutboxWorker();
   const components = [
     db,
     dbWrite,
@@ -256,6 +288,7 @@ async function checkDeepReadiness() {
     printQueue,
     printQueueWorker,
     syncFreshness,
+    fulfillmentOutbox,
     eventLoop,
   ];
 

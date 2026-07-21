@@ -4,6 +4,10 @@ import { readFileSync } from 'node:fs';
 const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
 const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
 const rateJobStore = readFileSync('src/services/rate-browse-job-store.ts', 'utf8');
+const carrierSnapshotWorker = readFileSync(
+  'src/services/shipstation-carrier-account-snapshot-worker.ts',
+  'utf8',
+);
 const durableWorkerMigration = readFileSync(
   'drizzle/0067_durable_worker_execution_fences.sql',
   'utf8',
@@ -24,6 +28,14 @@ assert(
 assert(
   !rateJobStore.includes('postgres(') && !rateJobStore.includes('.reserve()'),
   'rate workflow reservation must not own a session-held advisory-lock client',
+);
+
+assert(
+  !carrierSnapshotWorker.includes('postgres(') &&
+    !carrierSnapshotWorker.includes('.reserve()') &&
+    !carrierSnapshotWorker.includes('pg_try_advisory_lock') &&
+    !carrierSnapshotWorker.includes('pg_advisory_unlock'),
+  'carrier snapshot worker must delegate cross-process ownership to the transaction-scoped queue lane',
 );
 
 assert(
