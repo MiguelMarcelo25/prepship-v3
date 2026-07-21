@@ -523,12 +523,6 @@ function dateFromUnknown(value: unknown): Date | null {
   return null;
 }
 
-function isDeferredShipStationOrderSync(data: unknown): boolean {
-  if (!data || typeof data !== 'object') return false;
-  const source = data as { deferredLane?: unknown; deferCount?: unknown };
-  return source.deferredLane === 'shipstation-sync' && Number(source.deferCount) > 0;
-}
-
 async function findSupersedingManualOrderSyncJob(
   name: JobName,
   job: PgBossJobLike | undefined,
@@ -1242,13 +1236,11 @@ async function runOrderSyncWithOutboxPriority(
 
   try {
     const options = orderSyncOptionsFromJobPayload(jobData);
-    if (isDeferredShipStationOrderSync(jobData)) {
-      // Per user override unlock shipped data on 2026-05-23, reconfirmed on
-      // 2026-07-07: a busy-defer row is just a retry wake-up after the
-      // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
-      // wake-ups cannot become another long status catch-up that starves labels.
-      options.skipStatusPasses = true;
-    }
+    // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+    // 2026-07-21; a durable retry preserves the originating payload's scope.
+    // Manual incremental refresh remains Awaiting-only, while cadence/watchdog
+    // retries retain status catch-up. The cooperative outbox monitor below is
+    // now the canonical starvation guard for long status passes.
     // Per user override unlock shipped data on 2026-07-14: order ingestion no
     // longer starts a detached broad rate backfill outside its durable queue
     // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss

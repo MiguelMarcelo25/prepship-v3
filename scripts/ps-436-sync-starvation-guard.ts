@@ -512,6 +512,11 @@ assert.match(queue, /runBackfillTick\(identity\.queueJobId, signal\)/);
 assert.match(queue, /priority: rateBackfillPriority\(ratePayload\)/);
 assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*'shipment_recovery_pending'/);
 assert.match(queue, /runOrderSyncWithOutboxPriority[\s\S]*yielded_to_pending_fulfillment_outbox/);
+assert.match(
+  queue,
+  /runOrderSyncWithOutboxPriority[\s\S]*orderSyncOptionsFromJobPayload\(jobData\)[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal: workSignal \}\)/,
+);
+assert.doesNotMatch(queue, /function isDeferredShipStationOrderSync/);
 assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows\)/);
 assert.match(queue, /JOBS\.fulfillmentOutbox,[\s\S]*runFulfillmentOutboxTick/);
 assert.match(backfill, /RATE_BACKFILL_DURABLE_CHUNK_SIZE = 2/);
