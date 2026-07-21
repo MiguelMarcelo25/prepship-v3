@@ -142,6 +142,57 @@ async function main(): Promise<void> {
   assert.equal(heldRetry.kind, 'reconcile_required', 'ambiguous provider outcome is operator-held');
   assert.equal(ambiguousCalls, 1, 'operator-held unknown is never blindly dispatched again');
 
+  const expiredInput = {
+    kind: 'forward_label' as const,
+    provider: 'shipstation',
+    subjectType: 'order',
+    subjectId: 423003,
+    request: { serviceCode: 'ups_ground', package: 'box' },
+  };
+  const leaseStartedAt = new Date('2026-07-21T00:00:00.000Z');
+  const expiredClaim = await ledger.acquireFulfillmentOperation(expiredInput, {
+    ...dependencies,
+    now: () => leaseStartedAt,
+  });
+  assert.equal(expiredClaim.kind, 'dispatch');
+  if (expiredClaim.kind !== 'dispatch') throw new Error('expired-lease fixture was not claimed');
+  await assert.rejects(
+    ledger.holdExpiredFulfillmentOperationForReconciliation(
+      expiredClaim.lease.operationId,
+      { note: 'Provider GET verification is pending' },
+      { ...dependencies, now: () => new Date('2026-07-21T00:00:10.000Z') },
+    ),
+    /lease is still active/,
+    'an operator cannot hold a live provider lease',
+  );
+  const expiredHeld = await ledger.holdExpiredFulfillmentOperationForReconciliation(
+    expiredClaim.lease.operationId,
+    { note: 'Provider GET verified an existing label after the worker lease expired' },
+    { ...dependencies, now: () => new Date('2026-07-21T00:04:00.000Z') },
+  );
+  assert.equal(expiredHeld.state, 'reconcile_required');
+  const repeatedHold = await ledger.holdExpiredFulfillmentOperationForReconciliation(
+    expiredClaim.lease.operationId,
+    { note: 'Repeated operator hold remains idempotent' },
+    { ...dependencies, now: () => new Date('2026-07-21T00:05:00.000Z') },
+  );
+  assert.equal(repeatedHold.state, 'reconcile_required');
+  await ledger.recordFulfillmentOperationReceiptByOperator(
+    expiredClaim.lease.operationId,
+    {
+      actor: 'ps423-fixture',
+      note: 'Provider GET returned the exact external shipment id',
+      receipt: { created: { labelId: 'label-423003' } },
+      providerOperationId: 'label-423003',
+    },
+    dependencies,
+  );
+  await ledger.consumeFulfillmentOperation(
+    expiredClaim.lease.operationId,
+    async () => ({ shipmentId: 423003 }),
+    dependencies,
+  );
+
   await ledger.resolveFulfillmentOperationNoEffect(
     unknownClaim.lease.operationId,
     { actor: 'ps423-fixture', note: 'Provider lookup proved no return label exists' },

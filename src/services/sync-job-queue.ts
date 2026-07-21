@@ -68,7 +68,10 @@ import {
   resolveSyncJobAdmission,
   runnableOperationalSyncQueueSizes,
   SHIPSTATION_SYNC_JOBS,
+  shipmentSyncRequestHasRecoveryPriority,
+  shouldYieldOrderSyncToShipmentRecovery,
   shouldYieldShipmentSyncToOrders,
+  SYNC_STARVATION_DEFER_THRESHOLD,
   syncQueuePolicyForJob,
   type OperationalSyncQueueRow,
   type SyncJobAdmissionIntent,
@@ -137,7 +140,6 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let shipStationConsumerLeadership: ShipStationConsumerLeadershipController | null = null;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
-const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS.rateBackfill]);
 const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
@@ -913,7 +915,7 @@ async function deferBusySyncJob(
   try {
     const deferCount = Math.max(0, Math.trunc(priorDeferCount)) + 1;
     const orderStarvation =
-      name === JOBS.orders && deferCount >= ORDER_STARVATION_DEFER_THRESHOLD;
+      name === JOBS.orders && deferCount >= SYNC_STARVATION_DEFER_THRESHOLD;
     const delaySeconds = orderStarvation ? ORDER_STARVATION_DEFER_SECONDS : BUSY_DEFER_SECONDS;
     const isRateBackfill = name === JOBS.rateBackfill;
     const ratePayload = isRateBackfill
@@ -1146,11 +1148,30 @@ async function pendingOperationalBlockerForRateBackfill(): Promise<string | null
   );
 }
 
+async function pendingShipmentRecoveryBlockerForOrders(): Promise<string | null> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
+    SELECT
+      name,
+      state,
+      start_after AS "startAfter",
+      priority,
+      data->>'deferCount' AS "deferCount"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ${JOBS.shipments}
+      AND state IN ('active', 'created', 'retry')
+  `;
+  return shouldYieldOrderSyncToShipmentRecovery(rows)
+    ? JOBS.shipments
+    : null;
+}
+
 async function runShipmentSyncWithOrderPriority(
   jobData: unknown,
   parentSignal: AbortSignal,
 ): Promise<unknown> {
   const priorDeferCount = busyDeferCount(jobData);
+  const recoveryRequested = shipmentSyncRequestHasRecoveryPriority(jobData);
   const preempt = new AbortController();
   const stopMonitor = new AbortController();
   const workSignal = AbortSignal.any([parentSignal, preempt.signal]);
@@ -1161,6 +1182,7 @@ async function runShipmentSyncWithOrderPriority(
       if (shouldYieldShipmentSyncToOrders({
         ordersPending: hasPendingOrderSyncWork(queueTruth),
         priorDeferCount,
+        recoveryRequested,
       })) {
         // Per user override unlock shipped data on 2026-07-18: this cancels
         // only the current bounded shipment worker attempt. Existing database
@@ -1233,6 +1255,34 @@ async function registerWorker(
           reason: 'superseded_manual_order_sync',
           supersededBy,
         };
+      }
+
+      if (name === JOBS.orders) {
+        const shipmentBlocker = await pendingShipmentRecoveryBlockerForOrders();
+        if (shipmentBlocker) {
+          // Per user override unlock shipped data on 2026-07-21: this yields
+          // only the queue attempt. The canonical sync handlers and shipped /
+          // cancelled protections remain unchanged.
+          await recordWorkerJobSkipped(name, `${shipmentBlocker} recovery pending`);
+          const deferredJobId = await deferBusySyncJob(
+            name,
+            shipmentBlocker,
+            syncJobLaneFor(name),
+            busyDeferCount(job?.data),
+            job?.data,
+          );
+          if (!deferredJobId) {
+            throw new Error('order-sync fairness deferral failed; retrying original queue job');
+          }
+          return {
+            ok: true,
+            skipped: true,
+            deferred: true,
+            deferredJobId,
+            blockedBy: shipmentBlocker,
+            reason: 'shipment_recovery_pending',
+          };
+        }
       }
 
       const lane = syncJobLaneFor(name);

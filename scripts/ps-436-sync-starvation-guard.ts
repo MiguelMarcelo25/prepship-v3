@@ -25,6 +25,8 @@ import {
 import {
   resolveSyncJobAdmission,
   SHIPSTATION_SYNC_JOBS,
+  shouldYieldOrderSyncToShipmentRecovery,
+  SYNC_STARVATION_DEFER_THRESHOLD,
 } from '../src/services/sync-job-admission';
 
 process.env.DATABASE_URL ??= 'postgres://user:pass@127.0.0.1:5432/prepship_guard';
@@ -302,6 +304,18 @@ const highestRatePriority = Math.max(
 assert.ok(orderPriority > highestRatePriority);
 assert.ok(shipmentPriority > highestRatePriority);
 
+// Cross-queue priorities are queue-local in pg-boss. A shipment wake-up that
+// repeatedly lost the shared advisory lane must therefore block another long
+// order refresh at the canonical admission owner.
+const fairnessNowMs = Date.parse('2026-07-17T12:00:00.000Z');
+assert.equal(shouldYieldOrderSyncToShipmentRecovery([{
+  name: SHIPSTATION_SYNC_JOBS.shipments,
+  state: 'created',
+  startAfter: new Date(fairnessNowMs),
+  priority: shipmentPriority,
+  deferCount: SYNC_STARVATION_DEFER_THRESHOLD,
+}], fairnessNowMs), true);
+
 type SimulatedJob = {
   kind: 'orders' | 'shipments' | 'rate';
   arrivalAtSeconds: number;
@@ -464,6 +478,7 @@ assert.match(queue, /terminateWorkerForUnacknowledgedCancellation/);
 assert.match(queue, /runDurableRateBackfillJob\(explicitRequest, signal\)/);
 assert.match(queue, /runBackfillTick\(identity\.queueJobId, signal\)/);
 assert.match(queue, /priority: rateBackfillPriority\(ratePayload\)/);
+assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*reason: 'shipment_recovery_pending'/);
 assert.match(backfill, /RATE_BACKFILL_DURABLE_CHUNK_SIZE = 2/);
 assert.match(backfill, /currentJobId: payload\.jobId,[\s\S]{0,300}nextPayload: payload/);
 assert.match(backfill, /persistRateBackfillGenerationState[\s\S]*enqueueDurableRateBackfillJob\(nextPayload\)/);

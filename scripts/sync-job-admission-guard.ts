@@ -7,10 +7,14 @@ import {
   rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
   runnableOperationalSyncQueueSizes,
+  shipmentSyncRequestHasRecoveryPriority,
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
+  shouldYieldOrderSyncToShipmentRecovery,
   shouldYieldShipmentSyncToOrders,
+  STARVED_SHIPMENT_LOOKAHEAD_MS,
   STARVATION_RECOVERY_PRIORITY,
+  SYNC_STARVATION_DEFER_THRESHOLD,
   syncQueuePolicyForJob,
   WATCHDOG_SYNC_PRIORITY,
 } from '../src/services/sync-job-admission';
@@ -51,19 +55,97 @@ assert.equal(
 );
 
 assert.equal(
-  shouldYieldShipmentSyncToOrders({ ordersPending: true, priorDeferCount: 0 }),
+  shouldYieldShipmentSyncToOrders({
+    ordersPending: true,
+    priorDeferCount: 0,
+    recoveryRequested: false,
+  }),
   true,
   'a fresh shipment attempt yields once to pending order work',
 );
 assert.equal(
-  shouldYieldShipmentSyncToOrders({ ordersPending: true, priorDeferCount: 1 }),
+  shouldYieldShipmentSyncToOrders({
+    ordersPending: true,
+    priorDeferCount: 1,
+    recoveryRequested: false,
+  }),
   false,
   'the durable replacement cannot be preempted by recurring cadence orders',
 );
 assert.equal(
-  shouldYieldShipmentSyncToOrders({ ordersPending: false, priorDeferCount: 0 }),
+  shouldYieldShipmentSyncToOrders({
+    ordersPending: false,
+    priorDeferCount: 0,
+    recoveryRequested: false,
+  }),
   false,
   'shipment work continues when no order work is pending',
+);
+assert.equal(
+  shouldYieldShipmentSyncToOrders({
+    ordersPending: true,
+    priorDeferCount: 0,
+    recoveryRequested: true,
+  }),
+  false,
+  'an explicit shipment recovery cannot preempt itself back to orders',
+);
+assert.equal(shipmentSyncRequestHasRecoveryPriority({
+  requestedBy: 'manual-shipment-sync',
+}), true);
+assert.equal(shipmentSyncRequestHasRecoveryPriority({
+  requestedBy: 'shipment-sync-watchdog',
+}), true);
+assert.equal(shipmentSyncRequestHasRecoveryPriority({
+  requestedBy: 'pg-boss-cron',
+}), false);
+
+const starvedShipment = {
+  name: shipments,
+  state: 'created',
+  startAfter: new Date(now + STARVED_SHIPMENT_LOOKAHEAD_MS),
+  priority: 0,
+  deferCount: String(SYNC_STARVATION_DEFER_THRESHOLD),
+};
+assert.equal(
+  shouldYieldOrderSyncToShipmentRecovery([starvedShipment], now),
+  true,
+  'a repeatedly deferred shipment blocks another long order refresh',
+);
+assert.equal(
+  shouldYieldOrderSyncToShipmentRecovery([{
+    ...starvedShipment,
+    deferCount: '0',
+    priority: WATCHDOG_SYNC_PRIORITY,
+  }], now),
+  true,
+  'a watchdog shipment recovery receives cross-queue admission priority',
+);
+assert.equal(
+  shouldYieldOrderSyncToShipmentRecovery([{
+    ...starvedShipment,
+    startAfter: new Date(now + STARVED_SHIPMENT_LOOKAHEAD_MS + 1),
+  }], now),
+  false,
+  'far-future shipment work does not block current order work',
+);
+assert.equal(
+  shouldYieldOrderSyncToShipmentRecovery([{
+    ...starvedShipment,
+    state: 'active',
+    startAfter: new Date(now + STARVED_SHIPMENT_LOOKAHEAD_MS + 1),
+  }], now),
+  true,
+  'an already-claimed shipment attempt wins the advisory-lock race',
+);
+assert.equal(
+  shouldYieldOrderSyncToShipmentRecovery([{
+    ...starvedShipment,
+    deferCount: '0',
+    priority: 0,
+  }], now),
+  false,
+  'fresh cadence work retains the existing orders-first behavior',
 );
 
 assert.equal(syncQueuePolicyForJob(orders), 'stately');
@@ -156,6 +238,8 @@ assert.match(queue, /resolveSyncJobAdmission\(JOBS\.shipments,[\s\S]*kind: 'watc
 assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(queue, /shouldYieldShipmentSyncToOrders\(\{[\s\S]*ordersPending: hasPendingOrderSyncWork\(queueTruth\),[\s\S]*priorDeferCount/);
+assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*shouldYieldOrderSyncToShipmentRecovery\(rows\)/);
+assert.match(queue, /name === JOBS\.orders[\s\S]*reason: 'shipment_recovery_pending'/);
 assert.match(queue, /return id \?\? `coalesced:\$\{admission\.singletonKey\}`/);
 assert.match(
   queue,

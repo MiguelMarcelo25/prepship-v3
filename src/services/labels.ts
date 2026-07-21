@@ -185,7 +185,7 @@ import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-in
 // Batch-label callers often omit a panel-selected package. PS-413 accepts
 // dimensions only when they identify exactly one catalog package; ambiguous
 // matches remain review work and never guess/decrement package stock.
-async function resolveLabelPackageId(args: {
+export async function resolveLabelPackageId(args: {
   orderId: number | null;
   customPackageId?: number | string | null;
   length: number | null;
@@ -931,7 +931,7 @@ async function assertShipmentInScope(
   throw new ResourceScopeError(notFoundMessage);
 }
 
-type MarketplaceConfirmationProvider = 'shipstation' | 'walmart' | 'ebay';
+export type MarketplaceConfirmationProvider = 'shipstation' | 'walmart' | 'ebay';
 
 function firstText(...values: unknown[]): string {
   for (const value of values) {
@@ -956,7 +956,7 @@ function isNoMarketplaceSource(value: unknown): boolean {
 }
 
 
-function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider | null {
+export function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider | null {
   if (isNoMarketplaceSource(order.sourceProvider)) return null;
   const fromSourceProvider = normalizeConfirmationProvider(order.sourceProvider);
   if (fromSourceProvider) return fromSourceProvider;
@@ -978,7 +978,7 @@ function confirmationProviderForOrder(order: typeof orders.$inferSelect): Market
   return fromExternalId ?? 'shipstation';
 }
 
-function baseConfirmationPayload(created: CreatedExternalLabel): Record<string, unknown> {
+export function baseConfirmationPayload(created: CreatedExternalLabel): Record<string, unknown> {
   return {
     carrierProvider: 'shipstation',
     carrierAccountId: created.providerAccountId,
@@ -1006,7 +1006,7 @@ function trackingUrlForCarrier(carrierCode: string | null | undefined, trackingN
   return '';
 }
 
-function marketplaceConfirmationPayload(
+export function marketplaceConfirmationPayload(
   order: typeof orders.$inferSelect,
   created: CreatedExternalLabel,
   provider: MarketplaceConfirmationProvider,
@@ -1080,7 +1080,7 @@ async function nextLabelSemanticGeneration(orderId: number, returnForShipmentId?
   return Number(row?.total ?? 0) + 1;
 }
 
-function createdLabelFromOperationReceipt(receipt: Record<string, unknown>): CreatedExternalLabel {
+export function createdLabelFromOperationReceipt(receipt: Record<string, unknown>): CreatedExternalLabel {
   const value = receipt.created;
   if (!value || typeof value !== 'object') throw new Error('Provider operation receipt is missing label data');
   const created = value as Partial<CreatedExternalLabel>;
@@ -1100,7 +1100,7 @@ function throwForBlockedOperation(
   throw new FulfillmentOperationHeldError(action.operation);
 }
 
-async function persistCreatedLabel(args: {
+export async function persistCreatedLabel(args: {
   created: CreatedExternalLabel;
   orderId: number;
   orderNumber: string | null;

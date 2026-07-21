@@ -1408,3 +1408,50 @@ export async function processFulfillmentOutboxById(options: {
     return { processed: 1, succeeded: 0, failed: 1 };
   }
 }
+
+/**
+ * Release a crashed confirmation claim only after its canonical provider
+ * operation has an operator-verified receipt or no-effect resolution.
+ *
+ * This cannot dispatch a connector. It moves one exact outbox row back to the
+ * normal claim path, where processOutboxRow either consumes the recorded
+ * receipt without replay or performs one newly-authorized dispatch after a
+ * verified no-effect outcome.
+ */
+export async function releaseResolvedShipmentConfirmationForResume(options: {
+  outboxId: number;
+  operationId: number;
+}): Promise<boolean> {
+  await ensureFulfillmentSchema();
+  // Per user override unlock shipped data on 2026-07-21: release only a
+  // processing confirmation whose exact external operation has an operator
+  // receipt/no-effect resolution. This release itself mutates no provider,
+  // order, or shipment state.
+  const rows = await pg<Array<{ id: number }>>`
+    UPDATE fulfillment_outbox AS outbox
+    SET status = 'pending', next_run_at = NOW(), updated_at = NOW()
+    WHERE outbox.id = ${options.outboxId}
+      AND outbox.event_type = 'shipment_confirmation_requested'
+      AND outbox.status IN ('processing', 'failed', 'pending')
+      AND EXISTS (
+        SELECT 1
+        FROM external_operations operation
+        WHERE operation.id = ${options.operationId}
+          AND operation.kind = 'marketplace_confirmation'
+          AND operation.provider = outbox.provider
+          AND operation.subject_type = 'fulfillment_outbox'
+          AND operation.subject_id = outbox.id::text
+          AND (
+            operation.state IN ('receipt_recorded', 'consumed')
+            OR (
+              operation.state = 'failed_pre_dispatch'
+              AND operation.resolved_by IS NOT NULL
+              AND operation.resolved_at IS NOT NULL
+              AND operation.resolution_note IS NOT NULL
+            )
+          )
+      )
+    RETURNING outbox.id
+  `;
+  return rows.length === 1;
+}

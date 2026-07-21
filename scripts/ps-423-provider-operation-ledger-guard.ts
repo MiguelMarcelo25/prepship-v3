@@ -7,6 +7,7 @@ const service = read('src/services/fulfillment-operation-ledger.ts');
 const schema = read('src/db/schema/external-operations.ts');
 const readiness = read('src/services/runtime-schema-readiness.ts');
 const labels = read('src/services/labels.ts');
+const verifiedRecovery = read('src/services/verified-forward-label-recovery.ts');
 const outbox = read('src/services/fulfillment/outbox.ts');
 const connectorTypes = read('src/connectors/types.ts');
 const shipstationLabels = read('src/lib/shipstation/labels.ts');
@@ -40,8 +41,10 @@ assert.match(service, /eq\(externalOperations\.generation, lease\.generation\)/)
 assert.match(service, /runDurableWorkerAttempt/);
 assert.match(service, /recordFulfillmentOperationReceipt/);
 assert.match(service, /consumeFulfillmentOperation/);
+assert.match(service, /local_result = \$\{serializedLocalResult\}::jsonb/);
 assert.match(service, /resolveFulfillmentOperationNoEffect/);
 assert.match(service, /recordFulfillmentOperationReceiptByOperator/);
+assert.match(service, /holdExpiredFulfillmentOperationForReconciliation/);
 assert.match(readiness, /'external_operations'/);
 assert.match(readiness, /0072_external_operations\.sql/);
 
@@ -56,7 +59,13 @@ for (const kind of [
 }
 assert.match(labels, /dispatchFulfillmentOperation/);
 assert.match(labels, /consumeFulfillmentOperation/);
+assert.match(verifiedRecovery, /resumeVerifiedShipStationForwardLabel/);
+assert.match(verifiedRecovery, /Verified ShipStation forward-label receipt is not recoverable/);
+assert.doesNotMatch(verifiedRecovery, /createCarrierLabel|dispatchFulfillmentOperation|ssCreateLabel/);
 assert.match(outbox, /consumeFulfillmentOperationWithSql/);
+assert.match(outbox, /releaseResolvedShipmentConfirmationForResume/);
+assert.match(outbox, /operation\.state IN \('receipt_recorded', 'consumed'\)/);
+assert.match(outbox, /operation\.state = 'failed_pre_dispatch'/);
 assert.match(connectorTypes, /signal\?: AbortSignal/);
 assert.match(connectorTypes, /idempotencyKey\?: string/);
 assert.match(shipstationLabels, /external_shipment_id/);

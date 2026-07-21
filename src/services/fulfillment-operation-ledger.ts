@@ -565,10 +565,15 @@ export async function consumeFulfillmentOperationWithSql<T extends Record<string
       throw new FulfillmentOperationHeldError(operation);
     }
     const localResult = safeJsonRecord(await apply(tx, current.provider_receipt));
+    // Per user override unlock shipped data on 2026-07-21: postgres.js 3.4 can
+    // bind tx.json(object) as raw bytes on this transaction path. Bind canonical
+    // serialized JSON and cast explicitly so receipt consumption stays atomic
+    // instead of stranding a provider-success row at receipt_recorded.
+    const serializedLocalResult = JSON.stringify(localResult);
     const [updated] = await tx<Array<{ id: number }>>`
       UPDATE external_operations
       SET state = 'consumed',
-          local_result = ${tx.json(localResult as any)},
+          local_result = ${serializedLocalResult}::jsonb,
           consumed_at = NOW(),
           lease_token = NULL,
           lease_expires_at = NULL,
@@ -596,6 +601,63 @@ export async function listHeldFulfillmentOperations(
     .where(and(...conditions))
     .orderBy(externalOperations.createdAt)
     .limit(Math.max(1, Math.min(200, input.limit ?? 100)));
+}
+
+/**
+ * Move an expired provider lease into the operator-held reconciliation state.
+ *
+ * This is intentionally narrower than acquisition: it can never prepare,
+ * claim, or dispatch provider work. It only exposes the same fail-closed state
+ * transition that acquireFulfillmentOperation applies to an expired lease so a
+ * verified provider receipt can be recorded without replaying the mutation.
+ */
+export async function holdExpiredFulfillmentOperationForReconciliation(
+  operationId: number,
+  input: { note: string },
+  injected: FulfillmentOperationDependencies = {},
+): Promise<ExternalOperation> {
+  const dependencies = dependenciesFor(injected);
+  await dependencies.ensureSchema();
+  const note = nonEmpty(input.note, 'note');
+  const now = dependencies.now();
+
+  // Per user override unlock shipped data on 2026-07-21: this operator path
+  // changes only the provider-operation journal. It never calls a provider or
+  // mutates order/shipment history, and it rejects active (unexpired) leases.
+  return dependencies.database.transaction(async (tx) => {
+    const [current] = await tx
+      .select()
+      .from(externalOperations)
+      .where(eq(externalOperations.id, operationId))
+      .limit(1)
+      .for('update');
+    if (!current) throw new Error('Fulfillment operation not found');
+    if (current.state === 'reconcile_required') return current;
+    if (current.state !== 'in_flight') {
+      throw new Error('Only an in_flight operation can be held for expired-lease reconciliation');
+    }
+    if (current.leaseExpiresAt && current.leaseExpiresAt.getTime() > now.getTime()) {
+      throw new Error('The provider operation lease is still active');
+    }
+
+    const [updated] = await tx
+      .update(externalOperations)
+      .set({
+        state: 'reconcile_required',
+        lastError: current.lastError ?? note,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(externalOperations.id, operationId),
+          eq(externalOperations.state, 'in_flight'),
+          eq(externalOperations.generation, current.generation),
+        ),
+      )
+      .returning();
+    if (!updated) throw new Error('Fulfillment operation reconciliation hold raced with another writer');
+    return updated;
+  });
 }
 
 /**
