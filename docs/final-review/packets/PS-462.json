@@ -2,10 +2,10 @@
   "$schema": "../evidence-packet.schema.json",
   "schemaVersion": 1,
   "taskId": "PS-462",
-  "title": "Canonical inventory ledger quantity, phase-1 operator, correction gate, and tested rollback",
+  "title": "Canonical inventory ledger quantity, append-only correction operator, phase-2 cutover, and tested rollback",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "cee2f059eb55bdb2c4f2fb4a8dfce439d26deb4a"
+    "reviewedSha": "3230cde57176219664b7bdc2cf632cf4cd98e3c1"
   },
   "riskDomains": [
     "billing_inventory_lifecycle"
@@ -31,7 +31,8 @@
       "evidenceIds": [
         "inventory-migrated-db",
         "inventory-adversarial",
-        "phase1-rollout-proof"
+        "phase1-rollout-proof",
+        "correction-cutover-proof"
       ]
     },
     {
@@ -49,9 +50,10 @@
       "id": "AC-4",
       "severity": "high",
       "status": "met",
-      "description": "The correction packet is regenerated from the canonical read-only plan at the exact implementation SHA, SHA-verifies its CSV, and exposes no apply mode.",
+      "description": "The correction packet is regenerated from the canonical read-only plan at the exact implementation SHA and SHA-verifies its CSV; the separate correction operator defaults read-only and requires the exact approved plan and movement hashes before it can delegate to the append-only movement owner.",
       "evidenceIds": [
-        "production-readonly-correction"
+        "production-readonly-correction",
+        "correction-cutover-proof"
       ]
     },
     {
@@ -89,10 +91,11 @@
       "id": "AC-8",
       "severity": "high",
       "status": "blocked",
-      "description": "The out-of-journal 0073 now has a fail-closed operator and runbook, but production execution plus the later 0074 application mechanism still require separate approval.",
+      "description": "The out-of-journal 0073 and 0074 now have fail-closed, dry-run-default operators and a closed-window runbook, but production execution, correction application, push, and deployment still require separate approval.",
       "evidenceIds": [
         "migration-static-proof",
-        "phase1-rollout-proof"
+        "phase1-rollout-proof",
+        "correction-cutover-proof"
       ]
     }
   ],
@@ -101,6 +104,7 @@
       "src/services/inventory-stock-math.ts owns signed ledger-derived quantity reads",
       "src/services/inventory-movement.ts#applyInventoryMovementInTransaction owns append-only idempotent movements",
       "src/services/inventory-reconciliation.ts#buildInventoryReconciliationPlan owns read-only discrepancy planning",
+      "src/services/inventory-correction-plan.ts#buildInventoryCorrectionPlan owns deterministic reviewed correction rows and hashes",
       "drizzle/0073_inventory_quantity_sot.sql and drizzle/0074_inventory_quantity_cutover.sql own ordered schema preparation and cutover",
       "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql owns emergency post-cutover compatibility restoration"
     ],
@@ -141,6 +145,16 @@
         "path": "scripts/ps-462-inventory-preparation-operator.ts",
         "action": "added",
         "delegatesTo": "drizzle/0073_inventory_quantity_sot.sql with exact approval, maintenance, snapshot, timeout, and verification gates"
+      },
+      {
+        "path": "scripts/ps-462-inventory-correction-operator.ts",
+        "action": "added",
+        "delegatesTo": "the canonical reconciliation, correction-plan, and append-only movement owners with exact hash and maintenance gates"
+      },
+      {
+        "path": "scripts/ps-462-inventory-cutover-operator.ts",
+        "action": "added",
+        "delegatesTo": "drizzle/0074_inventory_quantity_cutover.sql with parity, rollback-readiness, snapshot, timeout, and maintenance gates"
       }
     ],
     "sotBypass": {
@@ -239,6 +253,31 @@
       "proves": "The operator defaults to a read-only transaction and production preflight observed 1,008 inventory rows, 6,905 ledger rows, ledger quantity -489, zero zero-quantity rows, and all 6,905 rows lacking the new identity surface. Offline integration proves 0073 and its pre-cutover compatibility rollback are repeatable and preserve ledger immutability. No production SQL mutation ran."
     },
     {
+      "id": "correction-cutover-proof",
+      "classification": "integration",
+      "command": "npm run test:ps-462-inventory-correction-cutover",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/inventory-correction-plan.ts",
+        "scripts/ps-462-inventory-correction-operator.ts",
+        "scripts/ps-462-inventory-cutover-operator.ts",
+        "scripts/ps-462-inventory-correction-cutover-guard.ts",
+        "scripts/ps-462-inventory-correction-cutover-integration.ts",
+        "docs/runbooks/ps-462-inventory-correction-cutover.md"
+      ],
+      "assertions": [
+        "read_only_default",
+        "exact_plan_and_csv_hash",
+        "maintenance_required",
+        "deterministic_lock_order",
+        "append_only_movement_owner",
+        "all_or_nothing_global_parity",
+        "phase2_snapshot_unchanged",
+        "forward_rollback_review_required"
+      ],
+      "proves": "The correction plan is deterministic, stale approvals fail closed, the offline correction appends through the canonical movement service, 0074 rejects pre-parity state, the corrected fixture cuts over without changing ledger counts or sums, and ledger immutability remains active. No production mutation ran."
+    },
+    {
       "id": "production-readonly-correction",
       "classification": "live",
       "command": "npm run inventory:correction-packet:prepare && npm run inventory:reconcile:dry-run",
@@ -254,7 +293,7 @@
         "correction_csv_sha_verified",
         "production_mutation_zero"
       ],
-      "proves": "The ignored PS-462 packet at reviewed SHA cee2f059 has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. No apply mode or production DML ran."
+      "proves": "The ignored PS-462 packet at reviewed implementation SHA 3230cde5 has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. Packet generation performed no production DML."
     },
     {
       "id": "inventory-browser-e2e",
@@ -358,7 +397,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status 7d1360fc9ca1500c3df5df095e9ced21145566c2..cee2f059eb55bdb2c4f2fb4a8dfce439d26deb4a",
+      "command": "git diff --name-status 7d1360fc9ca1500c3df5df095e9ced21145566c2..3230cde57176219664b7bdc2cf632cf4cd98e3c1",
       "result": "pass",
       "artifactPaths": [
         "drizzle/0073_inventory_quantity_sot.sql",
@@ -367,10 +406,14 @@
         "ops/rollback/ps-462_inventory_preparation_compatibility_rollback.sql",
         "ops/rollback/ps-462_inventory_quantity_forward_rollback.sql",
         "scripts/ps-462-inventory-preparation-operator.ts",
-        "scripts/ps-462-inventory-correction-packet.ts"
+        "scripts/ps-462-inventory-correction-packet.ts",
+        "scripts/ps-462-inventory-correction-operator.ts",
+        "scripts/ps-462-inventory-cutover-operator.ts",
+        "src/services/inventory-correction-plan.ts",
+        "docs/runbooks/ps-462-inventory-correction-cutover.md"
       ],
       "assertions": [],
-      "proves": "The candidate contains the ledger-only rollout, migration split, test-fixture repair, PS-462 identity, read-only correction generator, fail-closed phase-1 operator/runbook, and both phase-correct rollback paths. No production movement, migration, push, or deployment is included."
+      "proves": "The candidate contains the ledger-only rollout, migration split, PS-462 identity, deterministic correction plan, dry-run-default correction and phase-2 operators, closed-window runbooks, and both phase-correct rollback paths. No production movement, migration, push, or deployment is included."
     }
   ],
   "migrations": {
@@ -387,6 +430,7 @@
       "artifactPaths": [
         "scripts/ps-439-inventory-concurrency-integration.ts",
         "scripts/ps-462-inventory-preparation-rollout-integration.ts",
+        "scripts/ps-462-inventory-correction-cutover-integration.ts",
         "scripts/ps-462-inventory-forward-rollback-integration.ts",
         "scripts/runtime-ddl-guard.mjs"
       ]
@@ -404,7 +448,7 @@
   },
   "liveVerification": {
     "status": "unverified",
-    "reason": "Only production read-only reconciliation and the new phase-1 operator preflight were run. No correction, migration, Render deployment, commit-parity check, or post-deploy health verification is authorized or complete.",
+    "reason": "Only production read-only reconciliation/packet generation and phase-1 preflight were run. Correction and 0074 operators were verified offline only. No production correction, migration, Render deployment, commit-parity check, or post-deploy health verification is authorized or complete.",
     "followUpOwner": "DJ",
     "artifactPaths": []
   },
@@ -437,9 +481,9 @@
       "id": "migration-ledger-outside-journal",
       "severity": "high",
       "status": "open",
-      "description": "Handwritten 0073/0074 are outside drizzle/meta/_journal.json. Phase 1 now has an explicit tested operator/runbook, but the later 0074 application mechanism remains unapproved and unprepared.",
+      "description": "Handwritten 0073/0074 are outside drizzle/meta/_journal.json. Both phases now have explicit tested operators and a closed-window runbook, but their production execution remains separately unapproved.",
       "followUpOwner": "DJ",
-      "followUpTask": "Prepare and separately approve the phase-2 0074 application mechanism only after the correction/parity gate passes."
+      "followUpTask": "Separately approve the exact phase-2 0074 operator command only after the correction transaction and zero-parity evidence are approved and recorded."
     }
   ]
 }
