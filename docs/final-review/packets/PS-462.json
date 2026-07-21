@@ -5,7 +5,7 @@
   "title": "Canonical inventory ledger quantity, append-only correction operator, phase-2 cutover, and tested rollback",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "3230cde57176219664b7bdc2cf632cf4cd98e3c1"
+    "reviewedSha": "b786f4f93981e0fdc90caf4e3bf20d621072d258"
   },
   "riskDomains": [
     "billing_inventory_lifecycle"
@@ -74,7 +74,8 @@
         "strict-typecheck",
         "frontend-build",
         "full-sot-guard-pack",
-        "safety-regressions"
+        "safety-regressions",
+        "combined-ps447-certification"
       ]
     },
     {
@@ -293,7 +294,7 @@
         "correction_csv_sha_verified",
         "production_mutation_zero"
       ],
-      "proves": "The ignored PS-462 packet at reviewed implementation SHA 3230cde5 has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. Packet generation performed no production DML."
+      "proves": "The ignored PS-462 packet at reviewed combined SHA b786f4f9 has plan d62ccdab, 49 rows, +1,000 units, and CSV SHA f3574469. The aggregate also reports 33,193 missing movements, 189 negative balances, and 1,287 billing-display mismatches. Packet generation performed no production DML."
     },
     {
       "id": "inventory-browser-e2e",
@@ -383,6 +384,26 @@
       "proves": "Inventory auto-deduction remains kill-switch protected, shipped/cancelled locks remain active, and Print Queue plus sync reliability regressions stay green."
     },
     {
+      "id": "combined-ps447-certification",
+      "classification": "unit",
+      "command": "npm run test:ps-447-shipstation-admission && npm run test:rate-source-of-truth && npm run test:ps-462-inventory-sot",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-447-shipstation-admission-guard.ts",
+        "src/lib/shipstation/durable-rate-limiter.ts",
+        "src/lib/shipstation/client.ts",
+        "src/services/inventory-correction-plan.ts",
+        "scripts/ps-462-inventory-correction-cutover-integration.ts"
+      ],
+      "assertions": [
+        "shared_shipstation_admission",
+        "rate_authority_preserved",
+        "inventory_correction_cutover_preserved",
+        "offline_only_no_provider_calls"
+      ],
+      "proves": "After rebasing onto remote PS-447, its ShipStation admission guard, backend rate-authority guard, and the complete PS-462 inventory suite pass together without provider or production mutation."
+    },
+    {
       "id": "ticket-identity-proof",
       "classification": "static",
       "command": "Read, rename, and re-read Trello card 9LO26Gtc; inspect PS-439/PS-462 repository ledger references",
@@ -397,7 +418,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status 7d1360fc9ca1500c3df5df095e9ced21145566c2..3230cde57176219664b7bdc2cf632cf4cd98e3c1",
+      "command": "git diff --name-status 7d1360fc9ca1500c3df5df095e9ced21145566c2..b786f4f93981e0fdc90caf4e3bf20d621072d258",
       "result": "pass",
       "artifactPaths": [
         "drizzle/0073_inventory_quantity_sot.sql",
@@ -448,11 +469,19 @@
   },
   "liveVerification": {
     "status": "unverified",
-    "reason": "Only production read-only reconciliation/packet generation and phase-1 preflight were run. Correction and 0074 operators were verified offline only. No production correction, migration, Render deployment, commit-parity check, or post-deploy health verification is authorized or complete.",
+    "reason": "Only production read-only reconciliation/packet generation and schema preflights were run. Correction and 0074 operators were verified offline only. Render inspection found API/workers on different SHAs and API auto-deploy still enabled. No production correction, migration, candidate deployment, or post-deploy health verification is authorized or complete.",
     "followUpOwner": "DJ",
     "artifactPaths": []
   },
   "caveats": [
+    {
+      "id": "render-commit-parity-and-autodeploy",
+      "severity": "critical",
+      "status": "open",
+      "description": "Render API is live on 956cf41f while both workers are live on 7d1360fc; API auto-deploy is enabled while worker auto-deploy is disabled. A push would deploy only the API against the old schema and workers.",
+      "followUpOwner": "DJ",
+      "followUpTask": "Disable API auto-deploy, record all current deploy IDs, and approve a closed maintenance window plus exact manual deployment order before any branch push or 0073 application."
+    },
     {
       "id": "production-correction-not-approved",
       "severity": "critical",
