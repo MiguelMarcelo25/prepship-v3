@@ -469,7 +469,7 @@
   },
   "liveVerification": {
     "status": "unverified",
-    "reason": "Only production read-only reconciliation/packet generation and schema preflights were run. Correction and 0074 operators were verified offline only. Render inspection found API/workers on different SHAs and API auto-deploy still enabled. No production correction, migration, candidate deployment, or post-deploy health verification is authorized or complete.",
+    "reason": "Only production read-only reconciliation/packet generation and schema preflights were run. Correction and 0074 operators were verified offline only. Render inspection on 2026-07-21 confirmed auto-deploy is disabled for API, worker, and print worker, but API/workers remain on different SHAs. No production correction, migration, candidate deployment, or post-deploy health verification is authorized or complete.",
     "followUpOwner": "DJ",
     "artifactPaths": []
   },
@@ -478,9 +478,9 @@
       "id": "render-commit-parity-and-autodeploy",
       "severity": "critical",
       "status": "open",
-      "description": "Render API is live on 956cf41f while both workers are live on 7d1360fc; API auto-deploy is enabled while worker auto-deploy is disabled. A push would deploy only the API against the old schema and workers.",
+      "description": "Render API deploy dep-d9fh4957vvec73e9t9o0 is live on 9a676317 while worker deploy dep-d9fh03b7uimc73eltllg and print-worker deploy dep-d9fh03n41pts73e6b9kg are live on 956cf41f. Auto-deploy is disabled for all three services, closing the accidental-deploy risk, but commit parity remains unresolved until the approved maintenance deployment.",
       "followUpOwner": "DJ",
-      "followUpTask": "Disable API auto-deploy, record all current deploy IDs, and approve a closed maintenance window plus exact manual deployment order before any branch push or 0073 application."
+      "followUpTask": "Approve a closed maintenance window plus the exact manual candidate deployment order before any branch push or 0073 application; verify API and both workers reach the same approved SHA before reopening traffic."
     },
     {
       "id": "production-correction-not-approved",
