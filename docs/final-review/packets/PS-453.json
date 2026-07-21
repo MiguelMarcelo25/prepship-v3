@@ -1,0 +1,257 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-453",
+  "title": "Per-job durable Print Queue merge snapshots and mandatory PDF artifacts",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "71368b9c41822e08f0017ddebe9062f0ac6d9ad2"
+  },
+  "riskDomains": [
+    "provider_durable_job",
+    "timing_live"
+  ],
+  "claimedScore": 100,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Concurrent PDF merges retain independent per-job snapshots and generation-fenced artifacts instead of overwriting a singleton.",
+      "evidenceIds": [
+        "merge-job-integration",
+        "merge-job-adversarial"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Four missed 15-second heartbeats derive interrupted/stale status within the 60-second recovery window while the generation fence remains active until its execution lease expires; restart recovery can then resume without a permanent phantom running state.",
+      "evidenceIds": [
+        "heartbeat-status-unit",
+        "merge-job-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Every completed PDF chunk and terminal merge snapshot is awaited; a stale generation or failed artifact write cannot publish done.",
+      "evidenceIds": [
+        "merge-durability-static",
+        "merge-job-adversarial",
+        "merge-job-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "The DURABLE_PRINT_QUEUE_PDF canary passed in production and the later PS-428 boundary made generation-fenced durable chunks mandatory; the compatibility key now defaults on.",
+      "evidenceIds": [
+        "production-canary-and-exact-sha"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "The card-mandated guards, migrated restart/concurrency integration, typecheck, production build, runtime schema guard, and source-of-truth pack pass without live label or customer-data mutation.",
+      "evidenceIds": [
+        "card-guard-suite",
+        "release-gates",
+        "production-canary-and-exact-sha"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/print-queue/merge-job-store.ts plus print_queue_merge_jobs per-job snapshot, heartbeat, and generation state",
+      "src/services/print-queue-pdf-store.ts plus print_queue_pdf_chunks immutable generation-fenced artifacts",
+      "src/services/print-queue-worker.ts dedicated execution and recovery",
+      "src/services/print-queue/merge-job-status.ts backend-derived operator status"
+    ],
+    "oldOwners": [
+      {
+        "path": "print_queue.pdf_merge.last_run singleton settings snapshot",
+        "disposition": "deleted",
+        "delegatesTo": "print_queue_merge_jobs keyed by job_id"
+      },
+      {
+        "path": "API-local detached merge execution and fire-and-forget artifact persistence",
+        "disposition": "delegated",
+        "delegatesTo": "dedicated Print Queue worker with awaited snapshot and chunk owners"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/print-queue.ts",
+        "action": "modified",
+        "delegatesTo": "getMergeJobSnapshot and deriveMergeJobSnapshotStatus backend owners"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Routes only validate intent and render backend snapshots. Job claims, heartbeat freshness, recovery, artifact publication, and terminal completion remain in the named backend owners."
+    }
+  },
+  "evidence": [
+    {
+      "id": "heartbeat-status-unit",
+      "classification": "unit",
+      "command": "npm run test:audit-print-queue-merge-durability",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-print-queue-merge-durability-guard.ts",
+        "src/services/print-queue/merge-job-status.ts",
+        "src/lib/print-queue-worker-deadline.ts"
+      ],
+      "assertions": [],
+      "proves": "A fresh snapshot remains active, a snapshot older than the shared 60-second heartbeat recovery threshold is visibly stale without releasing its generation, a lease-expired snapshot becomes terminal, and completed snapshots are never reclassified."
+    },
+    {
+      "id": "merge-durability-static",
+      "classification": "static",
+      "command": "npm run test:audit-print-queue-merge-durability && npm run test:ps-256-durable-print-queue-pdf && npm run test:ps-403-print-queue-pdf-chunks",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-print-queue-merge-durability-guard.ts",
+        "scripts/ps-256-durable-print-queue-pdf-guard.ts",
+        "scripts/ps-403-print-queue-pdf-chunks-guard.ts",
+        "src/services/print-queue-pdf-store.ts",
+        "src/services/print-queue.ts"
+      ],
+      "assertions": [],
+      "proves": "The route reads requested job IDs, PDF chunks are mandatory and generation-fenced, no fire-and-forget terminal writes remain, and missing durable bytes prevent terminal completion."
+    },
+    {
+      "id": "merge-job-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "drizzle/0064_print_queue_merge_jobs.sql",
+        "drizzle/0067_durable_worker_execution_fences.sql"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "restart_idempotency"
+      ],
+      "proves": "A migrated PostgreSQL-compatible fixture persists independent jobs and chunks across a simulated restart, reclaims stale work, advances generation, and preserves completed artifacts."
+    },
+    {
+      "id": "merge-job-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "src/services/print-queue/merge-job-store.ts",
+        "src/services/print-queue-pdf-store.ts"
+      ],
+      "assertions": [
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Fresh claims cannot overlap, two job IDs remain independent, and a stale generation cannot update snapshots, overwrite a chunk, or insert a new artifact."
+    },
+    {
+      "id": "merge-job-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "src/services/durable-worker-attempt.ts",
+        "src/services/print-queue-worker.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "crash_recovery",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Injected timeout and non-cooperative execution retain ownership until the original attempt settles, acknowledge cancellation afterward, and permit safe generation-fenced recovery without duplicate publication."
+    },
+    {
+      "id": "card-guard-suite",
+      "classification": "integration",
+      "command": "npm run test:ps-256-durable-print-queue-pdf && npm run test:ps-346-print-queue-durable-full-results && npm run test:print-queue-persistence && npm run test:ps-403-print-queue-pdf-chunks",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-256-durable-print-queue-pdf-guard.ts",
+        "scripts/ps-346-print-queue-durable-full-results-guard.ts",
+        "scripts/print-queue-persistence-guard.mjs",
+        "scripts/ps-403-print-queue-pdf-chunks-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All four Trello acceptance guard families pass against mandatory durable chunks, full durable results, restart-safe persistence, and bounded high-volume PDF chunking."
+    },
+    {
+      "id": "release-gates",
+      "classification": "integration",
+      "command": "npm run typecheck && npm run build:web && npm run test:runtime-ddl && npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "package.json",
+        "src/services/runtime-schema-readiness.ts",
+        "scripts/sot-guard-pack.mjs",
+        "docs/ps-tickets/PS-453.md"
+      ],
+      "assertions": [],
+      "proves": "Strict backend/frontend TypeScript, production frontend compilation, runtime schema ownership, and all 53 mandatory source-of-truth gates pass at the reviewed SHA."
+    },
+    {
+      "id": "production-canary-and-exact-sha",
+      "classification": "live",
+      "command": "Existing 2026-07-14 mock-only DURABLE_PRINT_QUEUE_PDF canary plus Render deploys dep-d9fmo35aeets73cdd0r0, dep-d9fmo5hkh4rs73cpf8pg, dep-d9fmo5j7uimc73f0m1fg; Vercel dpl_7mcEEVAaXsemUgSjYoJ24RmoGQxH; GET /health, /health/ready, /health/deep",
+      "result": "pass",
+      "artifactPaths": [
+        "PRINT_QUEUE_MERGE_DURABILITY_AUDIT.md",
+        "docs/ps-tickets/PS-453.md",
+        "docs/final-review/packets/PS-452.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact"
+      ],
+      "proves": "The prior production canary persisted and rehydrated a mock-only PDF across restart without live postage. Exact SHA 71368b9c41822e08f0017ddebe9062f0ac6d9ad2 is live on API, sync worker, Print Queue worker, and a Ready Vercel production deployment. Health and readiness are HTTP 200; Print Queue worker health is OK with a fresh heartbeat and zero active/provider-pending work. Deep health is degraded only by the pre-existing two-account sync freshness condition."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "not applicable - PS-453 reuses already-applied additive migrations 0064 and 0067; npm run test:runtime-ddl passed",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema rollback is required. Redeploy prior live SHA 25dc3a12960a0d94409c2b842731dd10fafa0cce to restore the earlier delayed stale-status presentation while retaining additive per-job and PDF sidecars."
+  },
+  "rollback": {
+    "strategy": "Redeploy prior live SHA 25dc3a12960a0d94409c2b842731dd10fafa0cce across Vercel, API, sync worker, and Print Queue worker. Keep migrations 0064 and 0067 and all job/artifact history in place.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Exact reviewed SHA 71368b9c41822e08f0017ddebe9062f0ac6d9ad2 is live on all three Render services and Vercel. Public health/readiness are HTTP 200 and the Print Queue component is healthy; no live merge was started because existing mock-only canary evidence proves artifact persistence without risking customer labels.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "PRINT_QUEUE_MERGE_DURABILITY_AUDIT.md",
+      "docs/ps-tickets/PS-453.md"
+    ]
+  },
+  "caveats": [
+    {
+      "id": "SYNC-FRESHNESS-EXISTING",
+      "severity": "low",
+      "status": "closed",
+      "description": "The aggregate deep endpoint remains HTTP 503 because two order-sync accounts are stale or failed. Database, event loop, API readiness, Print Queue worker, durable queue work, and fulfillment outbox are healthy; this condition predates and is outside PS-453.",
+      "followUpOwner": null,
+      "followUpTask": null
+    }
+  ]
+}
