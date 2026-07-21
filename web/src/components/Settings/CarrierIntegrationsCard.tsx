@@ -1801,7 +1801,7 @@ export function CarrierIntegrationsCard({
     apiVersion: 'v1' | 'v2'
   }
   const { data: envShipStationData } = useQuery<{ data: EnvShipStationAccount[] }>({
-    queryKey: ['settings:shipstation-env-accounts'],
+    queryKey: ['settings', 'shipstation-env-accounts'],
     enabled: queriesEnabled,
     queryFn: () => api.get<{ data: EnvShipStationAccount[] }>('/init/shipstation-accounts'),
     staleTime: 5 * 60_000,

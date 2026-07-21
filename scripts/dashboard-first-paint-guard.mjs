@@ -53,19 +53,22 @@ assert(
   'non-critical work is scheduled on browser idle only after metrics settle',
 );
 
-const gateCount = dashboard.split('enabled: nonCriticalReady').length - 1;
+const gateCount = (dashboard.match(/enabled:\s*dashboardWindowReady\s*&&\s*nonCriticalReady/g) ?? []).length;
 assert(
   gateCount >= 3,
   `sku-trends, inventory-risk, and top-skus queries defer behind the idle gate (found ${gateCount}, need >= 3)`,
 );
 
-// The critical metrics query itself must never sit behind a gate.
+// The critical metrics query waits only for its backend-owned reporting-window
+// prerequisite; it must never sit behind the non-critical browser-idle gate.
 const metricsBlock = dashboard.slice(
   indexOfOrEnd('const metricsQuery = useQuery'),
   indexOfOrEnd('const shippingMarginQuery = useQuery'),
 );
 assert(
-  metricsBlock.length > 0 && !metricsBlock.includes('enabled:'),
+  metricsBlock.length > 0 &&
+    metricsBlock.includes('enabled: dashboardWindowReady') &&
+    !metricsBlock.includes('nonCriticalReady'),
   'the critical metrics query is ungated (critical first paint)',
 );
 

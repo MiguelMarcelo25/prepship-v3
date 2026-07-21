@@ -64,6 +64,9 @@ function makeBackend() {
     if (!isApiRequest) return null // a baseUrl asset — let the dev server serve it
 
     // --- Sidebar / shell scaffolding -------------------------------------------------
+    if (url.pathname === '/health/ready') {
+      return json({ status: 'ready', components: [{ name: 'db', status: 'ok' }] })
+    }
     if (url.pathname === '/clients') return json(clients)
     if (url.pathname === '/users') return json({ users: [{ id: 'u1', email: 'operator@example.com', isAdmin: true }] })
     if (url.pathname === '/sync/status') {
@@ -71,6 +74,18 @@ function makeBackend() {
     }
     if (url.pathname === '/init/stores') {
       return json({ data: clients.map((c) => ({ id: c.storeId, storeId: c.storeId, name: c.name, storeName: c.name, clientName: c.name, clientId: c.id, active: c.active, isTest: c.isTest })) })
+    }
+    if (url.pathname === '/init/counts') {
+      return json({ byStatus: {}, byStatusStore: {} })
+    }
+    if (url.pathname === '/analysis/reporting-window') {
+      return json({
+        current: { from: '2026-05-21', to: '2026-06-20' },
+        prior: { from: '2026-04-20', to: '2026-05-20' },
+        currentTrailingSeven: { from: '2026-06-14', to: '2026-06-20' },
+        priorTrailingSeven: { from: '2026-05-14', to: '2026-05-20' },
+        rangeDays: 31,
+      })
     }
 
     // --- Dashboard BUSINESS METRICS (the heart of the proof) -------------------------
@@ -265,7 +280,6 @@ const FORBIDDEN_HOST_PATTERNS = [
 ]
 
 const KNOWN_UNMATCHED_API_PATHS = new Set([
-  '/health/ready',
   '/settings/markups',
 ])
 
@@ -335,5 +349,38 @@ test.describe('PS-325 Dashboard read-model proof', () => {
     const offenders = backend.captured.filter((r) => FORBIDDEN_HOST_PATTERNS.some((re) => re.test(r.host)))
     expect(offenders, `dashboard must not contact a real provider host: ${JSON.stringify(offenders)}`).toEqual([])
     expectOnlyKnownUnmatchedApiPaths(backend)
+  })
+})
+
+test.describe('PS-448 Dashboard remount cache proof', () => {
+  test('Dashboard -> Orders -> Dashboard performs zero unchanged-data refetches', async ({ page }) => {
+    const backend = makeBackend()
+    await gotoDashboard(page, backend)
+
+    const isDashboardRead = (request) => request.method === 'GET' && (
+      request.pathname.startsWith('/dashboard/')
+      || request.pathname === '/analysis/reporting-window'
+      || request.pathname === '/sync/status'
+    )
+    const firstVisitReads = backend.captured.filter(isDashboardRead)
+    expect(firstVisitReads.length, 'the first Dashboard visit must exercise the mocked GET boundary').toBeGreaterThan(0)
+
+    const sidebar = page.locator('aside[aria-label="Primary navigation"]')
+    await sidebar.getByText('Awaiting Shipment', { exact: true }).click()
+    await expect(page).toHaveURL(/\/orders\/awaiting_shipment$/)
+
+    await sidebar.getByRole('button', { name: 'Dashboard' }).click()
+    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page.getByText('Out of Stock').first()).toBeVisible()
+
+    // QueryClient's five-minute stale window must serve every Dashboard query
+    // from memory on remount. Give React Query a full turn to expose any eager
+    // refetch before comparing the network ledger.
+    await page.waitForTimeout(750)
+    const revisitReads = backend.captured.filter(isDashboardRead)
+    expect(
+      revisitReads.map((request) => `${request.method} ${request.pathname}`),
+      'fresh Dashboard queries must not issue another GET after an in-app remount',
+    ).toEqual(firstVisitReads.map((request) => `${request.method} ${request.pathname}`))
   })
 })
