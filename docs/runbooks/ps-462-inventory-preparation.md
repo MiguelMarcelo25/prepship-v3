@@ -4,6 +4,11 @@ This runbook prepares and verifies the additive `0073` inventory-ledger schema. 
 not authorize or perform the correction movements, the `0074` cutover, a Git push, or a
 Render deployment.
 
+Production currently has 49 legacy-to-ledger mismatches. Therefore, completing phase 1
+does not authorize reopening customer traffic on the ledger-reading runtime. A production
+window must either continue into separately approved correction and cutover procedures or
+use the phase-1 compatibility rollback and restore the prior runtime.
+
 ## Ownership and sequencing risk
 
 - Schema authority: `drizzle/0073_inventory_quantity_sot.sql`.
@@ -29,21 +34,24 @@ separate approvals.
 
 1. Confirm the exact reviewed commit and a clean worktree. Build the compatible API and
    worker candidate locally, but do not push the production branch yet.
-2. Confirm a current Supabase backup or point-in-time recovery (PITR) window and record the
+2. Confirm the exact correction packet and phase-2 cutover procedures are reviewed and
+   ready for separate approval. If they are not ready, do not start this production window;
+   validate phase 1 only in a non-production database.
+3. Confirm a current Supabase backup or point-in-time recovery (PITR) window and record the
    recovery timestamp. Do not begin without verified recovery coverage.
-3. Record current Render API/worker deploy IDs and environment configuration. Confirm
+4. Record current Render API/worker deploy IDs and environment configuration. Confirm
    `INVENTORY_AUTO_DEDUCT=false` is ready for the maintenance window. Confirm Render
    auto-deploy is disabled for the API, sync worker, and print worker before any authorized
    push; otherwise a branch push could deploy the new runtime against the old schema.
-4. Run the read-only schema/data preflight:
+5. Run the read-only schema/data preflight:
 
    ```text
    npm run migrate:ps-462-inventory-preparation
    ```
 
-5. Record only its aggregate schema state, inventory-row count, ledger-row count, ledger
+6. Record only its aggregate schema state, inventory-row count, ledger-row count, ledger
    quantity, zero-quantity count, and incomplete-identity count. Do not export customer rows.
-6. Abort if the database is unreachable, the snapshot cannot complete, or any unexpected
+7. Abort if the database is unreachable, the snapshot cannot complete, or any unexpected
    partial schema state cannot be explained.
 
 ## Maintenance and application
@@ -65,7 +73,7 @@ separate approvals.
    `inventory_and_ledger_data_unchanged=true`.
 6. Do not apply 0074. Do not apply the correction packet. Do not reopen old-runtime writers.
 
-## Immediate deployment and verification
+## Maintenance-only deployment and verification
 
 1. Manually deploy the exact reviewed PS-462-compatible API and workers while maintenance
    remains on. Do not use a generic "latest" deploy when the commit cannot be verified.
@@ -73,10 +81,14 @@ separate approvals.
    enabled triggers, the source-identity index, and the legacy `stock_qty` column must be present.
 3. Verify Render health/readiness and worker heartbeat without invoking providers, purchasing
    labels/postage, notifying marketplaces, or mutating production inventory/order/shipment data.
-4. Keep `INVENTORY_AUTO_DEDUCT=false` until the API/worker commit parity and schema readiness
-   are confirmed. Re-enable it only under its own approved rollout step.
-5. Reopen traffic only when the compatible runtime is healthy and no new identity-guard errors
-   appear in logs.
+4. Keep `INVENTORY_AUTO_DEDUCT=false`. Do not reopen traffic after phase 1: the current
+   correction packet still reports 49 quantity mismatches, so the ledger-reading runtime
+   cannot yet be treated as preserving the approved legacy balance intent.
+5. Continue only into the separately approved correction and `0074` procedures in the same
+   maintenance window. If either approval or gate is unavailable, use the compatibility
+   rollback below, restore the prior runtime, verify it, and only then reopen traffic.
+6. Re-enable inventory auto-deduction and reopen traffic only after the full cutover has its
+   own approval and passes quantity parity, commit parity, health, and worker-readiness checks.
 
 ## Abort and compatibility rollback
 
