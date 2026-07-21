@@ -27,12 +27,14 @@ separate approvals.
 
 ## Preflight — read only
 
-1. Confirm the exact reviewed commit and a clean worktree. Confirm the compatible API and
-   worker artifacts are available but not yet serving traffic.
+1. Confirm the exact reviewed commit and a clean worktree. Build the compatible API and
+   worker candidate locally, but do not push the production branch yet.
 2. Confirm a current Supabase backup or point-in-time recovery (PITR) window and record the
    recovery timestamp. Do not begin without verified recovery coverage.
 3. Record current Render API/worker deploy IDs and environment configuration. Confirm
-   `INVENTORY_AUTO_DEDUCT=false` is ready for the maintenance window.
+   `INVENTORY_AUTO_DEDUCT=false` is ready for the maintenance window. Confirm Render
+   auto-deploy is disabled for the API, sync worker, and print worker before any authorized
+   push; otherwise a branch push could deploy the new runtime against the old schema.
 4. Run the read-only schema/data preflight:
 
    ```text
@@ -48,21 +50,25 @@ separate approvals.
 
 1. Put the user-facing app into maintenance mode. Stop the API, sync worker, and print worker
    so no inventory-ledger writer remains active.
-2. Set and verify `INVENTORY_AUTO_DEDUCT=false`. Preserve logs and the preflight output.
-3. Apply only `0073` with the exact double confirmation:
+2. Set and verify `INVENTORY_AUTO_DEDUCT=false`, and re-verify auto-deploy is disabled on all
+   three Render services. Preserve logs and the preflight output.
+3. Only with separate push approval, push the exact reviewed production branch while all
+   writers remain stopped. Confirm no Render service started an automatic deployment.
+4. Apply only `0073` with the exact double confirmation:
 
    ```text
    npm run migrate:ps-462-inventory-preparation -- --apply --confirm=apply-ps-462-inventory-preparation-0073 --maintenance-confirm=api-workers-stopped-inventory-auto-deduct-disabled
    ```
 
-4. The operator uses one transaction, a five-second lock timeout, a sixty-second statement
+5. The operator uses one transaction, a five-second lock timeout, a sixty-second statement
    timeout, and before/after aggregate snapshots. It must report
    `inventory_and_ledger_data_unchanged=true`.
-5. Do not apply 0074. Do not apply the correction packet. Do not reopen old-runtime writers.
+6. Do not apply 0074. Do not apply the correction packet. Do not reopen old-runtime writers.
 
 ## Immediate deployment and verification
 
-1. Deploy the exact reviewed PS-462-compatible API and workers while maintenance remains on.
+1. Manually deploy the exact reviewed PS-462-compatible API and workers while maintenance
+   remains on. Do not use a generic "latest" deploy when the commit cannot be verified.
 2. Run the read-only preflight again. All identity columns, the nonzero constraint, the three
    enabled triggers, the source-identity index, and the legacy `stock_qty` column must be present.
 3. Verify Render health/readiness and worker heartbeat without invoking providers, purchasing

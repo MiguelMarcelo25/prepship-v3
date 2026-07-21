@@ -28,6 +28,9 @@ assert.doesNotMatch(rollback, /\b(?:orders|shipments)\b/i);
 
 assert.match(runbook, /maintenance/i);
 assert.match(runbook, /INVENTORY_AUTO_DEDUCT=false/);
+assert.match(runbook, /auto-deploy is disabled/i);
+assert.match(runbook, /do not push the production branch yet/i);
+assert.match(runbook, /separate push approval/i);
 assert.match(runbook, /backup|point-in-time recovery|PITR/i);
 assert.match(runbook, /Do not apply 0074/i);
 assert.match(runbook, /Do not apply the correction/i);
