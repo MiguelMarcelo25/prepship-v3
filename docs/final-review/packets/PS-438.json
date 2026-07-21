@@ -5,7 +5,7 @@
   "title": "Rate recalculation job progress with durable backend snapshot truth",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "70c9611a1fc9c6d3f657a7f5171287c738bfaf61"
+    "reviewedSha": "ecfb6f2f102579d7fbd3430ed4c58f649b97c73c"
   },
   "riskDomains": [
     "provider_durable_job"
@@ -20,6 +20,7 @@
       "evidenceIds": [
         "ps438-projection-unit",
         "implementation-scope-proof",
+        "current-head-drift-review",
         "full-sot-guard-pack"
       ]
     },
@@ -67,7 +68,7 @@
       "id": "AC-6",
       "severity": "critical",
       "status": "met",
-      "description": "Durable backfill crash, lost-response retry, restart, concurrency, and stale-generation protections remain green; strict typecheck, production web build, the full source-of-truth pack, and shipped/cancelled lockdown guard pass at the exact reviewed SHA without any live side effect.",
+      "description": "Durable backfill crash, lost-response retry, restart, concurrency, and stale-generation protections remain green; strict typecheck, production web build, all 49 source-of-truth guards, and the shipped/cancelled lockdown guard pass at the exact reviewed SHA. Later PS-439 worker-lock and health changes are independently classified and leave every PS-438 implementation path unchanged.",
       "evidenceIds": [
         "backfill-generation-integration",
         "backfill-generation-adversarial",
@@ -75,7 +76,8 @@
         "full-sot-guard-pack",
         "strict-typecheck",
         "frontend-build",
-        "lockdown-proof"
+        "lockdown-proof",
+        "current-head-drift-review"
       ]
     }
   ],
@@ -248,10 +250,11 @@
       "artifactPaths": [
         "scripts/sot-guard-pack.mjs",
         "scripts/ps-335-sot-guard-pack-guard.ts",
-        "scripts/ps-436-sync-starvation-guard.ts"
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "scripts/ps-439-session-advisory-locks-guard.ts"
       ],
       "assertions": [],
-      "proves": "All 48 mandatory source-of-truth, backend-truth, durable-worker, lifecycle, billing, authorization, and safety checks pass at the reviewed SHA."
+      "proves": "All 49 mandatory source-of-truth, backend-truth, durable-worker, lifecycle, billing, authorization, and safety checks pass locally at the exact reviewed SHA with inert test-only environment values."
     },
     {
       "id": "strict-typecheck",
@@ -304,6 +307,22 @@
       ],
       "assertions": [],
       "proves": "The reviewed implementation is frontend presentation, browser evidence, documentation, and offline guards only. No backend, provider, migration, label, billing, inventory, shipment, or order persistence code changed, and no live side effect was performed."
+    },
+    {
+      "id": "current-head-drift-review",
+      "classification": "static",
+      "command": "git log --format='%H %s' 70c9611a1fc9c6d3f657a7f5171287c738bfaf61..ecfb6f2f102579d7fbd3430ed4c58f649b97c73c && git diff --name-status 70c9611a1fc9c6d3f657a7f5171287c738bfaf61..ecfb6f2f102579d7fbd3430ed4c58f649b97c73c && git diff --name-status 70c9611a1fc9c6d3f657a7f5171287c738bfaf61..ecfb6f2f102579d7fbd3430ed4c58f649b97c73c -- web/src/components/Views/orders-recalculate-all-progress.ts web/src/components/Views/OrdersRecalculationProgress.tsx web/src/components/Views/orders-recalculate-all.ts web/src/components/Views/OrdersFilterToolbar.tsx web/src/components/Views/OrdersView.tsx scripts/ps-438-rate-recalculation-progress-guard.ts web/e2e/orders-ps438-recalculation-progress.spec.js",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-438.json",
+        "docs/final-review/packets/PS-432.json",
+        "docs/ps-tickets/ps-439-session-advisory-locks.md",
+        "scripts/ps-439-session-advisory-locks-guard.ts",
+        "src/services/shipstation-carrier-account-snapshot-worker.ts",
+        "src/services/worker-job-skip-health.ts"
+      ],
+      "assertions": [],
+      "proves": "Drift after the PS-438 implementation consists of its evidence packet, independent PS-439 advisory-lock/deep-health hardening, and the PS-432 packet refresh. The targeted path diff is empty for every PS-438 implementation, projection, guard, and browser-test file, so later work neither changes the progress UI nor moves rate/job truth into the frontend."
     }
   ],
   "migrations": {
@@ -323,7 +342,7 @@
   },
   "liveVerification": {
     "status": "not-required",
-    "reason": "PS-438 is a presentation-only consumer of existing backend job DTOs. Unit and browser proof use inert or fully mocked requests, and no live provider, label purchase, postage, marketplace notification, database write, or production order/shipment mutation is required for closure. Deployment health remains a separate post-push observation.",
+    "reason": "PS-438 is a presentation-only consumer of existing backend job DTOs. Unit and browser proof use inert or fully mocked requests, and no live provider, label purchase, postage, marketplace notification, database write, or production order/shipment mutation is required for closure. Exact review target ecfb6f2f102579d7fbd3430ed4c58f649b97c73c is verified locally and is not claimed as deployed; paid CI and deployment were deliberately not invoked. Deployment health remains a separate post-push observation.",
     "followUpOwner": null,
     "artifactPaths": []
   },
