@@ -5,7 +5,7 @@
   "title": "Return labels expose customer shipping rate and never selected label cost",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "de826288e2bf8587bdfba648900885b3a32c8f0e"
+    "reviewedSha": "24bade0f23c62e44a616746b29daa2f401d2e087"
   },
   "riskDomains": [
     "rate_label",
@@ -227,7 +227,7 @@
         "vite.config.ts"
       ],
       "assertions": [],
-      "proves": "PrepShip focused source-of-truth checks, backend/frontend strict TypeScript, and the 2,977-module production Vite build pass at reviewed SHA de826288e2bf8587bdfba648900885b3a32c8f0e."
+      "proves": "PrepShip focused source-of-truth checks, backend/frontend strict TypeScript, and the production Vite build pass at reviewed SHA 24bade0f23c62e44a616746b29daa2f401d2e087."
     },
     {
       "id": "client-portal-certification",
@@ -253,7 +253,7 @@
       "command": "Verify exact commit metadata for Vercel and Render deployments; GET PrepShip /health/deep and Client Portal /health; GET both production frontends",
       "result": "pass",
       "artifactPaths": [
-        "https://prepshipv4-lbo83fzsx-dr-prepper-usas-projects.vercel.app",
+        "https://prepshipv4-fw7yu47kj-dr-prepper-usas-projects.vercel.app",
         "https://prepshipv4-api-l5xc.onrender.com/health/deep",
         "https://client-portal-prepship-9oob1qtkp-dr-prepper-usas-projects.vercel.app",
         "https://client-portal-prepship.onrender.com/health"
@@ -264,12 +264,12 @@
         "production_health_ready",
         "no_provider_side_effect"
       ],
-      "proves": "PrepShip Vercel and Render API are live at de826288e2bf8587bdfba648900885b3a32c8f0e; Client Portal Vercel and Render are live at 87c8ab3553b8e54f8629815d2853685b1323c3e0; both frontends return HTTP 200, Client Portal health reports its exact commit, and PrepShip deep health reports ready with every component green."
+      "proves": "PrepShip Vercel deployment dpl_EgK3MGnNcyL9MSG1UKADYiFY2BtF and Render API dep-d9gksocvikkc739l1do0, sync worker dep-d9gksomigcvs73ai2230, and print worker dep-d9gksosvikkc739l1fog are live at exact reviewed SHA 24bade0f23c62e44a616746b29daa2f401d2e087. Client Portal Vercel and Render deploy dep-d9gke16igcvs73ah81b0 are live at 87c8ab3553b8e54f8629815d2853685b1323c3e0; both frontends return HTTP 200, Client Portal health reports its exact commit, and PrepShip deep health reports ready with every component green."
     },
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git show --stat bed413f0fbbfb84d3e8e41c43e18644e0f1ff5e4; git show --stat 265d9a045a144ed67a6551ba046df52876440bd9; git show --stat bc9b0f610a661b87e086d8911976af89ed52fddf; git show --stat 87c8ab3553b8e54f8629815d2853685b1323c3e0",
+      "command": "git show --stat bed413f0fbbfb84d3e8e41c43e18644e0f1ff5e4; git show --stat 24bade0f23c62e44a616746b29daa2f401d2e087; git show --stat 265d9a045a144ed67a6551ba046df52876440bd9; git show --stat bc9b0f610a661b87e086d8911976af89ed52fddf; git show --stat 87c8ab3553b8e54f8629815d2853685b1323c3e0",
       "result": "pass",
       "artifactPaths": [
         "src/services/customer-shipping-money.ts",
@@ -279,7 +279,7 @@
         "https://github.com/drprepperusa-org/client-portal-prepship/compare/49eae24ff380ec0602d76489230779c176de6d8b...87c8ab3553b8e54f8629815d2853685b1323c3e0"
       ],
       "assertions": [],
-      "proves": "The coordinated commits contain the canonical policy gate, thin scoped route, pre-provider Client Portal delegate, disclosure guards, Billing cleanup, completed-label recovery, pending UI, read-only audit, and the final scope-guard correction. No migration or production repair was introduced."
+      "proves": "The coordinated commits contain the canonical policy gate, persisted client-ID pricing identity, thin scoped route, pre-provider Client Portal delegate, disclosure guards, Billing cleanup, completed-label recovery, pending UI, read-only audit, and the final scope-guard correction. No migration or production repair was introduced."
     }
   ],
   "migrations": {
@@ -290,21 +290,21 @@
       "result": "not-applicable",
       "artifactPaths": []
     },
-    "rollbackPlan": "Forward-revert only PrepShip bed413f0 and Client Portal 265d9a0/bc9b0f6/87c8ab3. Existing frozen customer-money tuples remain immutable and require no database rollback."
+    "rollbackPlan": "Forward-revert only PrepShip bed413f0/24bade0f and Client Portal 265d9a0/bc9b0f6/87c8ab3. Existing frozen customer-money tuples remain immutable and require no database rollback."
   },
   "rollback": {
-    "strategy": "Forward-revert the PS-435 implementation commits while preserving immutable return, shipment, Billing, and audit history. Do not delete labels, replay completed purchases, or rewrite shipped/cancelled production data.",
+    "strategy": "Forward-revert the PS-435/437 customer-money implementation commits while preserving immutable return, shipment, Billing, and audit history. Do not delete labels, replay completed purchases, or rewrite shipped/cancelled production data.",
     "tested": false,
     "evidenceIds": []
   },
   "liveVerification": {
     "status": "verified",
-    "reason": "Exact-SHA Render and Vercel deployments are live and healthy. Verification was read-only and did not buy postage, create labels, call a live marketplace mutation, or modify production order, shipment, return, or Billing rows.",
+    "reason": "PrepShip exact implementation SHA 24bade0f23c62e44a616746b29daa2f401d2e087 is Ready/live on Vercel plus the Render API, sync worker, and print worker. Client Portal exact SHA 87c8ab3553b8e54f8629815d2853685b1323c3e0 is Ready/live on Vercel and Render, and its health response reports that exact commit. Verification was read-only and did not buy postage, create labels, call a live marketplace mutation, or modify production order, shipment, return, or Billing rows.",
     "followUpOwner": null,
     "artifactPaths": [
       "https://prepshipv4-api-l5xc.onrender.com/health/deep",
       "https://client-portal-prepship.onrender.com/health",
-      "https://prepshipv4-lbo83fzsx-dr-prepper-usas-projects.vercel.app",
+      "https://prepshipv4-fw7yu47kj-dr-prepper-usas-projects.vercel.app",
       "https://client-portal-prepship-9oob1qtkp-dr-prepper-usas-projects.vercel.app"
     ]
   },
