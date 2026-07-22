@@ -1,0 +1,322 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-439",
+  "title": "Make marketplace-confirmation scheduler locks pool-safe and expose persistent lock skips",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "a55efc85c3c0fd079eaca8606032144c10689eec"
+  },
+  "riskDomains": [
+    "provider_durable_job",
+    "timing_live"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Scheduler, carrier-snapshot, and rate-browse paths own no pooled session advisory lock; cross-process sync admission delegates to the queue lane's transaction-scoped advisory lock or the durable unique rate-job fence.",
+      "evidenceIds": [
+        "lock-owner-adversarial",
+        "full-sot-pack"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "The simulated pooled unlock-miss strands session ownership while transaction completion releases the replacement ownership without a separate unlock statement.",
+      "evidenceIds": [
+        "lock-owner-adversarial"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Repeated lock-held skips are recorded as skipped telemetry and become a failed fulfillment-outbox deep-health component after the canonical three-cadence age budget; success clears the streak.",
+      "evidenceIds": [
+        "lock-owner-adversarial",
+        "starvation-failure-injection",
+        "production-health"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "The post-deploy transaction-read-only production inspection finds no affected legacy or unnamed idle advisory lock, including the former carrier-snapshot and fulfillment-outbox session keys.",
+      "evidenceIds": [
+        "production-lock-audit"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "Marketplace-confirmation retry, restart, concurrency, fencing, starvation, source-of-truth, lockdown, strict TypeScript, and production frontend build gates remain green without a live provider side effect.",
+      "evidenceIds": [
+        "provider-retry-integration",
+        "leadership-integration",
+        "starvation-failure-injection",
+        "full-sot-pack",
+        "strict-typecheck",
+        "frontend-build",
+        "lockdown-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/sync-job-queue.ts registerWorker for durable cross-process job admission and skip recording",
+      "src/services/sync-lane-lock.ts withSyncLaneAdvisoryLock for transaction-scoped lane ownership",
+      "src/services/worker-job-skip-health.ts for persistent fulfillment-outbox skip health",
+      "src/services/rate-browse-job-store.ts plus drizzle/0067_durable_worker_execution_fences.sql for durable rate-workflow admission"
+    ],
+    "oldOwners": [
+      {
+        "path": "src/services/shipstation-carrier-account-snapshot-worker.ts duplicate pooled session advisory lock",
+        "disposition": "deleted",
+        "delegatesTo": "src/services/sync-job-queue.ts and src/services/sync-lane-lock.ts"
+      },
+      {
+        "path": "src/services/sync-scheduler.ts legacy per-handler session locks",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/sync-job-queue.ts canonical queue admission"
+      },
+      {
+        "path": "src/services/rate-browse-job-store.ts legacy session reservation lock",
+        "disposition": "delegated",
+        "delegatesTo": "drizzle/0067_durable_worker_execution_fences.sql active request uniqueness"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/health.ts checkFulfillmentOutboxWorker",
+        "action": "modified",
+        "delegatesTo": "src/services/worker-job-skip-health.ts evaluateWorkerJobSkipHealth"
+      },
+      {
+        "path": "src/services/shipstation-carrier-account-snapshot-worker.ts runShipStationCarrierAccountSnapshotTick",
+        "action": "modified",
+        "delegatesTo": "queue-owned cross-process admission while retaining only process-local promise coalescing"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The queue and transaction lock remain the backend admission owners. Health is backend-owned, and no frontend, route, or provider adapter chooses lock, marketplace-confirmation, or job-liveness truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "lock-owner-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-439-session-advisory-locks && npm run test:sync-advisory-lock && npm run test:ps-463-leader-skip-health",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-session-advisory-locks-guard.ts",
+        "scripts/sync-advisory-lock-guard.mjs",
+        "scripts/ps-463-leader-skip-health-guard.ts",
+        "src/services/sync-lane-lock.ts",
+        "src/services/worker-job-skip-health.ts"
+      ],
+      "assertions": [
+        "pooled_session_unlock_miss_strands_original_owner",
+        "transaction_completion_releases_without_unlock",
+        "affected_paths_have_no_session_lock",
+        "persistent_skip_fails_after_three_cadences",
+        "successful_run_clears_skip_streak"
+      ],
+      "proves": "The canonical owner is pool-safe, affected duplicate lock owners are absent, and the current age-based skip policy is deterministic and fail-closed."
+    },
+    {
+      "id": "provider-retry-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-432-sync-fulfillment-resilience && npm run test:shipment-confirmation-auto-recovery",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-432-sync-fulfillment-resilience-integration.ts",
+        "scripts/shipment-confirmation-auto-recovery-guard.mjs",
+        "src/services/fulfillment/outbox.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "mocked_provider_retry_only",
+        "enqueue_precedes_outbox_processing"
+      ],
+      "proves": "Durable marketplace-confirmation recovery remains idempotent across lost responses and restarts without notifying a live provider."
+    },
+    {
+      "id": "leadership-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-426-consumer-leadership-integration.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "leader_connection_loss_reacquires_without_overlap",
+        "shutdown_releases_leadership"
+      ],
+      "proves": "The one intentional reserved leadership session keeps consumer registration single-owner across acquisition, loss, handoff, and shutdown."
+    },
+    {
+      "id": "starvation-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-436-sync-starvation",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "non_cooperative_timeout_keeps_lane_fenced",
+        "outbox_priority_bounded_under_contention",
+        "zero_live_provider_calls",
+        "zero_production_mutations"
+      ],
+      "proves": "Injected contention, timeout, and starvation scenarios preserve the durable lane and marketplace-confirmation recovery boundary."
+    },
+    {
+      "id": "production-lock-audit",
+      "classification": "live",
+      "command": "DOTENV_CONFIG_PATH=<local production env> npm run diagnose:ps-439-advisory-locks",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-advisory-lock-audit.ts",
+        "docs/ps-tickets/ps-439-session-advisory-locks.md"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "all_nine_legacy_lock_keys_clear",
+        "unnamed_idle_locks_zero",
+        "intentional_consumer_leadership_exempted",
+        "transaction_read_only"
+      ],
+      "proves": "The deployed PS-439 implementation has no stranded affected legacy advisory lock in production while the expected dedicated leader and active xact lane remain distinguishable."
+    },
+    {
+      "id": "production-health",
+      "classification": "live",
+      "command": "GET /health/ready and GET /health/deep",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/ps-439-session-advisory-locks.md",
+        "src/routes/health.ts"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "ready_db_dbwrite_eventloop_green",
+        "fulfillment_outbox_health_green",
+        "skip_fields_visible"
+      ],
+      "proves": "Production readiness is healthy and the fulfillment-outbox component is independently healthy and observable; the unrelated stale order-sync account remains separately classified."
+    },
+    {
+      "id": "full-sot-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-439-session-advisory-locks-guard.ts"
+      ],
+      "assertions": [
+        "all_53_source_of_truth_commands_pass"
+      ],
+      "proves": "Repository-wide ownership, durability, runtime-schema, safety, and lifecycle guards remain green at the reviewed SHA."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [
+        "backend_and_frontend_strict_types_pass"
+      ],
+      "proves": "Worker telemetry, health, scheduler, and all callers compile under strict TypeScript."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "web/src",
+        "vite.config.ts"
+      ],
+      "assertions": [
+        "production_frontend_bundle_passes"
+      ],
+      "proves": "The backend-only lock and closeout work introduces no frontend build regression."
+    },
+    {
+      "id": "lockdown-proof",
+      "classification": "static",
+      "command": "npm run test:ps-245-lockdown-fence && npm run test:order-editable-lockdown",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-245-lockdown-fence-guard.ts",
+        "scripts/order-editable-lockdown-guard.mjs"
+      ],
+      "assertions": [
+        "shipped_cancelled_guards_remain_green",
+        "reviewed_closeout_diff_touches_no_locked_surface"
+      ],
+      "proves": "PS-439 changes coordination and health only; shipped/cancelled mutation guards and protected files are unchanged."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git diff --name-only 0f3d3b571c939886dc22fb26b7455c7e5a0b76e8..a55efc85c3c0fd079eaca8606032144c10689eec -- drizzle",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No migration or production data change exists. Forward-revert the closeout-only reviewed commit and redeploy the prior stable tip; retain the earlier pool-safe runtime implementation."
+  },
+  "rollback": {
+    "strategy": "Forward-revert a55efc85c3c0fd079eaca8606032144c10689eec and redeploy 0f3d3b571c939886dc22fb26b7455c7e5a0b76e8. This reverts only closeout documentation and a stale test assertion while retaining the deployed PS-439 pool-safe runtime implementation.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "The deployed revision is a descendant of the PS-439 implementation. Transaction-read-only production pg_locks inspection cleared every affected legacy key, production readiness returned ready, and fulfillment-outbox deep health was green without any provider or business-data mutation.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/ps-tickets/ps-439-session-advisory-locks.md",
+      "scripts/ps-439-advisory-lock-audit.ts"
+    ]
+  },
+  "caveats": [
+    {
+      "id": "intentional-leadership-lock",
+      "severity": "low",
+      "status": "closed",
+      "description": "The card's broad idle-lock wording is reconciled: the dedicated stately-consumer leadership session is intentional, reserved on one direct/session-mode connection, and explicitly separated from the forbidden pooled handler locks.",
+      "followUpOwner": null,
+      "followUpTask": null
+    },
+    {
+      "id": "safe-boundary-depth",
+      "severity": "low",
+      "status": "closed",
+      "description": "No competing lock was created in production. The required pooled unlock-miss is simulated offline and paired with a transaction-read-only post-deploy lock inspection; this preserves production safety without overstating the test as a live two-session mutation drill.",
+      "followUpOwner": null,
+      "followUpTask": null
+    }
+  ]
+}
