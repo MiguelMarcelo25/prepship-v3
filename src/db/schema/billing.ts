@@ -104,6 +104,11 @@ export const billingLineItems = pgTable(
     uniqueIndex('billing_li_storage_unique_idx')
       .on(t.clientId, t.lineType, t.shipDate, t.description)
       .where(sql`${t.orderId} is null`),
+    // PS-462: proof/description changes cannot mint a second storage charge for
+    // the same client + UTC calendar month.
+    uniqueIndex('billing_li_storage_month_unq')
+      .on(t.clientId, sql`date_trunc('month', ${t.shipDate} at time zone 'UTC')`)
+      .where(sql`${t.orderId} is null and ${t.lineType} = 'storage' and ${t.shipDate} is not null`),
     uniqueIndex('billing_li_adjustment_unq')
       .on(t.billingAdjustmentId)
       .where(sql`${t.billingAdjustmentId} is not null`),

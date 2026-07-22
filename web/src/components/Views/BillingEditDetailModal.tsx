@@ -338,11 +338,23 @@ export function BillingEditDetailModal({
           <div><span>Shipping Margin</span><strong style={{ color: billingMarginColor(draftMargin) }}>{draftMargin > 0 ? '+' : ''}${draftMargin.toFixed(2)}</strong></div>
         </div>
 
+        <label style={{ display: 'grid', gap: 6, marginTop: 12 }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>Reason for edit</span>
+          <textarea
+            value={draft.reason}
+            disabled={saving}
+            maxLength={500}
+            rows={3}
+            placeholder="Required: explain why this invoice line is changing"
+            onChange={(event) => onDraftChange('reason', event.target.value)}
+          />
+        </label>
+
         {error ? <div className="billing-edit-error">{error}</div> : null}
 
         <div className="billing-edit-actions">
           <button className="btn btn-secondary btn-sm" type="button" disabled={saving} onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary btn-sm" type="button" disabled={saving} onClick={() => void onSave()}>
+          <button className="btn btn-primary btn-sm" type="button" disabled={saving || draft.reason.trim().length < 3} onClick={() => void onSave()}>
             {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
             Save
           </button>

@@ -21,7 +21,11 @@ import { ensureBillingStorageProofSchema } from '../db/ensure-billing-storage-pr
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { roundMoney } from '../lib/money';
 import { logStructured, reportError } from '../lib/structured-log';
-import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
+import {
+  calendarStoragePeriodsForRange,
+  computeClientStorageBilling,
+  type StorageLedgerMovement,
+} from './billing-storage';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 import { resolveCustomerShippingMoney } from './customer-shipping-money';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
@@ -1808,30 +1812,15 @@ export async function generateLineItems(input: GenerateInput) {
   // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
   // The billable-storage math is owned by computeClientStorageBilling
   // (src/services/billing-storage.ts). For each client with a positive storage
-  // rate, it rebuilds each active positive-volume SKU's on-hand timeline from the
+  // rate, it rebuilds each positive-volume SKU's on-hand timeline from the
   // canonical inventory_ledger and integrates cubic-foot-DAYS over the billing
   // month, prorated by the actual days in that month — replacing the old
-  // end-of-period Σ stock_qty × cuFt snapshot. One frozen storage line per client;
+  // end-of-period balance snapshot. One frozen storage line per client;
   // per-unit volume via cuFtPerUnit(); rate from billing_config. Reads inventory /
   // inventory_ledger only (never mutates order/shipment rows).
-  const periodStart = new Date(input.dateFrom);
-  const periodEnd = new Date(input.dateTo);
-  // PS-373: the one storage line is dated on the LAST billed day of the period
-  // (inclusive), NOT the exclusive period end. The summary aggregate and the
-  // regen delete both bound on `ship_date < dateTo`, so a line dated exactly on
-  // periodEnd was excluded from its own month's storage_total and only swept up
-  // by the NEXT month's regen. periodEnd is the exclusive UTC-midnight day-after,
-  // so periodEnd − 1 day is the last billed day and lives inside [dateFrom,
-  // dateTo): it lands in the correct month and regen cleanly rebuilds it.
-  const STORAGE_LINE_DAY_MS = 24 * 60 * 60 * 1000;
-  const storageShipDate = new Date(periodEnd.getTime() - STORAGE_LINE_DAY_MS);
-  const storageCalendar = resolveBillingCalendarDay({
-    actualActivityDay: storageShipDate.toISOString().slice(0, 10),
-    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
-  });
-  const storageBillingEffectiveDate = new Date(
-    `${storageCalendar.billingEffectiveDay}T00:00:00.000Z`,
-  );
+  const storagePeriods = calendarStoragePeriodsForRange(input.dateFrom, input.dateTo);
+  const storageRangeStart = storagePeriods[0]?.periodStart ?? new Date(input.dateFrom);
+  const storageRangeEnd = storagePeriods.at(-1)?.periodEnd ?? new Date(input.dateTo);
 
   const existingStorageRows = await db
     .select({
@@ -1844,8 +1833,8 @@ export async function generateLineItems(input: GenerateInput) {
       and(
         sql`${billingLineItems.orderId} is null`,
         eq(billingLineItems.lineType, 'storage'),
-        sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-        sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+        sql`${billingLineItems.shipDate} >= ${storageRangeStart.toISOString()}::timestamptz`,
+        sql`${billingLineItems.shipDate} < ${storageRangeEnd.toISOString()}::timestamptz`,
         input.clientId !== undefined
           ? eq(billingLineItems.clientId, input.clientId)
           : undefined,
@@ -1864,7 +1853,11 @@ export async function generateLineItems(input: GenerateInput) {
     ...existingStorageRows.map((row) => row.clientId),
   ])];
 
-  const cleanupEditableStorage = async (clientId: number): Promise<void> => {
+  const cleanupEditableStorage = async (
+    clientId: number,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<void> => {
     await db.transaction(async (tx) => {
       await tx
         .delete(billingLineItems)
@@ -1873,8 +1866,8 @@ export async function generateLineItems(input: GenerateInput) {
             eq(billingLineItems.clientId, clientId),
             sql`${billingLineItems.orderId} is null`,
             eq(billingLineItems.lineType, 'storage'),
-            sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-            sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+            sql`${billingLineItems.shipDate} >= ${periodStart.toISOString()}::timestamptz`,
+            sql`${billingLineItems.shipDate} < ${periodEnd.toISOString()}::timestamptz`,
             billingLineItemScopePredicate(input),
             billingLineItemIsEditablePredicate(),
           ),
@@ -1914,8 +1907,8 @@ export async function generateLineItems(input: GenerateInput) {
       height: number | null;
     }>(sql`
       select id, client_id, sku, cu_ft_override, length, width, height
-      from inventory
-      where client_id = any(${intArraySql(storageClientIds)}) and active = true
+       from inventory
+       where client_id = any(${intArraySql(storageClientIds)})
     `);
     for (const r of invRowsAll) {
       const list = storageInvRowsByClient.get(Number(r.client_id)) ?? [];
@@ -1936,7 +1929,7 @@ export async function generateLineItems(input: GenerateInput) {
         select inventory_id, type, qty, order_id, coalesce(effective_at, created_at) as effective_at
         from inventory_ledger
         where inventory_id = any(${intArraySql(allInvIds)})
-          and coalesce(effective_at, created_at) < ${periodEnd.toISOString()}::timestamptz
+          and coalesce(effective_at, created_at) < ${storageRangeEnd.toISOString()}::timestamptz
       `);
       for (const row of ledgerRowsAll) {
         const id = Number(row.inventory_id);
@@ -1947,18 +1940,29 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
-  for (const clientId of storageClientIdsToProcess) {
+  for (const storagePeriod of storagePeriods) {
+    const { monthKey, periodStart, periodEnd, lineDate: storageShipDate } = storagePeriod;
+    const storageCalendar = resolveBillingCalendarDay({
+      actualActivityDay: storageShipDate.toISOString().slice(0, 10),
+      effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+    });
+    const storageBillingEffectiveDate = new Date(
+      `${storageCalendar.billingEffectiveDay}T00:00:00.000Z`,
+    );
+
+    for (const clientId of storageClientIdsToProcess) {
     const cfg = configByClient.get(clientId);
     const storageRate = toNum(cfg?.storageFeePerCuFt ?? '0');
     if (!cfg || storageRate <= 0 || cfg.active === false) {
-      await cleanupEditableStorage(clientId);
+      await cleanupEditableStorage(clientId, periodStart, periodEnd);
       continue;
     }
 
-    // The client's active SKUs with their canonical cuFt inputs.
+    // Historical monthly storage must include deactivated catalog rows when
+    // their signed ledger held inventory during this month.
     const invRows = storageInvRowsByClient.get(clientId) ?? [];
     if (!invRows.length) {
-      await cleanupEditableStorage(clientId);
+      await cleanupEditableStorage(clientId, periodStart, periodEnd);
       continue;
     }
 
@@ -1974,16 +1978,13 @@ export async function generateLineItems(input: GenerateInput) {
       periodEnd,
     });
     if (storage.amount <= 0) {
-      await cleanupEditableStorage(clientId);
+      await cleanupEditableStorage(clientId, periodStart, periodEnd);
       continue;
     }
 
-    const description =
-      `Storage — ${storage.totalCuFtDays.toFixed(2)} cuft-days over ${storage.daysInMonth} days ` +
-      `× $${storageRate.toFixed(4)}/cuft/mo (${storage.skuProofs.length} SKU${storage.skuProofs.length === 1 ? '' : 's'})` +
-      (storage.exceptions.length
-        ? ` — ${storage.exceptions.length} negative-balance exception${storage.exceptions.length === 1 ? '' : 's'}`
-        : '');
+    // PS-462: stable client+calendar-month display identity. Volatile math and
+    // exception details live in the frozen proof sidecar, not this unique key.
+    const description = `Storage — ${monthKey}`;
 
     // Invoice-line display (numeric(10,2)): bill the average cuft held over the
     // month (cuft-months = cuft-days / days) at the monthly rate, so
@@ -2018,7 +2019,7 @@ export async function generateLineItems(input: GenerateInput) {
         // commit/rollback; the second writer waits (ms — this tx is 3 small
         // statements), then its delete sees the committed row.
         const [storageLockClassId, storageLockObjId] = advisoryLockKeyPair(
-          `billing-storage:${clientId}:${fromIso}:${toIso}`,
+          `billing-storage:${clientId}:${monthKey}`,
         );
         await tx.execute(
           sql`select pg_advisory_xact_lock(${storageLockClassId}, ${storageLockObjId})`,
@@ -2033,8 +2034,8 @@ export async function generateLineItems(input: GenerateInput) {
               eq(billingLineItems.clientId, clientId),
               sql`${billingLineItems.orderId} is null`,
               eq(billingLineItems.lineType, 'storage'),
-              sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-              sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+              sql`${billingLineItems.shipDate} >= ${periodStart.toISOString()}::timestamptz`,
+              sql`${billingLineItems.shipDate} < ${periodEnd.toISOString()}::timestamptz`,
               billingLineItemScopePredicate(input),
               billingLineItemIsEditablePredicate(),
             ),
@@ -2089,10 +2090,12 @@ export async function generateLineItems(input: GenerateInput) {
       }
       reportError('billing.storage_line.freeze_failed', storageErr, {
         clientId,
-        dateFrom: input.dateFrom,
-        dateTo: input.dateTo,
+        monthKey,
+        dateFrom: periodStart.toISOString(),
+        dateTo: periodEnd.toISOString(),
       });
     }
+  }
   }
 
   // New lines were just written — any cached freshness verdict in this

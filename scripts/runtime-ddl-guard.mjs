@@ -170,6 +170,20 @@ const migrationOwnership = [
       'billing_line_items_block_adjustment_mutation',
     ],
   ],
+  [
+    'drizzle/0075_inventory_quantity_sot.sql',
+    [
+      'inventory_ledger_source_identity_unq',
+      'inventory_ledger_prepare_insert',
+      'inventory_ledger_block_mutations',
+      'inventory_ledger_no_update_delete',
+      'inventory_ledger_no_truncate',
+    ],
+  ],
+  [
+    'drizzle/0077_ps462_billing_storage_month.sql',
+    ['billing_li_storage_month_unq', 'PS462_STORAGE_MONTH_DUPLICATES'],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -252,6 +266,18 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCurrentPeriodAdjustmentMigration),
   '0074 adds append-only billing adjustment facts without backfill or mutation of historical billing/orders/shipments',
 );
+const inventoryQuantityMigration = read('drizzle/0075_inventory_quantity_sot.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(inventoryQuantityMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(inventoryQuantityMigration),
+  '0075 changes only inventory source-of-truth structures and never mutates orders/shipments',
+);
+const storageMonthMigration = read('drizzle/0077_ps462_billing_storage_month.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO|TRUNCATE)\b/i.test(storageMonthMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(storageMonthMigration),
+  '0077 adds a fail-closed monthly storage identity without mutating billing, orders, or shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -262,7 +288,9 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0074_billing_current_period_adjustments.sql',
+  'current release frontier',
+  'inventory_identity_immutable_with_ledger',
+  'billing_li_storage_month_unq',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

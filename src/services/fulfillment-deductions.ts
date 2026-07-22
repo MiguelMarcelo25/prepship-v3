@@ -129,7 +129,7 @@ export async function deductPackageForShipment(input: {
 // What stops:
 //   - Auto-creation of inventory rows on first ship of an unknown SKU
 //   - All `'ship'` type entries in inventory_ledger
-//   - All stockQty mutations triggered by the label/sync paths
+//   - All inventory movements triggered by the label/sync paths
 //
 // Default (unset or any other value) preserves the original behavior so
 // existing deployments aren't surprised. Flip the flag in Vercel/Render
@@ -249,7 +249,6 @@ export async function applyInventoryClaimsForLifecycleEvent(
               clientId: order.clientId ?? null,
               sku: claim.sku,
               name: claim.name,
-              stockQty: 0,
               active: true,
             })
             .returning({ id: inventory.id });
@@ -278,6 +277,8 @@ export async function applyInventoryClaimsForLifecycleEvent(
         createdBy: `order_lifecycle:${claim.direction}`,
         effectiveAt: event.effectiveAt,
         idempotencyKey: claim.idempotencyKey,
+        sourceEntity: 'fulfillment_line_claim',
+        sourceId: String(claim.id),
         nameIfMissing: claim.name,
       });
       const appliedAt = new Date();
@@ -334,13 +335,12 @@ export async function deductInventoryForOrder(
     let skipped = 0;
     for (const line of lines) {
       const skuMatches = sql`lower(${inventory.sku}) = lower(${line.sku})`;
-      // Per user override unlock shipped data on 2026-07-21: defer the PS-439
-      // ledger-only cutover after its production discrepancy gate failed; retain
-      // the prior kill-switch-protected stock_qty path until corrections are approved.
-      let row: { id: number; stockQty: number } | null = null;
+      // Per user override unlock shipped data on 2026-07-22: PS-462 removes the
+      // legacy balance cache; shipment deductions append only the canonical ledger movement.
+      let row: { id: number } | null = null;
       if (order.clientId != null) {
         const [exact] = await tx
-          .select({ id: inventory.id, stockQty: inventory.stockQty })
+          .select({ id: inventory.id })
           .from(inventory)
           .where(and(eq(inventory.clientId, order.clientId), skuMatches, eq(inventory.active, true)))
           .limit(1);
@@ -348,7 +348,7 @@ export async function deductInventoryForOrder(
       }
       if (!row) {
         const [global] = await tx
-          .select({ id: inventory.id, stockQty: inventory.stockQty })
+          .select({ id: inventory.id })
           .from(inventory)
           .where(and(isNull(inventory.clientId), skuMatches, eq(inventory.active, true)))
           .limit(1);
@@ -362,10 +362,9 @@ export async function deductInventoryForOrder(
             clientId: order.clientId ?? null,
             sku: line.sku,
             name: line.name,
-            stockQty: 0,
             active: true,
           })
-          .returning({ id: inventory.id, stockQty: inventory.stockQty });
+          .returning({ id: inventory.id });
         if (!created) throw new Error(`Failed to create inventory row for ${line.sku}`);
         row = created;
       }
@@ -388,10 +387,10 @@ export async function deductInventoryForOrder(
       }
 
       // PS-247 (Per user override unlock shipped data on 2026-06-16): ATOMIC decrement.
-      // Pre-PS-247 this read row.stockQty (the un-locked SELECT above) and wrote a pre-computed
+      // Pre-PS-247 this read a cached balance and wrote a pre-computed
       // balanceAfter, so two concurrent ship-deductions both read the same start value and one
       // decrement was LOST (read-modify-write race under READ COMMITTED — the SELECT takes no row
-      // lock). `stock_qty - qty` applies in-DB under the row lock, so concurrent deductions compose.
+      // lock). The canonical ledger insert now composes concurrent deductions directly.
       // No floor — negative stock is an intentional backorder signal (PS-224, boss directive). The
       // (orderId, inventoryId) ship-ledger idempotency guard above still blocks double-deducting the
       // SAME order; this only fixes the cross-order concurrency race.
@@ -407,6 +406,8 @@ export async function deductInventoryForOrder(
         createdBy: input.source ?? 'label',
         effectiveAt: input.effectiveAt ?? toMovementDate(order.orderDate) ?? new Date(),
         idempotencyKey: `inventory:ship:order:${order.id}:inventory:${row.id}`,
+        sourceEntity: input.shipmentId ? 'shipment' : 'order',
+        sourceId: String(input.shipmentId ?? order.id),
         nameIfMissing: line.name,
       });
       if (movement.status === 'already_applied') {

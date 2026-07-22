@@ -1,13 +1,14 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { requireInternalPermission } from '../middleware/auth';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { parentSkus } from '../db/schema/parent-skus';
 import { inventory } from '../db/schema/inventory';
 import { clients } from '../db/schema/clients';
+import { inventoryQuantitySql } from '../services/inventory-stock-math';
 
 const app = new Hono();
 
@@ -89,8 +90,7 @@ app.patch(
 // Returns aggregated ParentSkuDetailDto: `{parent, children, lowStockChildren,
 // lowStockCount}`. Replaces the React client's N+1 (fetch parent + list
 // inventory + filter) with a single server-assembled payload. Low-stock
-// filter: inventory rows where stock_qty <= reorder_level (v2 uses the same
-// threshold semantics via base_units <= min_stock).
+// filter: the canonical ledger quantity is at or below the reorder threshold.
 app.get('/:id{[0-9]+}/detail', async (c) => {
   const id = Number(c.req.param('id'));
   const [parent] = await db
@@ -101,13 +101,16 @@ app.get('/:id{[0-9]+}/detail', async (c) => {
   if (!parent) return c.json({ error: 'Parent SKU not found' }, 404);
 
   const children = await db
-    .select()
+    .select({
+      ...getTableColumns(inventory),
+      inventoryQuantity: inventoryQuantitySql(inventory.id),
+    })
     .from(inventory)
     .where(eq(inventory.parentSkuId, id))
     .orderBy(asc(inventory.sku));
 
   const lowStockChildren = children.filter(
-    (c) => c.stockQty <= c.reorderLevel
+    (child) => child.inventoryQuantity <= child.reorderLevel
   );
 
   return c.json({

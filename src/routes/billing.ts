@@ -31,9 +31,14 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
 import { billingLineEffectiveDaySql } from '../services/billing-calendar-policy';
 import { logStructured, reportError } from '../lib/structured-log';
-import { requirePermission } from '../middleware/auth';
+import { requireAdmin, requirePermission } from '../middleware/auth';
 // PS-234: durable audit trail for billing generation.
-import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
+import {
+  auditActorFromContext,
+  ensureAuditLogSchema,
+  recordAuditEvent,
+  recordRequiredAuditEventInTransaction,
+} from '../services/audit-log';
 // PS-132: synthetic/system clients excluded from Config + Summary grids — single source.
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
@@ -560,6 +565,9 @@ const detailPatchSchema = z.object({
   packageId: z.coerce.number().int().positive().nullable().optional(),
   // PS-207: optional operator note stored on the box resolution.
   note: z.string().max(500).optional(),
+  // PS-462: every direct invoice-line edit requires an explicit reason. This
+  // reason is frozen with actor + before/after values in the atomic audit row.
+  reason: z.string().trim().min(3).max(500),
 });
 
 const hugrabShippingFloorRawSchema = z.object({
@@ -803,9 +811,9 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
 // ─── Storage-fee PROOF drilldown (admin) ───────────────────────────────
 // PS-373 (slice 2): return the FROZEN per-SKU / per-interval evidence behind a
 // client's single storage line for a billing period. financials:read-gated (the
-// global app.use above) + per-client scope. The period is matched on the SAME
-// canonical UTC-midnight [dateFrom, dateTo) bounds generateSchema produces — the
-// exact instants billing froze at generate time. The route only reads and
+// global app.use above) + per-client scope. The clicked storage line supplies
+// its activity day; the route finds the frozen UTC calendar-month proof that
+// contains that day. The route only reads and
 // returns the sidecar row; the FE renders it verbatim and never recomputes
 // storage (the backend rate owner stays the source of truth).
 app.get('/storage-proof', zValidator('query', generateSchema), async (c) => {
@@ -824,10 +832,11 @@ app.get('/storage-proof', zValidator('query', generateSchema), async (c) => {
     .where(
       and(
         eq(billingStorageProof.clientId, q.clientId),
-        sql`${billingStorageProof.periodStart} = ${q.dateFrom}::timestamptz`,
-        sql`${billingStorageProof.periodEnd} = ${q.dateTo}::timestamptz`,
+        sql`${billingStorageProof.periodStart} < ${q.dateTo}::timestamptz`,
+        sql`${billingStorageProof.periodEnd} > ${q.dateFrom}::timestamptz`,
       ),
     )
+    .orderBy(desc(billingStorageProof.periodStart))
     .limit(1);
   if (!row) {
     // 200 with found:false — a valid period that simply has no storage proof yet
@@ -916,10 +925,12 @@ app.post(
   },
 );
 
-app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zValidator('json', detailPatchSchema), async (c) => {
+app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financials:write'), zValidator('json', detailPatchSchema), async (c) => {
   const orderId = Number(c.req.param('orderId'));
   const body = c.req.valid('json');
   const scope = billingScopeFromContext(c);
+  const actor = auditActorFromContext(c);
+  if (!actor.actorId) return c.json({ error: 'Authenticated actor is required' }, 401);
 
   const [base] = await db
     .select({
@@ -988,6 +999,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   // change and needs no lockdown override.
   await ensureBillingFinalizationPolicySchema();
   await ensureBillingBoxResolutionsSchema();
+  await ensureAuditLogSchema();
   if (prepFeePatchTouched) await ensureBillingFeeWaiverSchema();
   if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
 
@@ -1000,6 +1012,24 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       },
       tx,
     );
+
+    const before = await tx
+      .select({
+        id: billingLineItems.id,
+        lineType: billingLineItems.lineType,
+        qty: billingLineItems.qty,
+        unitCost: billingLineItems.unitCost,
+        totalCost: billingLineItems.totalCost,
+        packageId: billingLineItems.packageId,
+      })
+      .from(billingLineItems)
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId),
+        ),
+      )
+      .orderBy(asc(billingLineItems.id));
 
     const [currentPackageCostLineBeforeEdit] = await tx
       .select({ totalCost: billingLineItems.totalCost })
@@ -1109,7 +1139,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
         const value = body[bodyKey];
         if (typeof value !== 'number') continue;
         const amount = money(value);
-        const note = body.note ?? `Manual Billing edit set ${label} to $${amount}`;
+        const note = body.note ?? `${body.reason} (${label})`;
         await upsertBillingManualOverride(
           {
             orderId,
@@ -1166,11 +1196,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           orderId,
           decision: manualPrepFeeDecision,
           reviewer: (c.get('email' as never) as string | undefined) ?? null,
-          note:
-            body.note ??
-            (manualPrepFeeDecision === 'waived'
-              ? 'Manual Billing edit set Pick & Pack to $0.00'
-              : 'Manual Billing edit restored prep fee'),
+          note: body.note ?? body.reason,
           originalPrepAmount: Number.isFinite(originalPrepAmount as number)
             ? originalPrepAmount
             : null,
@@ -1245,7 +1271,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
             shipmentId: base.shipmentId,
             packageId: newPackageId,
             overridePrice,
-            note: body.note ?? null,
+            note: body.note ?? body.reason,
             resolvedBy,
           })
           .onConflictDoUpdate({
@@ -1254,7 +1280,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
               shipmentId: base.shipmentId,
               packageId: newPackageId,
               overridePrice,
-              ...(body.note !== undefined ? { note: body.note } : {}),
+              note: body.note ?? body.reason,
               resolvedBy,
               resolvedAt: new Date(),
               updatedAt: new Date(),
@@ -1270,7 +1296,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
                 resolvedBy: existing.resolvedBy ?? null,
               }
             : null,
-          after: { packageId: newPackageId, overridePrice, note: body.note ?? null, resolvedBy },
+          after: { packageId: newPackageId, overridePrice, note: body.note ?? body.reason, resolvedBy },
         };
 
         const [shipmentBoxFacts] = base.shipmentId != null
@@ -1309,7 +1335,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           operator: {
             packageId: newPackageId,
             overridePrice: overridePrice != null ? Number(overridePrice) : null,
-            note: body.note ?? existing?.note ?? null,
+            note: body.note ?? body.reason,
           },
           selectedPid: shipmentBoxFacts?.selectedPid ?? null,
           selectedPackageId: shipmentBoxFacts?.selectedPackageId ?? null,
@@ -1346,6 +1372,41 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           );
       }
     }
+
+    const after = await tx
+      .select({
+        id: billingLineItems.id,
+        lineType: billingLineItems.lineType,
+        qty: billingLineItems.qty,
+        unitCost: billingLineItems.unitCost,
+        totalCost: billingLineItems.totalCost,
+        packageId: billingLineItems.packageId,
+      })
+      .from(billingLineItems)
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId),
+        ),
+      )
+      .orderBy(asc(billingLineItems.id));
+
+    // PS-462: the edit and its append-only audit fact are one transaction. An
+    // audit insert failure rolls back every line/override/resolution mutation.
+    await recordRequiredAuditEventInTransaction(tx, {
+      ...actor,
+      eventType: 'billing',
+      resourceType: 'billing_invoice_line_edit',
+      resourceId: orderId,
+      action: 'invoice_line_edit',
+      details: {
+        clientId: body.clientId,
+        orderId,
+        reason: body.reason,
+        before,
+        after,
+      },
+    });
   });
 
   const manualPrepFeeAudit = manualPrepFeeAuditRef.current;

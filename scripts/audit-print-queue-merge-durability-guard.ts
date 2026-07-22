@@ -107,6 +107,7 @@ check('boot readiness keeps worker-fence objects at the latest migration frontie
     /0074_billing_current_period_adjustments\.sql/,
     'readiness reports the latest additive migration while retaining earlier schema requirements',
   );
+  assert.match(readiness, /0075_inventory_quantity_sot\.sql/);
   assert.match(fenceMigration, /input_payload jsonb/);
   assert.match(fenceMigration, /generation integer/);
   assert.match(fenceMigration, /print_queue_merge_jobs_recovery_idx/);

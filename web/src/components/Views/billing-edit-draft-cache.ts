@@ -6,6 +6,7 @@ export type BillingEditDraft = {
   packageCost: string
   shipping: string
   packageId: string
+  reason: string
 }
 
 export type BillingEditDraftCache = Record<string, BillingEditDraft>
@@ -23,6 +24,7 @@ export function createBillingEditDraft(row: BillingDetailDto): BillingEditDraft 
     packageCost: metrics.packageCost.toFixed(2),
     shipping: metrics.shipping.toFixed(2),
     packageId: rawPackageId != null ? String(rawPackageId) : '',
+    reason: '',
   }
 }
 

@@ -4,7 +4,6 @@ import { db } from '../src/db/client';
 import { orders } from '../src/db/schema/orders';
 import { inventoryLedger } from '../src/db/schema/inventory';
 import { parseShipStationV1Date } from '../src/lib/shipstation/v1-date';
-import { ensureInventoryLedgerSchema } from '../src/services/inventory-ledger-schema';
 
 type Candidate = {
   id: number;
@@ -106,43 +105,20 @@ if (candidateIds.length) {
   }
 }
 
-let updatedOrders = 0;
-let updatedLedgerRows = 0;
-
 if (apply) {
-  await ensureInventoryLedgerSchema();
-  for (const candidate of candidates) {
-    // Per user override unlock shipped data on 2026-05-29: repair only the
-    // timestamp semantics for ShipStation rows that were stored as legacy
-    // naive-PT-stamped-Z. No order status, shipment history, labels, postage,
-    // or marketplace notifications are changed.
-    await db
-      .update(orders)
-      .set({ orderDate: candidate.correctedOrderDate, updatedAt: new Date() })
-      .where(eq(orders.id, candidate.id));
-    updatedOrders += 1;
-
-    const ledger = await db
-      .update(inventoryLedger)
-      .set({ effectiveAt: candidate.correctedOrderDate })
-      .where(and(eq(inventoryLedger.orderId, candidate.id), eq(inventoryLedger.type, 'ship')))
-      .returning({ id: inventoryLedger.id });
-    updatedLedgerRows += ledger.length;
-  }
+  // Per user override unlock shipped data on 2026-07-21: immutable shipped
+  // movement history cannot be timestamp-rewritten by this legacy repair.
+  throw new Error('PS462_INVENTORY_LEDGER_IMMUTABLE: timestamp repair is report-only; use a separately reviewed append-only correction design');
 }
 
 console.log(`ShipStation legacy timestamp repair ${apply ? 'apply' : 'dry-run'}`);
 console.log(`Scanned orders: ${rows.length}`);
 console.log(`Would update orders: ${candidates.length}`);
 console.log(`Would update order-linked ship ledger rows: ${candidates.reduce((sum, row) => sum + row.ledgerRows, 0)}`);
-if (apply) {
-  console.log(`Updated orders: ${updatedOrders}`);
-  console.log(`Updated order-linked ship ledger rows: ${updatedLedgerRows}`);
-}
 for (const candidate of candidates.slice(0, 50)) {
   console.log(
     `- order=${candidate.orderNumber ?? candidate.id} id=${candidate.id} raw=${candidate.rawOrderDate} current=${candidate.orderDate?.toISOString() ?? 'null'} -> corrected=${candidate.correctedOrderDate.toISOString()} ledgerRows=${candidate.ledgerRows}`,
   );
 }
 if (candidates.length > 50) console.log(`... ${candidates.length - 50} more`);
-console.log('Default dry-run is read-only. Apply mode changes only orders.order_date and order-linked ship inventory_ledger.effective_at.');
+console.log('Report-only: immutable inventory movement timestamps are never updated in place.');

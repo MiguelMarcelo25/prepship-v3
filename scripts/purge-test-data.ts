@@ -102,6 +102,18 @@ async function main() {
     process.exit(0);
   }
 
+  // Per user override unlock shipped data on 2026-07-21: fail before a test
+  // purge could cascade through immutable shipped inventory movements.
+  const [orderLedgerCount] = testOrderIds.length
+    ? await db.select({ count: sql<number>`count(*)::int` }).from(inventoryLedger).where(inArray(inventoryLedger.orderId, testOrderIds))
+    : [{ count: 0 }];
+  const [inventoryLedgerCount] = testInventoryIds.length
+    ? await db.select({ count: sql<number>`count(*)::int` }).from(inventoryLedger).where(inArray(inventoryLedger.inventoryId, testInventoryIds))
+    : [{ count: 0 }];
+  if (Number(orderLedgerCount?.count ?? 0) + Number(inventoryLedgerCount?.count ?? 0) > 0) {
+    throw new Error('PS462_INVENTORY_LEDGER_IMMUTABLE: use a fresh isolated test client/database instead of deleting movement history');
+  }
+
   // 4. Cascading delete in FK-safe order, wrapped in a transaction
   const result = await db.transaction(async (tx) => {
     let billing = 0;
@@ -120,12 +132,6 @@ async function main() {
         .where(inArray(billingLineItems.orderId, testOrderIds))
         .returning({ id: billingLineItems.id });
       billing = billingDel.length;
-
-      const ledgerByOrderDel = await tx
-        .delete(inventoryLedger)
-        .where(inArray(inventoryLedger.orderId, testOrderIds))
-        .returning({ id: inventoryLedger.id });
-      ledgerByOrder = ledgerByOrderDel.length;
 
       const overridesDel = await tx
         .delete(orderOverrides)
@@ -155,16 +161,6 @@ async function main() {
       .where(inArray(printQueue.clientId, testClientIds))
       .returning({ id: printQueue.id });
     queueEntries += queueByClientDel.length;
-
-    // Inventory ledger entries that reference test inventory rows
-    // (separate from order-linked ones we deleted above).
-    if (testInventoryIds.length > 0) {
-      const ledgerByInvDel = await tx
-        .delete(inventoryLedger)
-        .where(inArray(inventoryLedger.inventoryId, testInventoryIds))
-        .returning({ id: inventoryLedger.id });
-      ledgerByInventory = ledgerByInvDel.length;
-    }
 
     // Now delete the orders themselves
     if (testOrderIds.length > 0) {

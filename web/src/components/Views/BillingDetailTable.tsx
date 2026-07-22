@@ -249,7 +249,7 @@ export function BillingDetailTable({
   // PS-373 (slice 2): admin drilldown into the frozen storage proof. Optional —
   // when provided, the storage line's cell becomes a button that opens the
   // per-SKU / per-interval evidence. Passed through from BillingView.
-  onOpenStorageProof?: () => void
+  onOpenStorageProof?: (row: BillingDetailDto) => void
 }) {
   if (detailState.error) {
     return (
@@ -419,7 +419,7 @@ export function BillingDetailTable({
                       type="button"
                       className="inventory-inline-button"
                       title="View the storage-fee proof (per-SKU cubic-foot-days)"
-                      onClick={(e) => { e.stopPropagation(); onOpenStorageProof() }}
+                      onClick={(e) => { e.stopPropagation(); onOpenStorageProof(row) }}
                       style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
                     >
                       Storage · proof ▸

@@ -66,7 +66,7 @@ import {
 import {
   compareInventoryRows,
   getInventoryDisplayStatus,
-  getInventoryDisplayStock,
+  getInventoryQuantity,
   getInventoryStockTooltip,
   type InventorySortKey,
   type InventorySortState,
@@ -513,7 +513,7 @@ function writeStoredInventoryColumnWidths(widths: InventoryColumnWidths): void {
 }
 
 // PS-154: inventorySortCollator / inventoryStatusRank / toSortNumber /
-// getInventoryDisplayStock / getInventoryDisplayStatus /
+// getInventoryQuantity / getInventoryDisplayStatus /
 // getInventoryStockTooltip / getInventoryPackageSortLabel /
 // getInventorySortValue / compareInventoryRows moved VERBATIM into
 // ./inventory-stock-helpers (imported above). They are pure read-only
@@ -1027,6 +1027,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const [receiveNote, setReceiveNote] = useState('')
   const [receiveDate, setReceiveDate] = useState(() => californiaDateInputValue())
   const [receiveRows, setReceiveRows] = useState<ReceiveDraftRow[]>([createReceiveDraftRow()])
+  const receiveSubmissionIdentity = useRef<{ fingerprint: string; key: string } | null>(null)
   const [receiveSkuMap, setReceiveSkuMap] = useState<Record<string, ReceiveSkuLookup>>({})
   const [receiveResultMessage, setReceiveResultMessage] = useState('')
   // 2026-05-15: Receive-tab autosuggest options. Derived from
@@ -1131,6 +1132,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const [parentSkuOptions, setParentSkuOptions] = useState<Record<number, ParentSkuDto[]>>({})
   const [parentModal, setParentModal] = useState<CreateParentFormState | null>(null)
   const [adjustModal, setAdjustModal] = useState<AdjustModalState | null>(null)
+  const adjustSubmissionIdentity = useRef<{ fingerprint: string; key: string } | null>(null)
   const [ledgerDeleteModal, setLedgerDeleteModal] = useState<InventoryLedgerEntryDto | null>(null)
   const [ledgerDeleteInFlight, setLedgerDeleteInFlight] = useState(false)
   const [skuDrawer, setSkuDrawer] = useState<InventorySkuOrdersDto | null>(null)
@@ -1430,13 +1432,13 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       width: 75,
       align: 'center',
       sortable: true,
-      sortValue: (row) => getInventoryDisplayStock(row),
+      sortValue: (row) => getInventoryQuantity(row),
       render: (row) => (
         <span
           title={getInventoryStockTooltip(row)}
-          style={{ fontWeight: 700, fontSize: 13, color: getInventoryDisplayStock(row) <= 0 ? 'var(--red)' : 'var(--text)' }}
+          style={{ fontWeight: 700, fontSize: 13, color: getInventoryQuantity(row) <= 0 ? 'var(--red)' : 'var(--text)' }}
         >
-          {getInventoryDisplayStock(row)}
+          {getInventoryQuantity(row)}
         </span>
       ),
     },
@@ -1472,10 +1474,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       width: 95,
       align: 'center',
       sortable: true,
-      sortValue: (row) => (row.units_per_pack > 1 ? getInventoryDisplayStock(row) * row.units_per_pack : 0),
+      sortValue: (row) => (row.units_per_pack > 1 ? getInventoryQuantity(row) * row.units_per_pack : 0),
       render: (row) => (
         row.units_per_pack > 1
-          ? <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--text2)' }}>{getInventoryDisplayStock(row) * row.units_per_pack}</span>
+          ? <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--text2)' }}>{getInventoryQuantity(row) * row.units_per_pack}</span>
           : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
       ),
     },
@@ -1717,7 +1719,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     filteredAlerts,
     alertsSort,
     (alert: any, key) => {
-      const stock = getInventoryDisplayStock(alert as InventoryItemDto)
+      const stock = getInventoryQuantity(alert as InventoryItemDto)
       const minStock = alert?.minStock ?? 0
       const clientName = alert?.clientName
         ?? clients.find((client) => client.clientId === alert?.clientId)?.name
@@ -2013,14 +2015,14 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     try {
       await apiClient.deleteInventoryLedgerEntry(entry.id)
       setLedgerDeleteModal(null)
-      toastContext?.addToast('History row deleted and stock adjusted', 'success')
+      toastContext?.addToast('Immutable reversal appended and stock adjusted', 'success')
       await Promise.all([
         loadHistory(),
         inventoryQuery.refetch(),
         queryClient.invalidateQueries({ queryKey: ['inventory', 'alerts'] }),
       ])
     } catch (error) {
-      toastContext?.addToast(error instanceof Error ? error.message : 'Delete failed', 'error')
+      toastContext?.addToast(error instanceof Error ? error.message : 'Reversal failed', 'error')
     } finally {
       setLedgerDeleteInFlight(false)
     }
@@ -2097,8 +2099,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 void handleDeleteLedgerEntry(entry)
               }}
               disabled={!canDelete}
-              title={canDelete ? 'Delete manual history row' : 'Order-linked ship rows are locked'}
-              aria-label={canDelete ? `Delete history row ${entry.id}` : `History row ${entry.id} is locked`}
+              title={canDelete ? 'Append an immutable reversal' : 'Order-linked ship rows are locked'}
+              aria-label={canDelete ? `Reverse history row ${entry.id}` : `History row ${entry.id} is locked`}
             >
               <Trash2 size={13} />
             </button>
@@ -2573,10 +2575,22 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     const receivedAt = receiveDate
       ? new Date(`${receiveDate}T12:00:00`).toISOString()
       : new Date().toISOString()
+    const fingerprint = JSON.stringify({
+      clientId: receiveClientId,
+      note: receiveNote.trim(),
+      receivedAt,
+      items: itemsToReceive,
+    })
+    let identity = receiveSubmissionIdentity.current
+    if (identity?.fingerprint !== fingerprint) {
+      identity = { fingerprint, key: crypto.randomUUID() }
+      receiveSubmissionIdentity.current = identity
+    }
 
     try {
       const result = await apiClient.submitInventoryReceive({
         clientId: Number.parseInt(receiveClientId, 10),
+        idempotencyKey: identity.key,
         items: itemsToReceive,
         note: receiveNote.trim() || undefined,
         receivedAt,
@@ -2589,7 +2603,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       const dateLabel = formatCaDateLong(receivedAt)
       const failureNote = result.failed ? ` (${result.failed} failed)` : ''
-      setReceiveResultMessage(`✅ Received ${receivedRows.length} SKU(s) on ${dateLabel}${failureNote}: ${receivedRows.map((row: any) => `${row.sku} (${row.qty} units → ${row.newStock} total)`).join(', ')}`)
+      setReceiveResultMessage(`✅ Received ${receivedRows.length} SKU(s) on ${dateLabel}${failureNote}: ${receivedRows.map((row: any) => `${row.sku} (${row.qty} units → ${row.inventoryQuantity} total)`).join(', ')}`)
       setHistoryClientId(receiveClientId)
       setHistoryType('receive')
       setHistoryFrom(receiveDate)
@@ -2597,6 +2611,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       setReceiveRows([createReceiveDraftRow()])
       setReceiveNote('')
       setReceiveDate(californiaDateInputValue())
+      receiveSubmissionIdentity.current = null
       await refreshInventoryView()
       toastContext?.addToast('Inventory received', 'success')
     } catch (error) {
@@ -2810,6 +2825,18 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     const adjustedAt = adjustModal.date
       ? new Date(`${adjustModal.date}T12:00:00`).toISOString()
       : new Date().toISOString()
+    const fingerprint = JSON.stringify({
+      inventoryId: adjustModal.invSkuId,
+      qty: signedQty,
+      note: adjustModal.note.trim() || defaultNote,
+      type: adjustModal.type,
+      adjustedAt,
+    })
+    let identity = adjustSubmissionIdentity.current
+    if (!identity || identity.fingerprint !== fingerprint) {
+      identity = { fingerprint, key: crypto.randomUUID() }
+      adjustSubmissionIdentity.current = identity
+    }
 
     try {
       const result = await apiClient.submitInventoryAdjustment({
@@ -2817,10 +2844,12 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         qty: signedQty,
         note: adjustModal.note.trim() || defaultNote,
         type: adjustModal.type,
+        idempotencyKey: identity.key,
         adjustedAt,
       })
+      adjustSubmissionIdentity.current = null
       setAdjustModal(null)
-      toastContext?.addToast(`✅ ${adjustModal.type.charAt(0).toUpperCase()}${adjustModal.type.slice(1)} recorded on ${formatCaDateLong(adjustedAt)}. New total: ${result.newStock}`, 'success')
+      toastContext?.addToast(`✅ ${adjustModal.type.charAt(0).toUpperCase()}${adjustModal.type.slice(1)} recorded on ${formatCaDateLong(adjustedAt)}. New total: ${result.inventoryQuantity}`, 'success')
       await refreshInventoryView()
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Adjust failed', 'error')
@@ -3585,20 +3614,19 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                                     // 2026-05-13: STOCK now shows the
                                     // operator-correct value computed
                                     // backend-side as `total_received −
-                                    // total_sold_all_time` (effectiveStock),
-                                    // not the cached stockQty / currentStock.
-                                    // currentStock kept available as a
+                                    // the signed inventory-ledger balance.
+                                    // Movement totals remain available as a
                                     // tooltip fallback so power users can
                                     // see the cached number if they ever
                                     // need to diff against the ledger.
-                                    const displayStock = getInventoryDisplayStock(row)
+                                    const inventoryQuantity = getInventoryQuantity(row)
                                     return (
                                       <td
                                         key="stock"
                                         title={getInventoryStockTooltip(row)}
-                                        style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: displayStock <= 0 ? 'var(--red)' : 'var(--text)' }}
+                                        style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: inventoryQuantity <= 0 ? 'var(--red)' : 'var(--text)' }}
                                       >
-                                        {displayStock}
+                                        {inventoryQuantity}
                                       </td>
                                     )
                                   }
@@ -3616,9 +3644,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                                     // Use effective stock here too so the
                                     // totalUnits column (effective ×
                                     // units_per_pack) stays consistent.
-                                    const displayStock = getInventoryDisplayStock(row)
+                                    const inventoryQuantity = getInventoryQuantity(row)
                                     return (
-                                      <td key="totalUnits" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{displayStock * row.units_per_pack}</span> : '—'}</td>
+                                      <td key="totalUnits" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{inventoryQuantity * row.units_per_pack}</span> : '—'}</td>
                                     )
                                   }
                                   case 'min':
@@ -4456,7 +4484,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 </thead>
                 <tbody>
                   {sortedAlerts.map((alert: any) => {
-                    const stock = getInventoryDisplayStock(alert as InventoryItemDto)
+                    const stock = getInventoryQuantity(alert as InventoryItemDto)
                     const minStock = alert?.minStock ?? 0
                     // PS-324: derive the badge from the single status owner
                     // (getInventoryDisplayStatus → classifyStockStatus) instead of a third

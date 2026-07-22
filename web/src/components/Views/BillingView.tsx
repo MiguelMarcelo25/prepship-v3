@@ -369,7 +369,7 @@ export default function BillingView() {
   const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
   // PS-373 (slice 2): storage-fee proof drilldown, opened from the storage line.
-  const [storageProofOpen, setStorageProofOpen] = useState(false)
+  const [storageProofDay, setStorageProofDay] = useState<string | null>(null)
   const [billingEditModal, setBillingEditModal] = useState<BillingEditModalState>(null)
   const billingEditDraftCacheRef = useRef<BillingEditDraftCache>({})
   // PS-275: in-flight flag for the $0-shipping prep-fee review POST. Separate
@@ -1456,6 +1456,7 @@ export default function BillingView() {
         shipping: parseMoneyDraft(billingEditModal.draft.shipping),
         // billing-line-only Box Size override (null = keep shipment box)
         packageId: billingEditModal.draft.packageId ? Number(billingEditModal.draft.packageId) : null,
+        reason: billingEditModal.draft.reason.trim(),
       })
 
       // PS-375: refresh details + summary + margin after the PATCH — the same
@@ -1826,7 +1827,10 @@ export default function BillingView() {
               readOnlyReason={billingPeriodReadOnlyReason}
               onOpenBillingEdit={handleOpenBillingEdit}
               onOpenOrderDetail={setOrderDetailModalId}
-              onOpenStorageProof={() => setStorageProofOpen(true)}
+              onOpenStorageProof={(row) => {
+                const day = String(row.actualActivityDate ?? row.shipDate ?? '').slice(0, 10)
+                if (day) setStorageProofDay(day)
+              }}
             />
           </div>
         ) : null}
@@ -1880,13 +1884,13 @@ export default function BillingView() {
         />
       </div>
 
-      {storageProofOpen && detailState.clientId != null ? (
+      {storageProofDay && detailState.clientId != null ? (
         <BillingStorageProofModal
           clientId={detailState.clientId}
           clientName={detailState.clientName}
-          from={from}
-          to={to}
-          onClose={() => setStorageProofOpen(false)}
+          from={storageProofDay}
+          to={storageProofDay}
+          onClose={() => setStorageProofDay(null)}
         />
       ) : null}
 

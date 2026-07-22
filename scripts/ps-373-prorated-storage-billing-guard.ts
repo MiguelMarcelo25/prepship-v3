@@ -8,9 +8,10 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  calendarStoragePeriodsForRange,
   computeClientStorageBilling,
   computeSkuStorageCuFtDays,
-  dedupeShipMovements,
+  normalizeStorageMovements,
   type StorageLedgerMovement,
 } from '../src/services/billing-storage';
 
@@ -28,6 +29,22 @@ const mv = (type: string, qty: number, day: string, orderId: number | null = nul
 const JAN = { start: '2026-01-01T00:00:00.000Z', end: '2026-02-01T00:00:00.000Z' }; // 31 days
 const FEB = { start: '2026-02-01T00:00:00.000Z', end: '2026-03-01T00:00:00.000Z' }; // 28 days
 const RATE = 0.5; // $/cuft/month
+
+// Any weekly/custom refresh resolves to the same full calendar-month identity.
+{
+  const firstWeek = calendarStoragePeriodsForRange('2026-01-03', '2026-01-10');
+  const lastWeek = calendarStoragePeriodsForRange('2026-01-24', '2026-02-01');
+  check('calendar owner gives every January refresh one January identity',
+    firstWeek.length === 1 && lastWeek.length === 1 &&
+    firstWeek[0]?.monthKey === '2026-01' && lastWeek[0]?.monthKey === '2026-01');
+  check('weekly refresh computes the full exact calendar month',
+    firstWeek[0]?.periodStart.toISOString() === JAN.start &&
+    firstWeek[0]?.periodEnd.toISOString() === JAN.end &&
+    firstWeek[0]?.lineDate.toISOString().startsWith('2026-01-31'));
+  const spanning = calendarStoragePeriodsForRange('2026-01-30', '2026-02-03');
+  check('a cross-month refresh yields one identity per intersected month',
+    spanning.map((period) => period.monthKey).join(',') === '2026-01,2026-02');
+}
 
 function skuBilling(cuFtPerUnit: number, movements: StorageLedgerMovement[], period = JAN, rate = RATE) {
   return computeClientStorageBilling({
@@ -127,17 +144,17 @@ function skuBilling(cuFtPerUnit: number, movements: StorageLedgerMovement[], per
     b.amount === sumOfRows, `line=${b.amount} rows=${sumOfRows}`);
 }
 
-// ── ship de-dupe: an order's ship recorded twice counts ONCE (min qty per order) ──
+// ── persisted movements are consumed exactly as stored; insert-time identity prevents replay ──
 {
-  const deduped = dedupeShipMovements([
+  const normalized = normalizeStorageMovements([
     mv('receive', 100, '2026-01-01'),
     mv('ship', -1, '2026-01-16', 900),
     mv('ship', -1, '2026-01-17', 900), // idempotent double-write of the SAME order
   ]);
-  const shipTotal = deduped.filter((d) => d.qty < 0).reduce((a, d) => a + d.qty, 0);
-  check('ship de-dupe: double-recorded order ship counts once (−1, not −2)', shipTotal === -1);
+  const shipTotal = normalized.filter((d) => d.qty < 0).reduce((a, d) => a + d.qty, 0);
+  check('persisted movement sequence is not silently de-duplicated at read time', shipTotal === -2);
   const b = skuBilling(1, [mv('receive', 100, '2026-01-01'), mv('ship', -1, '2026-01-16', 900), mv('ship', -1, '2026-01-17', 900)]);
-  check('ship de-dupe: balance drops by 1 (not 2) after the deduped ship', b.skuProofs[0]?.segments.at(-1)?.billedQty === 99);
+  check('storage uses both persisted rows; duplicate prevention belongs to ledger insertion', b.skuProofs[0]?.segments.at(-1)?.billedQty === 98);
 }
 
 function round2(n: number): number { return Math.round((n + Number.EPSILON) * 100) / 100; }

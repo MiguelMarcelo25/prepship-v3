@@ -15,6 +15,7 @@ const draft = (packageCost: string): BillingEditDraft => ({
   packageCost,
   shipping: '7.95',
   packageId: '12',
+  reason: 'Operator correction',
 })
 
 const rowA: BillingDetailDto = {
