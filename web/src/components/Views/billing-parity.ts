@@ -249,7 +249,6 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
   // Accept either the v4 camelCase (`billingMode`, `pickPackMaxUnits`) or
   // legacy snake_case (`billing_mode`) shapes on the incoming DTO.
   const c = config as any
-  const isHugrabClient = String(c.clientName ?? '').trim().toUpperCase() === 'HUGRAB'
   return {
     pickPackFee: Number(c.pickPackFee ?? 0).toFixed(2),
     pickPackMaxUnits: String(c.pickPackMaxUnits ?? 1),
@@ -257,10 +256,7 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
     packageCostMarkup: Number(c.packageCostMarkup ?? 0).toFixed(1),
     shippingMarkupPct: Number(c.shippingMarkupPct ?? 0).toFixed(1),
     shippingMarkupFlat: Number(c.shippingMarkupFlat ?? 0).toFixed(2),
-    hugrabShippingRateOverrideEnabled:
-      c.hugrabShippingRateOverrideEnabled == null
-        ? isHugrabClient
-        : c.hugrabShippingRateOverrideEnabled !== false,
+    hugrabShippingRateOverrideEnabled: c.hugrabShippingRateOverrideEnabled === true,
     hugrabShippingRateOverrideThreshold: Number(c.hugrabShippingRateOverrideThreshold ?? 6).toFixed(2),
     hugrabShippingRateOverrideAmount: Number(c.hugrabShippingRateOverrideAmount ?? 7.73).toFixed(2),
     storageFeePerCuFt: Number(c.storageFeePerCuFt ?? 0).toFixed(2),

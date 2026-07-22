@@ -947,10 +947,7 @@ export async function generateLineItems(input: GenerateInput) {
       coalesce(b.storage_fee_per_cu_ft, '0'::numeric)::text as "storageFeePerCuFt",
       coalesce(b.billing_mode, 'per_shipment') as "billingMode",
       coalesce(b.active, true) as active,
-      coalesce(
-        b.hugrab_shipping_rate_override_enabled,
-        upper(c.name) = 'HUGRAB'
-      ) as "hugrabShippingRateOverrideEnabled",
+      coalesce(b.hugrab_shipping_rate_override_enabled, false) as "hugrabShippingRateOverrideEnabled",
       coalesce(
         b.hugrab_shipping_rate_override_threshold,
         ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD}::numeric
@@ -1514,7 +1511,6 @@ export async function generateLineItems(input: GenerateInput) {
         shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
         shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
         shippingMarkupKind: resolvedShippingMarkup?.adjustmentKind ?? 'customer_profit_markup',
-        clientName: cfg.clientName,
         hugrabShippingRateOverride: {
           enabled: cfg.hugrabShippingRateOverrideEnabled,
           threshold: cfg.hugrabShippingRateOverrideThreshold,

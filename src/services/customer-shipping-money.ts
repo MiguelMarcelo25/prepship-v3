@@ -5,7 +5,6 @@ import { roundMoney } from '../lib/money.js';
 import {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
-  HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME,
   type HugrabShippingRateOverrideConfig,
 } from './billing-hugrab-shipping-rate-override.js';
 import {
@@ -45,7 +44,6 @@ export type CustomerShippingMoneyInput = {
   shippingMarkupPct?: number | null;
   shippingMarkupFlat?: number | null;
   shippingMarkupKind?: RateAdjustmentKind | null;
-  clientName?: string | null;
   hugrabShippingRateOverride?: HugrabShippingRateOverrideConfig | null;
 };
 
@@ -53,7 +51,6 @@ type CustomerShippingMoneyRow = {
   shipmentId: number;
   orderId: number | null;
   clientId: number | null;
-  clientName: string | null;
   storeIds: number[] | null;
   isReturn: boolean;
   voided: boolean;
@@ -87,7 +84,6 @@ export class ReturnCustomerShippingPolicyUnavailableError extends Error {
 }
 
 export type ReturnCustomerShippingPolicyFacts = {
-  clientName: string | null;
   hugrabOverrideEnabled: boolean;
   billingMode: string | null;
   carrierCode: string | null;
@@ -116,10 +112,9 @@ function roundPercent(value: number): number {
 export function assertReturnCustomerShippingPolicyConfigured(
   facts: ReturnCustomerShippingPolicyFacts,
 ): void {
-  const normalizedClientName = facts.clientName?.trim().toUpperCase() ?? '';
-  const hasHugrabPolicy =
-    normalizedClientName === HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME &&
-    facts.hugrabOverrideEnabled;
+  // Per user override unlock shipped data on 2026-07-23: PS-437 uses the
+  // persisted client-id billing configuration, never a mutable display name.
+  const hasHugrabPolicy = facts.hugrabOverrideEnabled;
   const billingMode = facts.billingMode ?? 'per_shipment';
   const hasReferenceRatePolicy =
     (billingMode === 'reference_rate' || billingMode === 'ss_ref_rate') &&
@@ -151,7 +146,6 @@ export function resolveCustomerShippingMoney(
     shippingMarkupFlat: finiteNumber(input.shippingMarkupFlat) ?? 0,
     shippingMarkupKind: input.shippingMarkupKind ?? 'customer_profit_markup',
     hugrabShippingRateOverride: {
-      clientName: input.clientName,
       selectedRateCost: selected,
       config: input.hugrabShippingRateOverride,
     },
@@ -182,7 +176,6 @@ async function loadCustomerShippingMoneyRow(shipmentId: number): Promise<Custome
       s.id as "shipmentId",
       s.order_id as "orderId",
       coalesce(s.client_id, o.client_id, store_client.id) as "clientId",
-      c.name as "clientName",
       c.store_ids as "storeIds",
       coalesce(s.is_return, false) as "isReturn",
       coalesce(s.voided, false) as voided,
@@ -196,10 +189,7 @@ async function loadCustomerShippingMoneyRow(shipmentId: number): Promise<Custome
       coalesce(b.shipping_markup_flat, 0::numeric) as "shippingMarkupFlat",
       oo.ref_usps_rate as "refUspsRate",
       oo.ref_ups_rate as "refUpsRate",
-      coalesce(
-        b.hugrab_shipping_rate_override_enabled,
-        upper(c.name) = ${HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME}
-      ) as "hugrabOverrideEnabled",
+      coalesce(b.hugrab_shipping_rate_override_enabled, false) as "hugrabOverrideEnabled",
       coalesce(
         b.hugrab_shipping_rate_override_threshold,
         ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD}::numeric
@@ -254,7 +244,7 @@ async function decideCustomerShippingMoneyForRow(
     }
     throw new Error('Customer shipping policy is inactive');
   }
-  if (row.clientId == null || !row.clientName) throw new Error('Customer shipping policy client is unavailable');
+  if (row.clientId == null) throw new Error('Customer shipping policy client is unavailable');
   // PS-437 fail-closed boundary: new return freezes require the exact provider
   // total persisted in selected_rate_cost. Legacy component fallbacks are audit
   // evidence only and must never become a newly frozen customer-money fact.
@@ -282,7 +272,6 @@ async function decideCustomerShippingMoneyForRow(
     // PS-435: a missing/all-zero billing row is not customer-rate policy.
     // Never let the generic label-cost fallback become a customer return rate.
     assertReturnCustomerShippingPolicyConfigured({
-      clientName: row.clientName,
       hugrabOverrideEnabled: row.hugrabOverrideEnabled,
       billingMode: row.billingMode,
       carrierCode,
@@ -300,7 +289,6 @@ async function decideCustomerShippingMoneyForRow(
     shippingMarkupPct: resolvedMarkup?.pct ?? 0,
     shippingMarkupFlat: resolvedMarkup?.flat ?? 0,
     shippingMarkupKind: resolvedMarkup?.adjustmentKind ?? 'customer_profit_markup',
-    clientName: row.clientName,
     hugrabShippingRateOverride: {
       enabled: row.hugrabOverrideEnabled,
       threshold: row.hugrabOverrideThreshold,

@@ -275,7 +275,6 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     const overrideDecision =
       rawCShippingRateAmount != null
         ? resolveHugrabShippingRateOverride({
-            clientName: facts.clientName,
             customerShippingRate: rawCShippingRateAmount,
             selectedRateCost,
             config: facts.hugrabShippingRateOverrideConfig,

@@ -340,7 +340,7 @@ app.get('/config', async (c) => {
   const data = rows.map((r) => {
     const houseAccountEnabled = houseAccountIds.has(r.clientId);
     const hugrabOverride = hugrabOverrideByClient.get(r.clientId) ?? {
-      enabled: String(r.clientName ?? '').trim().toUpperCase() === 'HUGRAB',
+      enabled: false,
       threshold: DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
       amount: DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
     };

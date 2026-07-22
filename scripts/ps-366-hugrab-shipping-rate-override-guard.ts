@@ -13,19 +13,18 @@ const {
 assert.equal(DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD, 6);
 assert.equal(DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT, 7.73);
 
-const defaulted = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
+const configuredWithDefaults = resolveHugrabShippingRateOverride({
   customerShippingRate: 5.7,
   selectedRateCost: 5.7,
+  config: { enabled: true },
 });
 
-assert.equal(defaulted.customerShippingRate, DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT);
-assert.equal(defaulted.selectedRateCost, 5.7);
-assert.equal(defaulted.overrideApplied, true);
-assert.equal(defaulted.overrideThreshold, DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD);
+assert.equal(configuredWithDefaults.customerShippingRate, DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT);
+assert.equal(configuredWithDefaults.selectedRateCost, 5.7);
+assert.equal(configuredWithDefaults.overrideApplied, true);
+assert.equal(configuredWithDefaults.overrideThreshold, DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD);
 
 const custom = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
   customerShippingRate: 5.49,
   selectedRateCost: 5.49,
   config: {
@@ -42,9 +41,9 @@ assert.equal(custom.overrideThreshold, 6.25);
 assert.equal(custom.overrideAmount, 6.15);
 
 const aboveThreshold = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
   customerShippingRate: 5.88,
   selectedRateCost: 6,
+  config: { enabled: true },
 });
 
 assert.equal(aboveThreshold.customerShippingRate, 5.88);
@@ -52,9 +51,9 @@ assert.equal(aboveThreshold.selectedRateCost, 6);
 assert.equal(aboveThreshold.overrideApplied, false);
 
 const aboveFloor = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
   customerShippingRate: 6.82,
   selectedRateCost: 6.82,
+  config: { enabled: true },
 });
 
 assert.equal(aboveFloor.customerShippingRate, 6.82);
@@ -62,7 +61,6 @@ assert.equal(aboveFloor.selectedRateCost, 6.82);
 assert.equal(aboveFloor.overrideApplied, false);
 
 const selectedRateTrigger = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
   customerShippingRate: 6.5,
   selectedRateCost: 5.88,
   config: {
@@ -86,7 +84,6 @@ const billingDecision = decideShippingLineBilling({
   shippingMarkupPct: 0,
   shippingMarkupFlat: 0,
   hugrabShippingRateOverride: {
-    clientName: 'HUGRAB',
     selectedRateCost: 5.88,
     config: { enabled: true, threshold: 6, amount: 7.73 },
   },
@@ -145,7 +142,6 @@ assert.equal(gridMoneyAtThreshold?.cShippingRateAmount, 6);
 assert.equal(gridMoneyAtThreshold?.markedAmount, 6);
 
 const disabled = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
   customerShippingRate: 5.5,
   selectedRateCost: 5.5,
   config: {
@@ -159,18 +155,16 @@ assert.equal(disabled.customerShippingRate, 5.5);
 assert.equal(disabled.selectedRateCost, 5.5);
 assert.equal(disabled.overrideApplied, false);
 
-const notHugrab = resolveHugrabShippingRateOverride({
-  clientName: 'Walmart - DJC',
+const unconfigured = resolveHugrabShippingRateOverride({
   customerShippingRate: 4.42,
   selectedRateCost: 4.42,
 });
 
-assert.equal(notHugrab.customerShippingRate, 4.42);
-assert.equal(notHugrab.selectedRateCost, 4.42);
-assert.equal(notHugrab.overrideApplied, false);
+assert.equal(unconfigured.customerShippingRate, 4.42);
+assert.equal(unconfigured.selectedRateCost, 4.42);
+assert.equal(unconfigured.overrideApplied, false);
 
 const invalidTargetNeverLowers = resolveHugrabShippingRateOverride({
-  clientName: 'HUGRAB',
   customerShippingRate: 5.75,
   selectedRateCost: 5.75,
   config: {
@@ -194,6 +188,10 @@ assert.match(billingService, /hugrabShippingRateOverride:\s*\{/);
 
 const billingOwner = readFileSync('src/services/billing-shipping-line.ts', 'utf8');
 assert.match(billingOwner, /resolveHugrabShippingRateOverride/);
+
+const overrideOwner = readFileSync('src/services/billing-hugrab-shipping-rate-override.ts', 'utf8');
+assert.doesNotMatch(overrideOwner, /clientName|upper\(c\.name\)|isHugrabClient/);
+assert.match(overrideOwner, /input\.config\?\.enabled === true/);
 
 const rateMoneyOwner = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 assert.match(rateMoneyOwner, /resolveHugrabShippingRateOverride/);

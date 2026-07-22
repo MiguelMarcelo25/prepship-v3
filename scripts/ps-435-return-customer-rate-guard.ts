@@ -15,7 +15,6 @@ const {
 
 assert.throws(
   () => assertReturnCustomerShippingPolicyConfigured({
-    clientName: 'Unconfigured Client',
     hugrabOverrideEnabled: false,
     billingMode: 'per_shipment',
     carrierCode: 'ups',
@@ -28,7 +27,6 @@ assert.throws(
 );
 
 assert.doesNotThrow(() => assertReturnCustomerShippingPolicyConfigured({
-  clientName: 'HUGRAB',
   hugrabOverrideEnabled: true,
   billingMode: 'per_shipment',
   carrierCode: 'stamps_com',
@@ -38,7 +36,6 @@ assert.doesNotThrow(() => assertReturnCustomerShippingPolicyConfigured({
 }));
 
 assert.doesNotThrow(() => assertReturnCustomerShippingPolicyConfigured({
-  clientName: 'Configured Markup Client',
   hugrabOverrideEnabled: false,
   billingMode: 'per_shipment',
   carrierCode: 'ups',
@@ -48,7 +45,6 @@ assert.doesNotThrow(() => assertReturnCustomerShippingPolicyConfigured({
 }));
 
 assert.doesNotThrow(() => assertReturnCustomerShippingPolicyConfigured({
-  clientName: 'Configured Reference Client',
   hugrabOverrideEnabled: false,
   billingMode: 'reference_rate',
   carrierCode: 'ups',
@@ -62,7 +58,6 @@ for (const selectedRateCost of [5.70, 5.58]) {
     selectedRateCost,
     billingMode: 'per_shipment',
     carrierCode: 'stamps_com',
-    clientName: 'HUGRAB',
     hugrabShippingRateOverride: { enabled: true, threshold: 6, amount: 7.73 },
   });
   assert.equal(decision.cShippingRateAmount, 7.73);

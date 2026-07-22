@@ -34,7 +34,6 @@ export type ShippingLineBillingInput = {
   shippingMarkupFlat: number;
   shippingMarkupKind?: RateAdjustmentKind | null | undefined;
   hugrabShippingRateOverride?: {
-    clientName: string | null | undefined;
     selectedRateCost?: number | null | undefined;
     config?: HugrabShippingRateOverrideConfig | null;
   } | null | undefined;
@@ -58,7 +57,6 @@ function withHugrabShippingRateOverride(
   const override = input.hugrabShippingRateOverride;
   if (!override) return { ...result, hugrabOverrideApplied: false };
   const decision = resolveHugrabShippingRateOverride({
-    clientName: override.clientName,
     customerShippingRate: result.billedAmount,
     selectedRateCost: override.selectedRateCost ?? input.labelCost,
     config: override.config,
