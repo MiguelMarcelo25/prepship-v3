@@ -34,6 +34,13 @@ assert(
   'the durable queue must remain the single cross-process carrier snapshot admission owner',
 );
 assert(
+  queue.includes('resolveShipStationConsumerLeaderDatabaseUrl({') &&
+    queue.includes('env.SHIPSTATION_CONSUMER_LEADER_DATABASE_URL') &&
+    queue.includes('isSupabaseTransactionPoolerUrl(selected)') &&
+    queue.includes('shipStationConsumerLeaderSql.reserve()'),
+  'the one allowed session lock must use one reserved direct/session-mode leadership connection',
+);
+assert(
   laneLock.includes('laneLockSql.begin') &&
     laneLock.includes('pg_try_advisory_xact_lock') &&
     !laneLock.includes('pg_advisory_unlock'),
@@ -73,19 +80,53 @@ assert.equal(
   'a different skip reason starts a new streak',
 );
 assert.equal(
-  evaluateWorkerJobSkipHealth({ status: 'skipped', summary: second }).status,
+  evaluateWorkerJobSkipHealth(
+    { status: 'skipped', finishedAt: '2026-07-21T00:01:00.000Z', summary: second },
+    Date.parse('2026-07-21T00:02:00.000Z'),
+  ).status,
   'ok',
   'two transient skips remain healthy',
 );
 assert.equal(
-  evaluateWorkerJobSkipHealth({ status: 'skipped', summary: third }).status,
-  'fail',
-  'three consecutive skips fail deep health',
+  evaluateWorkerJobSkipHealth(
+    { status: 'skipped', finishedAt: '2026-07-21T00:02:00.000Z', summary: third },
+    Date.parse('2026-07-21T00:02:00.000Z'),
+  ).status,
+  'ok',
+  'three fast lane-blocked skips remain healthy until the age budget is exceeded',
 );
 assert.equal(
-  evaluateWorkerJobSkipHealth({ status: 'succeeded', summary: null }).status,
+  evaluateWorkerJobSkipHealth(
+    { status: 'skipped', finishedAt: '2026-07-21T00:04:00.001Z', summary: third },
+    Date.parse('2026-07-21T00:04:00.001Z'),
+  ).status,
+  'fail',
+  'a skip streak fails deep health only after three full outbox cadences',
+);
+assert.equal(
+  evaluateWorkerJobSkipHealth(
+    { status: 'succeeded', finishedAt: '2026-07-21T00:04:00.000Z', summary: null },
+    Date.parse('2026-07-21T00:04:00.001Z'),
+  ).status,
   'ok',
   'a successful run clears the degraded skip state',
+);
+assert.equal(
+  evaluateWorkerJobSkipHealth(
+    { status: 'succeeded', finishedAt: firstAt, summary: null },
+    Date.parse('2026-07-21T00:04:00.001Z'),
+  ).reasonCode,
+  'job_stale',
+  'a stale successful result cannot hide a leader-loss halt',
+);
+assert.equal(
+  evaluateWorkerJobSkipHealth(
+    undefined,
+    Date.parse('2026-07-21T00:04:00.001Z'),
+    firstAt,
+  ).reasonCode,
+  'job_stale',
+  'a never-fetched outbox job fails after the worker startup grace window',
 );
 
 // Pooling boundary proof: a session lock belongs to backend A, so an unlock
@@ -109,6 +150,8 @@ assert(workerStatus.includes('nextWorkerJobSkipSummary(prior, reason, now)'));
 assert(
   healthRoute.includes('evaluateWorkerJobSkipHealth') &&
     healthRoute.includes("name: 'fulfillmentOutbox'") &&
+    healthRoute.includes('worker.status?.startedAt ?? null') &&
+    healthRoute.includes('lastRunAgeSeconds: health.lastRunAgeSeconds') &&
     healthRoute.includes("reasonCode: 'health_probe_failed'"),
   'deep health must fail closed and expose only sanitized fulfillment-outbox skip facts',
 );

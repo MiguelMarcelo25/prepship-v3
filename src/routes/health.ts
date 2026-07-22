@@ -169,6 +169,8 @@ async function checkFulfillmentOutboxWorker(): Promise<ReadinessComponent> {
     const worker = await getPersistedWorkerStatus();
     const health = evaluateWorkerJobSkipHealth(
       worker.status?.jobs['prepship.sync.fulfillment-outbox'],
+      Date.now(),
+      worker.status?.startedAt ?? null,
     );
     return {
       name: 'fulfillmentOutbox',
@@ -179,6 +181,8 @@ async function checkFulfillmentOutboxWorker(): Promise<ReadinessComponent> {
         consecutiveSkips: health.consecutiveSkips,
         firstSkippedAt: health.firstSkippedAt ?? 'none',
         skipAgeSeconds: health.skipAgeSeconds ?? -1,
+        lastRunAt: health.lastRunAt ?? 'none',
+        lastRunAgeSeconds: health.lastRunAgeSeconds ?? -1,
       },
     };
   } catch {

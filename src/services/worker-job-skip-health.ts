@@ -1,7 +1,13 @@
-export const PERSISTENT_WORKER_JOB_SKIP_THRESHOLD = 3;
+import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
+
+export const WORKER_JOB_STALE_CADENCE_MULTIPLIER = 3;
+export const WORKER_JOB_STALE_AFTER_MS =
+  SYNC_CADENCE_MS.fulfillmentOutbox * WORKER_JOB_STALE_CADENCE_MULTIPLIER;
 
 type WorkerJobForSkipHealth = {
   status?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
   summary?: Record<string, unknown> | null;
 };
 
@@ -13,10 +19,12 @@ export type WorkerJobSkipSummary = {
 
 export type WorkerJobSkipHealth = {
   status: 'ok' | 'fail';
-  reasonCode: 'none' | 'skip_below_threshold' | 'persistent_skip';
+  reasonCode: 'none' | 'skip_below_age_threshold' | 'persistent_skip' | 'job_stale';
   consecutiveSkips: number;
   firstSkippedAt: string | null;
   skipAgeSeconds: number | null;
+  lastRunAt: string | null;
+  lastRunAgeSeconds: number | null;
 };
 
 function positiveInteger(value: unknown): number | null {
@@ -49,15 +57,26 @@ export function nextWorkerJobSkipSummary(
 export function evaluateWorkerJobSkipHealth(
   job: WorkerJobForSkipHealth | null | undefined,
   nowMs: number = Date.now(),
-  threshold: number = PERSISTENT_WORKER_JOB_SKIP_THRESHOLD,
+  observationStartedAt: string | null = null,
+  staleAfterMs: number = WORKER_JOB_STALE_AFTER_MS,
 ): WorkerJobSkipHealth {
+  const lastRunAt = job?.finishedAt ?? job?.startedAt ?? observationStartedAt;
+  const lastRunMs = lastRunAt ? Date.parse(lastRunAt) : Number.NaN;
+  const lastRunAgeSeconds = Number.isFinite(lastRunMs)
+    ? Math.max(0, Math.round((nowMs - lastRunMs) / 1_000))
+    : null;
+  const staleAfterSeconds = Math.ceil(staleAfterMs / 1_000);
+
   if (job?.status !== 'skipped') {
+    const stale = lastRunAgeSeconds !== null && lastRunAgeSeconds > staleAfterSeconds;
     return {
-      status: 'ok',
-      reasonCode: 'none',
+      status: stale ? 'fail' : 'ok',
+      reasonCode: stale ? 'job_stale' : 'none',
       consecutiveSkips: 0,
       firstSkippedAt: null,
       skipAgeSeconds: null,
+      lastRunAt,
+      lastRunAgeSeconds,
     };
   }
 
@@ -70,13 +89,15 @@ export function evaluateWorkerJobSkipHealth(
   const skipAgeSeconds = Number.isFinite(firstSkippedMs)
     ? Math.max(0, Math.round((nowMs - firstSkippedMs) / 1_000))
     : null;
-  const persistent = consecutiveSkips >= threshold;
+  const persistent = skipAgeSeconds !== null && skipAgeSeconds > staleAfterSeconds;
 
   return {
     status: persistent ? 'fail' : 'ok',
-    reasonCode: persistent ? 'persistent_skip' : 'skip_below_threshold',
+    reasonCode: persistent ? 'persistent_skip' : 'skip_below_age_threshold',
     consecutiveSkips,
     firstSkippedAt,
     skipAgeSeconds,
+    lastRunAt,
+    lastRunAgeSeconds,
   };
 }

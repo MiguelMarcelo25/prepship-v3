@@ -105,6 +105,10 @@ const schema = z.object({
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.
   RUN_SYNC_SCHEDULER: booleanFlag(true),
+  // PS-463: optional direct/session-mode connection for the long-lived
+  // ShipStation consumer-leader session. Transaction-mode port 6543 is never
+  // accepted; when omitted, the scheduler derives Supabase session port 5432.
+  SHIPSTATION_CONSUMER_LEADER_DATABASE_URL: z.string().url().optional(),
   WORKER_PLACEHOLDER: booleanFlag(false),
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
   // PS-256 (durable worker-status events): when ON, worker heartbeat/job/staleness

@@ -63,6 +63,7 @@ import {
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
 import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-account-snapshot-worker';
+import { isSupabaseTransactionPoolerUrl } from './print-queue-worker-policy';
 import {
   FULFILLMENT_OUTBOX_JOB_NAME,
   rateBackfillOperationalBlocker,
@@ -395,17 +396,31 @@ export class ShipStationConsumerLeadershipController {
   }
 }
 
-function resolveShipStationConsumerLeaderDatabaseUrl(databaseUrl: string): string {
-  // Supabase port 6543 is transaction pooling, where a session advisory lock
-  // can move between server sessions. Port 5432 is the matching session pooler.
-  return databaseUrl.replace(':6543/', ':5432/');
+export function resolveShipStationConsumerLeaderDatabaseUrl(input: {
+  databaseUrl: string;
+  dedicatedDatabaseUrl?: string;
+}): string {
+  const dedicated = input.dedicatedDatabaseUrl?.trim();
+  const fallback = isSupabaseTransactionPoolerUrl(input.databaseUrl)
+    ? input.databaseUrl.replace(':6543/', ':5432/')
+    : input.databaseUrl;
+  const selected = dedicated || fallback;
+  if (isSupabaseTransactionPoolerUrl(selected)) {
+    throw new Error(
+      'ShipStation consumer leadership cannot use the Supabase transaction pooler on port 6543; configure a direct or session-mode port 5432 URL.',
+    );
+  }
+  return selected;
 }
 
 // Per user override unlock shipped data on 2026-07-16: this dedicated session
 // owns only pg-boss consumer leadership. It never reads or mutates orders,
 // shipments, labels, postage, marketplace notifications, or customer data.
 const shipStationConsumerLeaderSql = postgres(
-  resolveShipStationConsumerLeaderDatabaseUrl(env.DATABASE_URL),
+  resolveShipStationConsumerLeaderDatabaseUrl({
+    databaseUrl: env.DATABASE_URL,
+    dedicatedDatabaseUrl: env.SHIPSTATION_CONSUMER_LEADER_DATABASE_URL,
+  }),
   {
     prepare: false,
     max: 1,

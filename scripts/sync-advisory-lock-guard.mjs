@@ -21,6 +21,15 @@ assert(
 );
 
 assert(
+  queue.includes('resolveShipStationConsumerLeaderDatabaseUrl({') &&
+    queue.includes('isSupabaseTransactionPoolerUrl(selected)') &&
+    queue.includes('shipStationConsumerLeaderSql.reserve()') &&
+    queue.includes('select pg_try_advisory_lock') &&
+    queue.includes('select pg_advisory_unlock'),
+  'consumer leadership is the one explicit session lock and must stay on one reserved direct/session-mode connection',
+);
+
+assert(
   !scheduler.includes('pg.reserve()') && !scheduler.includes('pg_try_advisory_lock'),
   'scheduler handlers must not take a second lock through the application pool',
 );

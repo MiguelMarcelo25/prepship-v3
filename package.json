@@ -247,6 +247,7 @@
     "test:ps-438-rate-recalculation-progress": "tsx scripts/ps-438-rate-recalculation-progress-guard.ts",
     "test:ps-438-rate-recalculation-progress:browser": "playwright test web/e2e/orders-ps438-recalculation-progress.spec.js --reporter=line",
     "test:ps-439-session-advisory-locks": "tsx scripts/ps-439-session-advisory-locks-guard.ts",
+    "test:ps-463-leader-skip-health": "tsx scripts/ps-463-leader-skip-health-guard.ts",
     "diagnose:ps-439-advisory-locks": "tsx scripts/ps-439-advisory-lock-audit.ts",
     "test:ps-347-cache-first-recalculate": "tsx scripts/ps-347-cache-first-recalculate-guard.ts",
     "test:ps-354-print-queue-stale-job": "tsx scripts/ps-354-print-queue-stale-job-guard.ts",
