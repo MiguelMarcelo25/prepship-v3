@@ -60,7 +60,7 @@ assert(
 assert(
   scheduler.includes('enqueueMissingShipmentConfirmations') &&
     scheduler.indexOf('enqueueMissingShipmentConfirmations({ limit: 25 })') <
-      scheduler.indexOf('processFulfillmentOutboxOnce({ limit: 25 })'),
+      scheduler.indexOf('processFulfillmentOutboxOnce({'),
   'scheduler must enqueue missing confirmations before processing the fulfillment outbox',
 );
 assert.equal(
