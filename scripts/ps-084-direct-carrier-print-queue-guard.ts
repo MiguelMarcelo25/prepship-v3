@@ -85,8 +85,11 @@ check(
   // ROTTED-PIN repoint (b1ae3352 "Add print queue timing proof"): order.label was
   // hoisted to `const labelInput = order.label` and spread as ...labelInput into
   // createLabelV2 — still the same backend-owned buy of the order's label payload.
+    // PS-452 now materializes the scoped input before choosing fresh purchase
+    // versus durable-receipt resume; only the fresh branch calls createLabelV2.
     /const labelInput = order\.label\b/.test(printQueueSvc) &&
-    /createLabelV2\(\{[\s\S]*?\.\.\.labelInput\b/.test(printQueueSvc) &&
+    /const input = \{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId/.test(printQueueSvc) &&
+    /createLabelV2\(input, labelPurchaseScope\)/.test(printQueueSvc) &&
     /import\s*\{[\s\S]*?\bcreateLabelV2\b[\s\S]*?\}\s*from '\.\/labels';/.test(printQueueSvc) &&
     /if \(directRef\)[\s\S]*?createDirectCarrierLabelForOrder\(\{[\s\S]*?shipTo: carrierShipTo/.test(labelsSvc),
 );

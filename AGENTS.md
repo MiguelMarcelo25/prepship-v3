@@ -123,6 +123,35 @@ Any commit containing such a change must mention:
 
 `Per user override unlock shipped data on 2026-05-23`
 
+### Historical override confirmation for PS-444
+
+The current PS-ticket conversation contains DJ's exact phrase
+`unlock shipped data` before the direct-stable PS-444 push and deployment.
+The reviewed release commits record that implementation authorization on
+2026-07-21; this repository record was added on 2026-07-22 to close the
+independent governance audit. It applies only to the already-reviewed PS-444
+release range `fc6b0138` through `1771781f` and is not permission for new
+locked-surface changes.
+
+The confirmed historical locked-surface scope was:
+
+- `web/src/components/Views/OrdersView.tsx` for backend-owned Print Queue
+  outcomes and resume intent; the `isReadOnly` shipped/cancelled gates were
+  preserved.
+- `src/services/fulfillment-deductions.ts` only for the production-compatible
+  reversal of the unready PS-439 cutover; the `INVENTORY_AUTO_DEDUCT` kill
+  switch remained authoritative.
+- `src/routes/print-queue.ts` and `src/services/print-queue.ts` only for
+  idempotent queue recovery, existing-label handling, and provider-outcome
+  fencing.
+
+This historical confirmation did not authorize SQL UPDATE/DELETE against real
+shipped/cancelled orders or shipments, live requeue, provider lookup, lock
+release, label/postage purchase, printing, marketplace notification, or any
+production application-data repair. Any new PS-444 change to a locked surface
+still requires a fresh exact override, a nearby dated comment, and confirmation
+before push.
+
 ---
 
 ## Other repository conventions (not locked, but expected)

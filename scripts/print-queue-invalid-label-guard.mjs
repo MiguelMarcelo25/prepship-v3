@@ -109,7 +109,7 @@ report.check({
       ? serviceSource.slice(processStart, processEnd)
       : '';
     const existingLookupIndex = processBlock.indexOf('findExistingQueueSendLabel(order)');
-    const createLabelIndex = processBlock.indexOf('createLabelV2({');
+    const createLabelIndex = processBlock.indexOf('createLabelV2(');
     return serviceSource.includes('findExistingQueueSendLabel') &&
       serviceSource.includes('findExistingQueuedLabelForOrder') &&
       serviceSource.includes("eq(printQueue.status, 'queued')") &&

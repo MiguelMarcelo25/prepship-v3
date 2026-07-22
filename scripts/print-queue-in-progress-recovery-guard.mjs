@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 
 const service = readFileSync('src/services/print-queue.ts', 'utf8')
+const preflight = readFileSync('src/services/print-queue/queue-send-preflight.ts', 'utf8')
+const itemState = readFileSync('src/services/print-queue/queue-send-item-state.ts', 'utf8')
 const worker = readFileSync('src/services/print-queue-worker.ts', 'utf8')
 const env = readFileSync('src/lib/env.ts', 'utf8')
 const pkg = readFileSync('package.json', 'utf8')
@@ -28,8 +30,12 @@ const checks = [
   {
     name: 'queue-send fences active label-purchase locks from manual or automatic repurchase',
     pass:
+      /getActiveLabelPurchaseLockOrderIds\(orderIds\)/.test(preflight) &&
+      /queueSendPreflightHasBlockingOperation/.test(preflight) &&
+      /input\.hasHeldProviderOperation[\s\S]*?input\.hasActivePurchaseLock/.test(itemState) &&
+      /const executionPreflight = await preflightQueueSendOrders/.test(service) &&
       /const labelPurchaseInProgress = isLabelPurchaseInProgressError\(err\)/.test(service) &&
-      /const retryEligible = !labelPurchaseInProgress/.test(service) &&
+      /const retryEligible = !localTailFailureState[\s\S]{0,100}?&& !labelPurchaseInProgress/.test(service) &&
       /label_purchase_reconciliation_required/.test(service) &&
       /'provider_pending_recovery'/.test(service),
   },

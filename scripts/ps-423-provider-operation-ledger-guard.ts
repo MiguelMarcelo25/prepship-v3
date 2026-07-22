@@ -48,7 +48,7 @@ assert.match(service, /holdExpiredFulfillmentOperationForReconciliation/);
 assert.match(readiness, /'external_operations'/);
 assert.match(
   readiness,
-  /007[23]_(?:external_operations|print_queue_send_execution_fences)\.sql/,
+  /(?:0072_external_operations|0073_print_queue_send_execution_fences|0074_billing_current_period_adjustments)\.sql/,
   'runtime readiness reports the current additive migration while still requiring external_operations',
 );
 
