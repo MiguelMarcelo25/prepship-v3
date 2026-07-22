@@ -26,7 +26,7 @@ import {
 import {
   assertSsCarrierIdIsNotSynthetic,
   buildSsLabelRequestBody,
-} from '../src/lib/shipstation/labels';
+} from '../src/lib/shipstation/label-request-body';
 import {
   classifyQueueOrderRouteServer,
   planQueueRouteForOrders,
@@ -72,7 +72,7 @@ checkIncludesAll('PS-326 doc names the identity owner map and matrix coverage', 
   'src/connectors/carrier-resolution.ts',
   'src/services/shipping-workflow/rate-fingerprint.ts',
   'src/services/shipping-workflow/rate-quote-snapshot-store.ts',
-  'src/lib/shipstation/labels.ts',
+  'src/lib/shipstation/label-request-body.ts',
   'src/services/labels.ts#createLabelV2',
   'src/services/print-queue/queue-route-orchestrator.ts',
   'quote -> selected -> label -> queue -> shipment -> billing -> display',
@@ -196,7 +196,7 @@ check('rate quote snapshot store enforces account binding on the strict snapshot
   quoteStore.includes('assertRateQuoteSnapshotForLabelPurchase') &&
   quoteStore.includes('purchaseShippingProviderId?: unknown'));
 
-const ssLabels = read('src/lib/shipstation/labels.ts');
+const ssLabels = read('src/lib/shipstation/label-request-body.ts');
 checkPatterns('ShipStation label builder rejects synthetic direct ids at the last mile', ssLabels, [
   /export function assertSsCarrierIdIsNotSynthetic/,
   /assertSsCarrierIdIsNotSynthetic\(input\.carrierId\);/,
@@ -232,7 +232,8 @@ check('ShipStation label builder behavior rejects se-10000025 and accepts real s
 const labelsService = read('src/services/labels.ts');
 checkPatterns('createLabelV2 consumes identity owners before provider purchase', labelsService, [
   /await assertLabelPurchaseRateSelection\(\{/,
-  /purchaseShippingProviderId: body\.shippingProviderId/,
+  /shippingQuoteAuthorizedPurchaseFacts\(purchaseSelection\)/,
+  /shippingProviderId: authorizedPurchaseFacts\.shippingProviderId/,
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/,
   /carrierProvider: 'shipstation'/,
   /carrierAccountId: created\.providerAccountId/,

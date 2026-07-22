@@ -32,7 +32,23 @@ WITH pending AS (
       FROM label_purchase_intents lpi
       WHERE lpi.order_id = p.order_id
         AND lpi.state IN ('provider_pending', 'reconcile_required')
-    ) AS has_unresolved_purchase_intent
+    ) AS has_unresolved_purchase_intent,
+    EXISTS (
+      SELECT 1
+      FROM external_operations operation
+      WHERE operation.subject_type = 'order'
+        AND operation.subject_id = p.order_id::text
+        AND operation.kind IN ('forward_label', 'shopify_label')
+        AND operation.state IN ('in_flight', 'reconcile_required', 'receipt_recorded')
+    ) AS has_unresolved_external_operation,
+    EXISTS (
+      SELECT 1
+      FROM external_operations operation
+      WHERE operation.subject_type = 'order'
+        AND operation.subject_id = p.order_id::text
+        AND operation.kind IN ('forward_label', 'shopify_label')
+        AND operation.state = 'receipt_recorded'
+    ) AS has_unconsumed_provider_receipt
   FROM pending p
 )
 SELECT
@@ -45,5 +61,9 @@ SELECT
   count(*) FILTER (WHERE has_durable_provider_receipt)::int AS durable_provider_receipt_count,
   count(*) FILTER (WHERE has_queue_entry)::int AS queue_entry_count,
   count(*) FILTER (WHERE has_unresolved_purchase_intent)::int
-    AS unresolved_purchase_intent_count
+    AS unresolved_purchase_intent_count,
+  count(*) FILTER (WHERE has_unresolved_external_operation)::int
+    AS unresolved_external_operation_count,
+  count(*) FILTER (WHERE has_unconsumed_provider_receipt)::int
+    AS unconsumed_provider_receipt_count
 FROM evidence;

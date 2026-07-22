@@ -27,6 +27,12 @@ const shipStation = read('src/connectors/store/shipstation.ts');
 const inventoryDeductions = read('src/services/fulfillment-deductions.ts');
 const inventorySchema = read('src/db/schema/inventory.ts');
 const lifecycleCommand = read('src/services/order-lifecycle-command.ts');
+const verifiedForwardRecovery = read('src/services/verified-forward-label-recovery.ts');
+const shipStationForwardOperation = read('src/services/shipstation-forward-label-operation.ts');
+const shipStationForwardReconciliation = read('src/services/shipstation-forward-label-reconciliation.ts');
+const shipStationReconciler = read('src/services/print-queue/shipstation-operation-reconciler.ts');
+const shipStationRequestBody = read('src/lib/shipstation/label-request-body.ts');
+const shippingClientIdentity = read('src/services/shipping-client-identity.ts');
 const billingGuard = read('scripts/audit-billing-cross-period-reconciliation-guard.ts');
 const backfill = read('scripts/backfill-inventory-ledger.ts');
 const integration = read('scripts/ps-432-sync-fulfillment-resilience-integration.ts');
@@ -83,6 +89,39 @@ assert.match(shopify, /externalOperationId: shopifyExternalOperationId/);
 assert.match(labels, /pending\.labelPurchaseIntentId[\s\S]*state: 'completed'/);
 assert.match(operationLedger, /state: 'reconcile_required'/);
 assert.match(operationLedger, /eq\(externalOperations\.generation, lease\.generation\)/);
+assert.match(operationLedger, /Reserved system receipt provenance cannot be supplied by an operator/);
+assert.match(operationLedger, /recordExactShipStationReconciliationReceipt/);
+assert.match(labels, /buildShipStationForwardLabelReceipt\(label,[\s\S]*?selectedPackageId: resolvedPackageId/,
+  'initial ShipStation ACK seals canonical persistence facts');
+assert.match(labels, /action\.kind === 'resume_receipt'[\s\S]*?canAutomaticallyConsumeShipStationForwardLabelReceipt\(action\.operation\)[\s\S]*?readShipStationForwardLabelPersistenceFacts/,
+  'ordinary ShipStation label retry enforces the same trusted sealed-receipt boundary');
+assert.match(labels, /action\.operation\.resolvedBy != null[\s\S]*?FulfillmentOperationHeldError/,
+  'generic operator receipts cannot auto-persist through other label consumers');
+assert.match(verifiedForwardRecovery, /readShipStationForwardLabelPersistenceFacts/);
+assert.match(verifiedForwardRecovery, /\['receipt_recorded', 'consumed'\]\.includes/);
+assert.match(verifiedForwardRecovery, /requireAwaitingOrderStatus: true/);
+assert.match(verifiedForwardRecovery, /requireNoActiveOutboundShipment: true/);
+assert.doesNotMatch(verifiedForwardRecovery, /input\.(?:weightOz|length|width|height|customPackageId|insuranceProvider|insuredValue)/,
+  'verified recovery never consumes mutable queue persistence facts');
+assert.match(shipStationForwardOperation, /canonical_shipping_quote/);
+assert.match(shipStationForwardOperation, /requestVersion: 2/);
+assert.match(shipStationForwardOperation, /providerRequest/);
+assert.match(shipStationForwardOperation, /Operator-supplied|resolvedBy/);
+assert.match(shipStationForwardReconciliation, /recordExactShipStationReconciliationReceipt/);
+assert.match(shipStationRequestBody, /address_residential_indicator/);
+assert.match(shippingClientIdentity, /clients\.storeIds/);
+assert.match(verifiedForwardRecovery, /enqueueConfirmation\([\s\S]*?clientId,/,
+  'legacy recovery confirmation uses resolved client identity');
+assert.match(shipStationReconciler, /hashFulfillmentOperationRequest\(canonicalRequest\) !== operation\.requestHash/);
+assert.match(shipStationReconciler, /assertShippingQuoteIntentMatches/);
+assert.doesNotMatch(
+  shipStationReconciler.slice(
+    shipStationReconciler.indexOf("operation.state === 'receipt_recorded'"),
+    shipStationReconciler.indexOf("operation.provider !== 'shipstation'", shipStationReconciler.indexOf("operation.state === 'receipt_recorded'") + 1),
+  ),
+  /label\.(?:weightOz|length|width|height|customPackageId|insuranceProvider|insuredValue)/,
+  'receipt replay never reintroduces mutable queue facts',
+);
 assert.match(labelIntent, /export async function resolveLabelPurchaseIntentByOperator/);
 assert.match(labelIntent, /outcome: 'provider_verified_no_label'/);
 assert.match(labelIntent, /AND order_id = \$\{intent\.order_id\}[\s\S]*AND voided = false/);

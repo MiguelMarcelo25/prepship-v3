@@ -1,24 +1,26 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { externalOperations } from '../db/schema/external-operations';
 import { orders } from '../db/schema/orders';
-import { shipments } from '../db/schema/shipments';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import type { ClientStoreScope } from '../lib/client-store-scope';
 import { assertResourceInScope } from '../lib/scope-predicates';
-import { normalizeShippingOptions } from '../lib/shipping-options';
 import { consumeFulfillmentOperation } from './fulfillment-operation-ledger';
 import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 import { applyOrderLifecycleCommandInTransaction } from './order-lifecycle-command';
+import { resolveShippingClientId } from './shipping-client-identity';
 import {
   baseConfirmationPayload,
   confirmationProviderForOrder,
   createdLabelFromOperationReceipt,
   marketplaceConfirmationPayload,
   persistCreatedLabel,
-  resolveLabelPackageId,
   type CreateLabelResponseDto,
 } from './labels';
+import {
+  readShipStationForwardLabelPersistenceFacts,
+  SHIPSTATION_FORWARD_LABEL_RECEIPT_SYSTEM_ACTOR,
+} from './shipstation-forward-label-operation';
 import {
   enqueueShipmentConfirmation,
   ensureFulfillmentSchema,
@@ -27,18 +29,34 @@ import {
 export type ResumeVerifiedShipStationForwardLabelInput = {
   operationId: number;
   orderId: number;
-  weightOz: number;
-  length?: number | null;
-  width?: number | null;
-  height?: number | null;
-  customPackageId?: number | string | null;
-  insuranceProvider?: string | null;
-  insuredValue?: number | null;
+};
+
+type RecoveryOrder = typeof orders.$inferSelect;
+type RecoveryTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type RecoveryConsumeResult = {
+  kind: 'consumed' | 'already_consumed';
+  localResult: Record<string, unknown> | null;
+};
+
+export type VerifiedForwardLabelRecoveryDependencies = {
+  database?: typeof db;
+  ensureFulfillment?: () => Promise<void>;
+  ensurePackageConsumption?: () => Promise<void>;
+  ensureShipmentRateCost?: () => Promise<void>;
+  loadOrder?: (orderId: number) => Promise<RecoveryOrder | null>;
+  resolveClientId?: typeof resolveShippingClientId;
+  consumeOperation?: (
+    operationId: number,
+    apply: (tx: RecoveryTransaction, receipt: Record<string, unknown>) => Promise<Record<string, unknown>>,
+  ) => Promise<RecoveryConsumeResult>;
+  persistLabel?: typeof persistCreatedLabel;
+  applyLifecycle?: typeof applyOrderLifecycleCommandInTransaction;
+  enqueueConfirmation?: typeof enqueueShipmentConfirmation;
 };
 
 /**
- * Consume a ShipStation forward-label receipt that an operator already verified
- * and recorded in external_operations.
+ * Consume a ShipStation forward-label receipt recorded by the purchase boundary
+ * or the dedicated exact-ID reconciler in external_operations.
  *
  * This is a post-purchase recovery boundary, not a purchase path: it never
  * resolves a rate, authorizes an account, or invokes a carrier connector. The
@@ -48,12 +66,32 @@ export type ResumeVerifiedShipStationForwardLabelInput = {
 export async function resumeVerifiedShipStationForwardLabel(
   input: ResumeVerifiedShipStationForwardLabelInput,
   scope: ClientStoreScope,
+  injected: VerifiedForwardLabelRecoveryDependencies = {},
 ): Promise<CreateLabelResponseDto> {
-  await ensureFulfillmentSchema();
-  await ensurePackageConsumptionSchema();
-  await ensureShipmentsSelectedRateCostColumn();
+  if (Object.keys(injected).length > 0 && process.env.NODE_ENV !== 'test') {
+    throw new Error('Verified forward-label recovery dependencies may only be injected in tests');
+  }
+  const database = injected.database ?? db;
+  const ensureFulfillment = injected.ensureFulfillment ?? ensureFulfillmentSchema;
+  const ensurePackageConsumption = injected.ensurePackageConsumption ?? ensurePackageConsumptionSchema;
+  const ensureShipmentRateCost = injected.ensureShipmentRateCost ?? ensureShipmentsSelectedRateCostColumn;
+  const loadOrder = injected.loadOrder ?? (async (orderId: number) => {
+    const [order] = await database.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    return order ?? null;
+  });
+  const resolveClientId = injected.resolveClientId ?? resolveShippingClientId;
+  const consumeOperation = injected.consumeOperation ?? (
+    (operationId, apply) => consumeFulfillmentOperation(operationId, apply)
+  );
+  const persistLabel = injected.persistLabel ?? persistCreatedLabel;
+  const applyLifecycle = injected.applyLifecycle ?? applyOrderLifecycleCommandInTransaction;
+  const enqueueConfirmation = injected.enqueueConfirmation ?? enqueueShipmentConfirmation;
 
-  const [operation] = await db
+  await ensureFulfillment();
+  await ensurePackageConsumption();
+  await ensureShipmentRateCost();
+
+  const [operation] = await database
     .select({
       kind: externalOperations.kind,
       provider: externalOperations.provider,
@@ -61,6 +99,7 @@ export async function resumeVerifiedShipStationForwardLabel(
       subjectId: externalOperations.subjectId,
       state: externalOperations.state,
       providerReceipt: externalOperations.providerReceipt,
+      resolvedBy: externalOperations.resolvedBy,
     })
     .from(externalOperations)
     .where(eq(externalOperations.id, input.operationId))
@@ -71,72 +110,65 @@ export async function resumeVerifiedShipStationForwardLabel(
     || operation.provider !== 'shipstation'
     || operation.subjectType !== 'order'
     || operation.subjectId !== String(input.orderId)
-    || operation.state !== 'receipt_recorded'
+    || !['receipt_recorded', 'consumed'].includes(operation.state)
     || !operation.providerReceipt
   ) throw new Error('Verified ShipStation forward-label receipt is not recoverable');
 
-  const [order] = await db.select().from(orders).where(eq(orders.id, input.orderId)).limit(1);
+  const order = await loadOrder(input.orderId);
   if (!order) throw new Error('Order not found');
-  assertResourceInScope(scope, { clientId: order.clientId, storeId: order.storeId }, 'Order not found');
-  if (order.orderStatus !== 'awaiting_shipment') {
-    throw new Error(`Cannot recover a verified label onto ${order.orderStatus} order`);
-  }
-  const [activeLabel] = await db
-    .select({ id: shipments.id })
-    .from(shipments)
-    .where(and(eq(shipments.orderId, order.id), eq(shipments.voided, false), eq(shipments.isReturn, false)))
-    .limit(1);
-  if (activeLabel) throw new Error('An active local label already exists for this order');
+  const clientId = await resolveClientId(order);
+  assertResourceInScope(scope, { clientId, storeId: order.storeId }, 'Order not found');
 
   const created = createdLabelFromOperationReceipt(operation.providerReceipt);
   if (created.voided || !created.labelUrl || !created.trackingNumber || created.shipmentId <= 0) {
     throw new Error('Verified ShipStation forward-label receipt is incomplete or voided');
   }
-  const effectiveWeightOz = Number(input.weightOz ?? 0);
-  if (!Number.isFinite(effectiveWeightOz) || effectiveWeightOz <= 0) {
-    throw new Error('Verified label recovery requires the purchased shipment weight');
+  if (
+    operation.resolvedBy != null
+    && operation.resolvedBy !== SHIPSTATION_FORWARD_LABEL_RECEIPT_SYSTEM_ACTOR
+  ) {
+    throw new Error('Operator-supplied ShipStation receipt requires manual local recovery');
   }
-  const length = Number(input.length ?? 0) || null;
-  const width = Number(input.width ?? 0) || null;
-  const height = Number(input.height ?? 0) || null;
-  const selectedPackageId = await resolveLabelPackageId({
-    orderId: order.id,
-    customPackageId: input.customPackageId,
-    length,
-    width,
-    height,
-  });
-  const shippingOptions = normalizeShippingOptions({
-    insuranceProvider: input.insuranceProvider,
-    insuredValue: input.insuredValue,
-  });
+  readShipStationForwardLabelPersistenceFacts(
+    operation.providerReceipt,
+    { orderId: order.id, clientId },
+  );
 
-  // Per user override unlock shipped data on 2026-07-21: consume only an
-  // operator-recorded receipt. No ShipStation POST/PUT or new postage path is
-  // reachable here; shipment + lifecycle persistence stays one transaction.
-  const consumed = await consumeFulfillmentOperation(input.operationId, async (tx, receipt) => {
+  // Per user override unlock shipped data on 2026-07-22: recovery consumes only
+  // immutable, backend-authorized receipt facts. Queue payloads and generic
+  // operator JSON cannot choose shipment/package/insurance truth; no provider
+  // mutation is reachable and every local write remains in this transaction.
+  const consumed = await consumeOperation(input.operationId, async (tx, receipt) => {
     const durableCreated = createdLabelFromOperationReceipt(receipt);
-    const shipmentId = await persistCreatedLabel({
+    const durableFacts = readShipStationForwardLabelPersistenceFacts(receipt, {
+      orderId: order.id,
+      clientId,
+    });
+    const shipmentId = await persistLabel({
       created: durableCreated,
       orderId: order.id,
       orderNumber: order.orderNumber ?? null,
-      clientId: order.clientId ?? null,
-      effectiveWeightOz,
-      length,
-      width,
-      height,
-      selectedPackageId: selectedPackageId != null ? String(selectedPackageId) : null,
+      clientId,
+      effectiveWeightOz: durableFacts.effectiveWeightOz,
+      length: durableFacts.dimensions.length,
+      width: durableFacts.dimensions.width,
+      height: durableFacts.dimensions.height,
+      selectedPackageId: durableFacts.selectedPackageId != null
+        ? String(durableFacts.selectedPackageId)
+        : null,
       source: 'prepship_v2',
-      insuranceProvider: shippingOptions.insuranceProvider,
-      insuredValue: shippingOptions.insuredValue,
+      insuranceProvider: durableFacts.insuranceProvider,
+      insuredValue: durableFacts.insuredValue,
       tx,
     });
-    await applyOrderLifecycleCommandInTransaction(tx, {
+    await applyLifecycle(tx, {
       orderId: order.id,
       shipmentId,
       commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
       transition: 'shipped',
       source: 'prepship_v2',
+      requireAwaitingOrderStatus: true,
+      requireNoActiveOutboundShipment: true,
       effectiveAt: new Date(durableCreated.shipDate),
       fulfillmentFacts: {
         kind: 'unavailable',
@@ -151,8 +183,8 @@ export async function resumeVerifiedShipStationForwardLabel(
         sourceAccountId: durableCreated.providerAccountId ?? null,
         providerShipmentId: durableCreated.shipmentId || null,
         effectiveAt: durableCreated.shipDate,
-        selectedPackageId: selectedPackageId ?? input.customPackageId,
-        dimensions: { length, width, height },
+        selectedPackageId: durableFacts.selectedPackageId,
+        dimensions: durableFacts.dimensions,
       },
     });
     return { shipmentId };
@@ -165,12 +197,12 @@ export async function resumeVerifiedShipStationForwardLabel(
     ? marketplaceConfirmationPayload(order, created, confirmationProvider)
     : baseConfirmationPayload(created);
   try {
-    await enqueueShipmentConfirmation({
+    await enqueueConfirmation({
       order: {
         id: order.id,
         externalOrderId: order.externalOrderId,
         sourceProvider: order.sourceProvider,
-        clientId: order.clientId,
+        clientId,
         orderNumber: order.orderNumber ?? null,
       },
       shipmentId,

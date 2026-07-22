@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
 import { fulfillmentLineClaims, orderLifecycleEvents } from '../src/db/schema/order-lifecycle.js';
 import { fulfillmentOutbox } from '../src/db/schema/fulfillment-outbox.js';
@@ -143,11 +143,16 @@ async function main(): Promise<void> {
       (12, 'PS-424-WEBHOOK-REVIEW', '[{"sku":"WEBHOOK-GUESS","quantity":5}]'::jsonb),
       (13, 'PS-424-MANUAL-REVIEW', '[{"sku":"MANUAL-GUESS","quantity":4}]'::jsonb),
       (14, 'PS-424-VOID-BEFORE-DEDUCT', '[]'::jsonb),
-      (15, 'PS-424-MARKETPLACE-REVIEW', '[{"sku":"MARKETPLACE-GUESS","quantity":3}]'::jsonb)
+      (15, 'PS-424-MARKETPLACE-REVIEW', '[{"sku":"MARKETPLACE-GUESS","quantity":3}]'::jsonb),
+      (16, 'PS-432-RECOVERY-CURRENT-SHIPMENT', '[]'::jsonb),
+      (17, 'PS-432-RECOVERY-COMPETING-SHIPMENT', '[]'::jsonb),
+      (18, 'PS-432-RECOVERY-STALE-STATUS', '[]'::jsonb)
   `);
   await client.exec(`
     INSERT INTO shipments (id, order_id) VALUES
-      (101, 1), (102, 1), (105, 5), (106, 7), (107, 8), (108, 14), (109, 9), (201, 2)
+      (101, 1), (102, 1), (105, 5), (106, 7), (107, 8), (108, 14), (109, 9), (201, 2),
+      (160, 16), (171, 17);
+    UPDATE orders SET order_status = 'shipped' WHERE id = 18
   `);
 
   const ship = (args: {
@@ -205,6 +210,81 @@ async function main(): Promise<void> {
     ship({ shipmentId: 101, commandKey: 'fixture:wrong-shipment-owner', quantity: 1, orderId: 2 }),
     /does not belong to order 2/,
     'new lifecycle commands verify shipment ownership under lock',
+  );
+
+  // Per user override unlock shipped data on 2026-07-22: these fixtures insert
+  // only in PGlite and prove the shipped recovery transaction either commits
+  // one authorized outcome or rolls back its new shipment completely.
+  const recoveredCurrentShipment = await pg.transaction((tx) =>
+    applyOrderLifecycleCommandInTransaction(tx as never, {
+      orderId: 16,
+      shipmentId: 160,
+      commandKey: 'fixture:ps432:recovery:160',
+      transition: 'shipped',
+      source: 'prepship_v2',
+      requireAwaitingOrderStatus: true,
+      requireNoActiveOutboundShipment: true,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Verified provider receipt did not identify shipped line quantities',
+      },
+    }));
+  assert.equal(recoveredCurrentShipment.statusChanged, true,
+    'verified recovery excludes its own just-inserted shipment from the competing-label check');
+  const recoveryOutboxRows = await pg.select().from(fulfillmentOutbox)
+    .where(eq(fulfillmentOutbox.orderId, 16));
+  assert.equal(recoveryOutboxRows.length, 0,
+    'review-only recovery facts deliberately enqueue no inventory movement');
+
+  await assert.rejects(
+    pg.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO shipments (id, order_id) VALUES (170, 17)`);
+      return applyOrderLifecycleCommandInTransaction(tx as never, {
+        orderId: 17,
+        shipmentId: 170,
+        commandKey: 'fixture:ps432:recovery:170',
+        transition: 'shipped',
+        source: 'prepship_v2',
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
+        fulfillmentFacts: {
+          kind: 'unavailable',
+          description: 'Competing shipment fixture',
+        },
+      });
+    }),
+    /has an active outbound shipment/,
+    'a competing active shipment rejects recovery inside the lifecycle transaction',
+  );
+  assert.equal(
+    (await pg.select({ id: shipments.id }).from(shipments).where(eq(shipments.id, 170))).length,
+    0,
+    'the rejected recovery rolls back its just-inserted shipment',
+  );
+  await assert.rejects(
+    pg.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO shipments (id, order_id) VALUES (180, 18)`);
+      return applyOrderLifecycleCommandInTransaction(tx as never, {
+        orderId: 18,
+        shipmentId: 180,
+        commandKey: 'fixture:ps432:recovery:180',
+        transition: 'shipped',
+        source: 'prepship_v2',
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
+        fulfillmentFacts: {
+          kind: 'unavailable',
+          description: 'Stale outer read fixture',
+        },
+      });
+    }),
+    /no longer awaiting shipment/,
+    'a terminal status that changed after the outer read is revalidated under the order lock',
+  );
+  assert.equal(
+    (await pg.select({ id: shipments.id }).from(shipments).where(eq(shipments.id, 180))).length,
+    0,
+    'the stale-status rejection also rolls back its just-inserted shipment',
   );
 
   const concurrentShip = () => pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {

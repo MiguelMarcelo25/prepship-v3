@@ -116,7 +116,7 @@ assert.match(ratePolicy, /selectionRef/);
 assert.match(worker, /reconcileQueueShipStationOperation/);
 assert.match(reconciler, /ssGetLabelByExternalShipmentId/);
 assert.match(reconciler, /resumeVerifiedShipStationForwardLabel/);
-assert.match(reconciler, /system:print-queue-reconciler/);
+assert.match(reconciler, /recordExactShipStationForwardLabelReceipt/);
 assert.match(shipStationLabels, /\/v2\/labels\/external_shipment_id\//);
 assert.match(ratesBackfill, /authorization:\s*quoteAuthorization/);
 

@@ -317,7 +317,11 @@ assert.match(
   'Print Queue preflight must resolve the same authorization and enforce order/tenant identity',
 );
 assert.match(printQueue, /const labelPurchaseScope = queueWorkerClientStoreScope\(scope\)/);
-assert.match(printQueue, /createLabelV2\(\{[\s\S]*?\}, labelPurchaseScope\)/);
+assert.match(
+  printQueue,
+  /const input = \{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?\};[\s\S]*?resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/,
+  'Print Queue fresh purchase and receipt recovery must share the scoped authorized input',
+);
 assert.doesNotMatch(printQueue, /GLOBAL_SCOPE/);
 assert.match(ordersView, /buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/);
 assert.doesNotMatch(

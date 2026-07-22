@@ -6,7 +6,7 @@
  * durable inventory intent are committed together. Callers only normalize
  * provider facts and delegate here; no shipped/cancelled protection is removed.
  */
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   fulfillmentLineClaims,
@@ -200,10 +200,16 @@ export async function applyOrderLifecycleCommandInTransaction(
   const fulfilledLines = normalizeFulfillmentFacts(input.fulfillmentFacts, input.transition);
 
   if (input.requireNoActiveOutboundShipment) {
+    // Per user override unlock shipped data on 2026-07-22: label persistence
+    // checks for a competing active shipment while excluding the shipment that
+    // the same transaction just inserted; a conflict throws and rolls it back.
     const [activeShipment] = await tx
       .select({ id: shipments.id })
       .from(shipments)
-      .where(activeOutboundShipmentPredicate({ orderId: input.orderId }))
+      .where(and(
+        activeOutboundShipmentPredicate({ orderId: input.orderId }),
+        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId),
+      ))
       .limit(1);
     if (activeShipment) {
       throw new Error(`Order ${input.orderId} has an active outbound shipment`);

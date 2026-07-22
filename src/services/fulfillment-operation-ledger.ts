@@ -7,6 +7,7 @@ import {
 } from '../db/schema/external-operations.js';
 import { runDurableWorkerAttempt } from './durable-worker-attempt.js';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
+import { EXACT_SHIPSTATION_RECONCILER_ACTOR } from './fulfillment-operation-provenance.js';
 
 export type FulfillmentOperationKind =
   | 'forward_label'
@@ -754,7 +755,7 @@ export async function resolveFulfillmentOperationNoEffect(
   return updated;
 }
 
-export async function recordFulfillmentOperationReceiptByOperator(
+async function recordResolvedFulfillmentOperationReceipt(
   operationId: number,
   input: {
     actor: string;
@@ -764,6 +765,7 @@ export async function recordFulfillmentOperationReceiptByOperator(
     providerResultId?: string | number | null;
   },
   injected: FulfillmentOperationDependencies = {},
+  exactShipStationReconciliation = false,
 ): Promise<ExternalOperation> {
   const dependencies = dependenciesFor(injected);
   await dependencies.ensureSchema();
@@ -787,8 +789,56 @@ export async function recordFulfillmentOperationReceiptByOperator(
       resolvedAt: now,
       updatedAt: now,
     })
-    .where(and(eq(externalOperations.id, operationId), eq(externalOperations.state, 'reconcile_required')))
+    .where(and(
+      eq(externalOperations.id, operationId),
+      eq(externalOperations.state, 'reconcile_required'),
+      exactShipStationReconciliation ? eq(externalOperations.kind, 'forward_label') : undefined,
+      exactShipStationReconciliation ? eq(externalOperations.provider, 'shipstation') : undefined,
+    ))
     .returning();
   if (!updated) throw new Error('Only a reconcile_required operation can receive an operator receipt');
   return updated;
+}
+
+export async function recordFulfillmentOperationReceiptByOperator(
+  operationId: number,
+  input: {
+    actor: string;
+    note: string;
+    receipt: Record<string, unknown>;
+    providerOperationId?: string | number | null;
+    providerResultId?: string | number | null;
+  },
+  injected: FulfillmentOperationDependencies = {},
+): Promise<ExternalOperation> {
+  if (String(input.actor).trim() === EXACT_SHIPSTATION_RECONCILER_ACTOR) {
+    throw new Error('Reserved system receipt provenance cannot be supplied by an operator');
+  }
+  return recordResolvedFulfillmentOperationReceipt(operationId, input, injected);
+}
+
+/**
+ * Dedicated ledger transition for the exact ShipStation GET reconciler. Unlike
+ * the operator endpoint it supplies its provenance internally and only admits
+ * a held ShipStation forward-label operation.
+ */
+export async function recordExactShipStationReconciliationReceipt(
+  operationId: number,
+  input: {
+    note: string;
+    receipt: Record<string, unknown>;
+    providerOperationId?: string | number | null;
+    providerResultId?: string | number | null;
+  },
+  injected: FulfillmentOperationDependencies = {},
+): Promise<ExternalOperation> {
+  // Per user override unlock shipped data on 2026-07-22: generic operator JSON
+  // cannot mint this provenance; only the exact-ID reconciler uses this narrow
+  // ShipStation-forward-label state transition.
+  return recordResolvedFulfillmentOperationReceipt(
+    operationId,
+    { ...input, actor: EXACT_SHIPSTATION_RECONCILER_ACTOR },
+    injected,
+    true,
+  );
 }

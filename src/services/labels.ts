@@ -4,7 +4,6 @@ import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { orders, orderOverrides } from '../db/schema/orders';
-import { clients } from '../db/schema/clients';
 // PS-233 (Per user override unlock shipped data on 2026-06-13): caller-scope
 // enforcement on label/shipment operations. The label services are the attack
 // surface (routes pass them only an id/body); they now require the caller's scope.
@@ -26,6 +25,12 @@ import {
   FulfillmentOperationHeldError,
   refreshFulfillmentOperationReceipt,
 } from './fulfillment-operation-ledger';
+import {
+  buildShipStationForwardLabelOperationRequest,
+  buildShipStationForwardLabelReceipt,
+  canAutomaticallyConsumeShipStationForwardLabelReceipt,
+  readShipStationForwardLabelPersistenceFacts,
+} from './shipstation-forward-label-operation';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
 import { linkBundleShipment } from './shipment-bundles/create-bundle';
 import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
@@ -181,6 +186,7 @@ import { loadShippingAutomationRules } from './shipping-automation';
 // Per user override unlock shipped data on 2026-07-14: read the persisted HUGRAB
 // default-insurance intent before quote-proof validation or any postage side effect.
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
+import { resolveShippingClientId } from './shipping-client-identity';
 
 // Batch-label callers often omit a panel-selected package. PS-413 accepts
 // dimensions only when they identify exactly one catalog package; ambiguous
@@ -1496,6 +1502,8 @@ async function persistShopifyPurchasedLabel(input: {
         commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
         transition: 'shipped',
         source: SHOPIFY_SHIPPING_PROVIDER,
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
         effectiveAt: new Date(created.shipDate),
         fulfillmentFacts: input.fulfillmentLines?.length
           ? { kind: 'exact', lines: input.fulfillmentLines }
@@ -1794,15 +1802,7 @@ async function createShopifyShippingLabelForOrderImpl(
   }
   await assertOrderSafeToShip(order, { entryPoint: 'createShopifyShippingLabelForOrder' });
 
-  let clientId = order.clientId;
-  if (!clientId && order.storeId != null) {
-    const [match] = await db
-      .select({ id: clients.id })
-      .from(clients)
-      .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
-      .limit(1);
-    clientId = match?.id ?? null;
-  }
+  const clientId = await resolveShippingClientId(order);
 
   body = {
     ...body,
@@ -1909,6 +1909,11 @@ async function createShopifyShippingLabelForOrderImpl(
     });
     shopifyExternalOperationId = action.operation.id;
     if (action.kind === 'resume_receipt') {
+      // Per user override unlock shipped data on 2026-07-22: an operator-supplied
+      // receipt is review evidence, never automatic shipped persistence.
+      if (action.operation.resolvedBy != null) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
       purchased = shopifyPurchaseFromOperationReceipt(action.receipt);
       if (purchased.pending) {
         // Per user override unlock shipped data on 2026-07-21: PS-452 polls the
@@ -2083,15 +2088,10 @@ async function createLabelV2Impl(
   // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
   // through the clients.storeIds array (v2 parity for legacy orders whose
   // clientId was never backfilled).
-  let clientId = order.clientId;
-  if (!clientId && order.storeId != null) {
-    const [match] = await db
-      .select({ id: clients.id })
-      .from(clients)
-      .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
-      .limit(1);
-    clientId = match?.id ?? null;
-  }
+  // Per user override unlock shipped data on 2026-07-22: purchase and receipt
+  // recovery seal the same canonical tenant identity for legacy store-only
+  // orders instead of persisting the nullable raw orders.client_id value.
+  const clientId = await resolveShippingClientId(order);
   const requestedPurchaseIntent = body;
   // Per user override unlock shipped data on 2026-05-23: PS-422 resolves
   // test-mode authority before the real-postage authorization.
@@ -2481,6 +2481,8 @@ async function createLabelV2Impl(
           commandKey: `lifecycle:shipment:${persistedShipment.id}:shipped`,
           transition: 'shipped',
           source: 'test_label',
+          requireAwaitingOrderStatus: true,
+          requireNoActiveOutboundShipment: true,
           effectiveAt: createdAt,
           fulfillmentFacts: {
             kind: 'unavailable',
@@ -2516,6 +2518,9 @@ async function createLabelV2Impl(
   const purchaseRateProof = purchaseSelection ?? await assertLabelPurchaseRateSelection({
     selectionRef: body.selectionRef,
   });
+  if (!authorizedPurchaseFacts) {
+    throw new ShippingQuoteAuthorizationError('canonical label persistence facts');
+  }
   // Per user override unlock shipped data on 2026-07-14: bind the current toggle
   // to the backend quote. A setting change makes the old quote stale before any
   // carrier call, preventing an insured/uninsured price or coverage mismatch.
@@ -2684,6 +2689,11 @@ async function createLabelV2Impl(
     });
     operationId = action.operation.id;
     if (action.kind === 'resume_receipt') {
+      // Per user override unlock shipped data on 2026-07-22: direct-provider
+      // operator receipts remain held for manual local recovery.
+      if (action.operation.resolvedBy != null) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
       created = createdLabelFromOperationReceipt(action.receipt);
       const context = action.receipt.walmartContext;
       directWalmartContext = context && typeof context === 'object'
@@ -2789,20 +2799,47 @@ async function createLabelV2Impl(
       subjectType: 'order',
       subjectId: order.id,
       semanticGeneration,
-      request: {
-        shippingProviderId: body.shippingProviderId,
-        serviceCode: body.serviceCode,
-        packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
+      request: buildShipStationForwardLabelOperationRequest({
+        shippingProviderId: authorizedPurchaseFacts.shippingProviderId,
+        carrierCode: authorizedPurchaseFacts.carrierCode,
+        serviceCode: authorizedPurchaseFacts.serviceCode,
+        packageCode: authorizedPurchaseFacts.packageCode,
         weightOz: effectiveWeightOz,
         dimensions: { length, width, height },
-        packageId: resolvedPackageId ?? body.customPackageId ?? null,
+        // Per user override unlock shipped data on 2026-07-22: keep the
+        // immutable operation identity reconstructable from the authorized
+        // quote. The resolved catalog package is sealed separately in the
+        // provider receipt for local persistence.
+        packageId: authorizedPurchaseFacts.customPackageId,
         shippingOptions: options,
         shipTo: carrierShipTo,
         shipFrom,
-      },
+        orderNumber: order.orderNumber ?? null,
+      }),
     });
     operationId = action.operation.id;
     if (action.kind === 'resume_receipt') {
+      // Per user override unlock shipped data on 2026-07-22: every ordinary
+      // label-retry consumer enforces the same sealed-receipt provenance as
+      // Print Queue recovery. Generic operator JSON always remains held.
+      if (!canAutomaticallyConsumeShipStationForwardLabelReceipt(action.operation)) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      const durableFacts = readShipStationForwardLabelPersistenceFacts(action.receipt, {
+        orderId: order.id,
+        clientId: clientId ?? null,
+      });
+      if (
+        durableFacts.effectiveWeightOz !== effectiveWeightOz
+        || durableFacts.dimensions.length !== length
+        || durableFacts.dimensions.width !== width
+        || durableFacts.dimensions.height !== height
+        || durableFacts.selectedPackageId !== resolvedPackageId
+        || durableFacts.insuranceProvider !== options.insuranceProvider
+        || durableFacts.insuredValue !== options.insuredValue
+      ) {
+        throw new ShippingQuoteAuthorizationError('durable label receipt persistence facts');
+      }
       created = createdLabelFromOperationReceipt(action.receipt);
     } else if (action.kind === 'dispatch') {
       // Per user override unlock shipped data on 2026-07-21: receipt-only
@@ -2841,7 +2878,18 @@ async function createLabelV2Impl(
             return label as CreatedExternalLabel;
           }),
         normalizeReceipt: (label) => ({
-          receipt: { created: label },
+          // Per user override unlock shipped data on 2026-07-22: seal the
+          // post-authorization package/insurance facts with the provider ACK so
+          // crash recovery never trusts a mutable Print Queue payload.
+          receipt: buildShipStationForwardLabelReceipt(label, {
+            orderId: order.id,
+            clientId: clientId ?? null,
+            effectiveWeightOz,
+            dimensions: { length, width, height },
+            selectedPackageId: resolvedPackageId,
+            insuranceProvider: options.insuranceProvider,
+            insuredValue: options.insuredValue,
+          }),
           providerOperationId: label.labelId ?? label.shipmentId,
           providerResultId: label.trackingNumber,
         }),
@@ -2929,6 +2977,8 @@ async function createLabelV2Impl(
         commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
         transition: 'shipped',
         source: directProviderKey ?? 'prepship_v2',
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
         effectiveAt: new Date(durableCreated.shipDate),
         fulfillmentFacts: {
           kind: 'unavailable',
@@ -3657,6 +3707,11 @@ export async function createReturnLabelV2(
   });
   let result: Awaited<ReturnType<typeof ssCreateReturnLabel>>;
   if (action.kind === 'resume_receipt' || action.kind === 'consumed') {
+    // Per user override unlock shipped data on 2026-07-22: generic return-label
+    // receipt JSON also cannot cross the automatic persistence boundary.
+    if (action.kind === 'resume_receipt' && action.operation.resolvedBy != null) {
+      throw new FulfillmentOperationHeldError(action.operation);
+    }
     const receipt = action.operation.providerReceipt;
     const value = receipt?.returnLabel;
     if (!value || typeof value !== 'object') throw new Error('Return operation receipt is invalid');

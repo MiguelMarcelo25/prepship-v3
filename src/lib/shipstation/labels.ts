@@ -1,45 +1,18 @@
 import { ShipStationError, ssRequest } from './client.js';
 import { ssV1Request } from './v1-client.js';
-import { normalizeShippingOptions } from '../shipping-options.js';
-import type { Address } from './types.js';
-
-export type ShipstationAddressInput = {
-  name?: string | null;
-  company?: string | null;
-  street1?: string | null;
-  street2?: string | null;
-  city?: string | null;
-  state?: string | null;
-  postalCode?: string | null;
-  country?: string | null;
-  phone?: string | null;
-  // PS-127: residential/commercial for the LABEL must match what the rate was quoted
-  // under. true=residential, false=commercial, null/undefined=unknown (carrier decides).
-  // Previously omitted entirely, so labels silently let the carrier reclassify and could
-  // be billed differently than the residential-quoted rate.
-  residential?: boolean | null;
-};
-
-export type CreateExternalLabelInput = {
-  apiKeyV2?: string;
-  carrierId: string;
-  serviceCode: string;
-  packageCode: string;
-  weightOz: number;
-  length: number | null;
-  width: number | null;
-  height: number | null;
-  shipTo: ShipstationAddressInput;
-  shipFrom: ShipstationAddressInput;
-  confirmation?: string | null;
-  insuranceProvider?: string | null;
-  insuredValue?: number | null;
-  ssOrderId: number | null;
-  orderNumber: string | null;
-  externalShipmentId?: string;
-  signal?: AbortSignal;
-  testLabel?: boolean;
-};
+import {
+  buildSsLabelRequestBody,
+  normalizeShipStationExternalShipmentId,
+  type CreateExternalLabelInput,
+} from './label-request-body.js';
+// Per user override unlock shipped data on 2026-07-22: the network connector
+// and durable-operation hash share the pure request-body source of truth.
+export {
+  assertSsCarrierIdIsNotSynthetic,
+  buildSsLabelRequestBody,
+  normalizeShipStationExternalShipmentId,
+} from './label-request-body.js';
+export type { CreateExternalLabelInput, ShipstationAddressInput } from './label-request-body.js';
 
 export type CreatedExternalLabel = {
   labelId: string | null;
@@ -103,24 +76,6 @@ export type ReturnLabelResult = {
   labelUrl: string | null;
 };
 
-function toAddress(input: ShipstationAddressInput, fallbackPhone = '000-000-0000'): Address {
-  return {
-    name: input.name ?? undefined,
-    company_name: input.company ?? undefined,
-    phone: input.phone || fallbackPhone,
-    address_line1: input.street1 ?? '',
-    address_line2: input.street2 ?? undefined,
-    city_locality: input.city ?? '',
-    state_province: input.state ?? '',
-    postal_code: input.postalCode ?? '',
-    country_code: input.country ?? 'US',
-    // PS-127: send the SAME residential indicator the rate was quoted under so ShipStation
-    // bills the label exactly as quoted. Omit (carrier decides) only when truly unknown.
-    address_residential_indicator:
-      input.residential === true ? 'yes' : input.residential === false ? 'no' : 'unknown',
-  };
-}
-
 function stripSePrefix(value: unknown): number | null {
   if (value == null) return null;
   const stripped = String(value).replace(/^se-/, '');
@@ -179,80 +134,6 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
   };
 
   return pick(labelDownload);
-}
-
-export function normalizeShipStationExternalShipmentId(value: unknown): string | null {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  return normalized ? normalized.slice(0, 50) : null;
-}
-
-// PS-204 defense-in-depth: synthetic direct-account ids (se-1xxxxxxx
-// carrier_accounts / se-2xxxxxxx store_accounts) are PrepShip-internal — they
-// do not exist at ShipStation, which rejects them ("carrier_id 10000025 not
-// found"... after the request was already sent). This last-mile check makes it
-// structurally impossible for PrepShip to EMIT such a request body, whatever
-// upstream routing bug produced the id. Pure + offline-testable.
-const SS_SYNTHETIC_CARRIER_ID_FLOOR = 10_000_000;
-
-export function assertSsCarrierIdIsNotSynthetic(carrierId: unknown): void {
-  const match = String(carrierId ?? '').trim().match(/^se-(\d+)$/i);
-  const numeric = match ? Number(match[1]) : NaN;
-  if (Number.isFinite(numeric) && numeric >= SS_SYNTHETIC_CARRIER_ID_FLOOR) {
-    const err = new Error(
-      `Direct-carrier account id ${numeric} cannot be sent to ShipStation (carrier_id ${String(carrierId)} is a PrepShip-internal synthetic id). Re-rate/select the matching account or route through the direct-carrier label path. No postage was purchased.`,
-    ) as Error & { code?: string };
-    err.code = 'DIRECT_CARRIER_ON_SHIPSTATION_PATH';
-    throw err;
-  }
-}
-
-/**
- * Build the ShipStation v2 POST /v2/labels request body. Pure (no network) so
- * the payload SHAPE — especially PS-072's package-level insured_value vs
- * shipment-level insurance_provider — is unit-testable offline without buying
- * postage. ssCreateLabel uses this.
- */
-export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
-  assertSsCarrierIdIsNotSynthetic(input.carrierId);
-  const options = normalizeShippingOptions(input);
-  const pkg: Record<string, unknown> = {
-    weight: { value: Number(input.weightOz.toFixed(2)), unit: 'ounce' },
-    package_code: input.packageCode || 'package',
-  };
-  if (input.length && input.width && input.height) {
-    pkg.dimensions = {
-      length: Number(input.length.toFixed(2)),
-      width: Number(input.width.toFixed(2)),
-      height: Number(input.height.toFixed(2)),
-      unit: 'inch',
-    };
-  }
-  const hasInsurance = options.insuranceProvider !== 'none' && options.insuredValue != null;
-  if (hasInsurance) {
-    // PS-072: ShipStation v2 schema requires insured_value at the PACKAGE level
-    // (insurance_provider stays shipment-level). This was previously emitted as a
-    // shipment-level sibling, where v2 may ignore it — leaving labels uninsured.
-    pkg.insured_value = { amount: options.insuredValue, currency: 'usd' };
-  }
-
-  return {
-    shipment: {
-      carrier_id: input.carrierId,
-      service_code: input.serviceCode,
-      ship_date: new Date().toISOString().slice(0, 10),
-      ship_from: toAddress(input.shipFrom),
-      ship_to: toAddress(input.shipTo),
-      packages: [pkg],
-      confirmation: options.confirmation,
-      ...(hasInsurance ? { insurance_provider: options.insuranceProvider } : {}),
-      external_order_id: input.orderNumber ?? undefined,
-      external_shipment_id: normalizeShipStationExternalShipmentId(input.externalShipmentId) ?? undefined,
-    },
-    is_return_label: false,
-    label_layout: '4x6',
-    label_format: 'pdf',
-    label_download_type: 'url',
-  };
 }
 
 export async function ssGetLabelByExternalShipmentId(

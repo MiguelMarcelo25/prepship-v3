@@ -14,7 +14,7 @@ display-safe metadata.
 | Connector/provider family resolution | `src/connectors/carrier-resolution.ts` | Maps covered provider aliases such as `ShipStation`, `Shipp brokered UPS`, `EasyPost`, `Walmart Shipping`, and `eBay Shipping` to connector families and capabilities. |
 | Selected-rate proof account binding | `src/services/shipping-workflow/rate-fingerprint.ts` | Rejects purchase-account mismatch, including synthetic direct-carrier IDs on a ShipStation proof. |
 | Quote snapshot purchase boundary | `src/services/shipping-workflow/rate-quote-snapshot-store.ts` | Re-validates account identity for both snapshot and legacy proof paths before label purchase. |
-| ShipStation label request shaping | `src/lib/shipstation/labels.ts` | Blocks synthetic `se-10000000+` direct-carrier IDs from the ShipStation label path. |
+| ShipStation label request shaping | `src/lib/shipstation/label-request-body.ts` | Blocks synthetic `se-10000000+` direct-carrier IDs from the ShipStation label path and supplies the shared provider-dispatch/operation-hash payload shape. |
 | Label purchase and shipment snapshot | `src/services/labels.ts#createLabelV2` | Runs proof/account binding before provider branches and freezes provider/account identity onto shipment records. |
 | Print Queue route authority | `src/services/print-queue/queue-route-orchestrator.ts` | Classifies direct vs backend queue routing and supports the PS-317 direct-via-backend cutover. |
 | Billing / margin read model | `src/services/shipping-margin-analytics.ts` | Reads display-safe `carrierCode`, `serviceCode`, `providerAccountId`, and `providerAccountNickname` from shipment truth. |

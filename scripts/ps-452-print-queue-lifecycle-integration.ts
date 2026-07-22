@@ -583,7 +583,10 @@ assert.match(ledger, /getLatestLabelOperationForOrder[\s\S]*?orderBy/,
   'recovery reads the latest canonical operation, including terminal local truth');
 assert.match(reconciler, /consumedQueueLabelShipmentId[\s\S]*?eq\(shipments\.id, localShipmentId\)/,
   'all consumed label providers recover from the exact committed shipment row without replay');
-assert.match(reconciler, /consumedShipment\.status !== 'voided'[\s\S]*?nextLabelSemanticGeneration[\s\S]*?isHistoricalConsumedQueueLabelOperation/,
+// Per user override unlock shipped data on 2026-07-22: the injected name is
+// test-only; the assertion still proves only a voided historical receipt can
+// re-enter before a new provider operation.
+assert.match(reconciler, /consumedShipment\.status !== 'voided'[\s\S]*?nextSemanticGeneration[\s\S]*?isHistoricalConsumedQueueLabelOperation/,
   'only an exact voided historical consumed label can re-admit a new pre-ledger attempt');
 assert.match(reconciler, /operation\.state === 'receipt_recorded'[\s\S]*?status: 'resume_receipt'/,
   'non-ShipStation durable receipts are re-admitted only through canonical receipt consumption');

@@ -4,6 +4,14 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { eq, sql } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
+import {
+  buildShipStationForwardLabelOperationRequest,
+  buildShipStationForwardLabelReceipt,
+  canAutomaticallyConsumeShipStationForwardLabelReceipt,
+  readShipStationForwardLabelPersistenceFacts,
+  SHIPSTATION_FORWARD_LABEL_RECEIPT_SYSTEM_ACTOR,
+} from '../src/services/shipstation-forward-label-operation.js';
+import { shippingQuoteCredentialFingerprint } from '../src/services/shipping-workflow/shipping-quote-authorization.js';
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL ||= 'postgres://ps423:ps423@localhost:5432/ps423';
@@ -13,6 +21,9 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'ps423-service';
 process.env.SUPABASE_JWT_SECRET ||= 'ps423-jwt';
 
 const ledger = await import('../src/services/fulfillment-operation-ledger.js');
+const exactReconciliation = await import(
+  '../src/services/shipstation-forward-label-reconciliation.js'
+);
 
 async function main(): Promise<void> {
   const client = new PGlite();
@@ -21,6 +32,10 @@ async function main(): Promise<void> {
     CREATE TABLE ps423_local_results (
       operation_id integer PRIMARY KEY,
       result_key text NOT NULL
+    );
+    CREATE TABLE ps423_recovery_shipments (
+      order_id integer PRIMARY KEY,
+      tracking_number text NOT NULL
     );
   `);
   const database = drizzle(client, { schema, casing: 'snake_case' });
@@ -33,13 +48,37 @@ async function main(): Promise<void> {
     randomToken: () => `ps423-token-${++token}`,
   };
 
+  const canonicalForwardRequest = buildShipStationForwardLabelOperationRequest({
+    shippingProviderId: 423,
+    carrierCode: 'stamps_com',
+    serviceCode: 'usps_ground_advantage',
+    packageCode: 'package',
+    weightOz: 20,
+    dimensions: { length: 12, width: 8, height: 4 },
+    packageId: 42,
+    shippingOptions: {
+      confirmation: 'none',
+      insuranceProvider: 'parcelguard',
+      insuredValue: 100,
+    },
+    shipTo: {
+      name: 'PS-423 Recipient', company: '', street1: '1 Test Way', street2: '',
+      city: 'Testville', state: 'CA', postalCode: '90001', country: 'US', phone: '5550000001',
+      residential: true,
+    },
+    shipFrom: {
+      name: 'PS-423 Warehouse', company: '', street1: '2 Test Way', street2: '',
+      city: 'Testville', state: 'CA', postalCode: '90002', country: 'US', phone: '5550000002',
+    },
+    orderNumber: 'PS-423-001',
+  });
   const forwardInput = {
     kind: 'forward_label' as const,
     provider: 'shipstation',
     subjectType: 'order',
     subjectId: 423001,
     semanticGeneration: 1,
-    request: { serviceCode: 'usps_ground_advantage', package: 'box' },
+    request: canonicalForwardRequest,
   };
 
   const [first, overlap] = await Promise.all([
@@ -64,15 +103,28 @@ async function main(): Promise<void> {
           shipmentId: 423001,
           trackingNumber: '9400000000000000042301',
           labelUrl: 'https://labels.invalid/423001.pdf',
+          labelFormat: 'pdf',
+          cost: 8.42,
+          insuranceCost: 1.25,
           serviceCode: 'usps_ground_advantage',
+          carrierCode: 'stamps_com',
           shipDate: '2026-07-21T00:00:00.000Z',
           voided: false,
+          providerAccountId: 423,
           idempotencyKey,
           authorization: 'must-not-persist',
         };
       },
       normalizeReceipt: (result) => ({
-        receipt: { created: result },
+        receipt: buildShipStationForwardLabelReceipt(result, {
+          orderId: 423001,
+          clientId: 42,
+          effectiveWeightOz: 20,
+          dimensions: { length: 12, width: 8, height: 4 },
+          selectedPackageId: 42,
+          insuranceProvider: 'parcelguard',
+          insuredValue: 100,
+        }),
         providerOperationId: result.labelId,
         providerResultId: result.trackingNumber,
       }),
@@ -107,9 +159,110 @@ async function main(): Promise<void> {
     '[redacted]',
     'receipt storage redacts credential-shaped fields',
   );
-  await ledger.consumeFulfillmentOperation(
+  const persistenceFacts = readShipStationForwardLabelPersistenceFacts(
+    resume.receipt,
+    { orderId: 423001, clientId: 42 },
+  );
+  assert.deepEqual(
+    persistenceFacts,
+    {
+      version: 1,
+      authority: 'canonical_shipping_quote',
+      provider: 'shipstation',
+      source: 'prepship_v2',
+      orderId: 423001,
+      clientId: 42,
+      effectiveWeightOz: 20,
+      dimensions: { length: 12, width: 8, height: 4 },
+      selectedPackageId: 42,
+      insuranceProvider: 'parcelguard',
+      insuredValue: 100,
+    },
+    'receipt recovery reads the canonical post-authorization facts, not a mutable queue payload',
+  );
+  assert.equal(
+    canAutomaticallyConsumeShipStationForwardLabelReceipt({
+      providerReceipt: resume.receipt,
+      resolvedBy: null,
+    }),
+    true,
+    'the canonical provider-ACK receipt can automatically resume local persistence',
+  );
+  assert.equal(
+    canAutomaticallyConsumeShipStationForwardLabelReceipt({
+      providerReceipt: resume.receipt,
+      resolvedBy: SHIPSTATION_FORWARD_LABEL_RECEIPT_SYSTEM_ACTOR,
+    }),
+    true,
+    'the fixed exact-ID system reconciler may seal a resumable receipt',
+  );
+  assert.equal(
+    canAutomaticallyConsumeShipStationForwardLabelReceipt({
+      providerReceipt: resume.receipt,
+      resolvedBy: 'operator@example.test',
+    }),
+    false,
+    'generic operator receipt JSON cannot authorize automatic shipped persistence',
+  );
+  assert.throws(
+    () => readShipStationForwardLabelPersistenceFacts(
+      { created: resume.receipt.created },
+      { orderId: 423001, clientId: 42 },
+    ),
+    /missing canonical persistence facts/,
+    'legacy receipts without sealed facts remain held',
+  );
+  assert.throws(
+    () => readShipStationForwardLabelPersistenceFacts(
+      {
+        ...resume.receipt,
+        persistenceFacts: { ...persistenceFacts, effectiveWeightOz: -1 },
+      },
+      { orderId: 423001, clientId: 42 },
+    ),
+    /invalid effectiveWeightOz/,
+    'malformed receipt facts fail closed',
+  );
+  assert.throws(
+    () => readShipStationForwardLabelPersistenceFacts(
+      resume.receipt,
+      { orderId: 423099, clientId: 42 },
+    ),
+    /scope does not match/,
+    'cross-order receipt facts fail closed',
+  );
+  assert.equal(
+    ledger.hashFulfillmentOperationRequest(canonicalForwardRequest),
+    claimed.operation.requestHash,
+    'the system reconciler can prove the exact canonical request before sealing facts',
+  );
+  const tamperedWeightRequest = structuredClone(canonicalForwardRequest);
+  const tamperedWeightShipment = (
+    tamperedWeightRequest.providerRequest as Record<string, unknown>
+  ).shipment as Record<string, unknown>;
+  const tamperedWeightPackage = (tamperedWeightShipment.packages as Array<Record<string, unknown>>)[0]!;
+  (tamperedWeightPackage.weight as Record<string, unknown>).value = 10;
+  assert.notEqual(
+    ledger.hashFulfillmentOperationRequest(tamperedWeightRequest),
+    claimed.operation.requestHash,
+    'a tampered queue weight cannot match the immutable operation request',
+  );
+  const tamperedResidentialRequest = structuredClone(canonicalForwardRequest);
+  const tamperedResidentialShipment = (
+    tamperedResidentialRequest.providerRequest as Record<string, unknown>
+  ).shipment as Record<string, unknown>;
+  (tamperedResidentialShipment.ship_to as Record<string, unknown>)
+    .address_residential_indicator = 'no';
+  assert.notEqual(
+    ledger.hashFulfillmentOperationRequest(tamperedResidentialRequest),
+    claimed.operation.requestHash,
+    'the immutable operation request binds the residential bit sent to ShipStation',
+  );
+  let localApplyCalls = 0;
+  const consumeReceipt = () => ledger.consumeFulfillmentOperation(
     resume.operation.id,
     async (tx, receipt) => {
+      localApplyCalls += 1;
       assert.equal((receipt.created as Record<string, unknown>).labelId, 'label-423001');
       await tx.execute(sql`
         INSERT INTO ps423_local_results (operation_id, result_key)
@@ -119,6 +272,13 @@ async function main(): Promise<void> {
     },
     dependencies,
   );
+  const concurrentConsumption = await Promise.all([consumeReceipt(), consumeReceipt()]);
+  assert.deepEqual(
+    concurrentConsumption.map((result) => result.kind).sort(),
+    ['already_consumed', 'consumed'],
+    'two concurrent recovery workers produce one canonical local consumption',
+  );
+  assert.equal(localApplyCalls, 1, 'the exact durable receipt is applied once');
   const completed = await ledger.acquireFulfillmentOperation(forwardInput, dependencies);
   assert.equal(completed.kind, 'consumed');
   const latestCompleted = await ledger.getLatestLabelOperationForOrder(423001, dependencies);
@@ -175,8 +335,285 @@ async function main(): Promise<void> {
     false,
     'a missing or inconsistent exact shipment remains held',
   );
+  // Per user override unlock shipped data on 2026-07-22: all reconciliation
+  // fixtures below use fake GET/receipt/persistence dependencies and PGlite;
+  // no provider POST, postage, or production mutation is reachable.
+  const reconciliationOrder = {
+    orderId: 423007,
+    clientId: 42,
+    orderNumber: 'PS-423-001',
+    skuGroupId: 'ps423',
+    label: {
+      selectionRef: `sqa_${'a'.repeat(32)}.${'b'.repeat(24)}`,
+      shippingProviderId: 423,
+      serviceCode: 'usps_ground_advantage',
+      customPackageId: 42,
+      weightOz: 20,
+      length: 12,
+      width: 8,
+      height: 4,
+      confirmation: 'none',
+      insuranceProvider: 'parcelguard',
+      insuredValue: 100,
+    },
+  };
+  const reconciliationSelection = {
+    authorizationContext: {
+      version: 1 as const,
+      order: {
+        orderId: 423007, clientId: 42, storeId: null,
+        sourceProvider: null, sourceAccountId: null, sourceOrderId: null,
+      },
+      shipment: {
+        shipFromLocationId: null,
+        shipFrom: {
+          name: 'PS-423 Warehouse', company: '', street1: '2 Test Way', street2: '',
+          city: 'Testville', state: 'CA', postalCode: '90002', country: 'US', phone: '5550000002',
+        },
+        shipTo: {
+          name: 'PS-423 Recipient', company: '', street1: '1 Test Way', street2: '',
+          city: 'Testville', state: 'CA', postalCode: '90001', country: 'US', phone: '5550000001',
+        },
+        package: { id: 42, type: 'package', code: 'package' },
+        weightOz: 20,
+        dimensions: { length: 12, width: 8, height: 4 },
+        residential: true,
+        confirmation: 'none',
+        insuranceProvider: 'parcelguard',
+        insuredValue: 100,
+      },
+    },
+    accountAuthorization: {
+      providerFamily: 'shipstation' as const,
+      provider: 'shipstation',
+      shippingProviderId: 423,
+      sourceTable: 'shipstation' as const,
+      sourceAccountId: 423,
+      ownerClientId: 42,
+      ownerStoreAccountId: null,
+      credentialSource: 'client' as const,
+      credentialFingerprint: shippingQuoteCredentialFingerprint('ps423-key'),
+      environment: 'test',
+    },
+    selectedRate: {
+      serviceCode: 'usps_ground_advantage',
+      serviceName: 'USPS Ground Advantage',
+      carrierCode: 'stamps_com',
+      packageCode: 'package',
+    },
+  };
+  const reconciliationOperation = {
+    ...latestCompleted!,
+    id: 423007,
+    state: 'reconcile_required',
+    kind: 'forward_label',
+    provider: 'shipstation',
+    subjectType: 'order',
+    subjectId: '423007',
+    requestHash: ledger.hashFulfillmentOperationRequest(canonicalForwardRequest),
+    idempotencyKey: `psop_${'7'.repeat(45)}`,
+    providerReceipt: null,
+    localResult: null,
+    resolvedBy: null,
+  };
+  let exactLookupCalls = 0;
+  let exactReceiptWrites = 0;
+  let exactResumeCalls = 0;
+  const reconciliationDependencies: Parameters<
+    typeof reconciler.reconcileQueueShipStationOperation
+  >[2] = {
+    getLatestOperation: async () => reconciliationOperation as never,
+    selectRate: async () => reconciliationSelection as never,
+    loadCredentials: async () => ({
+      apiKeyV2: 'ps423-key',
+      apiKeyV1: null,
+      apiSecretV1: null,
+      sourceClientId: 42,
+    }),
+    lookupByExternalShipmentId: async () => {
+      exactLookupCalls += 1;
+      return {
+        status: 'completed',
+        label: {
+          labelId: 'label-423007', shipmentId: 423007,
+          trackingNumber: 'tracking-423007',
+          labelUrl: 'https://labels.invalid/423007.pdf', labelFormat: 'pdf',
+          cost: 8.42, insuranceCost: 1.25, voided: false,
+          carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage',
+          shipDate: '2026-07-21T00:00:00.000Z', providerAccountId: 423,
+        },
+      };
+    },
+    recordExactReceipt: async () => { exactReceiptWrites += 1; },
+    resumeReceipt: async () => {
+      exactResumeCalls += 1;
+      return {
+        shipmentId: 423007, trackingNumber: 'tracking-423007',
+        labelUrl: 'https://labels.invalid/423007.pdf', cost: 8.42,
+        voided: false, orderStatus: 'shipped', apiVersion: 'v2',
+      };
+    },
+  };
+  const exactReconciled = await reconciler.reconcileQueueShipStationOperation(
+    reconciliationOrder, {}, reconciliationDependencies,
+  );
+  assert.equal(exactReconciled.status, 'recovered');
+  assert.equal(exactLookupCalls, 1, 'the exact request hash admits one provider GET');
+  assert.equal(exactReceiptWrites, 1, 'the exact GET result reaches the dedicated receipt writer');
+  assert.equal(exactResumeCalls, 1, 'the exact GET result resumes local persistence once');
+  const hashHeld = await reconciler.reconcileQueueShipStationOperation(
+    reconciliationOrder,
+    {},
+    {
+      ...reconciliationDependencies,
+      getLatestOperation: async () => ({
+        ...reconciliationOperation,
+        requestHash: '0'.repeat(64),
+      }) as never,
+    },
+  );
+  assert.equal(hashHeld.status, 'held');
+  assert.equal(exactLookupCalls, 1,
+    'a mismatched immutable request hash is held before any provider GET');
   assert.equal(providerCalls, 1, 'provider success plus local fault causes exactly one provider invocation');
   assert.equal((await client.query(`SELECT * FROM ps423_local_results`)).rows.length, 1);
+
+  // Per user override unlock shipped data on 2026-07-22: execute the real
+  // recovery orchestrator with only injected PGlite/fake local boundaries.
+  const recoveryService = await import('../src/services/verified-forward-label-recovery.js');
+  let recoveryProviderCalls = 0;
+  const seedRecoveryReceipt = async (orderId: number): Promise<number> => {
+    const action = await ledger.acquireFulfillmentOperation({
+      ...forwardInput,
+      subjectId: orderId,
+    }, dependencies);
+    assert.equal(action.kind, 'dispatch');
+    if (action.kind !== 'dispatch') throw new Error('recovery receipt fixture was not claimable');
+    await ledger.dispatchFulfillmentOperation({
+      lease: action.lease,
+      execute: async () => {
+        recoveryProviderCalls += 1;
+        return {
+          labelId: `label-${orderId}`,
+          shipmentId: orderId,
+          trackingNumber: `tracking-${orderId}`,
+          labelUrl: `https://labels.invalid/${orderId}.pdf`,
+          labelFormat: 'pdf',
+          cost: 8.42,
+          insuranceCost: 0,
+          serviceCode: 'usps_ground_advantage',
+          carrierCode: 'stamps_com',
+          shipDate: '2026-07-21T00:00:00.000Z',
+          voided: false,
+          providerAccountId: 423,
+        };
+      },
+      normalizeReceipt: (created) => ({
+        receipt: buildShipStationForwardLabelReceipt(created, {
+          orderId,
+          clientId: 42,
+          effectiveWeightOz: 20,
+          dimensions: { length: 12, width: 8, height: 4 },
+          selectedPackageId: 42,
+          insuranceProvider: 'none',
+          insuredValue: null,
+        }),
+      }),
+    }, dependencies);
+    return action.operation.id;
+  };
+  let recoveryPersistCalls = 0;
+  let recoveryLifecycleCalls = 0;
+  let recoveryConfirmationCalls = 0;
+  const recoveryDependencies: Parameters<
+    typeof recoveryService.resumeVerifiedShipStationForwardLabel
+  >[2] = {
+    database: database as never,
+    ensureFulfillment: async () => undefined,
+    ensurePackageConsumption: async () => undefined,
+    ensureShipmentRateCost: async () => undefined,
+    loadOrder: async (orderId) => ({
+      id: orderId,
+      orderNumber: `PS-423-${orderId}`,
+      clientId: null,
+      storeId: 420,
+      externalOrderId: null,
+      sourceProvider: null,
+    }) as never,
+    resolveClientId: async () => 42,
+    consumeOperation: (operationId, apply) =>
+      ledger.consumeFulfillmentOperation(operationId, apply as never, dependencies),
+    persistLabel: async (input) => {
+      recoveryPersistCalls += 1;
+      await input.tx.execute(sql`
+        INSERT INTO ps423_recovery_shipments (order_id, tracking_number)
+        VALUES (${input.orderId}, ${input.created.trackingNumber})
+      `);
+      return input.orderId;
+    },
+    applyLifecycle: async (_tx, input) => {
+      recoveryLifecycleCalls += 1;
+      assert.equal(input.requireAwaitingOrderStatus, true);
+      assert.equal(input.requireNoActiveOutboundShipment, true);
+      return {
+        lifecycleEventId: input.orderId,
+        alreadyApplied: false,
+        statusChanged: true,
+        claimCount: 1,
+      };
+    },
+    enqueueConfirmation: async (input) => {
+      recoveryConfirmationCalls += 1;
+      assert.equal(input.order.clientId, 42,
+        'legacy store-only recovery passes the resolved client to confirmation');
+      return undefined;
+    },
+  };
+  const recoveryOperationId = await seedRecoveryReceipt(423005);
+  const recoveryInput = { operationId: recoveryOperationId, orderId: 423005 };
+  const [firstRecovery, racedRecovery] = await Promise.all([
+    recoveryService.resumeVerifiedShipStationForwardLabel(
+      recoveryInput, { clientIds: [42], storeIds: [], isGlobal: false, isRestricted: true },
+      recoveryDependencies,
+    ),
+    recoveryService.resumeVerifiedShipStationForwardLabel(
+      recoveryInput, { clientIds: [42], storeIds: [], isGlobal: false, isRestricted: true },
+      recoveryDependencies,
+    ),
+  ]);
+  assert.equal(firstRecovery.shipmentId, 423005);
+  assert.equal(racedRecovery.shipmentId, 423005,
+    'a worker that observes the already-consumed receipt returns the committed result');
+  assert.equal(recoveryPersistCalls, 1, 'two recovery workers persist one local shipment');
+  assert.equal(recoveryLifecycleCalls, 1, 'two recovery workers apply one terminal transition');
+  assert.equal(recoveryConfirmationCalls, 2,
+    'confirmation enqueue remains idempotently requested after either recovery result');
+
+  const rollbackOperationId = await seedRecoveryReceipt(423006);
+  await assert.rejects(
+    recoveryService.resumeVerifiedShipStationForwardLabel(
+      { operationId: rollbackOperationId, orderId: 423006 },
+      { clientIds: [42], storeIds: [], isGlobal: false, isRestricted: true },
+      {
+        ...recoveryDependencies,
+        applyLifecycle: async () => {
+          throw new Error('PS-423 recovery lifecycle rejection');
+        },
+      },
+    ),
+    /PS-423 recovery lifecycle rejection/,
+  );
+  assert.equal(
+    (await client.query(`SELECT * FROM ps423_recovery_shipments WHERE order_id = 423006`)).rows.length,
+    0,
+    'a lifecycle rejection rolls the recovery shipment back',
+  );
+  const [rolledBackOperation] = await database.select().from(schema.externalOperations)
+    .where(eq(schema.externalOperations.id, rollbackOperationId));
+  assert.equal(rolledBackOperation?.state, 'receipt_recorded',
+    'a lifecycle rejection leaves the durable receipt unconsumed for review/retry');
+  assert.equal(recoveryProviderCalls, 2,
+    'only fixture receipt seeding called a fake provider; recovery never dispatched');
 
   const unknownInput = {
     kind: 'return_label' as const,
@@ -249,6 +686,19 @@ async function main(): Promise<void> {
     { ...dependencies, now: () => new Date('2026-07-21T00:05:00.000Z') },
   );
   assert.equal(repeatedHold.state, 'reconcile_required');
+  await assert.rejects(
+    ledger.recordFulfillmentOperationReceiptByOperator(
+      expiredClaim.lease.operationId,
+      {
+        actor: SHIPSTATION_FORWARD_LABEL_RECEIPT_SYSTEM_ACTOR,
+        note: 'A generic caller must not mint trusted system provenance',
+        receipt: { created: { labelId: 'forged-label' } },
+      },
+      dependencies,
+    ),
+    /Reserved system receipt provenance/,
+    'generic operator JSON cannot forge exact-reconciler provenance',
+  );
   await ledger.recordFulfillmentOperationReceiptByOperator(
     expiredClaim.lease.operationId,
     {
@@ -264,6 +714,46 @@ async function main(): Promise<void> {
     async () => ({ shipmentId: 423003 }),
     dependencies,
   );
+
+  const trustedReconcileInput = {
+    kind: 'forward_label' as const,
+    provider: 'shipstation',
+    subjectType: 'order',
+    subjectId: 423004,
+    request: canonicalForwardRequest,
+  };
+  const trustedClaim = await ledger.acquireFulfillmentOperation(trustedReconcileInput, {
+    ...dependencies,
+    now: () => leaseStartedAt,
+  });
+  assert.equal(trustedClaim.kind, 'dispatch');
+  if (trustedClaim.kind !== 'dispatch') throw new Error('trusted reconciliation fixture was not claimed');
+  await ledger.holdExpiredFulfillmentOperationForReconciliation(
+    trustedClaim.lease.operationId,
+    { note: 'Exact provider GET is ready' },
+    { ...dependencies, now: () => new Date('2026-07-21T00:04:00.000Z') },
+  );
+  await exactReconciliation.recordExactShipStationForwardLabelReceipt(
+    trustedClaim.lease.operationId,
+    {
+      labelId: 'label-423004', shipmentId: 423004,
+      trackingNumber: '9400000000000000042304',
+      labelUrl: 'https://labels.invalid/423004.pdf', labelFormat: 'pdf',
+      cost: 9.42, insuranceCost: 0, voided: false,
+      carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage',
+      shipDate: '2026-07-21T00:00:00.000Z', providerAccountId: 423,
+    },
+    {
+      orderId: 423004, clientId: 42, effectiveWeightOz: 20,
+      dimensions: { length: 12, width: 8, height: 4 },
+      selectedPackageId: 42, insuranceProvider: 'none', insuredValue: null,
+    },
+    dependencies,
+  );
+  const trustedRecorded = await database.select().from(schema.externalOperations)
+    .where(eq(schema.externalOperations.id, trustedClaim.lease.operationId));
+  assert.equal(trustedRecorded[0]?.resolvedBy, SHIPSTATION_FORWARD_LABEL_RECEIPT_SYSTEM_ACTOR,
+    'only the dedicated exact-GET writer stamps trusted provenance');
 
   await ledger.resolveFulfillmentOperationNoEffect(
     unknownClaim.lease.operationId,

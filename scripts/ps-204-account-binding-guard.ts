@@ -31,7 +31,7 @@ import {
   selectedRateProviderAccountKey,
 } from '../src/services/shipping-workflow/rate-fingerprint';
 import { resolveRateQuoteForPurchase, selectedRateOpaqueKey } from '../src/services/shipping-workflow/rate-quote-snapshot';
-import { buildSsLabelRequestBody, assertSsCarrierIdIsNotSynthetic } from '../src/lib/shipstation/labels';
+import { buildSsLabelRequestBody, assertSsCarrierIdIsNotSynthetic } from '../src/lib/shipstation/label-request-body';
 import {
   rateBelongsToProviderAccount,
   rateProviderAccountKey,
@@ -189,7 +189,7 @@ check('createLabelV2 replaces the payload account with the authorized account',
   /shippingProviderId: authorizedPurchaseFacts\.shippingProviderId/.test(labelsService) &&
   /shippingQuoteAuthorizedPurchaseFacts\(purchaseSelection\)/.test(labelsService) &&
   /assertShippingQuoteAccountMatches\(\{/.test(labelsService));
-const ssLabels = readFileSync('src/lib/shipstation/labels.ts', 'utf8');
+const ssLabels = readFileSync('src/lib/shipstation/label-request-body.ts', 'utf8');
 check('buildSsLabelRequestBody runs the synthetic-id assert before building',
   /assertSsCarrierIdIsNotSynthetic\(input\.carrierId\);/.test(ssLabels));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
@@ -224,7 +224,7 @@ check('backend createLabelV2 owns the direct-carrier branch via directLabelAccou
 const printQueueService = readFileSync('src/services/print-queue.ts', 'utf8');
 check('print-queue processQueueSendOrder routes the queue order through the backend createLabelV2 owner',
   /async function processQueueSendOrder\(/.test(printQueueService) &&
-  /createLabelV2\(\{/.test(printQueueService));
+  /createLabelV2\(input, labelPurchaseScope\)/.test(printQueueService));
 check('Ship Acct change drops a preview rate from another account (no mixed-source card)',
   /setPanelRatePreview\(\(current\) => \{\s*\n\s*const belongs = rateBelongsToProviderAccount\(current\[0\], nextValue\)/.test(ordersView));
 check('mixed-source purchase shows the re-rate action instead of a generic failure',
