@@ -36,6 +36,7 @@ import {
   loadActiveShipStationCutoverStoreIds,
 } from './store-source-cutover';
 import {
+  markShipStationSyncAccountDeferred,
   markShipStationSyncAccountFailed,
   markShipStationSyncAccountStarted,
   markShipStationSyncAccountSucceeded,
@@ -46,6 +47,7 @@ import {
   summarizeShipStationAccountWatermarks,
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
+import { isOrderSyncCooperativeYieldError } from '../lib/order-sync-cooperative-yield';
 import {
   orderSyncQueueState,
   readOrderSyncQueueTruth,
@@ -1505,6 +1507,14 @@ export async function syncOrders(opts: {
         );
       }
     } catch (err) {
+      if (isOrderSyncCooperativeYieldError(opts.signal?.reason ?? err)) {
+        // Per user override unlock shipped data on 2026-07-22: a durable
+        // queue-control yield closes only account lifecycle metadata as
+        // deferred. It does not weaken shipped/cancelled guards or mutate an
+        // order, shipment, label, postage, or marketplace confirmation.
+        await markShipStationSyncAccountDeferred(acct, runIdentity, Date.now());
+        throwIfOrderSyncAborted(opts.signal);
+      }
       await markShipStationSyncAccountFailed(acct, runIdentity, Date.now(), err);
       throwIfOrderSyncAborted(opts.signal);
       console.error(
@@ -1583,7 +1593,7 @@ export type OrderSyncAccountDiagnostic = {
 
 export function orderSyncRunQueueVerdict(
   runState: {
-    status: 'running' | 'succeeded' | 'failed';
+    status: 'running' | 'succeeded' | 'failed' | 'deferred';
     activeJobId: string | null;
     lastStartedAt: string | null;
   } | undefined,

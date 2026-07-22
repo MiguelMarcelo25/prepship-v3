@@ -12,6 +12,7 @@ import {
 } from '../lib/sync-job-cancellation';
 import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
+import { OrderSyncCooperativeYieldError } from '../lib/order-sync-cooperative-yield';
 import {
   getSyncJobLaneBlocker,
   syncJobLaneFor,
@@ -1240,7 +1241,10 @@ async function runOrderSyncWithOutboxPriority(
         // already-durable outbox wake-up gets the shared lane. Order cursors and
         // normal transaction boundaries remain authoritative; no shipped lock
         // is bypassed.
-        preempt.abort(new Error('Order sync yielded to pending fulfillment outbox'));
+        // Per user override unlock shipped data on 2026-07-22: identify this
+        // durable queue-control deferral separately from real provider or
+        // persistence failures so account health remains truthful.
+        preempt.abort(new OrderSyncCooperativeYieldError());
         return;
       }
       await sleep(SHARED_LANE_PRIORITY_POLL_MS, undefined, {
