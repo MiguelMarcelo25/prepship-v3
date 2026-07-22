@@ -5,7 +5,7 @@
   "title": "Unify customer shipping money across PrepShip and Client Portal and reconcile exact historical return receipts",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "77e00f287017732a490c080d6f4515689dc6bb46"
+    "reviewedSha": "24bade0f23c62e44a616746b29daa2f401d2e087"
   },
   "riskDomains": [
     "rate_label",
@@ -17,7 +17,7 @@
       "id": "AC-1",
       "severity": "critical",
       "status": "met",
-      "description": "PrepShip owns one policy-versioned purchased-cost, customer-rate, and margin tuple; Billing, return read models, and Client Portal delegate instead of deriving alternate truth.",
+      "description": "PrepShip owns one policy-versioned purchased-cost, customer-rate, and margin tuple; the HUGRAB rule activates only from persisted client-ID billing configuration, and Billing, return read models, and Client Portal delegate instead of deriving alternate truth.",
       "evidenceIds": [
         "focused-ps437-guard",
         "implementation-scope-proof"
@@ -73,13 +73,14 @@
         "frontend-build",
         "full-sot-guard-pack",
         "client-portal-ci",
+        "live-deployment-readiness",
         "live-return-reconciliation"
       ]
     }
   ],
   "architecture": {
     "canonicalOwners": [
-      "src/services/customer-shipping-money.ts customer shipping decision/freeze owner",
+      "src/services/customer-shipping-money.ts customer shipping decision/freeze owner and persisted client-ID policy gate",
       "src/services/customer-shipping-money-snapshot.ts immutable tuple contract",
       "src/services/billing-shipping-line.ts and src/services/billing.ts existing Billing policy owners consumed by the customer-money owner",
       "Client Portal provider label receipt persistence followed by PrepShip scoped freeze delegation"
@@ -120,7 +121,7 @@
     ],
     "sotBypass": {
       "present": false,
-      "details": "Neither React nor Client Portal owns authoritative shipping-money policy. The reconciliation cannot estimate a cost or call a provider; it accepts only two fixed rows whose durable label receipt components agree and asks the canonical PrepShip policy owner for the frozen tuple."
+      "details": "Neither React nor Client Portal owns authoritative shipping-money policy. The HUGRAB override cannot be activated by a mutable display name and requires persisted client-ID billing configuration. The reconciliation cannot estimate a cost or call a provider; it accepts only two fixed rows whose durable label receipt components agree and asks the canonical PrepShip policy owner for the frozen tuple."
     }
   },
   "evidence": [
@@ -291,21 +292,40 @@
       "proves": "The complete mandatory source-of-truth, rate, label, Billing, lifecycle, lockdown, and runtime-schema guard pack passes."
     },
     {
+      "id": "live-deployment-readiness",
+      "classification": "live",
+      "command": "Read-only Vercel and Render deployment inspection, post-deploy error-log inspection, and public GET /health, /health/ready, /health/deep, and Vercel production alias on 2026-07-23",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-437.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_implementation_sha_live",
+        "vercel_ready",
+        "render_api_worker_print_live",
+        "readiness_http_200",
+        "provider_spy_untouched"
+      ],
+      "proves": "Vercel deployment dpl_EgK3MGnNcyL9MSG1UKADYiFY2BtF is Ready and Promoted in Production for exact SHA 24bade0f23c62e44a616746b29daa2f401d2e087. Render API dep-d9gksocvikkc739l1do0, sync worker dep-d9gksomigcvs73ai2230, and print worker dep-d9gksosvikkc739l1fog are live on the same SHA. The Vercel production alias, /health, /health/ready, and /health/deep returned HTTP 200; Print Queue reported zero queued/provider-pending work, worker heartbeat was current, and no post-deploy error was present. Verification called no label, postage, marketplace mutation, Billing generation, inventory mutation, or production order/shipment write boundary."
+    },
+    {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git show --name-only --format= 7c8cca4d1312379257948b728257be5353b60d90 && git show --name-only --format= 77e00f287017732a490c080d6f4515689dc6bb46",
+      "command": "git show --stat --oneline 24bade0f23c62e44a616746b29daa2f401d2e087 && git diff --check 5986b8a399583637706e47bf5dcc217943ec880f..24bade0f23c62e44a616746b29daa2f401d2e087",
       "result": "pass",
       "artifactPaths": [
         "src/services/customer-shipping-money.ts",
-        "src/services/customer-shipping-money-snapshot.ts",
-        "src/routes/client-portal/integrations.ts",
+        "src/services/billing-hugrab-shipping-rate-override.ts",
+        "src/services/billing-shipping-line.ts",
         "src/services/billing.ts",
-        "src/services/return-order-read-model.ts",
-        "scripts/ps-437-reconcile-return-money.ts",
-        "docs/ps-tickets/PS-437.md"
+        "src/services/shipping-workflow/rate-money.ts",
+        "src/routes/billing.ts",
+        "web/src/components/Views/billing-parity.ts",
+        "scripts/ps-437-customer-shipping-money-guard.ts"
       ],
       "assertions": [],
-      "proves": "The reviewed PrepShip commits contain the canonical policy/snapshot boundary, thin scoped route and consumers, bounded historical tool, tests, and report; no migration or destructive schema change exists."
+      "proves": "The reviewed PrepShip commit removes every active display-name fallback from the canonical policy owner and its Billing, rate-display, route, and frontend draft consumers; persisted client-ID billing configuration is required, focused guards forbid fallback reintroduction, and no migration or destructive schema change exists."
     }
   ],
   "migrations": {
@@ -325,7 +345,7 @@
   },
   "liveVerification": {
     "status": "verified",
-    "reason": "Both target applications are live/ready, and the post-apply production audit proves the exact two frozen tuples, three unchanged offline fixtures, zero canonical delta, and no Billing history or external side effect.",
+    "reason": "Exact implementation SHA 24bade0f23c62e44a616746b29daa2f401d2e087 is Ready and Promoted in Vercel production deployment dpl_EgK3MGnNcyL9MSG1UKADYiFY2BtF and live on Render API dep-d9gksocvikkc739l1do0, sync worker dep-d9gksomigcvs73ai2230, and print worker dep-d9gksosvikkc739l1fog. Public shell, health, readiness, and deep health are HTTP 200 with no post-deploy errors. The earlier post-apply production audit continues to prove the exact two frozen tuples, three unchanged offline fixtures, zero canonical delta, and no Billing-history or external side effect from the bounded correction. This release verification performed no business-data mutation.",
     "followUpOwner": null,
     "artifactPaths": [
       "docs/final-review/evidence/PS-437-return-reconciliation.json",
