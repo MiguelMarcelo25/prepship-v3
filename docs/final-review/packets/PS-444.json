@@ -5,7 +5,7 @@
   "title": "Crash-safe Print Queue mixed-batch recovery and provider outcome fencing",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "00adc6e6fe2d7aff1180a228408fde6794c13562"
+    "reviewedSha": "7e8ba7753fa538f496da3fbdebee511da477123f"
   },
   "riskDomains": [
     "rate_label",
