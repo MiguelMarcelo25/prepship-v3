@@ -19,6 +19,8 @@ import {
 import {
   freezeReturnCustomerShippingMoney,
   getShipmentCustomerShippingMoneyTarget,
+  previewReturnCustomerShippingMoney,
+  ReturnCustomerShippingPolicyUnavailableError,
 } from '../../services/customer-shipping-money';
 
 const app = new Hono<{ Variables: AuthVars }>();
@@ -126,6 +128,55 @@ const freezeCustomerShippingMoneySchema = z.object({
   shipmentId: z.number().int().positive(),
 });
 
+const previewReturnCustomerShippingMoneySchema = z.object({
+  sourceShipmentId: z.number().int().positive(),
+  selectedRateCost: z.number().positive().max(100_000),
+  carrierCode: z.string().trim().max(100).nullable().optional(),
+  providerAccountId: z.number().int().positive().nullable().optional(),
+});
+
+// PS-435: fail closed before Client Portal calls a postage provider. The route
+// validates scope and delegates every pricing decision to the canonical owner;
+// its response deliberately omits selected cost and margin.
+app.post(
+  '/customer-shipping-money/return-preview',
+  requirePermission('billing:generate'),
+  zValidator('json', previewReturnCustomerShippingMoneySchema),
+  async (c) => {
+    const input = c.req.valid('json');
+    const target = await getShipmentCustomerShippingMoneyTarget(input.sourceShipmentId);
+    const scope = getInternalOpsClientStoreScope({
+      email: c.get('email'),
+      role: c.get('role'),
+      permissions: c.get('permissions'),
+      clientIds: c.get('clientIds'),
+      storeIds: c.get('storeIds'),
+    });
+    if (
+      !target ||
+      target.isReturn ||
+      !isClientVisibleToScope({ id: target.clientId, storeIds: target.storeIds }, scope)
+    ) {
+      return c.json({ error: 'Outbound shipment not found' }, 404);
+    }
+    try {
+      const preview = await previewReturnCustomerShippingMoney(input);
+      return c.json({
+        data: {
+          cShippingRateAmount: preview.cShippingRateAmount,
+          customerRateSource: preview.customerRateSource,
+          customerShippingMoneyPolicyVersion: preview.customerShippingMoneyPolicyVersion,
+        },
+      });
+    } catch (error) {
+      if (error instanceof ReturnCustomerShippingPolicyUnavailableError) {
+        return c.json({ error: error.message }, 422);
+      }
+      throw error;
+    }
+  },
+);
+
 // PS-437: a portal user submits only a return shipment identity. PrepShip
 // reloads exact selected cost + account policy and returns only customer-safe
 // fields. The portal client id must own the shipment; internal money stays here.
@@ -149,14 +200,21 @@ app.post(
     ) {
       return c.json({ error: 'Return shipment not found' }, 404);
     }
-    const snapshot = await freezeReturnCustomerShippingMoney(shipmentId);
-    return c.json({
-      data: {
-        cShippingRateAmount: snapshot.cShippingRateAmount,
-        customerRateSource: snapshot.customerRateSource,
-        customerShippingMoneyPolicyVersion: snapshot.customerShippingMoneyPolicyVersion,
-      },
-    });
+    try {
+      const snapshot = await freezeReturnCustomerShippingMoney(shipmentId);
+      return c.json({
+        data: {
+          cShippingRateAmount: snapshot.cShippingRateAmount,
+          customerRateSource: snapshot.customerRateSource,
+          customerShippingMoneyPolicyVersion: snapshot.customerShippingMoneyPolicyVersion,
+        },
+      });
+    } catch (error) {
+      if (error instanceof ReturnCustomerShippingPolicyUnavailableError) {
+        return c.json({ error: error.message }, 422);
+      }
+      throw error;
+    }
   },
 );
 

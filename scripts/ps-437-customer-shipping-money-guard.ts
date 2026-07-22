@@ -96,10 +96,13 @@ assert.match(billing, /resolveCustomerShippingMoney\(\{/);
 assert.match(route, /customer-shipping-money\/freeze/);
 assert.match(route, /requirePermission\('billing:generate'\)/);
 assert.match(route, /isClientVisibleToScope\(\{ id: target\.clientId, storeIds: target\.storeIds \}, scope\)/);
-assert.match(owner, /const selectedRateCost = finiteNumber\(row\.selectedRateCost\)/);
+assert.match(
+  owner,
+  /const selectedRateCost = finiteNumber\(options\.selectedRateCost \?\? row\.selectedRateCost\)/,
+);
 assert.doesNotMatch(owner, /resolveBillingSelectedRateCost/);
 assert.match(owner, /previewShipmentCustomerShippingMoneyWithSelectedRateCost/);
-assert.match(owner, /Per user override unlock shipped data on 2026-05-23: PS-437/);
+assert.match(owner, /Per user override unlock shipped data on 2026-07-22: PS-435\/437/);
 assert.match(reconciliation, /--confirm-production/);
 assert.match(reconciliation, /--expected-count=/);
 assert.match(reconciliation, /DryRunRollback/);

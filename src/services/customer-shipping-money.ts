@@ -72,6 +72,30 @@ type CustomerShippingMoneyRow = {
   hugrabOverrideAmount: string | number | null;
 };
 
+export type ReturnCustomerShippingMoneyPreviewInput = {
+  sourceShipmentId: number;
+  selectedRateCost: number;
+  carrierCode?: string | null;
+  providerAccountId?: number | null;
+};
+
+export class ReturnCustomerShippingPolicyUnavailableError extends Error {
+  constructor() {
+    super('Customer return shipping rate is not configured');
+    this.name = 'ReturnCustomerShippingPolicyUnavailableError';
+  }
+}
+
+export type ReturnCustomerShippingPolicyFacts = {
+  clientName: string | null;
+  hugrabOverrideEnabled: boolean;
+  billingMode: string | null;
+  carrierCode: string | null;
+  refUspsRate: number | null;
+  refUpsRate: number | null;
+  hasResolvedMarkup: boolean;
+};
+
 function finiteNumber(value: unknown): number | null {
   if (value == null || value === '') return null;
   const parsed = Number(value);
@@ -86,6 +110,25 @@ function recordOrNull(value: unknown): Record<string, unknown> | null {
 
 function roundPercent(value: number): number {
   return Math.round(value * 1000) / 10;
+}
+
+/** Fail-closed policy gate for customer-visible return postage. */
+export function assertReturnCustomerShippingPolicyConfigured(
+  facts: ReturnCustomerShippingPolicyFacts,
+): void {
+  const normalizedClientName = facts.clientName?.trim().toUpperCase() ?? '';
+  const hasHugrabPolicy =
+    normalizedClientName === HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME &&
+    facts.hugrabOverrideEnabled;
+  const billingMode = facts.billingMode ?? 'per_shipment';
+  const hasReferenceRatePolicy =
+    (billingMode === 'reference_rate' || billingMode === 'ss_ref_rate') &&
+    !SS_BASELINE_CARRIER_CODES.has(facts.carrierCode ?? '') &&
+    [facts.refUspsRate, facts.refUpsRate].some((value) => value != null && value > 0);
+
+  if (!hasHugrabPolicy && !facts.hasResolvedMarkup && !hasReferenceRatePolicy) {
+    throw new ReturnCustomerShippingPolicyUnavailableError();
+  }
 }
 
 /** Canonical PrepShip policy shared by outbound Billing and return snapshot freeze. */
@@ -198,30 +241,60 @@ export async function getShipmentCustomerShippingMoneyTarget(
 
 async function decideCustomerShippingMoneyForRow(
   row: CustomerShippingMoneyRow,
+  options: {
+    requireExplicitReturnPolicy?: boolean;
+    selectedRateCost?: number;
+    carrierCode?: string | null;
+    providerAccountId?: number | null;
+  } = {},
 ): Promise<CustomerShippingMoneyDecision> {
-  if (!row.billingActive) throw new Error('Customer shipping policy is inactive');
+  if (!row.billingActive) {
+    if (options.requireExplicitReturnPolicy) {
+      throw new ReturnCustomerShippingPolicyUnavailableError();
+    }
+    throw new Error('Customer shipping policy is inactive');
+  }
   if (row.clientId == null || !row.clientName) throw new Error('Customer shipping policy client is unavailable');
   // PS-437 fail-closed boundary: new return freezes require the exact provider
   // total persisted in selected_rate_cost. Legacy component fallbacks are audit
   // evidence only and must never become a newly frozen customer-money fact.
-  const selectedRateCost = finiteNumber(row.selectedRateCost);
+  const selectedRateCost = finiteNumber(options.selectedRateCost ?? row.selectedRateCost);
   if (selectedRateCost == null || selectedRateCost <= 0) {
     throw new Error('Selected/purchased label cost is unavailable');
   }
+  const carrierCode = options.carrierCode !== undefined
+    ? options.carrierCode
+    : row.carrierCode;
+  const providerAccountId = options.providerAccountId !== undefined
+    ? options.providerAccountId
+    : row.providerAccountId;
   const perAccountMarkups = process.env.BILLING_PER_ACCOUNT_MARKUP === 'on'
     ? await loadCarrierMarkups()
     : null;
   const resolvedMarkup = resolveCanonicalMarkup({
     carrierAccountMarkup: perAccountMarkups
-      ? resolvePerAccountMarkupRule(perAccountMarkups, row.providerAccountId)
+      ? resolvePerAccountMarkupRule(perAccountMarkups, providerAccountId)
       : null,
     clientShippingMarkupPct: finiteNumber(row.shippingMarkupPct) ?? 0,
     clientShippingMarkupFlat: finiteNumber(row.shippingMarkupFlat) ?? 0,
   });
-  return resolveCustomerShippingMoney({
+  if (options.requireExplicitReturnPolicy) {
+    // PS-435: a missing/all-zero billing row is not customer-rate policy.
+    // Never let the generic label-cost fallback become a customer return rate.
+    assertReturnCustomerShippingPolicyConfigured({
+      clientName: row.clientName,
+      hugrabOverrideEnabled: row.hugrabOverrideEnabled,
+      billingMode: row.billingMode,
+      carrierCode,
+      refUspsRate: finiteNumber(row.refUspsRate),
+      refUpsRate: finiteNumber(row.refUpsRate),
+      hasResolvedMarkup: resolvedMarkup != null,
+    });
+  }
+  const decision = resolveCustomerShippingMoney({
     selectedRateCost,
     billingMode: row.billingMode,
-    carrierCode: row.carrierCode,
+    carrierCode,
     refUspsRate: finiteNumber(row.refUspsRate),
     refUpsRate: finiteNumber(row.refUpsRate),
     shippingMarkupPct: resolvedMarkup?.pct ?? 0,
@@ -234,6 +307,13 @@ async function decideCustomerShippingMoneyForRow(
       amount: row.hugrabOverrideAmount,
     },
   });
+  if (
+    options.requireExplicitReturnPolicy &&
+    Math.abs(decision.cShippingRateAmount - decision.selectedRateCost) < 0.005
+  ) {
+    throw new ReturnCustomerShippingPolicyUnavailableError();
+  }
+  return decision;
 }
 
 export async function previewShipmentCustomerShippingMoney(
@@ -260,8 +340,26 @@ export async function previewShipmentCustomerShippingMoneyWithSelectedRateCost(
 }
 
 /**
+ * Read-only pre-purchase decision for Client Portal returns. The candidate
+ * provider cost stays server-to-server; callers receive only customer-safe
+ * amount/provenance fields from the route DTO.
+ */
+export async function previewReturnCustomerShippingMoney(
+  input: ReturnCustomerShippingMoneyPreviewInput,
+): Promise<CustomerShippingMoneyDecision> {
+  const row = await loadCustomerShippingMoneyRow(input.sourceShipmentId);
+  if (!row || row.isReturn || row.voided) throw new Error('Active outbound shipment not found');
+  return decideCustomerShippingMoneyForRow(row, {
+    requireExplicitReturnPolicy: true,
+    selectedRateCost: input.selectedRateCost,
+    carrierCode: input.carrierCode,
+    providerAccountId: input.providerAccountId,
+  });
+}
+
+/**
  * Freeze the canonical return money tuple on shipments.selected_rate_json.
- * Per user override unlock shipped data on 2026-05-23: PS-437 updates only the
+ * Per user override unlock shipped data on 2026-07-22: PS-435/437 update only the
  * one explicitly requested return shipment, never status/history/postage, and
  * never rewrites a snapshot once the full policy-versioned tuple exists.
  */
@@ -273,7 +371,11 @@ export async function freezeReturnCustomerShippingMoney(
   const existing = readFrozenCustomerShippingMoney(row.selectedRateJson);
   if (existing) return existing;
 
-  const decision = await decideCustomerShippingMoneyForRow(row);
+  // Per user override unlock shipped data on 2026-07-22: PS-435 tightens this
+  // existing return-only freeze; shipped/cancelled edit protections stay intact.
+  const decision = await decideCustomerShippingMoneyForRow(row, {
+    requireExplicitReturnPolicy: true,
+  });
   const original = recordOrNull(row.selectedRateJson) ?? {};
   const frozen: FrozenCustomerShippingMoney = {
     selectedRateCost: decision.selectedRateCost,

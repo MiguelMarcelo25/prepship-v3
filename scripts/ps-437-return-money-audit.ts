@@ -200,10 +200,44 @@ for (const row of rows) {
         : persistedProviderReceipt
           ? 'persisted_provider_label_receipt'
           : 'insufficient_exact_evidence';
+  const rawCostForComparison =
+    finite(row.selectedRateCost) ??
+    exactEvidenceCost ??
+    (legacyCostEvidence != null && legacyCostEvidence > 0 ? legacyCostEvidence : null);
+  const returnPostageLines = billingRows.filter((billingRow) =>
+    billingRow.lineType === 'return_postage' &&
+    billingRow.clientId === row.clientId &&
+    (
+      (row.shipmentId != null && billingRow.shipmentId === row.shipmentId) ||
+      (billingRow.shipmentId == null && billingRow.orderId === row.orderId)
+    ));
+  const billingReturnPostageAmounts = returnPostageLines.map((billingRow) =>
+    Math.round(Number(billingRow.totalCost) * 100) / 100);
+  const categories: string[] = [];
+  if (!frozen) categories.push('missing_frozen_snapshot');
+  if (row.compatibilityRate == null) categories.push('missing_return_customer_shipping_rate');
+  if (
+    current != null &&
+    rawCostForComparison != null &&
+    Math.abs(current - rawCostForComparison) < 0.005
+  ) {
+    categories.push('snapshot_equals_raw_cost');
+  }
+  if (offlineTestNoCharge || current === 0) categories.push('zero_or_offline_snapshot');
+  if (
+    returnPostageLines.length > 0 &&
+    (
+      current == null ||
+      billingReturnPostageAmounts.some((amount) => Math.abs(amount - current) >= 0.005)
+    )
+  ) {
+    categories.push('billing_return_postage_mismatch');
+  }
   report.push({
     returnId: row.returnId,
     returnReference: row.returnReference,
     shipmentId: row.shipmentId,
+    clientId: row.clientId,
     frozenCustomerRate: frozen?.cShippingRateAmount ?? null,
     selectedRateCost: row.selectedRateCost == null ? null : Number(row.selectedRateCost),
     returnStatus: row.returnStatus,
@@ -217,6 +251,9 @@ for (const row of rows) {
     repairCandidateSelectedRateCost: exactEvidenceCost,
     compatibilityRate: row.compatibilityRate == null ? null : Number(row.compatibilityRate),
     canonicalExpectedRate: expected,
+    rawCostForComparison,
+    billingReturnPostageAmounts,
+    categories,
     delta: current != null && expected != null
       ? Math.round((current - expected) * 100) / 100
       : null,
@@ -232,9 +269,17 @@ for (const row of rows) {
   });
 }
 
+const categoryCounts = report.reduce<Record<string, number>>((counts, row) => {
+  for (const category of row.categories) {
+    counts[category] = (counts[category] ?? 0) + 1;
+  }
+  return counts;
+}, {});
+
 console.log(JSON.stringify({
   mode: 'read-only',
   count: report.length,
+  categoryCounts,
   rows: report,
   billing: billingRows.map((row) => ({
     ...row,
