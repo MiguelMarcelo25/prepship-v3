@@ -127,6 +127,7 @@ function createWorker(workerId: string, manager: FakeLeadershipManager) {
   let recoveryCount = 0;
   let registerCount = 0;
   let unregisterCount = 0;
+  const restartRequests: string[] = [];
   const diagnostics: string[] = [];
 
   const controller = new ShipStationConsumerLeadershipController(
@@ -145,6 +146,7 @@ function createWorker(workerId: string, manager: FakeLeadershipManager) {
         manager.unregister(workerId);
         unregisterCount += 1;
       },
+      requestRestart: (reason: string) => restartRequests.push(reason),
       setTimer: clock.setTimer,
       clearTimer: clock.clearTimer,
       info: (message: string) => diagnostics.push(`info:${message}`),
@@ -166,7 +168,7 @@ function createWorker(workerId: string, manager: FakeLeadershipManager) {
       recoverActiveJobs = recovery;
     },
     counts() {
-      return { recoveryCount, registerCount, unregisterCount };
+      return { recoveryCount, registerCount, unregisterCount, restartRequests };
     },
   };
 }
@@ -183,7 +185,12 @@ assert.deepEqual(workerA.controller.snapshot(), {
   consumersRegistered: true,
   scheduledDelayMs: 15,
 });
-assert.deepEqual(workerA.counts(), { recoveryCount: 1, registerCount: 1, unregisterCount: 0 });
+assert.deepEqual(workerA.counts(), {
+  recoveryCount: 1,
+  registerCount: 1,
+  unregisterCount: 0,
+  restartRequests: [],
+});
 
 await workerB.controller.start();
 assert.equal(workerB.controller.snapshot().ownsLock, false);
@@ -194,7 +201,12 @@ assert.equal(manager.maxRegisteredWorkers, 1, 'two workers must never register t
 await workerA.controller.stop();
 assert.equal(manager.owner, null);
 assert.deepEqual(workerA.clock.pendingDelays(), []);
-assert.deepEqual(workerA.counts(), { recoveryCount: 1, registerCount: 1, unregisterCount: 1 });
+assert.deepEqual(workerA.counts(), {
+  recoveryCount: 1,
+  registerCount: 1,
+  unregisterCount: 1,
+  restartRequests: [],
+});
 
 workerB.setActiveJobs([{ id: 'old-generation-job', name: 'prepship.sync.orders' }]);
 await workerB.controller.runMaintenanceNow();
@@ -224,7 +236,12 @@ await workerB.controller.notifyConnectionClosed();
 assert.equal(workerB.controller.snapshot().ownsLock, false);
 assert.equal(workerB.controller.snapshot().consumersRegistered, false);
 assert.deepEqual(workerB.clock.pendingDelays(), [5]);
-assert.deepEqual(workerB.counts(), { recoveryCount: 2, registerCount: 1, unregisterCount: 1 });
+assert.deepEqual(workerB.counts(), {
+  recoveryCount: 2,
+  registerCount: 1,
+  unregisterCount: 1,
+  restartRequests: ['shipstation_consumer_leadership_closed'],
+});
 
 const workerC = createWorker('worker-c', manager);
 await workerC.controller.start();
@@ -245,12 +262,15 @@ assert.deepEqual(
     'drop:worker-c',
     'unregister:worker-c',
     'release:worker-c',
-    'reserve:worker-c',
-    'acquire:worker-c',
-    'register:worker-c',
   ],
-  'health fallback must unregister the lost generation before reacquiring',
+  'health fallback must unregister the lost generation before requesting restart',
 );
+assert.equal(workerC.controller.snapshot().ownsLock, false);
+assert.equal(workerC.controller.snapshot().consumersRegistered, false);
+assert.deepEqual(workerC.clock.pendingDelays(), [5]);
+assert.deepEqual(workerC.counts().restartRequests, [
+  'shipstation_consumer_leadership_ping_failed',
+]);
 assert.equal(manager.maxRegisteredWorkers, 1);
 
 await workerC.controller.stop();

@@ -174,6 +174,7 @@ type ShipStationConsumerLeadershipDependencies = {
   readActiveJobs(): Promise<ActiveShipStationSyncJob[]>;
   registerConsumers(): Promise<void>;
   unregisterConsumers(): Promise<void>;
+  requestRestart(reason: string): void;
   setTimer(callback: () => void, delayMs: number): unknown;
   clearTimer(handle: unknown): void;
   info(message: string): void;
@@ -245,8 +246,7 @@ export class ShipStationConsumerLeadershipController {
         new Error('leadership_session_closed'),
       );
       this.clearScheduledTimer();
-      await this.dropLostConnection();
-      this.schedule(this.retryMs);
+      await this.restartAfterLostConnection('shipstation_consumer_leadership_closed');
     });
   }
 
@@ -315,6 +315,18 @@ export class ShipStationConsumerLeadershipController {
     }
   }
 
+  private async restartAfterLostConnection(reason: string): Promise<void> {
+    await this.dropLostConnection();
+    // Per user override unlock shipped data on 2026-05-23: a lost
+    // leadership session can leave its server-side advisory lock alive after
+    // a network abort. Restart the worker so the OS closes every stale socket
+    // and the durable queue can elect a clean consumer generation. This is
+    // queue control-plane recovery only; it does not mutate orders,
+    // shipments, labels, postage, or marketplace state.
+    this.schedule(this.retryMs);
+    this.dependencies.requestRestart(reason);
+  }
+
   private async releaseLeadership(): Promise<void> {
     const connection = this.connection;
     this.connection = null;
@@ -343,7 +355,8 @@ export class ShipStationConsumerLeadershipController {
             '[job-queue] ShipStation consumer leadership connection lost',
             error,
           );
-          await this.dropLostConnection();
+          await this.restartAfterLostConnection('shipstation_consumer_leadership_ping_failed');
+          return;
         }
       }
 
@@ -1686,6 +1699,10 @@ function createShipStationConsumerLeadership(): ShipStationConsumerLeadershipCon
       await registerShipStationStatelyWorkers();
     },
     unregisterConsumers: unregisterShipStationStatelyWorkers,
+    requestRestart: (reason) => {
+      console.error(`[job-queue] unhealthy; requesting supervisor restart (${reason})`);
+      process.exit(1);
+    },
     setTimer: (callback, delayMs) => {
       const timer = setTimeout(callback, delayMs);
       timer.unref?.();
