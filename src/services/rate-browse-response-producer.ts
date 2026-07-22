@@ -54,6 +54,7 @@ import {
   selectedRateOpaqueKey,
   withSelectedRateKeys,
 } from './shipping-workflow/rate-quote-snapshot-store';
+import { rateSourcesArePurchaseProofEligible } from './shipping-workflow/rate-signature-cache-policy';
 import {
   readText,
   stampHugrabCoverageDisplayFields,
@@ -583,6 +584,10 @@ export async function produceRateBrowsePayload({
       cacheKey: combinedRequestKey,
       bestRateComplete,
       fetchedAt: result.fetchedAt,
+      purchaseProofEligible: rateSourcesArePurchaseProofEligible({
+        shipStationCached: result.cached,
+        directCarrierCacheUsed: directRates.usedCachedRates,
+      }),
       authorization: quoteAuthorization,
     });
     rateQuoteId = finalized.rateQuoteId;

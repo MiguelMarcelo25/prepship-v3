@@ -99,6 +99,8 @@ export async function finalizeBestRateWithQuote<T extends Record<string, unknown
   cacheKey: string;
   bestRateComplete?: boolean | null;
   fetchedAt?: string | number;
+  /** Cached rates are planning/display truth only and cannot authorize postage. */
+  purchaseProofEligible?: boolean;
   authorization?: {
     context: ShippingQuoteAuthorizationContext;
     accounts: ShippingQuoteAccountAuthorization[];
@@ -122,14 +124,16 @@ export async function finalizeBestRateWithQuote<T extends Record<string, unknown
 }> {
   const ratesWithKeys = withSelectedRateKeys(input.rates);
   const isComplete = input.bestRateComplete === true;
-  const rateQuoteId = await storeRateQuoteSnapshot({
-    cacheKey: input.cacheKey,
-    rates: ratesWithKeys,
-    bestRate: input.bestRate,
-    bestRateComplete: input.bestRateComplete,
-    fetchedAt: input.fetchedAt,
-    authorization: input.authorization,
-  });
+  const rateQuoteId = input.purchaseProofEligible === false
+    ? null
+    : await storeRateQuoteSnapshot({
+        cacheKey: input.cacheKey,
+        rates: ratesWithKeys,
+        bestRate: input.bestRate,
+        bestRateComplete: input.bestRateComplete,
+        fetchedAt: input.fetchedAt,
+        authorization: input.authorization,
+      });
   const selectionRefFor = (rate: Record<string, unknown> & { selectedRateKey: string }): string | null => {
     if (!rateQuoteId || !input.authorization) return null;
     const providerId = shippingProviderIdFromAuthorizedRate(rate);

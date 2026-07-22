@@ -3452,6 +3452,18 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
     })
     .returning();
 
+  // PS-459: a manual awaiting order with complete package facts enters the same durable,
+  // cache-first background owner as synced/webhook orders. If the operator already selected a
+  // preview rate, that live browse already warmed the cache and remains their explicit choice.
+  if (
+    !selectedBestRate
+    && weightOz > 0
+    && hasDims
+    && body.shipToPostalCode.trim().length > 0
+  ) {
+    await enqueueBackfillBestRatesForOrderIds([created.id], undefined, 'rate-on-ingest');
+  }
+
   return c.json({
     data: {
       order: created,

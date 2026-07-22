@@ -58,3 +58,21 @@ Per the user's current-conversation override `unlock shipped data`, the shared
 import owner reads the terminal-preserved post-upsert status and admits only
 `awaiting_shipment` rows. It does not alter terminal status, shipments, labels,
 postage, inventory, or marketplace confirmation.
+
+## PS-459 completion
+
+PS-459 extends the same source-of-truth path to manual awaiting orders that have
+complete weight, dimensions, and destination ZIP facts but no operator-selected
+preview rate. The manual route only admits the order ID; the durable backfill
+still owns rating and the combined backend authority still owns Best Rate.
+
+Direct-carrier planning rates now reuse the existing exact per-account cache
+identity before calling a provider. The longer saved-rate freshness window is
+used only for cache-first/cached-only reads; PS-271's live-response union keeps
+its independent short TTL. Background snapshots persist measured full-hit,
+partial-hit, miss, and provider-fetch counts so the cache hit rate is observable.
+
+Cached ShipStation or direct-carrier results are display/planning truth only.
+The shared finalizer skips quote-snapshot persistence for any cached source, so
+cached rates never receive a purchase-authorizing `selectionRef`; label purchase
+must re-rate through an all-live backend response first.

@@ -103,6 +103,7 @@ import {
   type DirectCarrierCacheRow,
 } from './direct-carrier-rate-cache';
 import { isShopifyShippingDisplayOnlyProvider } from './shopify-rates';
+import { decideDirectCarrierCacheUse } from './shipping-workflow/rate-signature-cache-policy';
 import { partitionShipStationEstimateBatch } from './shipstation-rate-batch';
 import {
   isDirectShippingAccount,
@@ -1039,7 +1040,27 @@ export type DirectCarrierRatesResult = {
   metas: DirectCarrierRateMeta[];
   diagnostics: CarrierRateDiagnostic[];
   authorizationAccounts: ShippingQuoteAccountAuthorization[];
+  providerFetches: number;
+  usedCachedRates: boolean;
 };
+
+function directCarrierQuoteAuthorizationAccount(
+  account: DirectCarrierAccountInfo,
+  shippingProviderId: number,
+): ShippingQuoteAccountAuthorization {
+  return {
+    providerFamily: 'direct',
+    provider: normalizeProviderKey(account.provider),
+    shippingProviderId,
+    sourceTable: account.sourceTable,
+    sourceAccountId: account.id,
+    ownerClientId: account.clientId,
+    ownerStoreAccountId: account.linkedStoreAccountId,
+    credentialSource: account.sourceTable === 'store_accounts' ? 'store_account' : 'carrier_account',
+    credentialFingerprint: shippingQuoteCredentialFingerprint(account.credentials),
+    environment: process.env.NODE_ENV ?? 'development',
+  };
+}
 
 // PS-132: derived from the single backend carrier-account registry (src/lib/
 // carrier-account-registry.ts) so the rate-carrier display can't drift from Orders/Settings.
@@ -2434,6 +2455,27 @@ function cachedRowToDirectRate(row: DirectCarrierCacheRow, shippingProviderId: n
   return { ...rate, carrier_id: `se-${shippingProviderId}` } as Rate;
 }
 
+function applyDirectRatePricing(
+  rates: Rate[],
+  directMarkups: Map<string, Markup>,
+  provider: string,
+  shippingOptions: ReturnType<typeof normalizeShippingOptions>,
+): Rate[] {
+  const markedUp = applyMarkups(rates, directMarkups);
+  const easyPostPremium =
+    normalizeProviderKey(provider) === 'easypost'
+    && shippingOptions.insuranceProvider !== 'none'
+    && Number(shippingOptions.insuredValue ?? 0) > 0
+      ? easyPostScheduledPremium(Number(shippingOptions.insuredValue ?? 0))
+      : null;
+  return easyPostPremium != null && easyPostPremium > 0
+    ? markedUp.map((rate) => ({
+        ...rate,
+        insurance_amount: { amount: easyPostPremium, currency: rate.insurance_amount?.currency ?? 'USD' },
+      }))
+    : markedUp;
+}
+
 // PS-271 (Layer 2): union live direct-carrier rates with fresh-cached rows for the SAME
 // (account, source_table, request_key) lane. Live wins per carrier|service|amount key (live inserted
 // first; a cached row is only added when its key is absent). When the cache is OFF or returns nothing
@@ -2444,25 +2486,29 @@ async function unionDirectRatesWithCache(
   account: DirectCarrierAccountInfo,
   shippingProviderId: number,
   requestKey: string,
-): Promise<Rate[]> {
-  if (!directCarrierRateCacheEnabled() || !requestKey) return live;
+): Promise<{ rates: Rate[]; usedCachedRates: boolean }> {
+  if (!directCarrierRateCacheEnabled() || !requestKey) return { rates: live, usedCachedRates: false };
   let cachedRows: DirectCarrierCacheRow[] = [];
   try {
     cachedRows = await readFreshDirectCarrierRates(account.id, account.sourceTable, requestKey);
   } catch (err) {
     console.warn('[rates] direct-carrier cache union skipped:', err instanceof Error ? err.message : err);
-    return live;
+    return { rates: live, usedCachedRates: false };
   }
-  if (!cachedRows.length) return live;
+  if (!cachedRows.length) return { rates: live, usedCachedRates: false };
   const byKey = new Map<string, Rate>();
   for (const rate of live) byKey.set(directRateUnionKey(rate), rate); // live wins
+  let usedCachedRates = false;
   for (const row of cachedRows) {
     const rate = cachedRowToDirectRate(row, shippingProviderId);
     if (!rate) continue;
     const key = directRateUnionKey(rate);
-    if (!byKey.has(key)) byKey.set(key, rate);
+    if (!byKey.has(key)) {
+      byKey.set(key, rate);
+      usedCachedRates = true;
+    }
   }
-  return [...byKey.values()];
+  return { rates: [...byKey.values()], usedCachedRates };
 }
 
 // PS-271 (Layer 2): fire-and-forget UPSERT each LIVE direct-carrier rate into the 60s cache. NO-OP
@@ -2490,7 +2536,7 @@ function writeDirectRatesToCache(
 
 export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
-  options: { cachedOnly?: boolean; priority?: RateFetchPriority } = {},
+  options: { cachedOnly?: boolean; cacheFirst?: boolean; priority?: RateFetchPriority } = {},
 ): Promise<DirectCarrierRatesResult> {
   input.signal?.throwIfAborted();
   const accounts = (await loadVisibleDirectCarrierAccounts(input)).filter((account) => {
@@ -2506,35 +2552,19 @@ export async function getDirectCarrierRatesForRateInput(
     return true;
   });
   if (!accounts.length) {
-    return { rates: [], errors: [], metas: [], diagnostics: [], authorizationAccounts: [] };
-  }
-  // PS-206: cachedOnly means cached-only across the WHOLE combined universe.
-  // Direct carriers have no rate cache today, so a cached-only lookup must NOT
-  // live-quote them (the old behavior silently fired provider calls during the
-  // Rate Browser's "instant cache paint"). Instead, report every visible
-  // account as terminal 'uncached' coverage — the caller (Rate Browser) then
-  // decides the live follow-up from this coverage identity, never from a
-  // carrier count.
-  if (options.cachedOnly) {
     return {
       rates: [],
       errors: [],
       metas: [],
+      diagnostics: [],
       authorizationAccounts: [],
-      diagnostics: accounts.map((account) => {
-        const shippingProviderId = directProviderIdFromAccount(account);
-        return {
-          carrierId: `se-${shippingProviderId}`,
-          accountId: String(account.id),
-          carrierCode: normalizeProviderKey(account.provider),
-          nickname: account.displayIdentity || normalizeProviderKey(account.provider),
-          status: 'uncached' as CarrierRateDiagnosticStatus,
-          rateCount: 0,
-          durationMs: 0,
-        };
-      }),
+      providerFetches: 0,
+      usedCachedRates: false,
     };
   }
+  // PS-459: cached-only and cache-first reads use the same exact per-account request signature.
+  // A warm hit returns planning/display rates without invoking a provider; a cached-only miss is
+  // terminal `uncached`, while cache-first falls through to the existing live quote owner.
   const shippingOptions = normalizeShippingOptions(input);
   const executionPolicy = resolveRateBrowseProviderExecutionPolicy({
     priority: options.priority ?? 'interactive',
@@ -2598,6 +2628,8 @@ export async function getDirectCarrierRatesForRateInput(
           durationMs: Date.now() - startedAt,
           error: scope.reason,
         },
+        providerFetches: 0,
+        usedCachedRates: false,
       };
     }
     const requestFingerprint = `${rateCacheKey({
@@ -2605,6 +2637,73 @@ export async function getDirectCarrierRatesForRateInput(
       residential: resolvedResidential,
       carrierIds: [`se-${shippingProviderId}`],
     })}:direct:${account.sourceTable}:${account.id}`;
+    const cachedRows = options.cachedOnly || options.cacheFirst
+      ? await readFreshDirectCarrierRates(
+          account.id,
+          account.sourceTable,
+          requestFingerprint,
+          CACHE_TTL_MS,
+        )
+      : [];
+    const cachedRates = cachedRows
+      .map((row) => cachedRowToDirectRate(row, shippingProviderId))
+      .filter((rate): rate is Rate => rate != null);
+    const cacheDecision = decideDirectCarrierCacheUse({
+      cachedOnly: options.cachedOnly === true,
+      cacheFirst: options.cacheFirst === true,
+      cachedRateCount: cachedRates.length,
+    });
+    if (cacheDecision === 'cache_hit') {
+      const provider = normalizeProviderKey(account.provider);
+      const rates = applyDirectRatePricing(cachedRates, directMarkups, provider, shippingOptions);
+      const meta = {
+        accountId: account.id,
+        sourceTable: account.sourceTable,
+        provider,
+        rateCount: rates.length,
+        cacheHit: true,
+      };
+      return {
+        rates,
+        errors: [] as DirectCarrierRateError[],
+        metas: [{ accountId: account.id, shippingProviderId, sourceTable: account.sourceTable, provider, meta }],
+        authorizationAccounts: [directCarrierQuoteAuthorizationAccount(account, shippingProviderId)],
+        diagnostic: {
+          carrierId: `se-${shippingProviderId}`,
+          accountId: String(account.id),
+          carrierCode: provider,
+          nickname: label,
+          status: 'cached' as CarrierRateDiagnosticStatus,
+          rateCount: rates.length,
+          durationMs: Date.now() - startedAt,
+          limiterWaitMs: 0,
+          attempts: 0,
+        },
+        providerFetches: 0,
+        usedCachedRates: true,
+      };
+    }
+    if (cacheDecision === 'uncached') {
+      return {
+        rates: [] as Rate[],
+        errors: [] as DirectCarrierRateError[],
+        metas: [] as DirectCarrierRateMeta[],
+        authorizationAccounts: [] as ShippingQuoteAccountAuthorization[],
+        diagnostic: {
+          carrierId: `se-${shippingProviderId}`,
+          accountId: String(account.id),
+          carrierCode: normalizeProviderKey(account.provider),
+          nickname: label,
+          status: 'uncached' as CarrierRateDiagnosticStatus,
+          rateCount: 0,
+          durationMs: Date.now() - startedAt,
+          limiterWaitMs: 0,
+          attempts: 0,
+        },
+        providerFetches: 0,
+        usedCachedRates: false,
+      };
+    }
     try {
       // PS-199: Walmart Shipping quotes need a Walmart purchaseOrderId + the raw
       // marketplace order. The canonical resolver (body → walmart- prefix →
@@ -2698,7 +2797,6 @@ export async function getDirectCarrierRatesForRateInput(
       // reflects what this account actually returned this pass. NO-OP when the cache is OFF.
       void writeDirectRatesToCache(liftedLive, account, requestFingerprint);
 
-      const markedUp = applyMarkups(liftedUnion, directMarkups);
       // PS-261: EasyPost charges its OWN insurance fee and its rates never pass through the
       // ShipStation enrichRatesWithInsuranceCost path (the direct universe is merged AFTER
       // enrichment via combineCarrierUniverses), so an insured EasyPost rate would carry
@@ -2707,19 +2805,12 @@ export async function getDirectCarrierRatesForRateInput(
       // EasyPost insurance estimate so the candidate is ranked/displayed fairly. This is
       // rate-time only: accurate post-purchase billing requires the EasyPost connector to
       // report its real fee (a source-of-truth follow-up; createLabelEasyPost discards it).
-      const easyPostPremium =
-        normalizeProviderKey(account.provider) === 'easypost'
-        && shippingOptions.insuranceProvider !== 'none'
-        && Number(shippingOptions.insuredValue ?? 0) > 0
-          ? easyPostScheduledPremium(Number(shippingOptions.insuredValue ?? 0))
-          : null;
-      const rates =
-        easyPostPremium != null && easyPostPremium > 0
-          ? markedUp.map((rate) => ({
-              ...rate,
-              insurance_amount: { amount: easyPostPremium, currency: rate.insurance_amount?.currency ?? 'USD' },
-            }))
-          : markedUp;
+      const rates = applyDirectRatePricing(
+        liftedUnion.rates,
+        directMarkups,
+        account.provider,
+        shippingOptions,
+      );
       // PS-271 (Layer 4): the Shipp connector rides a thin-source marker out via quoted.diagnostics
       // when Layer 1 accepted a known-thin partial (a non-empty 200 still missing an observed-expected
       // carrier). Carry it onto the meta AND the diagnostic so the combined-universe owner can mark the
@@ -2748,18 +2839,7 @@ export async function getDirectCarrierRatesForRateInput(
         rates,
         errors: [] as DirectCarrierRateError[],
         metas: [{ accountId: account.id, shippingProviderId, sourceTable: account.sourceTable, provider: meta.provider, meta }],
-        authorizationAccounts: [{
-          providerFamily: 'direct',
-          provider: normalizeProviderKey(account.provider),
-          shippingProviderId,
-          sourceTable: account.sourceTable,
-          sourceAccountId: account.id,
-          ownerClientId: account.clientId,
-          ownerStoreAccountId: account.linkedStoreAccountId,
-          credentialSource: account.sourceTable === 'store_accounts' ? 'store_account' : 'carrier_account',
-          credentialFingerprint: shippingQuoteCredentialFingerprint(account.credentials),
-          environment: process.env.NODE_ENV ?? 'development',
-        }] satisfies ShippingQuoteAccountAuthorization[],
+        authorizationAccounts: [directCarrierQuoteAuthorizationAccount(account, shippingProviderId)],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
           accountId: String(account.id),
@@ -2779,6 +2859,8 @@ export async function getDirectCarrierRatesForRateInput(
             return absent ? { expectedCarrierAbsent: absent } : {};
           })()),
         },
+        providerFetches: 1,
+        usedCachedRates: liftedUnion.usedCachedRates,
       };
     } catch (err) {
       const message = publicCarrierRateError(err);
@@ -2810,6 +2892,8 @@ export async function getDirectCarrierRatesForRateInput(
           transient: retryable,
           retryable,
         },
+        providerFetches: 1,
+        usedCachedRates: false,
       };
     }
   });
@@ -2819,5 +2903,7 @@ export async function getDirectCarrierRatesForRateInput(
     metas: settled.flatMap((item) => item.metas),
     diagnostics: settled.map((item) => item.diagnostic),
     authorizationAccounts: settled.flatMap((item) => item.authorizationAccounts),
+    providerFetches: settled.reduce((sum, item) => sum + item.providerFetches, 0),
+    usedCachedRates: settled.some((item) => item.usedCachedRates),
   };
 }

@@ -26,6 +26,12 @@ import {
 } from './shipping-workflow/rate-quote-snapshot-store';
 import { persistBestRateWithRatchet } from './best-rate-ratchet-db';
 import type { Rate } from '../lib/shipstation';
+import {
+  createRateSignatureCacheMetrics,
+  rateSourcesArePurchaseProofEligible,
+  recordRateSignatureCacheLookup,
+  type RateSignatureCacheMetrics,
+} from './shipping-workflow/rate-signature-cache-policy';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 import {
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -226,11 +232,16 @@ export type BackfillJob = {
   skipSamples: string[];
   failureSamples: string[];
   preExpiryRefresh: PreExpiryRefreshProof | null;
+  signatureCache: RateSignatureCacheMetrics;
   startedAt: number;
   finishedAt: number | null;
 };
 
 export type BackfillJobMode = 'manual_force_live' | 'cache_friendly';
+
+function signatureCacheSummary(metrics: RateSignatureCacheMetrics): string {
+  return `signature cache ${metrics.fullHits}/${metrics.lookups} full hits (${metrics.hitRatePct}%), ${metrics.providerFetches} provider fetches`;
+}
 
 export type BackfillOptions = RateBackfillOptions & {
   mode?: 'cache_first' | 'full_live_audit' | 'preexpiry_refresh';
@@ -264,6 +275,7 @@ export type BackfillJobSnapshot = {
   skipSamples: string[];
   failureSamples: string[];
   preExpiryRefresh: PreExpiryRefreshProof | null;
+  signatureCache: RateSignatureCacheMetrics;
   options: BackfillOptions;
   startedAt: string;
   finishedAt: string | null;
@@ -336,6 +348,7 @@ function toBackfillSnapshot(
           reasons: { ...job.preExpiryRefresh.reasons },
         }
       : null,
+    signatureCache: { ...job.signatureCache },
     options: {
       clientId: opts.clientId,
       limit: opts.limit,
@@ -551,11 +564,13 @@ function parseBackfillJobSnapshot(value: string): BackfillJobSnapshot | null {
     mode?: BackfillJobMode;
     skipSamples?: unknown;
     failureSamples?: unknown;
+    signatureCache?: RateSignatureCacheMetrics;
   };
   return {
     ...parsed,
     ...normalizeRateBackfillDiagnosticSamples(parsed),
     mode: parsed.mode === 'manual_force_live' ? 'manual_force_live' : 'cache_friendly',
+    signatureCache: parsed.signatureCache ?? createRateSignatureCacheMetrics(),
   };
 }
 
@@ -616,6 +631,7 @@ function createBackfillJob(
     error: null,
     ...createRateBackfillDiagnosticBuffers(),
     preExpiryRefresh: opts.mode === 'preexpiry_refresh' ? createPreExpiryRefreshProof() : null,
+    signatureCache: createRateSignatureCacheMetrics(),
     startedAt: Date.now(),
     finishedAt: null,
   };
@@ -1181,7 +1197,7 @@ async function runBackfill(
         );
         job.processed++;
         if (job.processed % 10 === 0 || job.processed === job.total) {
-          job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
+          job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed; ${signatureCacheSummary(job.signatureCache)}`;
         }
         if (job.processed % 50 === 0 || job.processed === job.total) {
           void persistBackfillJobSnapshot(job, opts);
@@ -1274,12 +1290,17 @@ async function runBackfill(
         // the comparison through the same canonical owner /browse delegates to.
         // A wholesale direct-fetch failure marks the universe incomplete (a
         // synthetic failed diagnostic) instead of self-certifying SS-only.
+        // PS-350/PS-459: background backfill remains lower priority than manual Rate Browser and
+        // Print Queue preflight, and cache-first exact-signature hits bypass provider work entirely.
         const directCarrierWork = getDirectCarrierRatesForRateInput({
             ...resolvedRateInput,
             includeVisibleDirectCarriers: true,
             orderId: row.id,
             orderNumber: row.orderNumber ?? undefined,
-          }, { priority: 'batch' });
+          }, {
+            cacheFirst: !rateFetchDecision.forceRefresh,
+            priority: 'batch',
+          });
         const directResult = await (
           context.durableChunk
             ? awaitSettledWork(
@@ -1297,6 +1318,8 @@ async function runBackfill(
           errors: [],
           metas: [],
           authorizationAccounts: [],
+          providerFetches: 1,
+          usedCachedRates: false,
           diagnostics: [{
             carrierId: 'se-direct-fetch',
             carrierCode: 'direct',
@@ -1307,6 +1330,11 @@ async function runBackfill(
           }],
         }));
         assertBackfillCanContinue(jobId, context.signal, `post-direct rates order ${row.id}`);
+        job.signatureCache = recordRateSignatureCacheLookup(job.signatureCache, {
+          shipStationCached: result.cached,
+          directCarrierCacheUsed: directResult.usedCachedRates,
+          providerFetches: (result.cached ? 0 : 1) + directResult.providerFetches,
+        });
         const combined = combineCarrierUniverses({
           ssRates: result.rates as unknown as Array<Record<string, unknown>>,
           ssCacheKey: result.cacheKey,
@@ -1456,6 +1484,10 @@ async function runBackfill(
             cacheKey: combined.combinedRequestKey,
             bestRateComplete: combined.bestRateComplete,
             fetchedAt: result.fetchedAt,
+            purchaseProofEligible: rateSourcesArePurchaseProofEligible({
+              shipStationCached: result.cached,
+              directCarrierCacheUsed: directResult.usedCachedRates,
+            }),
             authorization: quoteAuthorization,
           });
           assertBackfillCanContinue(jobId, context.signal, `post-quote snapshot order ${row.id}`);
@@ -1570,7 +1602,7 @@ async function runBackfill(
 
       job.processed++;
       if (job.processed % 10 === 0 || job.processed === job.total) {
-        job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
+        job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed; ${signatureCacheSummary(job.signatureCache)}`;
       }
       if (job.processed % 50 === 0 || job.processed === job.total) {
         void persistBackfillJobSnapshot(job, opts);
@@ -1589,7 +1621,8 @@ async function runBackfill(
 
     job.status = 'done';
     job.finishedAt = Date.now();
-    job.message = `Done — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed (of ${job.total})`;
+    job.message = `Done — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed (of ${job.total}); ${signatureCacheSummary(job.signatureCache)}`;
+    console.info('[rates-backfill]', job.message);
     await persistBackfillJobSnapshot(job, opts);
   } catch (err) {
     job.status = 'error';

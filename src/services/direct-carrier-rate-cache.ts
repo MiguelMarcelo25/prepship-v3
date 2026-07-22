@@ -72,12 +72,13 @@ export async function readFreshDirectCarrierRates(
   accountId: number,
   sourceTable: string,
   requestKey: string,
+  maxAgeMs: number = directCarrierRateCacheTtlMs(),
 ): Promise<DirectCarrierCacheRow[]> {
   if (!directCarrierRateCacheEnabled()) return [];
   if (!requestKey) return [];
   try {
     await ensureDirectCarrierRateCacheSchema();
-    const cutoffMs = directCarrierRateCacheTtlMs();
+    const cutoffMs = Math.max(1_000, maxAgeMs);
     const rows = await pg<Array<{
       carrierCode: string;
       serviceCode: string;
