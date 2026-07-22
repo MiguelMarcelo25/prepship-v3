@@ -215,15 +215,15 @@ async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
 
-  return withRefreshRun('daily-sales', async () => {
-    await db.execute(sql`
+  return withRefreshRun('daily-sales', () => db.transaction(async (tx) => {
+    await tx.execute(sql`
       delete from daily_sales_metrics
       where day between ${fromDay}::date and ${toDay}::date
         and client_id = 0
         and store_id = 0
     `);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into daily_sales_metrics (
         day,
         client_id,
@@ -276,7 +276,7 @@ async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count
       from daily_sales_metrics
       where day between ${fromDay}::date and ${toDay}::date
@@ -285,14 +285,14 @@ async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 async function refreshSkuVelocityMetrics(): Promise<number> {
-  return withRefreshRun('sku-velocity', async () => {
-    await db.execute(sql`delete from sku_velocity_metrics`);
+  return withRefreshRun('sku-velocity', () => db.transaction(async (tx) => {
+    await tx.execute(sql`delete from sku_velocity_metrics`);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into sku_velocity_metrics (
         sku,
         client_id,
@@ -331,20 +331,20 @@ async function refreshSkuVelocityMetrics(): Promise<number> {
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count from sku_velocity_metrics
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
   await ensureInventoryLedgerSchema();
-  return withRefreshRun('inventory-risk', async () => {
-    await db.execute(sql`delete from inventory_risk_metrics`);
+  return withRefreshRun('inventory-risk', () => db.transaction(async (tx) => {
+    await tx.execute(sql`delete from inventory_risk_metrics`);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into inventory_risk_metrics (
         inventory_id,
         sku,
@@ -477,12 +477,12 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count from inventory_risk_metrics
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 // PS-208 key contract: billingSummary passes UTC-midnight calendar-day bounds
@@ -506,14 +506,14 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
     sql`b.ship_date`,
   );
 
-  return withRefreshRun('billing-summary', async () => {
-    await db.execute(sql`
+  return withRefreshRun('billing-summary', () => db.transaction(async (tx) => {
+    await tx.execute(sql`
       delete from billing_summary_metrics
       where period_from = ${fromDay}::date
         and period_to = ${toDay}::date
     `);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into billing_summary_metrics (
         client_id,
         period_from,
@@ -566,7 +566,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count
       from billing_summary_metrics
       where period_from = ${fromDay}::date
@@ -574,7 +574,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 export type PruneBillingSummaryMetricsResult = {

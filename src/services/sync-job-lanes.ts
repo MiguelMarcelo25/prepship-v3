@@ -1,16 +1,19 @@
 // Per user override unlock shipped data on 2026-07-01: backend worker lane ownership
 // only; this does not mutate shipped/cancelled orders or shipment history.
-export type SyncJobLane =
-  | 'shipstation-sync'
-  | 'rate-backfill'
-  | 'fulfillment-outbox'
-  | 'reporting'
-  | 'external-shipped-classifier'
-  | 'shipment-tracking'
-  | 'walmart-fees'
-  | 'misc';
+export const SYNC_JOB_LANE_VALUES = [
+  'shipstation-sync',
+  'rate-backfill',
+  'fulfillment-outbox',
+  'reporting',
+  'external-shipped-classifier',
+  'shipment-tracking',
+  'walmart-fees',
+  'misc',
+] as const;
 
-const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
+export type SyncJobLane = (typeof SYNC_JOB_LANE_VALUES)[number];
+
+const SYNC_JOB_LANE_BY_NAME = new Map<string, SyncJobLane>([
   ['prepship.sync.orders', 'shipstation-sync'],
   ['orders sync', 'shipstation-sync'],
   ['prepship.sync.shipments', 'shipstation-sync'],
@@ -67,7 +70,7 @@ export function syncJobLaneFor(name: string): SyncJobLane {
   // are conservatively database-heavy. They must opt into an independent lane
   // explicitly instead of silently overlapping sync through the old misc
   // fallback (production rate-cache overlap reproduced the pool wedge).
-  return SYNC_JOB_LANES.get(name) ?? 'shipstation-sync';
+  return SYNC_JOB_LANE_BY_NAME.get(name) ?? 'shipstation-sync';
 }
 
 export function getSyncJobLaneBlocker(

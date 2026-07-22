@@ -613,7 +613,13 @@ async function upsertShipmentsBatch(
   return { inserted, updated, matched, ordersMarkedShipped };
 }
 
+// Per user override unlock shipped data on 2026-07-23: PS-440 adds result-only
+// observability counters; shipment and order mutation semantics are unchanged.
 export type ShipmentSyncResult = {
+  accounts: number;
+  attemptedAccounts: number;
+  successfulAccounts: number;
+  errors: number;
   fetched: number;
   inserted: number;
   updated: number;
@@ -723,10 +729,14 @@ export async function syncShipments(
   let maxPages = 1;
   let earliestSinceIso = new Date(runStartMs).toISOString();
   let ordersMarkedShipped = 0;
+  let attemptedAccounts = 0;
+  let successfulAccounts = 0;
+  let errors = 0;
 
   const accounts = await loadShipmentSyncAccounts();
   for (const acct of accounts) {
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
+    attemptedAccounts += 1;
     try {
       throwIfShipmentSyncAborted(opts.signal);
       const { primaryKey: key, value: storedLastSync } = await readShipmentSyncWatermark(acct);
@@ -872,8 +882,10 @@ export async function syncShipments(
       const nextWatermarkMs = Math.max(storedLastSync ?? 0, candidateMs);
       throwIfShipmentSyncAborted(opts.signal);
       await setSetting(key, String(nextWatermarkMs));
+      successfulAccounts += 1;
     } catch (err) {
       throwIfShipmentSyncAborted(opts.signal);
+      errors += 1;
       console.error(
         `[shipment-sync] account "${acct.label}" failed:`,
         (err as Error).message
@@ -894,6 +906,10 @@ export async function syncShipments(
 
   throwIfShipmentSyncAborted(opts.signal);
   return {
+    accounts: accounts.length,
+    attemptedAccounts,
+    successfulAccounts,
+    errors,
     fetched,
     inserted,
     updated,

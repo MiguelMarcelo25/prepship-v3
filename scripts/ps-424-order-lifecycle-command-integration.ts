@@ -116,6 +116,10 @@ async function main(): Promise<void> {
       type text NOT NULL,
       qty integer NOT NULL,
       order_id integer REFERENCES orders(id),
+      client_id integer,
+      sku text,
+      source_entity text,
+      source_id text,
       note text,
       created_by text,
       effective_at timestamptz,
@@ -123,9 +127,19 @@ async function main(): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE UNIQUE INDEX inventory_ledger_idempotency_key_unq ON inventory_ledger (idempotency_key);
+    CREATE UNIQUE INDEX inventory_ledger_source_identity_unq
+      ON inventory_ledger (source_entity, source_id, inventory_id, type);
   `);
   await client.exec(readFileSync('drizzle/0070_order_lifecycle_commands.sql', 'utf8'));
   const pg = drizzle(client, { schema, casing: 'snake_case' });
+  const stockQuantity = async (sku: string): Promise<number> => {
+    const [row] = await pg
+      .select({ stockQty: sql<number>`coalesce(sum(${inventoryLedger.qty}), 0)::int` })
+      .from(inventoryLedger)
+      .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+      .where(eq(inventory.sku, sku));
+    return Number(row?.stockQty ?? 0);
+  };
 
   await client.exec(`
     INSERT INTO orders (id, order_number, items) VALUES
@@ -315,11 +329,8 @@ async function main(): Promise<void> {
     applyInventoryClaimsForLifecycleEvent(concurrentEvent.lifecycleEventId, pg as never),
     applyInventoryClaimsForLifecycleEvent(concurrentEvent.lifecycleEventId, pg as never),
   ]);
-  const [concurrentStock] = await pg
-    .select({ stockQty: inventory.stockQty })
-    .from(inventory)
-    .where(eq(inventory.sku, 'CONCURRENT-SKU'));
-  assert.equal(concurrentStock.stockQty, -3, 'concurrent worker retry applies inventory once');
+  const concurrentStock = await stockQuantity('CONCURRENT-SKU');
+  assert.equal(concurrentStock, -3, 'concurrent worker retry applies inventory once');
 
   await assert.rejects(
     ship({ shipmentId: 201, commandKey: 'fixture:fault', quantity: 1, faultAfter: 'claims', orderId: 2 }),
@@ -379,19 +390,16 @@ async function main(): Promise<void> {
   );
 
   await applyInventoryClaimsForLifecycleEvent(first.lifecycleEventId, pg as never);
-  let [stock] = await pg
-    .select({ stockQty: inventory.stockQty })
-    .from(inventory)
-    .where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, -2);
+  let stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, -2);
   await applyInventoryClaimsForLifecycleEvent(first.lifecycleEventId, pg as never);
-  [stock] = await pg.select({ stockQty: inventory.stockQty }).from(inventory).where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, -2, 'worker retry is idempotent at the exact claim ledger key');
+  stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, -2, 'worker retry is idempotent at the exact claim ledger key');
 
   const split = await ship({ shipmentId: 102, commandKey: 'fixture:ship:102', quantity: 1 });
   await applyInventoryClaimsForLifecycleEvent(split.lifecycleEventId, pg as never);
-  [stock] = await pg.select({ stockQty: inventory.stockQty }).from(inventory).where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, -3, 'a second shipment claims only its own fulfilled quantity');
+  stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, -3, 'a second shipment claims only its own fulfilled quantity');
 
   const voidFirst = await pg.transaction((tx) => voidOrderShipmentLifecycleInTransaction(tx as never, {
     orderId: 1,
@@ -402,8 +410,8 @@ async function main(): Promise<void> {
   assert.equal(voidFirst.decision.kind, 'keep_shipped');
   assert.equal(voidFirst.reversalClaimCount, 1);
   await applyInventoryClaimsForLifecycleEvent(voidFirst.lifecycleEventId, pg as never);
-  [stock] = await pg.select({ stockQty: inventory.stockQty }).from(inventory).where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, -1);
+  stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, -1);
   const repeatedVoid = await pg.transaction((tx) => voidOrderShipmentLifecycleInTransaction(tx as never, {
     orderId: 1,
     shipmentId: 101,
@@ -412,8 +420,8 @@ async function main(): Promise<void> {
   }));
   assert.equal(repeatedVoid.alreadyApplied, true);
   await applyInventoryClaimsForLifecycleEvent(repeatedVoid.lifecycleEventId, pg as never);
-  [stock] = await pg.select({ stockQty: inventory.stockQty }).from(inventory).where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, -1, 'repeated void cannot add inventory twice');
+  stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, -1, 'repeated void cannot add inventory twice');
 
   const voidSplit = await pg.transaction((tx) => voidOrderShipmentLifecycleInTransaction(tx as never, {
     orderId: 1,
@@ -423,8 +431,8 @@ async function main(): Promise<void> {
   }));
   assert.equal(voidSplit.decision.kind, 'reopen');
   await applyInventoryClaimsForLifecycleEvent(voidSplit.lifecycleEventId, pg as never);
-  [stock] = await pg.select({ stockQty: inventory.stockQty }).from(inventory).where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, 0);
+  stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, 0);
 
   await client.exec(`INSERT INTO shipments (id, order_id) VALUES (103, 1)`);
   const relabel = await ship({ shipmentId: 103, commandKey: 'fixture:ship:103', quantity: 4 });
@@ -439,8 +447,8 @@ async function main(): Promise<void> {
   await client.exec(`INSERT INTO shipments (id, order_id) VALUES (104, 1)`);
   const changedRelabel = await ship({ shipmentId: 104, commandKey: 'fixture:ship:104', quantity: 2 });
   await applyInventoryClaimsForLifecycleEvent(changedRelabel.lifecycleEventId, pg as never);
-  [stock] = await pg.select({ stockQty: inventory.stockQty }).from(inventory).where(eq(inventory.sku, 'PS424-SKU'));
-  assert.equal(stock.stockQty, -2, 'void + changed-quantity relabel applies the new exact quantity');
+  stock = await stockQuantity('PS424-SKU');
+  assert.equal(stock, -2, 'void + changed-quantity relabel applies the new exact quantity');
 
   const cancellation = await pg.transaction((tx) => applyOrderLifecycleCommandInTransaction(tx as never, {
     orderId: 3,
@@ -556,11 +564,8 @@ async function main(): Promise<void> {
     },
   }));
   await applyInventoryClaimsForLifecycleEvent(exactAfterStatus.lifecycleEventId, pg as never);
-  const [statusStock] = await pg
-    .select({ stockQty: inventory.stockQty })
-    .from(inventory)
-    .where(eq(inventory.sku, 'STATUS-SKU'));
-  assert.equal(statusStock.stockQty, -2, 'later exact shipment facts deduct once, not the whole order plus shipment');
+  const statusStock = await stockQuantity('STATUS-SKU');
+  assert.equal(statusStock, -2, 'later exact shipment facts deduct once, not the whole order plus shipment');
 
   const shopifyLines = extractShopifyFulfillmentLinesForPurchase({
     id: 'gid://shopify/FulfillmentOrder/700',
@@ -588,11 +593,8 @@ async function main(): Promise<void> {
     fulfillmentFacts: { kind: 'exact', lines: shopifyLines },
   }));
   await applyInventoryClaimsForLifecycleEvent(shopifyPartial.lifecycleEventId, pg as never);
-  const [shopifyStock] = await pg
-    .select({ stockQty: inventory.stockQty })
-    .from(inventory)
-    .where(eq(inventory.sku, 'SHOPIFY-PARTIAL'));
-  assert.equal(shopifyStock.stockQty, -2,
+  const shopifyStock = await stockQuantity('SHOPIFY-PARTIAL');
+  assert.equal(shopifyStock, -2,
     'Shopify label caller deducts its fulfillment-order quantity, never mutable order quantity 9');
 
   const outboxBeforeReviewSources = (await pg.select().from(fulfillmentOutbox)).length;

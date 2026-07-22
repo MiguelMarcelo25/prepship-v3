@@ -60,7 +60,7 @@ assert.match(
   /jobData && typeof jobData === 'object'[\s\S]*jobData as Record<string, unknown>/,
   'priority deferral must preserve the original shipment payload',
 );
-assert.match(v1, /bucket\.acquire\(\{ signal: opts\.signal \}\)/);
+assert.match(v1, /bucket\.acquire\(\{ signal: requestSignal \}\)/);
 assert.match(
   laneLock,
   /SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS = SYNC_JOB_RUNNING_LEASE_MS \+ 5_000/,

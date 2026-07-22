@@ -37,11 +37,30 @@ export type MarkShippedExternallyResult = {
   notify: { ok: boolean; reason?: string };
 };
 
+export type MarkShippedExternallyDependencies = {
+  applyLifecycleCommand?: typeof applyOrderLifecycleCommand;
+  resolveProvider?: typeof resolveShipmentConfirmationProvider;
+  confirmDirect?: typeof confirmShipmentDirectNow;
+  loadCredentials?: typeof loadClientCredentials;
+  markShipStationShipped?: typeof ssMarkOrderShippedV1;
+  now?: () => Date;
+};
+
 export async function markOrderShippedExternally(
   input: MarkShippedExternallyInput,
+  dependencies: MarkShippedExternallyDependencies = {},
 ): Promise<MarkShippedExternallyResult> {
   const { order, flag } = input;
   const id = order.id;
+  // Per user override unlock shipped data on 2026-07-23: PS-440 adds only
+  // injectable offline-test seams. Production defaults remain the canonical
+  // lifecycle command, outbox resolver, credentials, and provider connectors.
+  const applyLifecycle = dependencies.applyLifecycleCommand ?? applyOrderLifecycleCommand;
+  const resolveProvider = dependencies.resolveProvider ?? resolveShipmentConfirmationProvider;
+  const confirmDirect = dependencies.confirmDirect ?? confirmShipmentDirectNow;
+  const loadCredentials = dependencies.loadCredentials ?? loadClientCredentials;
+  const markShipStationShipped = dependencies.markShipStationShipped ?? ssMarkOrderShippedV1;
+  const now = dependencies.now ?? (() => new Date());
 
   let statusFlipped = false;
   if (flag) {
@@ -52,7 +71,7 @@ export async function markOrderShippedExternally(
     // transaction. The forward-only lifecycle predicates remain unchanged.
     // Per user override unlock shipped data on 2026-07-16 (PS-424): status,
     // exact fulfilled lines, inventory intent, and provenance are one command.
-    const result = await applyOrderLifecycleCommand({
+    const result = await applyLifecycle({
       orderId: id,
       commandKey: `lifecycle:external-shipped:order:${id}`,
       transition: 'external_shipped',
@@ -73,7 +92,7 @@ export async function markOrderShippedExternally(
     });
     statusFlipped = result.statusChanged;
   } else {
-    await applyOrderLifecycleCommand({
+    await applyLifecycle({
       orderId: id,
       commandKey: `lifecycle:external-unmark:order:${id}`,
       transition: 'external_unmark',
@@ -110,7 +129,7 @@ export async function markOrderShippedExternally(
     (input.notifyCustomer === true || input.notifyMarketplace === true);
   let notify: { ok: boolean; reason?: string } = { ok: false, reason: 'not requested' };
   if (shouldNotify) {
-    const provider = resolveShipmentConfirmationProvider({
+    const provider = resolveProvider({
       sourceProvider: order.sourceProvider ?? null,
       externalOrderId: order.externalOrderId,
     });
@@ -122,9 +141,9 @@ export async function markOrderShippedExternally(
         notify = { ok: false, reason: 'order has no upstream ShipStation ID — sync may be incomplete' };
       } else {
         try {
-          const creds = await loadClientCredentials(order.clientId);
-          const shipDate = new Date().toISOString().slice(0, 10);
-          await ssMarkOrderShippedV1(
+          const creds = await loadCredentials(order.clientId);
+          const shipDate = now().toISOString().slice(0, 10);
+          await markShipStationShipped(
             {
               orderId: ssUpstreamOrderId,
               carrierCode: input.carrierCode ?? null,
@@ -155,7 +174,7 @@ export async function markOrderShippedExternally(
         };
       } else {
         try {
-          notify = await confirmShipmentDirectNow({
+          notify = await confirmDirect({
             provider,
             order: {
               id: order.id,
@@ -169,7 +188,7 @@ export async function markOrderShippedExternally(
             },
             trackingNumber,
             carrierCode: input.carrierCode ?? null,
-            shipDate: new Date().toISOString().slice(0, 10),
+            shipDate: now().toISOString().slice(0, 10),
             notifyCustomer: input.notifyCustomer === true,
             notifyMarketplace: input.notifyMarketplace === true,
           });

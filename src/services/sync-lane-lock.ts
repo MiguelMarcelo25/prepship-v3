@@ -4,10 +4,10 @@
 import postgres from 'postgres';
 import { env } from '../lib/env';
 import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline';
-import type { SyncJobLane } from './sync-job-lanes';
+import { SYNC_JOB_LANE_VALUES, type SyncJobLane } from './sync-job-lanes';
 
 const SYNC_LANE_LOCK_PREFIX = 'prepship.sync.lane';
-const SYNC_LANE_LOCK_POOL_MAX = 3; // one reserved transaction per sync lane
+export const SYNC_LANE_LOCK_POOL_MAX = SYNC_JOB_LANE_VALUES.length;
 export const SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS = SYNC_JOB_RUNNING_LEASE_MS + 5_000;
 
 // Per user override unlock shipped data on 2026-07-02: keep lane-lock

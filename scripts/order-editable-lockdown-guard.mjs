@@ -104,7 +104,8 @@ assert(
   'mark-shipped-externally.ts must export the canonical markOrderShippedExternally() owner',
 );
 assert(
-  /applyOrderLifecycleCommand\(\{/.test(markShippedExternally) &&
+  /applyLifecycle\(\{/.test(markShippedExternally) &&
+    /dependencies\.applyLifecycleCommand \?\? applyOrderLifecycleCommand/.test(markShippedExternally) &&
     /transition: 'external_shipped'/.test(markShippedExternally) &&
     /\.for\('update'\)/.test(lifecycle) &&
     /order\.orderStatus === 'cancelled'/.test(lifecycle),

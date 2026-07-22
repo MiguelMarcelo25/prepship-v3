@@ -105,7 +105,9 @@ assert.ok(
   'combo source, propagation, and materialization writes must each re-check lifecycle under lock',
 );
 
-assert.match(externalOwner, /applyOrderLifecycleCommand\(\{/,
+assert.match(externalOwner, /dependencies\.applyLifecycleCommand \?\? applyOrderLifecycleCommand/,
+  'manual external shipment test seams must default to the lifecycle command owner');
+assert.match(externalOwner, /applyLifecycle\(\{/,
   'manual external shipment updates must delegate to the lifecycle command owner');
 assert.ok(
   (externalOwner.match(/allowCanonicalOverride: input\.writeAuthorization\.allowTerminal/g) ?? []).length >= 2,

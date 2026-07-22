@@ -86,10 +86,11 @@ app.post('/:provider', async (c) => {
       metadata: normalized.metadata,
     });
   } catch (err) {
-    // Ledger unavailable — ACK (202) so the provider doesn't retry-storm. The pre-label
-    // safety guard still protects via order-column signals + later reconciliation.
+    // PS-440: the durable ledger is the webhook acceptance boundary. Returning
+    // success here discarded the provider's only retry signal while recording
+    // nothing, so fail closed and let the provider retry its signed event.
     console.error('[webhooks] ledger record failed:', err instanceof Error ? err.message : err);
-    return c.json({ ok: true, recorded: false }, 202);
+    return c.json({ ok: false, recorded: false, retryable: true }, 503);
   }
 
   // Forward-only scoped reconcile for terminal events — off the response path. Never blocks

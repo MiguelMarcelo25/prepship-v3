@@ -771,6 +771,7 @@
     "test:ref-rates-durable": "node scripts/ref-rates-durable-guard.mjs",
     "test:print-queue-durable": "node scripts/print-queue-durable-guard.mjs",
     "test:ps-444-print-queue-recovery": "tsx scripts/ps-444-print-queue-recovery-guard.ts",
+    "test:ps-440-connection-safety": "tsx scripts/ps-440-connection-safety-guard.ts",
     "test:ps-444-print-queue-recovery:browser": "playwright test web/e2e/batch-create-print-via-queue.spec.js --grep PS-444 --reporter=line",
     "test:ps-346-print-queue-durable-full-results": "tsx scripts/ps-346-print-queue-durable-full-results-guard.ts",
     "test:ps-351-durable-print-queue-jobs": "tsx scripts/ps-351-durable-print-queue-jobs-guard.ts",

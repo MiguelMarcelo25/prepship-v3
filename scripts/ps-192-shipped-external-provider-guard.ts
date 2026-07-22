@@ -48,17 +48,19 @@ const lifecycle = readFileSync('src/services/order-lifecycle-command.ts', 'utf8'
 
 assert.ok(svc.includes("import { confirmShipmentDirectNow, resolveShipmentConfirmationProvider } from './outbox'"),
   'the service must import the canonical resolver + the direct dispatcher');
-assert.ok(/resolveShipmentConfirmationProvider\(\{\s*sourceProvider: order\.sourceProvider \?\? null,\s*externalOrderId: order\.externalOrderId,?\s*\}\)/.test(svc),
+assert.ok(svc.includes('dependencies.resolveProvider ?? resolveShipmentConfirmationProvider') &&
+  /resolveProvider\(\{\s*sourceProvider: order\.sourceProvider \?\? null,\s*externalOrderId: order\.externalOrderId,?\s*\}\)/.test(svc),
   'the notify provider must come from the canonical resolver over the ORDER facts');
 // ShipStation keeps its exact v1 call — but ONLY inside the shipstation branch.
-const ssCalls = svc.match(/ssMarkOrderShippedV1\(/g) ?? [];
+const ssCalls = svc.match(/markShipStationShipped\(/g) ?? [];
 assert.equal(ssCalls.length, 1, 'exactly one ShipStation markasshipped call site may exist');
 const ssBranchIdx = svc.indexOf("provider === 'shipstation'");
-const ssCallIdx = svc.indexOf('ssMarkOrderShippedV1(');
+const ssCallIdx = svc.indexOf('markShipStationShipped(');
 assert.ok(ssBranchIdx > -1 && ssCallIdx > ssBranchIdx,
   'the ShipStation call must be gated behind the resolved shipstation provider');
 // Direct marketplaces dispatch through the outbox-shaped connector call.
-assert.ok(svc.includes('confirmShipmentDirectNow({'),
+assert.ok(svc.includes('dependencies.confirmDirect ?? confirmShipmentDirectNow') &&
+  svc.includes('confirmDirect({'),
   'non-ShipStation providers must dispatch through the canonical direct confirmer');
 assert.ok(svc.includes('requires a tracking number to confirm shipment'),
   'direct dispatch must refuse without a tracking number (connectors require it)');
@@ -99,7 +101,8 @@ const outbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
 assert.ok(outbox.includes('export async function confirmShipmentDirectNow'),
   'outbox must own the one-shot direct confirmation');
 const helperStart = outbox.indexOf('export async function confirmShipmentDirectNow');
-const helperBlock = outbox.slice(helperStart, helperStart + 2600);
+const helperEnd = outbox.indexOf('\nexport ', helperStart + 1);
+const helperBlock = outbox.slice(helperStart, helperEnd > helperStart ? helperEnd : helperStart + 6000);
 assert.ok(helperBlock.includes("resolveStoreConnector(args.provider, 'shipment.confirm')"),
   'the direct confirmer must resolve the SAME store-connector capability as the worker');
 assert.ok(helperBlock.includes('loadStoreCredentials(args.provider'),

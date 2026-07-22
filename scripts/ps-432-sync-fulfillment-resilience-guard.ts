@@ -45,7 +45,11 @@ assert.match(shipmentSync, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecy
 assert.match(orderSync, /inventoryDeductionSource: 'order_sync_status'/);
 assert.match(orderSync, /applyOrderLifecycleCommand\(\{[\s\S]*source: 'order_sync_status'/);
 assert.match(storeImport, /inventoryDeductionSource\?: string[\s\S]*db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,/);
-assert.match(externalShipped, /applyOrderLifecycleCommand\(\{[\s\S]*transition: 'external_shipped'/);
+assert.match(
+  externalShipped,
+  /const applyLifecycle = dependencies\.applyLifecycleCommand \?\? applyOrderLifecycleCommand/,
+);
+assert.match(externalShipped, /applyLifecycle\(\{[\s\S]*transition: 'external_shipped'/);
 assert.match(labels, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,/);
 assert.match(lifecycleCommand, /enqueueInventoryClaimDeduction\([\s\S]*, tx\)/);
 assert.doesNotMatch(labels, /inventory deduction enqueue failed; recovery scan will retry/);

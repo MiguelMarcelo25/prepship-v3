@@ -139,6 +139,12 @@ import {
   ShippingQuoteAuthorizationError,
   type ShippingQuoteAccountAuthorization,
 } from './shipping-workflow/shipping-quote-authorization';
+import {
+  assertPurchasedLabelArtifact,
+  LabelArtifactMissingAfterPurchaseError,
+} from './label-artifact-safety';
+
+export { LabelArtifactMissingAfterPurchaseError } from './label-artifact-safety';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
 // PS-261 (Per user override unlock shipped data on 2026-06-18): backend-owned HUGRAB
 // label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
@@ -461,17 +467,6 @@ export type CreateLabelResponseDto = {
   // for print-queue performance; no label/order mutation behavior changes.
   timings?: LabelCreateTimingBreakdown;
 };
-
-export class LabelArtifactMissingAfterPurchaseError extends Error {
-  readonly code = 'LABEL_ARTIFACT_MISSING_AFTER_PURCHASE' as const;
-  constructor(provider: string) {
-    super(
-      `${provider} accepted the label purchase but did not return a usable label artifact. ` +
-      'The provider receipt is held for reconciliation and must not be purchased again.',
-    );
-    this.name = 'LabelArtifactMissingAfterPurchaseError';
-  }
-}
 
 export type CreateShopifyShippingLabelInputDto = {
   orderId: number;
@@ -2916,19 +2911,16 @@ async function createLabelV2Impl(
       )) ?? created.providerAccountNickname ?? null;
   }
 
-  if (
-    directProviderKey === 'walmart_shipping'
-    && (
-      typeof created.labelUrl !== 'string'
-      || !created.labelUrl.trim()
-      || created.labelUrl.trim() === '[object Object]'
-    )
-  ) {
+  if (directProviderKey === 'walmart_shipping') {
+    // Per user override unlock shipped data on 2026-07-23: PS-440 keeps the
+    // provider-receipt boundary ahead of artifact validation and local writes.
+    // PS-444 established this fail-closed order; the focused owner makes that
+    // contract directly testable without a live label purchase.
     // Per user override unlock shipped data on 2026-07-21: PS-444 validates
     // the Walmart artifact only after its provider receipt is durable and
     // before shipment/order persistence. Retry therefore reuses the receipt
     // and cannot issue a second purchase POST.
-    throw new LabelArtifactMissingAfterPurchaseError('Walmart Shipping');
+    assertPurchasedLabelArtifact('Walmart Shipping', created.labelUrl);
   }
 
   // PS-370: ensure the additive selected_rate_cost column exists BEFORE the

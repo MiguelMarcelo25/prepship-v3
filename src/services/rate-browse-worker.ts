@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss';
 import { z } from 'zod';
 import { env } from '../lib/env';
+import { withPgBossPoolLifetime } from '../lib/pg-boss-pool-lifetime';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
 import { runDurableWorkerAttempt } from './durable-worker-attempt';
@@ -41,7 +42,7 @@ let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 let started = false;
 
 function createBoss(applicationName: string, consumerRole: boolean): PgBoss {
-  return new PgBoss({
+  return new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: applicationName,
@@ -59,7 +60,7 @@ function createBoss(applicationName: string, consumerRole: boolean): PgBoss {
     maintenanceIntervalSeconds: 60,
     schedule: false,
     migrate: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 }
 
 async function ensureQueue(target: PgBoss): Promise<void> {

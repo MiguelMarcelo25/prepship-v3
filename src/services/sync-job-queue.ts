@@ -5,6 +5,7 @@ import PgBoss from 'pg-boss';
 import postgres from 'postgres';
 import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
+import { withPgBossPoolLifetime } from '../lib/pg-boss-pool-lifetime';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
 import {
   requireCancellationAcknowledgement,
@@ -54,6 +55,7 @@ import {
   recordWorkerJobSuccess,
   setWorkerMode,
 } from './worker-status';
+import { classifyWorkerResolvedResult } from './worker-result-classification';
 import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
 import {
   SYNC_JOB_CANCELLATION_GRACE_MS,
@@ -740,7 +742,7 @@ export async function enqueueManualOrderSyncJob(
     return sendManualOrderSyncJob(boss, true, request);
   }
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-manual-order-sync',
@@ -752,7 +754,7 @@ export async function enqueueManualOrderSyncJob(
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -781,7 +783,7 @@ export async function enqueueOrderSyncWatchdogJob(): Promise<ManualOrderSyncEnqu
     return sendOrderSyncWatchdogJob(boss, true);
   }
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-order-sync-watchdog',
@@ -793,7 +795,7 @@ export async function enqueueOrderSyncWatchdogJob(): Promise<ManualOrderSyncEnqu
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -867,7 +869,7 @@ export async function enqueueManualShipmentSyncJob(
   const payload = buildManualShipmentSyncJobPayload(request);
   if (boss && started) return sendManualShipmentSyncJob(boss, true, request);
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-manual-shipment-sync',
@@ -879,7 +881,7 @@ export async function enqueueManualShipmentSyncJob(
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -904,7 +906,7 @@ export async function enqueueShipmentSyncWatchdogJob(): Promise<ShipmentSyncWatc
     return sendShipmentSyncWatchdogJob(boss, true);
   }
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-watchdog',
@@ -916,7 +918,7 @@ export async function enqueueShipmentSyncWatchdogJob(): Promise<ShipmentSyncWatc
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -1538,6 +1540,10 @@ async function registerWorker(
             name,
             { onTimeout: (error) => abortController.abort(error) },
           );
+          const classification = classifyWorkerResolvedResult(result);
+          if (classification.status === 'failed') {
+            throw new Error(`${name}: ${classification.error ?? 'all attempted work failed'}`);
+          }
           const durationMs = Date.now() - startedAt;
           console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
           await recordWorkerJobSuccess(name, startedAt, result);
@@ -1735,7 +1741,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   }
   started = true;
 
-  boss = new PgBoss({
+  boss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-worker',
@@ -1755,7 +1761,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     // ON, pg-boss reaps them itself on a 60s cadence; the SYNC_STUCK_JOB_REAPER stays as a backstop.
     supervise: true,
     maintenanceIntervalSeconds: 60,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   boss.on('error', (err) => {
     console.error('[job-queue] pg-boss error:', err.message);

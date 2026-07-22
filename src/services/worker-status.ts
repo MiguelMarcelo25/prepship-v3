@@ -4,6 +4,7 @@ import { withDeadline } from '../lib/with-deadline';
 import { getSetting } from './settings';
 import { nextWorkerJobSkipSummary } from './worker-job-skip-health';
 import { recordWorkerStatusEvent } from './worker-status-events';
+import { classifyWorkerResolvedResult } from './worker-result-classification';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
 const WORKER_STATUS_STALE_SECONDS = 120;
@@ -190,35 +191,6 @@ export function workerActiveLaneStatus(
   };
 }
 
-function summarizeResult(result: unknown): Record<string, unknown> | null {
-  if (!result || typeof result !== 'object') return null;
-  const source = result as Record<string, unknown>;
-  const summary: Record<string, unknown> = {};
-  for (const key of [
-    'synced',
-    'pages',
-    'inserted',
-    'updated',
-    'matchedOrders',
-    'ordersMarkedShipped',
-    'processed',
-    'succeeded',
-    'failed',
-    'skipped',
-    'total',
-    'refreshed',
-    'days',
-    'dailyRows',
-    'skuRows',
-    'inventoryRows',
-    'billingRows',
-    'lastSyncedAt',
-  ]) {
-    if (source[key] !== undefined) summary[key] = source[key];
-  }
-  return Object.keys(summary).length ? summary : null;
-}
-
 async function persistSnapshot(): Promise<void> {
   if (persistSnapshotInFlight) {
     const ageMs = Date.now() - persistSnapshotStartedAtMs;
@@ -379,37 +351,52 @@ export async function recordWorkerJobSuccess(
 ): Promise<void> {
   const now = new Date().toISOString();
   const prior = snapshot.jobs[name];
+  const classification = classifyWorkerResolvedResult(result);
   snapshot.currentJob = snapshot.currentJob === name ? null : snapshot.currentJob;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
     ...prior,
     name,
-    status: 'succeeded',
+    status: classification.status,
     startedAt: prior?.startedAt ?? new Date(startedAtMs).toISOString(),
     finishedAt: now,
     durationMs: Date.now() - startedAtMs,
-    summary: summarizeResult(result),
-    error: null,
+    summary: classification.summary,
+    error: classification.error,
   };
   if (prior?.lane && snapshot.activeLanes?.[prior.lane]?.jobId === (prior.jobId ?? null)) {
     delete snapshot.activeLanes[prior.lane];
   }
-  if (name === 'prepship.sync.orders') {
+  if (classification.status === 'succeeded' && name === 'prepship.sync.orders') {
     snapshot.syncWatermarks ??= { ordersCompletedAt: null, shipmentsCompletedAt: null };
     snapshot.syncWatermarks.ordersCompletedAt = now;
-  } else if (name === 'prepship.sync.shipments') {
+  } else if (classification.status === 'succeeded' && name === 'prepship.sync.shipments') {
     snapshot.syncWatermarks ??= { ordersCompletedAt: null, shipmentsCompletedAt: null };
     snapshot.syncWatermarks.shipmentsCompletedAt = now;
   }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
-  void recordWorkerStatusEvent({
-    service: snapshot.service,
-    pid: snapshot.pid,
-    eventType: 'job_complete',
-    jobName: name,
-    details: { status: 'succeeded', durationMs: Date.now() - startedAtMs },
-  });
+  if (classification.status === 'failed') {
+    void recordWorkerStatusEvent({
+      service: snapshot.service,
+      pid: snapshot.pid,
+      eventType: 'job_failed',
+      jobName: name,
+      details: {
+        status: 'failed',
+        durationMs: Date.now() - startedAtMs,
+        error: classification.error,
+      },
+    });
+  } else {
+    void recordWorkerStatusEvent({
+      service: snapshot.service,
+      pid: snapshot.pid,
+      eventType: 'job_complete',
+      jobName: name,
+      details: { status: 'succeeded', durationMs: Date.now() - startedAtMs },
+    });
+  }
 }
 
 export async function recordWorkerJobFailure(
