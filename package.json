@@ -43,6 +43,7 @@
     "db:studio": "drizzle-kit studio",
     "migrate:ps-423-external-operations": "tsx scripts/apply-ps-423-external-operations-migration.ts",
     "migrate:ps-452-print-queue-lifecycle": "tsx scripts/apply-ps-452-print-queue-lifecycle-migration.ts",
+    "migrate:ps-449-current-period-adjustments": "tsx scripts/apply-ps-449-current-period-adjustments-migration.ts",
     "migrate:ps-424-order-lifecycle": "tsx scripts/apply-ps-424-order-lifecycle-migration.ts",
     "marketplace:reconcile": "tsx scripts/reconcile-marketplace-order-status.ts",
     "marketplace:reconcile:apply": "tsx scripts/reconcile-marketplace-order-status.ts --apply",

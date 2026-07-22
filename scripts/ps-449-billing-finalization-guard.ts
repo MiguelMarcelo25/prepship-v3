@@ -18,6 +18,7 @@ const route = read('src/routes/billing.ts')
 const closeMigration = read('drizzle/0065_billing_close_workflow.sql')
 const adjustmentMigration = read('drizzle/0074_billing_current_period_adjustments.sql')
 const adjustmentIntegration = read('scripts/ps-449-current-period-adjustments-integration.ts')
+const migrationRollout = read('scripts/apply-ps-449-current-period-adjustments-migration.ts')
 const view = read('web/src/components/Views/BillingView.tsx')
 const panel = read('web/src/components/Views/BillingCloseWorkflowPanel.tsx')
 const browserProof = read('web/e2e/billing-close-workflow.spec.js')
@@ -126,9 +127,18 @@ assert.match(placement, /Canonical owner/)
 assert.match(placement, /current-period/i)
 assert.match(adjustmentIntegration, /finalized rows must remain byte-identical/)
 assert.match(adjustmentIntegration, /current-period signed adjustment integration/)
+assert.match(migrationRollout, /apply-ps-449-current-period-adjustments-0074/)
+assert.match(migrationRollout, /historical_billing_counts_and_totals_unchanged=true/)
+assert.match(migrationRollout, /orders_shipments_unchanged=true/)
+assert.match(migrationRollout, /client\.begin\(async \(tx\) =>/)
+assert.match(migrationRollout, /if \(!approved\(\)\)/)
 assert.equal(
   packageJson.scripts?.['test:ps-449-billing-finalization'],
   'tsx scripts/ps-449-billing-finalization-guard.ts && tsx scripts/ps-449-current-period-adjustments-integration.ts',
+)
+assert.equal(
+  packageJson.scripts?.['migrate:ps-449-current-period-adjustments'],
+  'tsx scripts/apply-ps-449-current-period-adjustments-migration.ts',
 )
 assert.match(sotPack, /'test:ps-449-billing-finalization'/)
 
