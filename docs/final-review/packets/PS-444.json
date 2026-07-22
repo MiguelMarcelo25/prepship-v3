@@ -5,7 +5,7 @@
   "title": "Crash-safe Print Queue mixed-batch recovery and provider outcome fencing",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "bccde960c21dbc81bd95d45c90441e52120276bb"
+    "reviewedSha": "24bade0f23c62e44a616746b29daa2f401d2e087"
   },
   "riskDomains": [
     "rate_label",
@@ -67,7 +67,7 @@
       "id": "AC-8",
       "severity": "critical",
       "status": "met",
-      "description": "DJ supplied the exact required `unlock shipped data` authorization in the active execution conversation; the historical locked-file scope is bounded, edit locks, schemas, and the inventory kill switch were not weakened, and verification performed no live provider or production data mutation.",
+      "description": "DJ supplied the exact required `unlock shipped data` authorization in the active execution conversation; the historical locked-file scope is bounded, backend edit locks, schemas, and the inventory kill switch were not weakened by PS-444, the pre-existing operator-authorized frontend selection unlock remains unchanged, and verification performed no live provider or production data mutation.",
       "evidenceIds": ["governance-override-proof", "governance-unit-fixtures", "governance-adversarial-fixtures", "governance-failure-injection-fixtures", "lockdown-proof", "implementation-scope-proof", "full-sot-guard-pack"]
     }
   ],
@@ -277,7 +277,7 @@
       "result": "pass",
       "artifactPaths": ["scripts/order-editable-lockdown-guard.mjs", "web/src/components/Views/OrdersView.tsx"],
       "assertions": [],
-      "proves": "Shipped/cancelled backend and frontend edit protections remain present and active."
+      "proves": "Backend shipped/cancelled mutation protections remain active. The operator-authorized frontend selection unlock predates PS-444, and PS-444 did not alter those controls."
     },
     {
       "id": "governance-unit-fixtures",
@@ -343,7 +343,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status fc6b0138^..1771781f && git diff --name-status 7e8ba7753fa538f496da3fbdebee511da477123f..bccde960c21dbc81bd95d45c90441e52120276bb -- src/routes/print-queue.ts src/services/print-queue.ts src/services/fulfillment-deductions.ts web/src/components/Views/OrdersView.tsx src/db/schema/orders.ts src/db/schema/shipments.ts src/routes/orders.ts",
+      "command": "git diff --name-status fc6b0138^..1771781f && git diff --name-status bccde960c21dbc81bd95d45c90441e52120276bb..24bade0f23c62e44a616746b29daa2f401d2e087 -- src/routes/print-queue.ts src/services/print-queue.ts src/services/fulfillment-deductions.ts web/src/components/Views/OrdersView.tsx src/db/schema/orders.ts src/db/schema/shipments.ts src/routes/orders.ts src/services/print-queue src/services/print-queue-worker.ts src/services/fulfillment-operation-ledger.ts src/services/shipping-workflow/rate-quote-snapshot-store.ts",
       "result": "pass",
       "artifactPaths": [
         "src/services/print-queue-worker.ts",
@@ -355,7 +355,7 @@
         "AGENTS.md"
       ],
       "assertions": [],
-      "proves": "The historical implementation range is bounded to PS-444 recovery plus the production-compatible PS-439 forward revert. Subsequent reviewed-SHA drift touches only fulfillment deduction source-of-truth work among those protected paths; exact-current PS-444, provider-ledger, lifecycle, label, rate, and lockdown guards all pass. This packet refresh changes no product runtime."
+      "proves": "The historical implementation range is bounded to PS-444 recovery plus the production-compatible PS-439 forward revert. No PS-444 protected or canonical runtime owner changed between the prior reviewed SHA and the exact deployed 24bade0f implementation; exact-current PS-444, provider-ledger, lifecycle, label, rate, lockdown, strict TypeScript, browser, build, and all 53 source-of-truth guards pass. This packet refresh changes no product runtime."
     }
   ],
   "migrations": {
@@ -379,5 +379,14 @@
     "followUpOwner": null,
     "artifactPaths": []
   },
-  "caveats": []
+  "caveats": [
+    {
+      "id": "pre-existing-frontend-selection-unlock",
+      "severity": "low",
+      "status": "closed",
+      "description": "OrdersView isReadOnly=false is a pre-existing operator-authorized UI selection unlock from commit 24225461; PS-444 neither introduced nor changed it. Backend assertOrderEditable and Print Queue preflight guards remain authoritative and fail closed.",
+      "followUpOwner": null,
+      "followUpTask": null
+    }
+  ]
 }
