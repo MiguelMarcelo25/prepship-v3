@@ -1,0 +1,312 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-435",
+  "title": "Return labels expose customer shipping rate and never selected label cost",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "de826288e2bf8587bdfba648900885b3a32c8f0e"
+  },
+  "riskDomains": [
+    "rate_label",
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 100,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "PrepShip rejects missing, inactive, or zero return-customer pricing before Client Portal can invoke a postage provider.",
+      "evidenceIds": [
+        "return-money-owner-unit",
+        "client-portal-return-integration"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Customer DTOs, return workflows, Billing, and UI consume only backend-frozen customer shipping money and do not disclose selected label cost, provider cost, carrier identity, or renamed internal-rate fields.",
+      "evidenceIds": [
+        "return-money-owner-unit",
+        "client-portal-return-integration",
+        "client-portal-certification"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Return Billing consumes the frozen return customer shipping rate, skips missing truth for reconciliation, and never falls back to selected, label, house, or other provider cost.",
+      "evidenceIds": [
+        "billing-boundary-integration",
+        "billing-boundary-adversarial",
+        "client-portal-certification"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "Existing policy-versioned frozen snapshots remain immutable; retries and completed-label recovery return the same canonical customer amount without a second purchase.",
+      "evidenceIds": [
+        "return-money-owner-unit",
+        "client-portal-return-integration"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "A read-only audit classifies unsafe historical snapshots and Billing mismatches without offering a production repair or mutation path.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "return-money-owner-unit"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "PrepShip focused rate, Billing, return-row, strict typecheck, and production build checks; all 156 Client Portal guards; strict typecheck/build; and CP-043, CP-045, and CP-057 disposable-database integrations pass at the reviewed commits.",
+      "evidenceIds": [
+        "prepship-certification",
+        "client-portal-certification",
+        "client-portal-return-integration",
+        "production-deployment-verification"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/customer-shipping-money.ts owns return customer policy validation, preview, and immutable final freeze",
+      "src/services/billing-shipping-line.ts owns canonical customer shipping amount calculation",
+      "Client Portal src/services/returns.ts fences provider mutation and delegates customer pricing to PrepShip",
+      "Client Portal returns.return_customer_shipping_rate is the frozen customer-safe Billing and display value"
+    ],
+    "oldOwners": [
+      {
+        "path": "PrepShip zero-markup label-cost fallback used by return freeze",
+        "disposition": "delegated",
+        "delegatesTo": "assertReturnCustomerShippingPolicyConfigured before resolveCustomerShippingMoney"
+      },
+      {
+        "path": "Client Portal post-purchase customer-money freeze ordering",
+        "disposition": "delegated",
+        "delegatesTo": "PrepShip return-preview before carrierConnectors.shipstation.createLabel"
+      },
+      {
+        "path": "Client Portal return Billing raw shipment cost projection",
+        "disposition": "deleted",
+        "delegatesTo": "returns.return_customer_shipping_rate only"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/client-portal/integrations.ts",
+        "action": "modified",
+        "delegatesTo": "previewReturnCustomerShippingMoney and freezeReturnCustomerShippingMoney"
+      },
+      {
+        "path": "Client Portal src/services/prepship-customer-shipping-money.ts",
+        "action": "modified",
+        "delegatesTo": "the scoped PrepShip return-preview and freeze endpoints"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "PrepShip decides customer shipping money. Client Portal forwards provider candidate facts server-to-server, receives a customer-safe amount and provenance, and contains no pricing formula or raw-cost fallback."
+    }
+  },
+  "evidence": [
+    {
+      "id": "return-money-owner-unit",
+      "classification": "unit",
+      "command": "npm run test:ps-435-return-customer-rate && npm run test:ps-437-customer-shipping-money",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-435-return-customer-rate-guard.ts",
+        "scripts/ps-437-customer-shipping-money-guard.ts",
+        "src/services/customer-shipping-money.ts",
+        "scripts/ps-437-return-money-audit.ts"
+      ],
+      "assertions": [
+        "missing_customer_policy_rejected",
+        "configured_customer_amount_not_internal_cost",
+        "frozen_snapshot_reused",
+        "read_only_audit_categories_present"
+      ],
+      "proves": "The canonical owner rejects unsafe fallback policy, returns configured customer money rather than provider cost, preserves immutable frozen tuples, and exposes only read-only audit classifications."
+    },
+    {
+      "id": "client-portal-return-integration",
+      "classification": "integration",
+      "command": "TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55436/ps435_test npm run test:client-portal-returns-cp043:integration && npm run test:client-portal-returns-cp045:integration && npm run test:client-portal-returns-cp057:integration",
+      "result": "pass",
+      "artifactPaths": [
+        "https://github.com/drprepperusa-org/client-portal-prepship/commit/87c8ab3553b8e54f8629815d2853685b1323c3e0",
+        "scripts/integration/client-portal-returns-cp043.integration.ts",
+        "scripts/integration/client-portal-returns-cp045.integration.ts",
+        "scripts/integration/client-portal-returns-cp057.integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "provider_spy_untouched",
+        "missing_customer_policy_rejected",
+        "no_return_shipment_on_rejection",
+        "frozen_snapshot_reused",
+        "completed_label_recovered_without_repurchase"
+      ],
+      "proves": "Disposable PostgreSQL fixtures prove missing customer pricing blocks the provider and persistence, a successful retry purchases once, completed labels recover without repurchase, customer DTOs remain redacted, and client evidence cannot mutate warehouse authority."
+    },
+    {
+      "id": "rate-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-rate-boundary && npm run test:rate-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "scripts/ps-313-rate-source-of-truth-guard.ts",
+        "src/services/shipping-workflow/apply-best-rate.ts",
+        "src/services/shipping-workflow/rate-fingerprint.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "The backend selected-rate boundary rejects cross-order, cross-account, stale, and mismatched rate facts before the offline provider spy can be called."
+    },
+    {
+      "id": "billing-boundary-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts",
+        "src/services/billing-invoice-totals.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "The in-memory PostgreSQL-compatible fixture preserves Billing line cardinality and stable totals across repeated canonical reads."
+    },
+    {
+      "id": "billing-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-billing-boundary && npm run test:return-order-summary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts",
+        "scripts/return-order-summary-guard.mjs",
+        "src/services/billing-invoice-totals.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "financial_rbac_redaction"
+      ],
+      "proves": "Cancelled, return, duplicate, out-of-window, and cross-client fixtures cannot corrupt Billing totals, while return rows consume only backend-frozen customer money and remain RBAC-redacted."
+    },
+    {
+      "id": "prepship-certification",
+      "classification": "static",
+      "command": "npm run test:ps-435-return-customer-rate && npm run test:ps-437-customer-shipping-money && npm run test:rate-source-of-truth && npm run test:ps-433-rate-boundary && npm run test:ps-433-billing-boundary && npm run test:return-order-summary && npm run typecheck && npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "package.json",
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts"
+      ],
+      "assertions": [],
+      "proves": "PrepShip focused source-of-truth checks, backend/frontend strict TypeScript, and the 2,977-module production Vite build pass at reviewed SHA de826288e2bf8587bdfba648900885b3a32c8f0e."
+    },
+    {
+      "id": "client-portal-certification",
+      "classification": "static",
+      "command": "npm run test:guards with inert test-only environment values; npm run typecheck; npm run build:web; focused architecture, shadow-renderer, scope, redaction, RBAC, return-rate, return-label, return-scope, and return-billing guards",
+      "result": "pass",
+      "artifactPaths": [
+        "https://github.com/drprepperusa-org/client-portal-prepship/commit/87c8ab3553b8e54f8629815d2853685b1323c3e0",
+        "https://github.com/drprepperusa-org/client-portal-prepship/blob/87c8ab3553b8e54f8629815d2853685b1323c3e0/scripts/dashboard-client-filter-guard.mjs"
+      ],
+      "assertions": [
+        "all_156_guards_pass",
+        "strict_typecheck",
+        "production_build",
+        "tenant_scope_preserved",
+        "carrier_and_cost_redaction_preserved"
+      ],
+      "proves": "Client Portal exact SHA 87c8ab3553b8e54f8629815d2853685b1323c3e0 passes all 156 guards, strict typecheck, production build, and focused return, Billing, redaction, RBAC, scope, architecture, and shadow-renderer checks."
+    },
+    {
+      "id": "production-deployment-verification",
+      "classification": "live",
+      "command": "Verify exact commit metadata for Vercel and Render deployments; GET PrepShip /health/deep and Client Portal /health; GET both production frontends",
+      "result": "pass",
+      "artifactPaths": [
+        "https://prepshipv4-lbo83fzsx-dr-prepper-usas-projects.vercel.app",
+        "https://prepshipv4-api-l5xc.onrender.com/health/deep",
+        "https://client-portal-prepship-9oob1qtkp-dr-prepper-usas-projects.vercel.app",
+        "https://client-portal-prepship.onrender.com/health"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_reviewed_sha",
+        "production_health_ready",
+        "no_provider_side_effect"
+      ],
+      "proves": "PrepShip Vercel and Render API are live at de826288e2bf8587bdfba648900885b3a32c8f0e; Client Portal Vercel and Render are live at 87c8ab3553b8e54f8629815d2853685b1323c3e0; both frontends return HTTP 200, Client Portal health reports its exact commit, and PrepShip deep health reports ready with every component green."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --stat bed413f0fbbfb84d3e8e41c43e18644e0f1ff5e4; git show --stat 265d9a045a144ed67a6551ba046df52876440bd9; git show --stat bc9b0f610a661b87e086d8911976af89ed52fddf; git show --stat 87c8ab3553b8e54f8629815d2853685b1323c3e0",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/customer-shipping-money.ts",
+        "src/routes/client-portal/integrations.ts",
+        "scripts/ps-435-return-customer-rate-guard.ts",
+        "scripts/ps-437-return-money-audit.ts",
+        "https://github.com/drprepperusa-org/client-portal-prepship/compare/49eae24ff380ec0602d76489230779c176de6d8b...87c8ab3553b8e54f8629815d2853685b1323c3e0"
+      ],
+      "assertions": [],
+      "proves": "The coordinated commits contain the canonical policy gate, thin scoped route, pre-provider Client Portal delegate, disclosure guards, Billing cleanup, completed-label recovery, pending UI, read-only audit, and the final scope-guard correction. No migration or production repair was introduced."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "No PS-435 migrations were added or modified; not applicable.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "Forward-revert only PrepShip bed413f0 and Client Portal 265d9a0/bc9b0f6/87c8ab3. Existing frozen customer-money tuples remain immutable and require no database rollback."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the PS-435 implementation commits while preserving immutable return, shipment, Billing, and audit history. Do not delete labels, replay completed purchases, or rewrite shipped/cancelled production data.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Exact-SHA Render and Vercel deployments are live and healthy. Verification was read-only and did not buy postage, create labels, call a live marketplace mutation, or modify production order, shipment, return, or Billing rows.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "https://prepshipv4-api-l5xc.onrender.com/health/deep",
+      "https://client-portal-prepship.onrender.com/health",
+      "https://prepshipv4-lbo83fzsx-dr-prepper-usas-projects.vercel.app",
+      "https://client-portal-prepship-9oob1qtkp-dr-prepper-usas-projects.vercel.app"
+    ]
+  },
+  "caveats": []
+}
