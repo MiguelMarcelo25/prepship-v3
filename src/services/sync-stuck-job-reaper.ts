@@ -24,6 +24,7 @@ import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline.js';
 import { syncJobLaneFor, type SyncJobLane } from './sync-job-lanes';
 import { isSyncLaneAdvisoryLockHeld } from './sync-lane-lock';
 import {
+  ORDER_RECOVERY_SINGLETON_KEY,
   ORDER_REFRESH_SINGLETON_KEY,
   SHIPMENT_REFRESH_SINGLETON_KEY,
   SHIPSTATION_SYNC_JOBS,
@@ -97,6 +98,9 @@ export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
   ...new Set([
     ...LEGACY_ORDER_REFRESH_SINGLETON_KEYS,
     ...LEGACY_SHIPMENT_REFRESH_SINGLETON_KEYS,
+    // Per user override unlock shipped data on 2026-07-22: this allow-list
+    // covers only stale pg-boss recovery rows, never order/shipment data.
+    ORDER_RECOVERY_SINGLETON_KEY,
     ORDER_REFRESH_SINGLETON_KEY,
     SHIPMENT_REFRESH_SINGLETON_KEY,
   ]),

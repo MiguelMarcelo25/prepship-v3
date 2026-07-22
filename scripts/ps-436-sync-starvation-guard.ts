@@ -25,6 +25,7 @@ import {
 import {
   FULFILLMENT_OUTBOX_JOB_NAME,
   FULFILLMENT_OUTBOX_SINGLETON_KEY,
+  ORDER_RECOVERY_SINGLETON_KEY,
   resolveSyncJobAdmission,
   SHIPSTATION_SYNC_JOBS,
   shouldYieldOrderSyncToFulfillmentOutbox,
@@ -335,6 +336,17 @@ assert.equal(shouldYieldOrderSyncToFulfillmentOutbox([{
   priority: fulfillmentAdmission.priority,
   deferCount: 1,
 }], fairnessNowMs), true);
+assert.equal(shouldYieldOrderSyncToFulfillmentOutbox([{
+  name: FULFILLMENT_OUTBOX_JOB_NAME,
+  state: 'created',
+  startAfter: new Date(fairnessNowMs),
+  priority: fulfillmentAdmission.priority,
+  deferCount: 1,
+}], fairnessNowMs, SYNC_STARVATION_DEFER_THRESHOLD), false);
+assert.equal(resolveSyncJobAdmission(
+  SHIPSTATION_SYNC_JOBS.orders,
+  { kind: 'busy-defer', recoveryPriority: true },
+).singletonKey, ORDER_RECOVERY_SINGLETON_KEY);
 const observedLongOrderSeconds = 174;
 const outboxCadenceSeconds = 60;
 const outboxRecoveryDelaySeconds = 60;
@@ -517,7 +529,8 @@ assert.match(
   /runOrderSyncWithOutboxPriority[\s\S]*orderSyncOptionsFromJobPayload\(jobData\)[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal: workSignal \}\)/,
 );
 assert.doesNotMatch(queue, /function isDeferredShipStationOrderSync/);
-assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows\)/);
+assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows, Date\.now\(\), priorOrderDeferCount\)/);
+assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders\(priorDeferCount\)/);
 assert.match(queue, /JOBS\.fulfillmentOutbox,[\s\S]*runFulfillmentOutboxTick/);
 assert.match(backfill, /RATE_BACKFILL_DURABLE_CHUNK_SIZE = 2/);
 assert.match(backfill, /currentJobId: payload\.jobId,[\s\S]{0,300}nextPayload: payload/);

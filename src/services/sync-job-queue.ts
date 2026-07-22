@@ -1204,7 +1204,9 @@ async function pendingShipmentRecoveryBlockerForOrders(): Promise<string | null>
     : null;
 }
 
-async function pendingFulfillmentOutboxBlockerForOrders(): Promise<string | null> {
+async function pendingFulfillmentOutboxBlockerForOrders(
+  priorOrderDeferCount: number = 0,
+): Promise<string | null> {
   const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
   const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
     SELECT
@@ -1217,7 +1219,7 @@ async function pendingFulfillmentOutboxBlockerForOrders(): Promise<string | null
     WHERE name = ${JOBS.fulfillmentOutbox}
       AND state IN ('active', 'created', 'retry')
   `;
-  return shouldYieldOrderSyncToFulfillmentOutbox(rows)
+  return shouldYieldOrderSyncToFulfillmentOutbox(rows, Date.now(), priorOrderDeferCount)
     ? JOBS.fulfillmentOutbox
     : null;
 }
@@ -1234,7 +1236,7 @@ async function runOrderSyncWithOutboxPriority(
   const monitorSignal = AbortSignal.any([parentSignal, stopMonitor.signal]);
   const monitor = (async () => {
     while (!monitorSignal.aborted) {
-      const outboxBlocker = await pendingFulfillmentOutboxBlockerForOrders();
+      const outboxBlocker = await pendingFulfillmentOutboxBlockerForOrders(priorDeferCount);
       if (outboxBlocker) {
         // Per user override unlock shipped data on 2026-05-23: reconfirmed on
         // 2026-07-21; cooperatively stop only this bounded order attempt so the
@@ -1385,7 +1387,9 @@ async function registerWorker(
       }
 
       if (name === JOBS.orders) {
-        const fulfillmentOutboxBlocker = await pendingFulfillmentOutboxBlockerForOrders();
+        const fulfillmentOutboxBlocker = await pendingFulfillmentOutboxBlockerForOrders(
+          busyDeferCount(job?.data),
+        );
         const shipmentBlocker = fulfillmentOutboxBlocker
           ? null
           : await pendingShipmentRecoveryBlockerForOrders();

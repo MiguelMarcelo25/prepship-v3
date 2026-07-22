@@ -6,6 +6,7 @@ import {
   FULFILLMENT_OUTBOX_SINGLETON_KEY,
   MANUAL_FULL_ORDER_SINGLETON_KEY,
   OPERATOR_SYNC_PRIORITY,
+  ORDER_RECOVERY_SINGLETON_KEY,
   ORDER_REFRESH_SINGLETON_KEY,
   rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
@@ -186,11 +187,21 @@ assert.equal(
 assert.equal(
   shouldYieldOrderSyncToFulfillmentOutbox([{
     ...outboxRecovery,
+    startAfter: new Date(now),
+    priority: 0,
+    deferCount: '0',
+  }], now, SYNC_STARVATION_DEFER_THRESHOLD),
+  false,
+  'a repeatedly deferred order receives one protected recovery turn',
+);
+assert.equal(
+  shouldYieldOrderSyncToFulfillmentOutbox([{
+    ...outboxRecovery,
     state: 'active',
     startAfter: new Date(now + FULFILLMENT_OUTBOX_RECOVERY_LOOKAHEAD_MS + 1),
-  }], now),
+  }], now, SYNC_STARVATION_DEFER_THRESHOLD),
   true,
-  'an active outbox attempt wins the shared-lane race',
+  'an active outbox attempt still wins the shared-lane race',
 );
 assert.equal(
   shouldYieldOrderSyncToFulfillmentOutbox([{
@@ -238,9 +249,17 @@ assert.deepEqual(resolveSyncJobAdmission(orders, {
   recoveryPriority: true,
 }), {
   policy: 'stately',
-  singletonKey: ORDER_REFRESH_SINGLETON_KEY,
+  singletonKey: ORDER_RECOVERY_SINGLETON_KEY,
   priority: STARVATION_RECOVERY_PRIORITY,
 });
+assert.equal(
+  resolveSyncJobAdmission(orders, {
+    kind: 'busy-defer',
+    recoveryPriority: false,
+  }).singletonKey,
+  ORDER_RECOVERY_SINGLETON_KEY,
+  'order deferral lineage must not be overwritten by a cadence replacement',
+);
 
 for (const intent of [
   { kind: 'cadence' } as const,
@@ -308,7 +327,8 @@ assert.match(queue, /resolveSyncJobAdmission\(name, \{[\s\S]*kind: 'busy-defer'/
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(queue, /shouldYieldShipmentSyncToOrders\(\{[\s\S]*ordersPending: hasPendingOrderSyncWork\(queueTruth\),[\s\S]*priorDeferCount/);
 assert.match(queue, /pendingShipmentRecoveryBlockerForOrders[\s\S]*shouldYieldOrderSyncToShipmentRecovery\(rows\)/);
-assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows\)/);
+assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders[\s\S]*shouldYieldOrderSyncToFulfillmentOutbox\(rows, Date\.now\(\), priorOrderDeferCount\)/);
+assert.match(queue, /pendingFulfillmentOutboxBlockerForOrders\(priorDeferCount\)/);
 assert.match(queue, /name === JOBS\.orders[\s\S]*fulfillment_outbox_recovery_pending[\s\S]*shipment_recovery_pending/);
 assert.match(queue, /runOrderSyncWithOutboxPriority[\s\S]*yielded_to_pending_fulfillment_outbox/);
 assert.match(queue, /registerWorker\(JOBS\.fulfillmentOutbox, runFulfillmentOutboxTick\)/);

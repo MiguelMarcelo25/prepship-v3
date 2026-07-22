@@ -14,6 +14,7 @@ export const SHIPSTATION_SYNC_JOBS = {
 export const FULFILLMENT_OUTBOX_JOB_NAME = 'prepship.sync.fulfillment-outbox';
 
 export const ORDER_REFRESH_SINGLETON_KEY = 'order-refresh';
+export const ORDER_RECOVERY_SINGLETON_KEY = 'order-refresh-recovery';
 export const SHIPMENT_REFRESH_SINGLETON_KEY = 'shipment-refresh';
 export const FULFILLMENT_OUTBOX_SINGLETON_KEY = 'fulfillment-outbox';
 export const MANUAL_FULL_ORDER_SINGLETON_KEY = 'manual-full';
@@ -135,11 +136,18 @@ export function shouldYieldOrderSyncToShipmentRecovery(
 export function shouldYieldOrderSyncToFulfillmentOutbox(
   rows: ReadonlyArray<OperationalSyncQueueRow>,
   nowMs: number = Date.now(),
+  priorOrderDeferCount: number = 0,
 ): boolean {
+  const orderRecoveryTurn =
+    nonnegativeInteger(priorOrderDeferCount) >= SYNC_STARVATION_DEFER_THRESHOLD;
   return rows.some((row) => {
     if (row.name !== FULFILLMENT_OUTBOX_JOB_NAME) return false;
     if (row.state === 'active') return true;
     if (row.state !== 'created' && row.state !== 'retry') return false;
+    // Per user override unlock shipped data on 2026-07-22: after the outbox has
+    // received three bounded turns, preserve one durable order-recovery turn.
+    // An already-active outbox still wins the shared-lane race above.
+    if (orderRecoveryTurn) return false;
 
     const startAfterMs = row.startAfter instanceof Date
       ? row.startAfter.getTime()
@@ -246,9 +254,13 @@ export function resolveSyncJobAdmission(
     };
   }
 
+  const busyDeferSingletonKey =
+    intent.kind === 'busy-defer' && name === SHIPSTATION_SYNC_JOBS.orders
+      ? ORDER_RECOVERY_SINGLETON_KEY
+      : refreshSingletonKey(name);
   return {
     policy,
-    singletonKey: refreshSingletonKey(name),
+    singletonKey: busyDeferSingletonKey,
     priority: intent.recoveryPriority ? STARVATION_RECOVERY_PRIORITY : 0,
   };
 }
