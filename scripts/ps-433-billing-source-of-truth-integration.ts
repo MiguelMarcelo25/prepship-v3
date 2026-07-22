@@ -72,6 +72,7 @@ async function main(): Promise<void> {
     packageTotal: 3,
     shippingTotal: 8,
     storageTotal: 4,
+    adjustmentTotal: 0,
     grandTotal: 23,
     fulfillmentFeeTotal: 18,
   });

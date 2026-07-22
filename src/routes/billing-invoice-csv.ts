@@ -29,6 +29,7 @@ export type InvoiceCsvDetailRow = {
   order_id: number | null;
   order_number: string | null;
   shipment_id?: number | null;
+  billing_adjustment_id?: string | null;
   ship_date: string | null;
   billing_effective_date: string | null;
   base_qty: string;
@@ -105,7 +106,9 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
       row.ship_date,
       row.billing_effective_date,
     ),
-    String(row.order_number ?? row.order_id ?? ''),
+    row.billing_adjustment_id
+      ? `Adjustment ${row.billing_adjustment_id.slice(0, 8)}`
+      : String(row.order_number ?? row.order_id ?? ''),
     row.billing_status_label || 'Fulfilled',
     invoiceOneLineCell(row.skus),
     invoiceOneLineCell(row.box_label),
@@ -116,7 +119,11 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     num(shippingAmt),
     num(storageAmt),
     num(total),
-    row.shipment_id == null ? 'External' : `#${row.shipment_id}`,
+    row.billing_adjustment_id
+      ? 'Adjustment'
+      : row.shipment_id == null
+        ? 'External'
+        : `#${row.shipment_id}`,
   ];
   return cells.map(csvField).join(',');
 }

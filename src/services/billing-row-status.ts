@@ -101,6 +101,17 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
   if (hasLine('return')) {
     return result('return', 'Return', 'purple', null, null, input);
   }
+  if (hasLine('billing_adjustment')) {
+    const isCredit = Number(input.totalCost) < 0;
+    return result(
+      'manual_adjustment',
+      isCredit ? 'Credit adjustment' : 'Debit adjustment',
+      'blue',
+      'manual_override',
+      isCredit ? 'CREDIT' : 'DEBIT',
+      input,
+    );
+  }
 
   const orderStatus =
     normalizedText(input.orderStatus)?.toLowerCase() ??

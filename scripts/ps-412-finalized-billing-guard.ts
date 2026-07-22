@@ -168,8 +168,11 @@ async function main(): Promise<void> {
       /billing-invoice-totals/.test(policy),
   );
   check(
-    'billing generation refuses finalized periods before rebuilding lines',
-    /assertBillingPeriodOpen/.test(billingService),
+    'billing generation compares finalized candidates but rebuilds only editable rows',
+    /const calculationRows = allBillableRows/.test(billingService) &&
+      /const editableRows = allRows\.filter/.test(billingService) &&
+      /reconcileFinalizedBillingOrderAdjustments/.test(billingService) &&
+      !/await assertBillingPeriodOpen\(/.test(billingService),
   );
   check(
     'billing routes expose scoped write-gated close and credit operations',
@@ -312,6 +315,8 @@ async function main(): Promise<void> {
         ship_date timestamptz,
         billing_effective_date timestamptz,
         billing_policy_version text,
+        source_finalization_id text,
+        billing_adjustment_id text,
         line_type text NOT NULL,
         description text NOT NULL,
         qty numeric(10,2) NOT NULL DEFAULT 1,

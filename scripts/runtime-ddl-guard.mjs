@@ -156,6 +156,20 @@ const migrationOwnership = [
       'print_queue_send_jobs_recovery_idx',
     ],
   ],
+  [
+    'drizzle/0074_billing_current_period_adjustments.sql',
+    [
+      'source_finalization_id',
+      'billing_adjustment_id',
+      'adjustment_total',
+      'billing_li_adjustment_unq',
+      'billing_credit_notes_source_order_idx',
+      'billing_credit_notes_projection_guard',
+      'billing_line_items_adjustment_immutable_guard',
+      'billing_credit_notes_require_projection',
+      'billing_line_items_block_adjustment_mutation',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -229,6 +243,15 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(printQueueExecutionFenceMigration),
   '0073 changes only Print Queue sidecars and never mutates or destructively alters orders/shipments',
 );
+const billingCurrentPeriodAdjustmentMigration = read('drizzle/0074_billing_current_period_adjustments.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments|billing_line_items|billing_finalizations|billing_credit_notes)\b/i.test(
+    billingCurrentPeriodAdjustmentMigration,
+  ) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(billingCurrentPeriodAdjustmentMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCurrentPeriodAdjustmentMigration),
+  '0074 adds append-only billing adjustment facts without backfill or mutation of historical billing/orders/shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
@@ -239,7 +262,7 @@ for (const token of [
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0073_print_queue_send_execution_fences.sql',
+  '0074_billing_current_period_adjustments.sql',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

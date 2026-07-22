@@ -11,6 +11,8 @@ export type BillingFinalizationDto = {
   orderCount: number
   subtotal: string
   creditedAmount: string
+  debitedAmount: string
+  signedAdjustmentAmount: string
   balance: string
   finalizedBy: string
   finalizedByEmail: string | null
@@ -23,6 +25,14 @@ export type BillingCreditNoteDto = {
   clientId: number
   amount: string
   signedAmount: string
+  adjustmentKind: 'credit' | 'debit'
+  adjustmentSource: 'manual' | 'regeneration'
+  sourceOrderId: number | null
+  postingVersion: 'legacy_credit_v1' | 'current_period_v2'
+  effectiveDate: string | null
+  billingPolicyVersion: string | null
+  billingLineItemId: number | null
+  sourceFinalizationId: string
   reason: string
   idempotencyKey: string
   createdBy: string
@@ -32,6 +42,7 @@ export type BillingCreditNoteDto = {
 
 export type BillingCreditDraft = {
   finalizationId: string
+  adjustmentKind: 'credit' | 'debit'
   amount: string
   reason: string
   idempotencyKey: string
@@ -89,6 +100,7 @@ export function BillingCloseWorkflowPanel({
   onCreateCredit: (draft: BillingCreditDraft) => Promise<boolean>
 }) {
   const [creditFormOpen, setCreditFormOpen] = useState(false)
+  const [adjustmentKind, setAdjustmentKind] = useState<'credit' | 'debit'>('credit')
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey)
@@ -96,10 +108,11 @@ export function BillingCloseWorkflowPanel({
     ?? finalizations[0]
     ?? null
   const locked = finalizations.length > 0
-  const creditAvailable = selectedFinalization != null && Number(selectedFinalization.balance) > 0
+  const adjustmentAvailable = selectedFinalization != null
 
   function resetCreditDraft() {
     setCreditFormOpen(false)
+    setAdjustmentKind('credit')
     setAmount('')
     setReason('')
     setIdempotencyKey(requestKey())
@@ -120,6 +133,7 @@ export function BillingCloseWorkflowPanel({
     if (!selectedFinalization) return
     const created = await onCreateCredit({
       finalizationId: selectedFinalization.id,
+      adjustmentKind,
       amount,
       reason,
       idempotencyKey,
@@ -152,7 +166,7 @@ export function BillingCloseWorkflowPanel({
               </div>
             ) : locked ? (
               <div className="mt-1 text-[11px] text-ink-2">
-                Invoice lines are immutable. Any correction must be an append-only credit memo.
+                Invoice lines are immutable. Corrections post as append-only current-period credit or debit adjustments.
               </div>
             ) : (
               <div className="mt-1 text-[11px] text-ink-2">
@@ -197,7 +211,7 @@ export function BillingCloseWorkflowPanel({
             </label>
           ) : null}
 
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             <div className="rounded-lg bg-surface px-3 py-2 ring-1 ring-line">
               <div className="text-[9.5px] font-bold uppercase tracking-wide text-ink-3">Frozen subtotal</div>
               <div className="mt-0.5 text-[14px] font-extrabold tabular-nums text-ink">{displayMoney(selectedFinalization.subtotal)}</div>
@@ -205,6 +219,10 @@ export function BillingCloseWorkflowPanel({
             <div className="rounded-lg bg-surface px-3 py-2 ring-1 ring-line">
               <div className="text-[9.5px] font-bold uppercase tracking-wide text-ink-3">Credits</div>
               <div className="mt-0.5 text-[14px] font-extrabold tabular-nums text-ink">{displayMoney(selectedFinalization.creditedAmount)}</div>
+            </div>
+            <div className="rounded-lg bg-surface px-3 py-2 ring-1 ring-line">
+              <div className="text-[9.5px] font-bold uppercase tracking-wide text-ink-3">Debits</div>
+              <div className="mt-0.5 text-[14px] font-extrabold tabular-nums text-ink">{displayMoney(selectedFinalization.debitedAmount)}</div>
             </div>
             <div className="rounded-lg bg-surface px-3 py-2 ring-1 ring-line">
               <div className="text-[9.5px] font-bold uppercase tracking-wide text-ink-3">Balance</div>
@@ -223,8 +241,8 @@ export function BillingCloseWorkflowPanel({
             <button
               type="button"
               className="btn btn-secondary btn-xs"
-              disabled={!creditAvailable || creditSubmitting}
-              title={creditAvailable ? 'Create an append-only credit memo' : 'This finalization has no remaining balance'}
+              disabled={!adjustmentAvailable || creditSubmitting}
+              title="Create an append-only current-period adjustment"
               onClick={() => {
                 setCreditFormOpen((open) => !open)
                 setIdempotencyKey(requestKey())
@@ -232,15 +250,29 @@ export function BillingCloseWorkflowPanel({
               data-billing-credit-trigger
             >
               <CreditCard size={13} aria-hidden="true" />
-              Credit memo
+              Add adjustment
             </button>
           </div>
 
           {creditFormOpen ? (
             <form className="mt-3 rounded-lg bg-surface p-3 ring-1 ring-line" onSubmit={submitCredit} data-billing-credit-form>
-              <div className="grid gap-3 sm:grid-cols-[150px_minmax(0,1fr)]">
+              <div className="grid gap-3 sm:grid-cols-[130px_150px_minmax(0,1fr)]">
                 <label className="text-[11px] font-bold text-ink-2">
-                  Credit amount
+                  Type
+                  <select
+                    className="filter-sel mt-1 block w-full bg-surface text-ink"
+                    value={adjustmentKind}
+                    onChange={(event) => {
+                      setAdjustmentKind(event.target.value as 'credit' | 'debit')
+                      setIdempotencyKey(requestKey())
+                    }}
+                  >
+                    <option value="credit">Credit</option>
+                    <option value="debit">Debit</option>
+                  </select>
+                </label>
+                <label className="text-[11px] font-bold text-ink-2">
+                  Amount
                   <input
                     className="markup-input-lg mt-1 w-full bg-surface text-ink"
                     type="number"
@@ -270,7 +302,7 @@ export function BillingCloseWorkflowPanel({
               <div className="mt-3 flex items-center justify-end gap-2">
                 <button type="button" className="btn btn-ghost btn-xs" disabled={creditSubmitting} onClick={resetCreditDraft}>Cancel</button>
                 <button type="submit" className="btn btn-primary btn-xs" disabled={creditSubmitting}>
-                  {creditSubmitting ? 'Creating…' : 'Create credit memo'}
+                  {creditSubmitting ? 'Creating…' : `Create ${adjustmentKind}`}
                 </button>
               </div>
             </form>
@@ -279,14 +311,14 @@ export function BillingCloseWorkflowPanel({
           <div className="mt-3" data-billing-credit-history>
             <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-ink-3">
               <ReceiptText size={13} aria-hidden="true" />
-              Credit history
+              Adjustment history
             </div>
             {creditNotesLoading ? (
-              <div className="mt-1 text-[11px] text-ink-3">Loading credit memos…</div>
+              <div className="mt-1 text-[11px] text-ink-3">Loading adjustments…</div>
             ) : creditNotesError ? (
               <div role="alert" className="mt-1 text-[11px] font-semibold text-rose-700">{creditNotesError}</div>
             ) : creditNotes.length === 0 ? (
-              <div className="mt-1 text-[11px] text-ink-3">No credit memos.</div>
+              <div className="mt-1 text-[11px] text-ink-3">No adjustments.</div>
             ) : (
               <ul className="mt-2 grid gap-1.5">
                 {creditNotes.map((note) => (
@@ -296,8 +328,15 @@ export function BillingCloseWorkflowPanel({
                       <div className="mt-0.5 text-[10px] text-ink-3">
                         {displayDateTime(note.createdAt)} · {note.createdByEmail ?? note.createdBy}
                       </div>
+                      <div className="mt-0.5 text-[10px] text-ink-3">
+                        {note.adjustmentSource} · current period {note.effectiveDate?.slice(0, 10) ?? 'legacy'}
+                        {note.sourceOrderId ? ` · order ${note.sourceOrderId}` : ''}
+                        {` · original ${note.sourceFinalizationId}`}
+                      </div>
                     </div>
-                    <div className="text-[12px] font-extrabold tabular-nums text-rose-700">{displayMoney(note.signedAmount)}</div>
+                    <div className={`text-[12px] font-extrabold tabular-nums ${note.adjustmentKind === 'credit' ? 'text-rose-700' : 'text-brand'}`}>
+                      {displayMoney(note.signedAmount)}
+                    </div>
                   </li>
                 ))}
               </ul>

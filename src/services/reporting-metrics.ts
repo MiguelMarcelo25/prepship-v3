@@ -86,6 +86,7 @@ export type BillingSummaryMetricRow = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  adjustmentTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -553,6 +554,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         package_total,
         shipping_total,
         storage_total,
+        adjustment_total,
         grand_total,
         updated_at
       )
@@ -566,6 +568,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         coalesce(sum(case when b.line_type = 'package_cost' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as package_total,
         coalesce(sum(case when b.line_type = 'shipping' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as shipping_total,
         coalesce(sum(case when b.line_type = 'storage' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as storage_total,
+        coalesce(sum(case when b.line_type = 'billing_adjustment' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as adjustment_total,
         coalesce(sum(${billingSummaryAmount}), 0)::numeric(14, 2) as grand_total,
         now() as updated_at
       from clients c
@@ -588,6 +591,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         package_total = excluded.package_total,
         shipping_total = excluded.shipping_total,
         storage_total = excluded.storage_total,
+        adjustment_total = excluded.adjustment_total,
         grand_total = excluded.grand_total,
         updated_at = now()
     `);
@@ -1012,6 +1016,7 @@ export async function getFreshBillingSummaryMetrics(options: {
       package_total: string | number;
       shipping_total: string | number;
       storage_total: string | number;
+      adjustment_total: string | number;
       order_count: number;
       grand_total: string | number;
       fresh_count: string | number;
@@ -1046,6 +1051,7 @@ export async function getFreshBillingSummaryMetrics(options: {
           m.package_total,
           m.shipping_total,
           m.storage_total,
+          m.adjustment_total,
           m.order_count,
           m.grand_total,
           m.updated_at as updated_at,
@@ -1076,6 +1082,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         fm.package_total,
         fm.shipping_total,
         fm.storage_total,
+        fm.adjustment_total,
         fm.order_count,
         fm.grand_total,
         coverage.fresh_count,
@@ -1096,6 +1103,7 @@ export async function getFreshBillingSummaryMetrics(options: {
       const packageTotal = num(row.package_total);
       const shippingTotal = num(row.shipping_total);
       const storageTotal = num(row.storage_total);
+      const adjustmentTotal = num(row.adjustment_total);
       const grandTotal = num(row.grand_total);
       const orderCount = num(row.order_count);
       const pickPackFeeTotal = pickPackTotal + additionalTotal;
@@ -1110,6 +1118,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         packageTotal,
         shippingTotal,
         storageTotal,
+        adjustmentTotal,
         fulfillmentFeeTotal,
         orderCount,
         grandTotal,
@@ -1121,6 +1130,7 @@ export async function getFreshBillingSummaryMetrics(options: {
           package_cost: packageTotal,
           shipping: shippingTotal,
           storage: storageTotal,
+          billing_adjustment: adjustmentTotal,
         },
       };
     });

@@ -45,7 +45,21 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'hugrab_shipping_rate_override_threshold',
     'hugrab_shipping_rate_override_amount',
   ],
-  billing_line_items: ['billing_effective_date', 'billing_policy_version'],
+  billing_line_items: [
+    'billing_effective_date',
+    'billing_policy_version',
+    'source_finalization_id',
+    'billing_adjustment_id',
+  ],
+  billing_credit_notes: [
+    'adjustment_kind',
+    'adjustment_source',
+    'source_order_id',
+    'posting_version',
+    'effective_date',
+    'billing_policy_version',
+  ],
+  billing_summary_metrics: ['adjustment_total'],
   client_combo_package_defaults: ['source'],
   external_operations: [
     'operation_key',
@@ -124,9 +138,13 @@ const REQUIRED_INDEXES = [
   'billing_li_order_unique_idx',
   'billing_li_shipment_unique_idx',
   'billing_li_effective_date_idx',
+  'billing_li_adjustment_unq',
+  'billing_li_source_finalization_idx',
   'billing_ref_rates_identity_unq',
   'billing_credit_notes_finalization_idx',
   'billing_credit_notes_idempotency_unq',
+  'billing_credit_notes_id_client_unq',
+  'billing_credit_notes_source_order_idx',
   'billing_finalizations_client_period_unq',
   'client_packing_rules_client_idx',
   'client_packing_rules_client_key_idx',
@@ -194,6 +212,15 @@ const REQUIRED_INDEXES = [
 // part of the PS-452 execution fence. Missing counters must fail boot readiness
 // even when every column and index happens to exist.
 const REQUIRED_CONSTRAINTS = [
+  'billing_credit_notes_adjustment_kind_chk',
+  'billing_credit_notes_adjustment_source_chk',
+  'billing_credit_notes_posting_version_chk',
+  'billing_credit_notes_current_period_fields_chk',
+  'billing_credit_notes_id_client_unq',
+  'billing_credit_notes_finalization_client_fk',
+  'billing_line_items_adjustment_reference_chk',
+  'billing_line_items_source_finalization_client_fk',
+  'billing_line_items_adjustment_client_fk',
   'print_queue_send_jobs_generation_nonnegative',
   'print_queue_send_jobs_chunk_sequence_positive',
   'print_queue_batch_job_items_attempt_count_nonnegative',
@@ -213,6 +240,8 @@ const REQUIRED_FUNCTIONS = [
   'billing_line_items_block_closed_period_mutation',
   'billing_close_records_block_mutations',
   'billing_credit_notes_block_excess',
+  'billing_credit_notes_require_projection',
+  'billing_line_items_block_adjustment_mutation',
 ] as const;
 
 const REQUIRED_TRIGGERS = [
@@ -226,6 +255,8 @@ const REQUIRED_TRIGGERS = [
   'billing_finalizations_no_update_delete',
   'billing_credit_notes_no_update_delete',
   'billing_credit_notes_balance_guard',
+  'billing_credit_notes_projection_guard',
+  'billing_line_items_adjustment_immutable_guard',
   'billing_finalizations_no_truncate',
   'billing_credit_notes_no_truncate',
 ] as const;
@@ -326,7 +357,7 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0073_print_queue_send_execution_fences.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `0074_billing_current_period_adjustments.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

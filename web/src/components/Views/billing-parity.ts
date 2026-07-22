@@ -311,7 +311,7 @@ export function buildBillingSummaryTotals(rows: BillingSummaryDto[]): BillingSum
       storage: totals.storage + storage,
       shipping: totals.shipping + shipping,
       fulfillmentFee: totals.fulfillmentFee + fulfillmentFee,
-      grand: totals.grand + (row.grandTotal || fulfillmentFee),
+      grand: totals.grand + Number(row.grandTotal ?? row.total ?? fulfillmentFee),
     }
   }, {
     orders: 0,
@@ -450,7 +450,8 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   // fee totals; the FE no longer recomputes them (snake key kept as deploy-skew fallback).
   const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? 0) || 0
   const fulfillmentFee = Number(detail.fulfillmentFeeTotal ?? detail.fulfillment_fee_total ?? 0) || 0
-  const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || fulfillmentFee
+  const totalValue = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? fulfillmentFee)
+  const total = Number.isFinite(totalValue) ? totalValue : fulfillmentFee
   const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost
   const ourCost = Number(selectedRateCost ?? 0) || 0
   const margin = shipping - ourCost

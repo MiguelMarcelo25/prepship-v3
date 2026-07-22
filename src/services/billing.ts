@@ -89,12 +89,12 @@ import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
 import {
-  assertBillingPeriodOpen,
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,
   ensureBillingFinalizationPolicySchema,
   finalizedBillingOrderIdsForRange,
   isBillingFinalizedLockError,
+  reconcileFinalizedBillingOrderAdjustments,
   rethrowAsBillingFinalizedLock,
   setBillingOrdersDirty,
 } from './billing-finalization-policy';
@@ -165,6 +165,10 @@ export type GenerateInput = {
   scopeStoreIds?: number[];
   scopeIsGlobal?: boolean;
   scopeRestricted?: boolean;
+  actorId?: string | null;
+  actorEmail?: string | null;
+  /** Internal test clock only. HTTP callers never supply this value. */
+  now?: Date;
 };
 
 export type BillingGenerationStatus = {
@@ -202,7 +206,8 @@ function billingSummaryHasValues(summary: { clients: BillingSummaryRow[] }): boo
       row.packageTotal > 0 ||
       row.shippingTotal > 0 ||
       row.storageTotal > 0 ||
-      row.grandTotal > 0
+      row.adjustmentTotal !== 0 ||
+      row.grandTotal !== 0
   );
 }
 
@@ -872,14 +877,10 @@ export async function generateLineItems(input: GenerateInput) {
   // PS-370: verify migration-owned selected-rate schema before reading it.
   await ensureShipmentsSelectedRateCostColumn();
   await ensureBillingFinalizationPolicySchema();
-  // Audit 3.6 / B-2: a close record freezes the whole client/period, including
-  // future regeneration attempts and late line inserts. Reject before any
-  // generator read/delete/insert work; the DB trigger is the race/script backstop.
-  await assertBillingPeriodOpen({
-    clientId: input.clientId,
-    dateFrom: fromIso,
-    dateTo: toIso,
-  });
+  // Per user override unlock shipped data on 2026-05-23: PS-449 permits a
+  // regeneration read of finalized shipped/cancelled source orders solely to
+  // calculate an append-only current-period correction. Frozen billing rows
+  // remain excluded from the delete/rebuild transaction below.
 
   // Scope-independent prefetch reads, fired TOGETHER (they used to run
   // serially — one pooler round-trip after another). Each is awaited exactly
@@ -1189,6 +1190,10 @@ export async function generateLineItems(input: GenerateInput) {
   const billableRows = allBillableRows.filter(
     (row) => row.orderId == null || !finalizedOrderIds.has(row.orderId),
   );
+  // PS-449 recomputes finalized candidates through the same canonical billing
+  // calculator. Only billableRows may be rebuilt; calculationRows are also
+  // compared with their immutable finalized invoice totals afterward.
+  const calculationRows = allBillableRows;
   const skippedFinalizedOrderCount = new Set(
     allBillableRows
       .map((row) => row.orderId)
@@ -1297,7 +1302,7 @@ export async function generateLineItems(input: GenerateInput) {
   const cShippingRateByShipmentId = new Map<number, number>();
   await requireBillingRegenerationRead('house shipping-rate sidecar', async () => {
     const houseShipmentIds = [
-      ...new Set(billableRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
+      ...new Set(calculationRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
     ];
     if (houseShipmentIds.length) {
       await ensureOrderCompetitiveRateSchema();
@@ -1319,7 +1324,7 @@ export async function generateLineItems(input: GenerateInput) {
   // order is waived (never product/marketplace/box/storage/shipping).
   // Sidecar failures propagate before the billing-line transaction begins.
   const orderIdsInScope = [
-    ...new Set(billableRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
+    ...new Set(calculationRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
   ];
   const [feeWaiverByOrderId, manualBillingOverrideByOrderId] = await Promise.all([
     requireBillingRegenerationRead(
@@ -1338,7 +1343,7 @@ export async function generateLineItems(input: GenerateInput) {
     ? await getBundlesForOrders(orderIdsInScope)
     : new Map();
 
-  for (const s of billableRows) {
+  for (const s of calculationRows) {
     if (s.clientId === null) {
       skipped += 1;
       continue;
@@ -1695,6 +1700,9 @@ export async function generateLineItems(input: GenerateInput) {
       .map((row) => row.orderId)
       .filter((orderId): orderId is number => orderId != null && orderId > 0),
   )];
+  const editableRows = allRows.filter(
+    (row) => row.orderId == null || !finalizedOrderIds.has(row.orderId),
+  );
   const requestedWindowOrderLines = and(
     sql`${billingPersistedEffectiveDaySql} >= ${fromIso}::timestamptz`,
     sql`${billingPersistedEffectiveDaySql} < ${toIso}::timestamptz`,
@@ -1733,8 +1741,8 @@ export async function generateLineItems(input: GenerateInput) {
           billingLineItemIsEditablePredicate(),
         ),
       );
-      for (let i = 0; i < allRows.length; i += CHUNK) {
-        const chunk = allRows.slice(i, i + CHUNK);
+      for (let i = 0; i < editableRows.length; i += CHUNK) {
+        const chunk = editableRows.slice(i, i + CHUNK);
         if (!chunk.length) continue;
         const inserted = await tx
           .insert(billingLineItems)
@@ -1762,6 +1770,40 @@ export async function generateLineItems(input: GenerateInput) {
   } catch (error) {
     if (isBillingFinalizedLockError(error)) rethrowAsBillingFinalizedLock(error);
     throw error;
+  }
+
+  const finalizedCandidateTotalsByClient = new Map<number, Map<number, number>>();
+  for (const row of allRows) {
+    if (row.orderId == null || !finalizedOrderIds.has(row.orderId)) continue;
+    let clientTotals = finalizedCandidateTotalsByClient.get(row.clientId);
+    if (!clientTotals) {
+      clientTotals = new Map<number, number>();
+      finalizedCandidateTotalsByClient.set(row.clientId, clientTotals);
+    }
+    clientTotals.set(row.orderId, roundMoney((clientTotals.get(row.orderId) ?? 0) + toNum(row.totalCost)));
+  }
+
+  let finalizedAdjustmentCount = 0;
+  let finalizedAdjustmentCreditCount = 0;
+  let finalizedAdjustmentDebitCount = 0;
+  let finalizedAdjustmentUntouchedCount = 0;
+  for (const [clientId, candidateTotals] of finalizedCandidateTotalsByClient) {
+    const result = await reconcileFinalizedBillingOrderAdjustments({
+      clientId,
+      dateFrom: fromIso,
+      dateTo: toIso,
+      candidates: [...candidateTotals].map(([orderId, currentTotal]) => ({
+        orderId,
+        currentTotal: currentTotal.toFixed(2),
+      })),
+      actorId: input.actorId,
+      actorEmail: input.actorEmail,
+      now: input.now,
+    });
+    finalizedAdjustmentCount += result.adjustedOrderCount;
+    finalizedAdjustmentCreditCount += result.creditCount;
+    finalizedAdjustmentDebitCount += result.debitCount;
+    finalizedAdjustmentUntouchedCount += result.untouchedOrderCount;
   }
   // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
   // The billable-storage math is owned by computeClientStorageBilling
@@ -2077,9 +2119,13 @@ export async function generateLineItems(input: GenerateInput) {
     total: roundMoney(total),
     skipped,
     skippedFinalizedOrderCount,
+    finalizedAdjustmentCount,
+    finalizedAdjustmentCreditCount,
+    finalizedAdjustmentDebitCount,
+    finalizedAdjustmentUntouchedCount,
     skippedFinalizedStorageCount: skippedFinalizedStorageGroups.size,
     billingSummaryMetricsRows,
-    message: `Generated ${generated} line items from ${billableRows.length} billable shipments/orders; ${skippedFinalizedOrderCount} finalized order(s) and ${skippedFinalizedStorageGroups.size} finalized storage period(s) left unchanged.`,
+    message: `Generated ${generated} line items from ${billableRows.length} editable shipments/orders; finalized rows stayed unchanged (${finalizedAdjustmentCount} current-period adjustment(s), ${finalizedAdjustmentUntouchedCount} untouched order(s)); ${skippedFinalizedStorageGroups.size} finalized storage period(s) left unchanged.`,
   };
 }
 
@@ -2093,6 +2139,7 @@ export type BillingSummaryRow = {
   shippingTotal: number;
   missingShippingCostCount?: number;
   storageTotal: number;
+  adjustmentTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -2211,6 +2258,7 @@ export async function billingSummary(
         shippingTotal: 0,
         missingShippingCostCount: 0,
         storageTotal: 0,
+        adjustmentTotal: 0,
         fulfillmentFeeTotal: 0,
         orderCount: 0,
         grandTotal: 0,
@@ -2223,6 +2271,7 @@ export async function billingSummary(
           shipping: 0,
           shipping_missing: 0,
           storage: 0,
+          billing_adjustment: 0,
         },
       })),
       grandTotal: 0,
@@ -2259,6 +2308,7 @@ export async function billingSummary(
     package_total: string;
     shipping_total: string;
     storage_total: string;
+    adjustment_total: string;
     missing_shipping_cost_count: number;
     order_count: number;
     grand_total: string;
@@ -2272,6 +2322,7 @@ export async function billingSummary(
       coalesce(sum(case when b.line_type = 'shipping' then ${summaryAmount} else 0 end), 0)::text as shipping_total,
       sum(case when b.line_type = 'shipping_missing' and not ${summaryCancelledNoCharge} then 1 else 0 end)::int as missing_shipping_cost_count,
       coalesce(sum(case when b.line_type = 'storage' then ${summaryAmount} else 0 end), 0)::text as storage_total,
+      coalesce(sum(case when b.line_type = 'billing_adjustment' then ${summaryAmount} else 0 end), 0)::text as adjustment_total,
       count(distinct b.order_id)::int as order_count,
       coalesce(sum(${summaryAmount}), 0)::text as grand_total
     from clients c
@@ -2295,6 +2346,7 @@ export async function billingSummary(
     const shippingTotal = roundMoney(toNum(r.shipping_total));
     const missingShippingCostCount = Number(r.missing_shipping_cost_count ?? 0);
     const storageTotal = roundMoney(toNum(r.storage_total));
+    const adjustmentTotal = roundMoney(toNum(r.adjustment_total));
     const grandTotal = roundMoney(toNum(r.grand_total));
     const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
     const fulfillmentFeeTotal = roundMoney(
@@ -2310,6 +2362,7 @@ export async function billingSummary(
       shippingTotal,
       missingShippingCostCount,
       storageTotal,
+      adjustmentTotal,
       fulfillmentFeeTotal,
       orderCount: Number(r.order_count ?? 0),
       grandTotal,
@@ -2322,6 +2375,7 @@ export async function billingSummary(
         shipping: shippingTotal,
         shipping_missing: missingShippingCostCount,
         storage: storageTotal,
+        billing_adjustment: adjustmentTotal,
       },
     };
   });
@@ -2352,6 +2406,8 @@ export async function billingDetails(input: GenerateInput) {
       qty: billingLineItems.qty,
       unitCost: billingLineItems.unitCost,
       totalCost: billingLineItems.totalCost,
+      sourceFinalizationId: billingLineItems.sourceFinalizationId,
+      billingAdjustmentId: billingLineItems.billingAdjustmentId,
       overridePackageId: billingLineItems.packageId,
       invoiced: billingLineItems.invoiced,
       createdAt: billingLineItems.createdAt,

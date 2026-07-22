@@ -110,6 +110,8 @@ async function setup(page) {
         orderCount: 1,
         subtotal: '12.62',
         creditedAmount: '0.00',
+        debitedAmount: '0.00',
+        signedAdjustmentAmount: '0.00',
         balance: '12.62',
         finalizedBy: 'u1',
         finalizedByEmail: 'billing@example.test',
@@ -129,6 +131,14 @@ async function setup(page) {
         clientId: 1,
         amount: '2.50',
         signedAmount: '-2.50',
+        adjustmentKind: body.adjustmentKind,
+        adjustmentSource: 'manual',
+        sourceOrderId: null,
+        postingVersion: 'current_period_v2',
+        effectiveDate: '2026-07-15T00:00:00.000Z',
+        billingPolicyVersion: 'legacy_calendar_v1',
+        billingLineItemId: 9100,
+        sourceFinalizationId: 'finalization-1',
         reason: body.reason,
         idempotencyKey: body.idempotencyKey,
         createdBy: 'u1',
@@ -139,6 +149,7 @@ async function setup(page) {
       finalization = {
         ...finalization,
         creditedAmount: '2.50',
+        signedAdjustmentAmount: '-2.50',
         balance: '10.12',
       }
       return route.fulfill(json({
@@ -158,7 +169,7 @@ async function setup(page) {
   return requests
 }
 
-test('operator finalizes a period, sees the lock, and appends a credit memo', async ({ page }) => {
+test('operator finalizes a period, sees the lock, and appends a current-period credit', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   const requests = await setup(page)
   await page.goto(`${baseUrl}/billing`)
@@ -181,15 +192,16 @@ test('operator finalizes a period, sees the lock, and appends a credit memo', as
   expect(requests.finalize.dateTo).toMatch(/^\d{4}-\d{2}-\d{2}$/)
 
   await workflow.locator('[data-billing-credit-trigger]').click()
-  await workflow.getByLabel('Credit amount').fill('2.50')
+  await workflow.getByLabel('Amount').fill('2.50')
   await workflow.getByLabel('Reason').fill('Carrier service refund')
-  await workflow.getByRole('button', { name: 'Create credit memo' }).click()
+  await workflow.getByRole('button', { name: 'Create credit' }).click()
 
   await expect(workflow.getByText('Carrier service refund')).toBeVisible()
   await expect(workflow.getByText('$10.12')).toBeVisible()
   expect(requests.credit).toMatchObject({
     clientId: 1,
     finalizationId: 'finalization-1',
+    adjustmentKind: 'credit',
     amount: '2.50',
     reason: 'Carrier service refund',
   })

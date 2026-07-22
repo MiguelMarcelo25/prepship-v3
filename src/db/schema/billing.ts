@@ -70,6 +70,12 @@ export const billingLineItems = pgTable(
     // the box name/dims instead of the shipment-derived package. Never mutates
     // the shipment's selectedPackageId.
     packageId: integer().references(() => packages.id),
+    // PS-449: append-only correction projections live in the current billing
+    // period while retaining an explicit reference to the frozen invoice fact.
+    // The composite foreign keys are migration-owned because the referenced
+    // tables are declared below this table in the Drizzle schema.
+    sourceFinalizationId: text('source_finalization_id'),
+    billingAdjustmentId: text('billing_adjustment_id'),
     invoiced: boolean().default(false).notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
@@ -98,6 +104,10 @@ export const billingLineItems = pgTable(
     uniqueIndex('billing_li_storage_unique_idx')
       .on(t.clientId, t.lineType, t.shipDate, t.description)
       .where(sql`${t.orderId} is null`),
+    uniqueIndex('billing_li_adjustment_unq')
+      .on(t.billingAdjustmentId)
+      .where(sql`${t.billingAdjustmentId} is not null`),
+    index('billing_li_source_finalization_idx').on(t.sourceFinalizationId),
   ]
 );
 
@@ -147,6 +157,14 @@ export const billingCreditNotes = pgTable(
       .notNull()
       .references(() => clients.id, { onDelete: 'restrict' }),
     amount: numeric({ precision: 12, scale: 2 }).notNull(),
+    // Legacy rows are credits. New PS-449 writes also support debit notes and
+    // always stamp the backend-owned current billing day.
+    adjustmentKind: text('adjustment_kind').default('credit').notNull(),
+    adjustmentSource: text('adjustment_source').default('manual').notNull(),
+    sourceOrderId: integer('source_order_id').references(() => orders.id, { onDelete: 'restrict' }),
+    postingVersion: text('posting_version').default('legacy_credit_v1').notNull(),
+    effectiveDate: timestamp('effective_date', { withTimezone: true }),
+    billingPolicyVersion: text('billing_policy_version'),
     reason: text().notNull(),
     idempotencyKey: text().notNull(),
     createdBy: text().notNull(),
@@ -155,7 +173,11 @@ export const billingCreditNotes = pgTable(
   },
   (t) => [
     unique('billing_credit_notes_idempotency_unq').on(t.idempotencyKey),
+    unique('billing_credit_notes_id_client_unq').on(t.id, t.clientId),
     index('billing_credit_notes_finalization_idx').on(t.finalizationId, t.createdAt),
+    index('billing_credit_notes_source_order_idx')
+      .on(t.finalizationId, t.sourceOrderId, t.createdAt)
+      .where(sql`${t.sourceOrderId} is not null`),
   ],
 );
 

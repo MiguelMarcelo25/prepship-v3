@@ -15,7 +15,9 @@ function sliceBetween(source: string, start: string, end: string): string {
 const policy = read('src/services/billing-finalization-policy.ts')
 const billingService = read('src/services/billing.ts')
 const route = read('src/routes/billing.ts')
-const migration = read('drizzle/0065_billing_close_workflow.sql')
+const closeMigration = read('drizzle/0065_billing_close_workflow.sql')
+const adjustmentMigration = read('drizzle/0074_billing_current_period_adjustments.sql')
+const adjustmentIntegration = read('scripts/ps-449-current-period-adjustments-integration.ts')
 const view = read('web/src/components/Views/BillingView.tsx')
 const panel = read('web/src/components/Views/BillingCloseWorkflowPanel.tsx')
 const browserProof = read('web/e2e/billing-close-workflow.spec.js')
@@ -47,7 +49,7 @@ assert.match(finalizePolicy, /conn\.transaction\(async \(tx\) =>/)
 assert.match(finalizePolicy, /pg_advisory_xact_lock\(36421, \$\{input\.clientId\}\)/)
 assert.match(finalizePolicy, /order by \$\{billingLineItems\.id\}[\s\S]*?for update/)
 assert.match(finalizePolicy, /billingInvoiceHeaderTotals\(/)
-assert.match(finalizePolicy, /set \$\{billingLineItems\.invoiced\} = true/)
+assert.match(finalizePolicy, /set invoiced = true/)
 assert.match(finalizePolicy, /insert into \$\{billingFinalizations\}/)
 assert.ok(
   finalizePolicy.indexOf('pg_advisory_xact_lock') < finalizePolicy.indexOf('for update') &&
@@ -56,19 +58,18 @@ assert.ok(
   'finalization must lock, freeze totals, then append the close record in that order',
 )
 
-// Regeneration refuses a closed period before generator reads or writes. The
-// migration trigger takes the same client advisory lock, closing the race where
-// finalize and generate begin concurrently.
-assert.match(generator, /await assertBillingPeriodOpen\(/)
-assert.ok(
-  generator.indexOf('await assertBillingPeriodOpen(') < generator.indexOf('await db.transaction('),
-  'period-open admission must precede billing regeneration writes',
-)
-assert.match(migration, /CREATE OR REPLACE FUNCTION billing_finalizations_block_overlap\(\)[\s\S]*?pg_advisory_xact_lock\(36421, NEW\.client_id\)/i)
-assert.match(migration, /CREATE OR REPLACE FUNCTION billing_line_items_block_closed_period_mutation\(\)[\s\S]*?pg_advisory_xact_lock\(36421, lock_client_id\)/i)
-assert.match(migration, /billing_line_items_closed_period_guard[\s\S]*?BEFORE INSERT OR UPDATE OR DELETE ON billing_line_items/i)
-assert.match(migration, /billing_finalizations_no_update_delete/)
-assert.match(migration, /billing_finalizations_no_truncate/)
+// Regeneration calculates finalized candidates through the canonical generator,
+// rebuilds only editable rows, and delegates signed delta posting to the policy.
+assert.doesNotMatch(generator, /await assertBillingPeriodOpen\(/)
+assert.match(generator, /const calculationRows = allBillableRows/)
+assert.match(generator, /const editableRows = allRows\.filter/)
+assert.match(generator, /reconcileFinalizedBillingOrderAdjustments\(/)
+assert.match(generator, /finalizedAdjustmentUntouchedCount/)
+assert.match(closeMigration, /CREATE OR REPLACE FUNCTION billing_finalizations_block_overlap\(\)[\s\S]*?pg_advisory_xact_lock\(36421, NEW\.client_id\)/i)
+assert.match(adjustmentMigration, /CREATE OR REPLACE FUNCTION billing_line_items_block_closed_period_mutation\(\)[\s\S]*?pg_advisory_xact_lock\(36421, lock_client_id\)/i)
+assert.match(adjustmentMigration, /billing_line_items_adjustment_immutable_guard/)
+assert.match(closeMigration, /billing_finalizations_no_update_delete/)
+assert.match(closeMigration, /billing_finalizations_no_truncate/)
 
 // Post-close corrections are reasoned, idempotent, balance-bounded, append-only
 // credit notes. The service and database each enforce the money boundary.
@@ -78,10 +79,14 @@ assert.match(creditPolicy, /pg_advisory_xact_lock\(36422, hashtext\(\$\{idempote
 assert.match(creditPolicy, /for update/)
 assert.match(creditPolicy, /BILLING_CREDIT_IDEMPOTENCY_CONFLICT/)
 assert.match(creditPolicy, /BILLING_CREDIT_EXCEEDS_BALANCE/)
-assert.match(creditPolicy, /insert into \$\{billingCreditNotes\}/)
-assert.match(migration, /billing_credit_notes_balance_guard/)
-assert.match(migration, /billing_credit_notes_no_update_delete/)
-assert.match(migration, /billing_credit_notes_no_truncate/)
+assert.match(creditPolicy, /appendBillingAdjustmentProjection\(/)
+assert.match(creditPolicy, /resolveBillingRegenerationAdjustment\(/)
+assert.match(creditPolicy, /adjustmentKind === 'credit'/)
+assert.match(adjustmentMigration, /posting_version = 'legacy_credit_v1'/)
+assert.match(adjustmentMigration, /BILLING_ADJUSTMENT_PROJECTION_MISSING/)
+assert.match(adjustmentMigration, /billing_credit_notes_balance_guard|CREATE OR REPLACE FUNCTION billing_credit_notes_block_excess/)
+assert.match(closeMigration, /billing_credit_notes_no_update_delete/)
+assert.match(closeMigration, /billing_credit_notes_no_truncate/)
 
 // HTTP handlers carry authenticated, scoped intent to the policy and record the
 // resulting backend fact. They do not reproduce close or credit calculations.
@@ -102,7 +107,7 @@ assert.doesNotMatch(creditRoute, /moneyCents|insert into|\.transaction\(/)
 assert.match(view, /api\.post[\s\S]*?'\/billing\/finalize'/)
 assert.match(view, /api\.post[\s\S]*?'\/billing\/credit-notes'/)
 assert.match(view, /readOnlyReason=\{billingPeriodReadOnlyReason\}/)
-for (const field of ['subtotal', 'creditedAmount', 'balance']) {
+for (const field of ['subtotal', 'creditedAmount', 'debitedAmount', 'balance']) {
   assert.ok(panel.includes(`selectedFinalization.${field}`), `panel renders backend ${field}`)
 }
 assert.doesNotMatch(panel, /subtotal\s*[-+]\s*creditedAmount|creditedAmount\s*[-+]\s*subtotal/)
@@ -115,13 +120,15 @@ assert.match(browserProof, /path === '\/billing\/credit-notes'[\s\S]*?request\.m
 assert.match(browserProof, /toHaveAttribute\('data-billing-period-locked', 'true'\)/)
 assert.match(browserProof, /billing-detail-edit-button[\s\S]*?toBeDisabled\(\)/)
 assert.match(browserProof, /Carrier service refund/)
+assert.match(browserProof, /adjustmentKind/)
 
 assert.match(placement, /Canonical owner/)
-assert.match(placement, /89a31558/)
-assert.match(placement, /283061e5/)
+assert.match(placement, /current-period/i)
+assert.match(adjustmentIntegration, /finalized rows must remain byte-identical/)
+assert.match(adjustmentIntegration, /current-period signed adjustment integration/)
 assert.equal(
   packageJson.scripts?.['test:ps-449-billing-finalization'],
-  'tsx scripts/ps-449-billing-finalization-guard.ts',
+  'tsx scripts/ps-449-billing-finalization-guard.ts && tsx scripts/ps-449-current-period-adjustments-integration.ts',
 )
 assert.match(sotPack, /'test:ps-449-billing-finalization'/)
 

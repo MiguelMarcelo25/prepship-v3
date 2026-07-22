@@ -523,6 +523,7 @@ const finalizeSchema = finalizeRawSchema
 const creditNoteSchema = z.object({
   clientId: z.coerce.number().int().positive(),
   finalizationId: z.string().trim().min(1).max(100),
+  adjustmentKind: z.enum(['credit', 'debit']).default('credit'),
   amount: z.union([z.string(), z.number()]).transform((value) => String(value)),
   reason: z.string().trim().min(3).max(500),
   idempotencyKey: z.string().trim().min(8).max(100),
@@ -605,14 +606,16 @@ function money(value: number): string {
 // capability, never financials:write.
 app.post('/generate', requirePermission('billing:generate'), zValidator('json', generateSchema), async (c) => {
   const body = c.req.valid('json');
+  const actor = auditActorFromContext(c);
   const result = await generateLineItems(withBillingScope(c, {
     clientId: body.clientId,
     dateFrom: body.dateFrom!,
     dateTo: body.dateTo!,
+    ...actor,
   }));
   // PS-234: audit billing generation (request facts only — no PII/secret values).
   await recordAuditEvent({
-    ...auditActorFromContext(c),
+    ...actor,
     eventType: 'billing',
     resourceType: 'billing_generation',
     resourceId: body.clientId ?? null,
@@ -680,7 +683,8 @@ app.get('/finalizations', zValidator('query', finalizeSchema), async (c) => {
 });
 
 // Corrections never rewrite an invoice. They append a reasoned, idempotent
-// credit against the frozen close record and cannot exceed its balance.
+// signed adjustment against the frozen close record and atomically project it
+// into the backend-selected current billing period.
 app.post(
   '/credit-notes',
   requirePermission('financials:write'),
@@ -703,13 +707,20 @@ app.post(
     await recordAuditEvent({
       ...actor,
       eventType: 'billing',
-      resourceType: 'billing_credit_note',
+      resourceType: 'billing_adjustment',
       resourceId: result.creditNote.id,
-      action: result.alreadyCreated ? 'credit_note_replay' : 'credit_note_create',
+      action: result.alreadyCreated
+        ? `${result.creditNote.adjustmentKind}_note_replay`
+        : `${result.creditNote.adjustmentKind}_note_create`,
       details: {
         clientId: body.clientId,
         finalizationId: body.finalizationId,
+        sourceFinalizationId: result.creditNote.sourceFinalizationId,
+        adjustmentKind: result.creditNote.adjustmentKind,
         amount: result.creditNote.amount,
+        signedAmount: result.creditNote.signedAmount,
+        effectiveDate: result.creditNote.effectiveDate,
+        billingLineItemId: result.creditNote.billingLineItemId,
       },
     });
     return c.json({ data: result });
@@ -1502,7 +1513,12 @@ app.post(
     // regenerated range matches exactly what was re-priced (and what the invoice shows).
     if (result.appliedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+        withBillingScope(c, {
+          clientId: body.clientId,
+          dateFrom: body.dateFrom!,
+          dateTo: body.dateTo!,
+          ...auditActorFromContext(c),
+        }),
       );
     }
     // Append-only audit of the bulk money action (actor + scope + result; secrets auto-redacted).
@@ -1591,7 +1607,12 @@ app.post(
     // regeneration — PS-207). Same normalized [fromUtc, toUtcExclusive) bounds as the fetch.
     if (result.appliedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+        withBillingScope(c, {
+          clientId: body.clientId,
+          dateFrom: body.dateFrom!,
+          dateTo: body.dateTo!,
+          ...auditActorFromContext(c),
+        }),
       );
     }
     await recordAuditEvent({
@@ -1634,7 +1655,12 @@ app.post(
     );
     if (result.revertedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+        withBillingScope(c, {
+          clientId: body.clientId,
+          dateFrom: body.dateFrom!,
+          dateTo: body.dateTo!,
+          ...auditActorFromContext(c),
+        }),
       );
     }
     await recordAuditEvent({
@@ -1774,6 +1800,7 @@ type InvoiceTotals = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  adjustmentTotal: number;
   grandTotal: number;
   fulfillmentFeeTotal: number;
 };
@@ -1789,6 +1816,9 @@ type InvoiceDetailRow = {
   ship_date: string | null;
   billing_effective_date: string | null;
   billing_policy_version: string | null;
+  billing_adjustment_id: string | null;
+  source_finalization_id: string | null;
+  adjustment_description: string | null;
   base_qty: string;
   addl_qty: string;
   pickpack_amt: string;
@@ -1905,6 +1935,9 @@ async function billingInvoiceData(
       to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD') as ship_date,
       to_char(${invoiceEffectiveDay} at time zone 'UTC', 'YYYY-MM-DD') as billing_effective_date,
       b.billing_policy_version,
+      b.billing_adjustment_id,
+      b.source_finalization_id,
+      max(case when b.line_type = 'billing_adjustment' then b.description else null end) as adjustment_description,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then ${detailAmount} else 0 end), 0)::text as pickpack_amt,
@@ -1956,7 +1989,8 @@ async function billingInvoiceData(
       and ${invoiceEffectiveDay} >= ${dateFrom}::timestamptz
       and ${invoiceEffectiveDay} < ${dateTo}::timestamptz
     group by b.order_id, b.order_number, b.shipment_id, b.ship_date,
-      b.billing_effective_date, b.billing_policy_version
+      b.billing_effective_date, b.billing_policy_version,
+      b.billing_adjustment_id, b.source_finalization_id
     order by ${invoiceEffectiveDay} desc, b.order_id desc, b.shipment_id desc nulls last
   `);
 
@@ -2007,6 +2041,9 @@ async function billingInvoiceData(
       ship_date: r.ship_date,
       billing_effective_date: r.billing_effective_date,
       billing_policy_version: r.billing_policy_version,
+      billing_adjustment_id: r.billing_adjustment_id,
+      source_finalization_id: r.source_finalization_id,
+      adjustment_description: r.adjustment_description,
       base_qty: r.base_qty,
       addl_qty: r.addl_qty,
       pickpack_amt: r.pickpack_amt,
@@ -2015,11 +2052,13 @@ async function billingInvoiceData(
       storage_amt: r.storage_amt,
       row_total: r.row_total,
       billing_status_label: billingStatus.billingStatusLabel,
-      item_names: itemSummary.itemNames,
+      item_names: r.adjustment_description ?? itemSummary.itemNames,
       // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
       // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
       // the order has no order_items rows so legacy/imported orders still show their SKUs.
-      skus: itemSummary.itemSkus ?? r.skus,
+      skus: r.source_finalization_id
+        ? `Original invoice ${r.source_finalization_id}`
+        : itemSummary.itemSkus ?? r.skus,
       carrier_code: r.carrier_code,
       package_cost_amt: r.package_cost_amt,
       box_label: cancelledNoCharge ? '—' : box_label,
@@ -2055,6 +2094,7 @@ export function renderInvoiceHtml(args: {
     packageTotal,
     shippingTotal,
     storageTotal,
+    adjustmentTotal,
     grandTotal,
     fulfillmentFeeTotal,
   } = totals;
@@ -2110,7 +2150,7 @@ export function renderInvoiceHtml(args: {
       return `
       <tr>
         <td class="ship-date">${dateCell}</td>
-        <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
+        <td class="mono">${escHtml(d.billing_adjustment_id ? `Adjustment ${d.billing_adjustment_id.slice(0, 8)}` : d.order_number ?? d.order_id ?? '')}</td>
         <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
@@ -2121,7 +2161,7 @@ export function renderInvoiceHtml(args: {
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
-        <td class="mono">${escHtml(d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
+        <td class="mono">${escHtml(d.billing_adjustment_id ? 'Adjustment' : d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
       </tr>`;
     })
     .join('');
@@ -2187,11 +2227,12 @@ export function renderInvoiceHtml(args: {
     <div class="card"><div class="cl">Packages</div><div class="cv">${packageTotal > 0 ? fmt(packageTotal) : '—'}</div></div>
     <div class="card"><div class="cl">Shipping</div><div class="cv">${fmt(shippingTotal)}</div></div>
     <div class="card"><div class="cl">Storage</div><div class="cv">${storageTotal > 0 ? fmt(storageTotal) : '—'}</div></div>
-    <div class="card"><div class="cl">Fulfillment Fee</div><div class="cv">${fmt(fulfillmentFeeTotal || grandTotal)}</div></div>
+    <div class="card"><div class="cl">Adjustments</div><div class="cv">${adjustmentTotal !== 0 ? fmt(adjustmentTotal) : '-'}</div></div>
+    <div class="card"><div class="cl">Fulfillment Fee</div><div class="cv">${fmt(fulfillmentFeeTotal)}</div></div>
   </div>
   <div class="grand-total">
     <div class="gtl">Total Amount Due — ${fromDisplay} → ${toDisplay}</div>
-    <div class="gtv">${fmt(fulfillmentFeeTotal || grandTotal)}</div>
+    <div class="gtv">${fmt(grandTotal)}</div>
   </div>
   ${waiverNote ? `<div class="waiver-note">${escHtml(waiverNote)}</div>` : ''}
   <table>
@@ -2208,7 +2249,7 @@ export function renderInvoiceHtml(args: {
         <th class="num">Add'l Units</th>
         <th class="num">Shipping</th>
         <th class="num">Storage</th>
-        <th class="num">Fulfillment Fee</th>
+        <th class="num">Total</th>
         <th>Shipment #</th>
       </tr>
     </thead>
@@ -2222,7 +2263,7 @@ export function renderInvoiceHtml(args: {
         <td class="num">${fmt(additionalTotal)}</td>
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
-        <td class="num" style="font-size:14px">${fmt(fulfillmentFeeTotal || grandTotal)}</td>
+        <td class="num" style="font-size:14px">${fmt(grandTotal)}</td>
         <td></td>
       </tr>
     </tfoot>
@@ -2293,7 +2334,7 @@ export async function renderInvoiceXlsx(args: {
     { header: 'Box Size', key: 'boxSize', width: 14 },
     { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: NUMBER_FMT } },
     { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
-    { header: 'Fulfillment Fee', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
+    { header: 'Total', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
     { header: 'Shipment #', key: 'shipmentId', width: 14 },
   ];
   invoice.getRow(1).font = { bold: true };
@@ -2316,7 +2357,9 @@ export async function renderInvoiceXlsx(args: {
       storage: storageAmt,
     });
     invoice.addRow({
-      orderNumber: String(d.order_number ?? d.order_id ?? ''),
+      orderNumber: d.billing_adjustment_id
+        ? `Adjustment ${d.billing_adjustment_id.slice(0, 8)}`
+        : String(d.order_number ?? d.order_id ?? ''),
       status: d.billing_status_label || 'Fulfilled',
       shipDate: invoiceBillingActivityDateCell(
         d.ship_date,
@@ -2333,7 +2376,11 @@ export async function renderInvoiceXlsx(args: {
       shipping: shippingAmt,
       storage: storageAmt,
       fulfillmentFee: fulfillmentFeeAmt,
-      shipmentId: d.shipment_id == null ? 'External' : `#${d.shipment_id}`,
+      shipmentId: d.billing_adjustment_id
+        ? 'Adjustment'
+        : d.shipment_id == null
+          ? 'External'
+          : `#${d.shipment_id}`,
     });
   }
   if (details.length) {

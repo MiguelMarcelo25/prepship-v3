@@ -717,7 +717,7 @@ export default function BillingView() {
         case 'shipping':
           return row.shippingTotal
         case 'total':
-          return row.fulfillmentFeeTotal ?? row.grandTotal
+          return row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal
         default:
           return ''
       }
@@ -735,7 +735,7 @@ export default function BillingView() {
   // "No line items found".
   const selectedSummaryOrders = Number(selectedDetailSummary?.orderCount ?? 0)
   const selectedSummaryTotal = Number(
-    selectedDetailSummary?.fulfillmentFeeTotal ?? selectedDetailSummary?.grandTotal ?? selectedDetailSummary?.total ?? 0,
+    selectedDetailSummary?.grandTotal ?? selectedDetailSummary?.total ?? selectedDetailSummary?.fulfillmentFeeTotal ?? 0,
   )
   const detailPanelState = classifyBillingDetailPanel({
     loading: detailLoading,
@@ -852,7 +852,7 @@ export default function BillingView() {
         additional: acc.additional + metrics.additional,
         packageCost: acc.packageCost + metrics.packageCost,
         shipping: acc.shipping + metrics.shipping,
-        total: acc.total + metrics.fulfillmentFee,
+        total: acc.total + metrics.total,
         margin: acc.margin + metrics.margin,
       }
     }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
@@ -1063,6 +1063,10 @@ export default function BillingView() {
       let generated = 0
       let finalizedSkipped = 0
       let finalizedStorageSkipped = 0
+      let finalizedAdjustments = 0
+      let finalizedCredits = 0
+      let finalizedDebits = 0
+      let finalizedUntouched = 0
       let alreadyCurrent = 0
 
       if (targetClientIds.length > 0) {
@@ -1111,6 +1115,10 @@ export default function BillingView() {
             generated += Number(result.generated ?? result.count ?? 0)
             finalizedSkipped += Number(result.skippedFinalizedOrderCount ?? 0)
             finalizedStorageSkipped += Number(result.skippedFinalizedStorageCount ?? 0)
+            finalizedAdjustments += Number(result.finalizedAdjustmentCount ?? 0)
+            finalizedCredits += Number(result.finalizedAdjustmentCreditCount ?? 0)
+            finalizedDebits += Number(result.finalizedAdjustmentDebitCount ?? 0)
+            finalizedUntouched += Number(result.finalizedAdjustmentUntouchedCount ?? 0)
           }
         }
       } else {
@@ -1141,13 +1149,20 @@ export default function BillingView() {
           generated += Number(result.generated ?? result.count ?? 0)
           finalizedSkipped += Number(result.skippedFinalizedOrderCount ?? 0)
           finalizedStorageSkipped += Number(result.skippedFinalizedStorageCount ?? 0)
+          finalizedAdjustments += Number(result.finalizedAdjustmentCount ?? 0)
+          finalizedCredits += Number(result.finalizedAdjustmentCreditCount ?? 0)
+          finalizedDebits += Number(result.finalizedAdjustmentDebitCount ?? 0)
+          finalizedUntouched += Number(result.finalizedAdjustmentUntouchedCount ?? 0)
         }
       }
-      const result = { generated, finalizedSkipped, finalizedStorageSkipped }
+      const result = { generated, finalizedSkipped, finalizedStorageSkipped, finalizedAdjustments }
       const finalizedGroupSkipped = finalizedSkipped + finalizedStorageSkipped
       const finalizedNote = [
-        finalizedSkipped > 0
-          ? `${finalizedSkipped} finalized order${finalizedSkipped === 1 ? '' : 's'}`
+        finalizedAdjustments > 0
+          ? `${finalizedAdjustments} current-period adjustment${finalizedAdjustments === 1 ? '' : 's'} (${finalizedCredits} credit, ${finalizedDebits} debit)`
+          : '',
+        finalizedUntouched > 0
+          ? `${finalizedUntouched} finalized order${finalizedUntouched === 1 ? '' : 's'} unchanged`
           : '',
         finalizedStorageSkipped > 0
           ? `${finalizedStorageSkipped} finalized storage period${finalizedStorageSkipped === 1 ? '' : 's'}`
@@ -1155,10 +1170,10 @@ export default function BillingView() {
       ].filter(Boolean).join(' and ')
       if (!silent) {
         if (generated > 0) {
-          const finalizedSuffix = finalizedGroupSkipped > 0 ? `; ${finalizedNote} left unchanged` : ''
+          const finalizedSuffix = finalizedNote ? `; ${finalizedNote}` : ''
           toastContext?.addToast(`Billing ${forceRegenerate ? 'regenerated' : 'updated'}: ${result.generated} line items${finalizedSuffix}`, 'success')
-        } else if (finalizedGroupSkipped > 0) {
-          toastContext?.addToast(`${finalizedNote} left unchanged`, 'success')
+        } else if (finalizedGroupSkipped > 0 || finalizedAdjustments > 0 || finalizedUntouched > 0) {
+          toastContext?.addToast(finalizedNote, 'success')
         } else {
           toastContext?.addToast('Billing is already up to date', 'success')
         }
@@ -1178,8 +1193,8 @@ export default function BillingView() {
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
-      const finalizedStatus = finalizedGroupSkipped > 0 ? ` · ${finalizedNote} unchanged` : ''
-      setStatus(`${generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`}${finalizedStatus}`)
+      const finalizedStatus = finalizedNote ? ` · ${finalizedNote}` : ''
+      setStatus(`${generated > 0 ? buildGenerateBillingStatus(result.generated, totals.grand) : `Billing already up to date - total ${formatBillingMoney(totals.grand)}`}${finalizedStatus}`)
       // Generated line items make every cached details payload stale. The open
       // panel's active query refetches now (awaited, errors staying panel-local
       // exactly like the old handleLoadDetails catch); cached clients refetch
@@ -1294,6 +1309,7 @@ export default function BillingView() {
       }>('/billing/credit-notes', {
         clientId,
         finalizationId: draft.finalizationId,
+        adjustmentKind: draft.adjustmentKind,
         amount: draft.amount,
         reason: draft.reason,
         idempotencyKey: draft.idempotencyKey,
@@ -1317,12 +1333,12 @@ export default function BillingView() {
       void queryClient.invalidateQueries({ queryKey: ['billing', 'finalizations'] })
       void queryClient.invalidateQueries({ queryKey: ['billing', 'credit-notes', clientId, draft.finalizationId] })
       toastContext?.addToast(
-        result.alreadyCreated ? 'Credit memo already exists' : 'Credit memo created',
+        result.alreadyCreated ? 'Billing adjustment already exists' : 'Billing adjustment created',
         'success',
       )
       return true
     } catch (error) {
-      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to create credit memo', 'error')
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to create billing adjustment', 'error')
       return false
     } finally {
       setBillingCreditSubmitting(false)
@@ -1942,7 +1958,7 @@ export default function BillingView() {
           <>
             Close <strong>{billingFinalizeIntent.clientName}</strong> for{' '}
             <strong>{billingFinalizeIntent.dateFrom} → {billingFinalizeIntent.dateTo}</strong>. The backend will
-            freeze the invoice lines and totals. This cannot be undone; later corrections must be credit memos.
+            freeze the invoice lines and totals. This cannot be undone; later corrections post as current-period credit or debit adjustments.
           </>
         ) : null}
         confirmLabel="Finalize and lock"

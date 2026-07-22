@@ -26,7 +26,7 @@ export function BillingDetailClientStrip({
       {sortedSummaryRows.map((row) => {
         const active = Number(row.clientId) === Number(detailState.clientId)
         const orderCount = Number(row.orderCount ?? 0)
-        const rowTotal = Number(row.fulfillmentFeeTotal ?? row.grandTotal ?? row.total ?? 0)
+        const rowTotal = Number(row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal ?? 0)
         // Designated per-store color dot (same hash-based palette as the Awaiting/Orders view).
         const palette = getClientPalette(row.clientName ?? 'Untagged')
         return (
