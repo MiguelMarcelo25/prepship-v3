@@ -227,6 +227,16 @@ async function main(): Promise<void> {
     )
   `));
 
+  await expectToken('BILLING_ADJUSTMENT_LEGACY_WRITE_DISABLED', () => pg.exec(`
+    insert into billing_credit_notes (
+      id, finalization_id, client_id, amount, reason,
+      idempotency_key, created_by
+    ) values (
+      'legacy-rollback-note', 'final-101', 1, 1,
+      'Rollback compatibility proof', 'legacy-rollback-key', 'test'
+    )
+  `));
+
   await pg.close();
   console.log('PASS PS-449 current-period signed adjustment integration');
 }
