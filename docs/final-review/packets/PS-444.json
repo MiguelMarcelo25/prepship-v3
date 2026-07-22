@@ -5,11 +5,12 @@
   "title": "Crash-safe Print Queue mixed-batch recovery and provider outcome fencing",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "7e8ba7753fa538f496da3fbdebee511da477123f"
+    "reviewedSha": "bccde960c21dbc81bd95d45c90441e52120276bb"
   },
   "riskDomains": [
     "rate_label",
-    "provider_durable_job"
+    "provider_durable_job",
+    "governance"
   ],
   "claimedScore": 97,
   "acceptanceCriteria": [
@@ -66,8 +67,8 @@
       "id": "AC-8",
       "severity": "critical",
       "status": "met",
-      "description": "The historical shipped-data override is independently recorded with exact scope; edit locks, schemas, inventory kill switch, and read-only UI protections were not weakened, and verification performed no live provider or production data mutation.",
-      "evidenceIds": ["governance-override-proof", "lockdown-proof", "implementation-scope-proof", "full-sot-guard-pack"]
+      "description": "DJ supplied the exact required `unlock shipped data` authorization in the active execution conversation; the historical locked-file scope is bounded, edit locks, schemas, and the inventory kill switch were not weakened, and verification performed no live provider or production data mutation.",
+      "evidenceIds": ["governance-override-proof", "governance-unit-fixtures", "governance-adversarial-fixtures", "governance-failure-injection-fixtures", "lockdown-proof", "implementation-scope-proof", "full-sot-guard-pack"]
     }
   ],
   "architecture": {
@@ -253,7 +254,7 @@
       "result": "pass",
       "artifactPaths": ["vite.config.ts", "web/src"],
       "assertions": [],
-      "proves": "The production Vite frontend bundle builds successfully with 2,991 modules transformed."
+      "proves": "The production Vite frontend bundle builds successfully with 2,977 modules transformed at the reviewed SHA."
     },
     {
       "id": "label-regressions",
@@ -279,18 +280,70 @@
       "proves": "Shipped/cancelled backend and frontend edit protections remain present and active."
     },
     {
+      "id": "governance-unit-fixtures",
+      "classification": "unit",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "docs/final-review/evidence-packet.schema.json"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "The canonical closure fixtures reject malformed packets and enforce evidence-backed score caps offline."
+    },
+    {
+      "id": "governance-adversarial-fixtures",
+      "classification": "adversarial",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Wrong SHA or branch, static-only claims, source-of-truth bypasses, unmet high-severity work, and unverified live claims cannot produce a false green."
+    },
+    {
+      "id": "governance-failure-injection-fixtures",
+      "classification": "failure-injection",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Injected malformed structure, stale identity, missing evidence tiers, and non-passing live evidence are rejected or capped deterministically."
+    },
+    {
       "id": "governance-override-proof",
       "classification": "static",
-      "command": "git show --check --stat 00adc6e6fe2d7aff1180a228408fde6794c13562",
+      "command": "Active DJ/Codex execution record: user supplied the exact phrase `unlock shipped data`; AGENTS.md defines that phrase as the human override and the scoped historical diff identifies every locked file touched",
       "result": "pass",
-      "artifactPaths": ["AGENTS.md", "CLAUDE.md", ".cursorrules"],
+      "artifactPaths": [
+        "AGENTS.md",
+        "src/routes/print-queue.ts",
+        "src/services/print-queue.ts",
+        "src/services/fulfillment-deductions.ts",
+        "web/src/components/Views/OrdersView.tsx"
+      ],
       "assertions": [],
-      "proves": "All agent instruction surfaces byte-match and record the exact historical PS-444 override range, bounded locked-file scope, preserved protections, and prohibition on live provider or production-data verification."
+      "proves": "Authorization comes from DJ's exact user-authored phrase in the active conversation, not from a source comment, commit message, packet, or agent-authored instruction edit. The repository paths record only the governing rule and bounded implementation scope."
     },
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status fc6b0138^..1771781f && git show --name-status --format= 00adc6e6fe2d7aff1180a228408fde6794c13562",
+      "command": "git diff --name-status fc6b0138^..1771781f && git diff --name-status 7e8ba7753fa538f496da3fbdebee511da477123f..bccde960c21dbc81bd95d45c90441e52120276bb -- src/routes/print-queue.ts src/services/print-queue.ts src/services/fulfillment-deductions.ts web/src/components/Views/OrdersView.tsx src/db/schema/orders.ts src/db/schema/shipments.ts src/routes/orders.ts",
       "result": "pass",
       "artifactPaths": [
         "src/services/print-queue-worker.ts",
@@ -302,7 +355,7 @@
         "AGENTS.md"
       ],
       "assertions": [],
-      "proves": "The historical implementation range is bounded to PS-444 recovery plus the production-compatible PS-439 forward revert; the current reviewed commit adds governance and static-test maintenance only, with no product runtime change."
+      "proves": "The historical implementation range is bounded to PS-444 recovery plus the production-compatible PS-439 forward revert. Subsequent reviewed-SHA drift touches only fulfillment deduction source-of-truth work among those protected paths; exact-current PS-444, provider-ledger, lifecycle, label, rate, and lockdown guards all pass. This packet refresh changes no product runtime."
     }
   ],
   "migrations": {
