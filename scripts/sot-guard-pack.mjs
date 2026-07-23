@@ -9,6 +9,7 @@
 import { spawnSync } from 'node:child_process';
 
 const REQUIRED_GUARDS = [
+  'test:ps-464-architecture-boundaries',
   'test:ps-305-authority-drift',
   'test:rate-source-of-truth',
   'test:ps-421-method-capability-matrix',

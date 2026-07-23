@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 const REQUIRED_GUARDS = [
+  'test:ps-464-architecture-boundaries',
   'test:ps-305-authority-drift',
   'test:rate-source-of-truth',
   'test:ps-314-no-sot-bypass-wrappers',

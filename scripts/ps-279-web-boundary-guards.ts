@@ -8,6 +8,7 @@ import {
   classifyQueueOrderRouteServer,
   planQueueRouteForOrders,
 } from '../src/services/print-queue/queue-route-orchestrator';
+import { functionCalls } from './lib/architecture-boundary-analyzer';
 
 let failures = 0;
 function check(name: string, cond: boolean): void {
@@ -69,17 +70,32 @@ check('backend plan can force all residual direct routes through backend orchest
   })());
 
 const labelsSvc = read('src/services/labels.ts');
+const labelOwnerCalls = functionCalls(
+  { path: 'src/services/labels.ts', content: labelsSvc },
+  'createLabelV2Impl',
+  true,
+);
 check('labels.ts: backend createLabelV2 owns the label buy',
   /function createLabelV2/.test(labelsSvc));
 check('labels.ts: backend detects direct carriers',
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsSvc));
 check('labels.ts: backend enforces selected-rate proof + account binding before purchase',
-  /assertLabelPurchaseRateSelection\(\{[\s\S]*?selectedRateProof:\s*body\.selectedRateProof[\s\S]*?purchaseShippingProviderId:\s*body\.shippingProviderId[\s\S]*?\}\)/.test(labelsSvc));
+  labelOwnerCalls.has('assertlabelpurchaserateselection') &&
+  labelOwnerCalls.has('shippingquoteauthorizedpurchasefacts') &&
+  labelOwnerCalls.has('assertshippingquoteintentmatches') &&
+  /shippingProviderId:\s*authorizedPurchaseFacts\.shippingProviderId/.test(labelsSvc));
 
 const printQueueSvc = read('src/services/print-queue.ts');
+const queueWorkerCalls = functionCalls(
+  { path: 'src/services/print-queue.ts', content: printQueueSvc },
+  'processQueueSendOrder',
+  true,
+);
 check('print-queue.ts: queue worker buys via backend createLabelV2',
-  /const labelInput = order\.label/.test(printQueueSvc) &&
-  /createLabelV2\(\{\s*\.\.\.labelInput/.test(printQueueSvc));
+  queueWorkerCalls.has('createlabelv2') &&
+  queueWorkerCalls.has('resumelabelv2fromdurablereceipt') &&
+  /createLabelV2\(input, labelPurchaseScope\)/.test(printQueueSvc) &&
+  /resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)/.test(printQueueSvc));
 
 check('package.json wires test:ps-279-web-boundary-guards',
   /test:ps-279-web-boundary-guards/.test(read('package.json')));

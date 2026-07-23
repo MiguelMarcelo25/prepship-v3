@@ -331,6 +331,38 @@ coding. Do not infer a backend-critical owner from the nearest UI symptom.
 - **Duplicate logic removed** (or explicitly left as follow-up debt): …
 - **Boundary tests added** at the owner: …
 
+## Executable dependency and route-debt boundary (PS-464)
+
+The executable owner for layer direction is
+`scripts/ps-464-architecture-boundary-guard.ts`; its reviewed debt policy is
+`scripts/ps-464-architecture-boundary-policy.ts`. The guard parses TypeScript syntax rather
+than matching helper names, runs first in the mandatory SOT guard pack, and rejects stale
+exceptions so each reviewed allowance must shrink when its debt disappears.
+
+Dependency direction is one-way:
+
+1. Frontend / UI may import public DTOs, contracts, and display-only utilities.
+2. Public shared contracts may describe transport shapes but may not own business decisions.
+3. Routes validate input, call a service/read model/policy, and return a DTO.
+4. Services, read models, and policies own cross-workflow business truth.
+5. Provider adapters/connectors translate external shapes and delegate policy decisions.
+6. Persistence/database modules implement storage behind those owners.
+
+`web/src` may not add imports into backend-private `src/**`; public cross-layer contracts belong
+under `src/contracts/**` or `src/shared/**`. Routes may not add direct `db`/`tx`
+`insert`/`update`/`delete` calls. Reviewed legacy imports, route-local persistence, and high-risk
+frontend semantic sites are exact-path allowances with a reason, PS owner, endpoint/site map,
+and count ratchet. The current inventory and ownership report is emitted on every guard run and
+is summarized in `docs/engineering/ps-464-architecture-boundary-report.md`.
+
+The semantic negative controls cover renamed frontend implementations of rate ranking and money,
+selected-rate proof minting, label/provider selection, inventory authority, billing finalization,
+auth/scope/status locks, and provider/store capability routing. Positive controls preserve valid
+display/DTO formatting, provider-shape translation, and thin route delegation.
+
+This is an enforcement-only boundary. It does not move runtime behavior or authorize changes to
+rates, labels, inventory, billing, auth, provider integrations, or shipped/cancelled data.
+
 ## Exact-SHA Final Review closure
 
 For Final Review, the process source of truth is

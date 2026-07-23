@@ -1,0 +1,35 @@
+export function chooseOne(options: Array<{ rateAmount: number }>) {
+  const officialWinner = options.reduce((left, right) =>
+    left.rateAmount <= right.rateAmount ? left : right);
+  return officialWinner;
+}
+
+export async function opaqueReference(input: unknown) {
+  const requestFingerprint = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(input)));
+  return { rateQuoteId: 'local', selectedRateKey: 'local', proofSource: 'browser', requestFingerprint };
+}
+
+export async function dispatchThing(intent: { carrier: string; label: unknown }) {
+  const provider = intent.carrier === 'ups' ? 'ups' : 'shipstation';
+  return api.purchaseLabel({ ...intent.label, provider });
+}
+
+export async function persistCount(currentStock: number, adjustmentQty: number) {
+  const inventoryQuantity = currentStock + adjustmentQty;
+  return api.updateInventory({ inventoryQuantity });
+}
+
+export async function closePeriod(rows: Array<{ totalAmount: number }>) {
+  const invoiceTotal = rows.reduce((sum, row) => sum + row.totalAmount, 0);
+  return api.finalizeBillingInvoice({ invoiceTotal });
+}
+
+export async function guardedDelete(role: string, orderStatus: string) {
+  if (role !== 'admin' || orderStatus === 'shipped') throw new Error('forbidden');
+  return api.deleteOrder();
+}
+
+export function pickConnection(provider: string, storeCapability: string) {
+  if (provider === 'walmart' && storeCapability === 'direct') return 'direct-route';
+  return 'shipstation-route';
+}
