@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "taskId": "PS-457",
+  "generatedAt": "2026-07-23T05:11:30Z",
+  "implementationCommit": "e2708f040802ad09a141a082462bf449e755a67e",
+  "baselineCommit": "27b7d2e3c5cfb8a24ced9ae5f9dd31efe02fe8a3",
+  "currentStableCommit": "e27186e510b37a2d50835c437e51917ab72417ce",
+  "method": {
+    "description": "Execute the same deterministic three-order billing fixture against the exact parent of the PS-457 implementation commit and the current stable commit, serialize the backend decisions with JSON.stringify, then compare the UTF-8 bytes and SHA-256 hashes.",
+    "owner": "src/services/billing-shipping-line.ts#decideShippingLineBilling",
+    "fixtureOrders": [
+      "SAMPLE-1",
+      "SAMPLE-2",
+      "SAMPLE-3"
+    ]
+  },
+  "result": {
+    "status": "pass",
+    "byteIdentical": true,
+    "baselineByteLength": 304,
+    "currentByteLength": 304,
+    "baselineSha256": "1cc47960c08373627bdfd676b710feba1d2af367a2f4a26d96eda86fb6dc7a9b",
+    "currentSha256": "1cc47960c08373627bdfd676b710feba1d2af367a2f4a26d96eda86fb6dc7a9b",
+    "serializedOutput": "[{\"order\":\"SAMPLE-1\",\"unitCost\":\"14.44\",\"totalCost\":\"14.44\",\"source\":\"label_cost\",\"suffix\":\" (15% + $0.25)\"},{\"order\":\"SAMPLE-2\",\"unitCost\":\"11.23\",\"totalCost\":\"11.23\",\"source\":\"c_shipping_rate\",\"suffix\":\"\"},{\"order\":\"SAMPLE-3\",\"unitCost\":\"9.11\",\"totalCost\":\"9.11\",\"source\":\"reference_rate\",\"suffix\":\"\"}]"
+  },
+  "protectedScope": {
+    "authorization": "User supplied the exact phrase unlock shipped data in the active execution conversation and separately approved the PS-457 protected-path diff and push/deploy.",
+    "files": [
+      "src/services/shipping-workflow/parcelguard-backfill.ts",
+      "src/services/shipping-workflow/selected-rate-cost-backfill.ts"
+    ],
+    "change": "Only the local cent-rounding helper was replaced with the canonical src/lib/money.ts#roundMoney import. Dry-run planning, proof, idempotency, skip, and write gates were not changed.",
+    "protectionsNotWeakened": true
+  },
+  "verification": {
+    "commands": [
+      "npm run test:audit-money-rounding",
+      "npm run test:ps-323-billing-sot-parity",
+      "npm run test:ps-362-billing-detail-sot-export",
+      "npm run test:ps-372-billing-read-divergence",
+      "npm run test:rate-source-of-truth",
+      "npm run typecheck",
+      "npm run build:web",
+      "npm run test:sot-guard-pack with inert test-only environment values"
+    ],
+    "status": "pass",
+    "mandatorySotCommandsPassed": 56
+  },
+  "sideEffects": {
+    "databaseConnections": 0,
+    "productionMutations": 0,
+    "liveProviderCalls": 0,
+    "labelsPurchased": 0,
+    "postagePurchased": 0,
+    "marketplaceNotifications": 0
+  }
+}
