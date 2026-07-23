@@ -340,6 +340,7 @@
     "test:best-rate-dims": "node scripts/best-rate-dims-guard.mjs",
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",
     "test:audit-runtime-schema-readiness": "node scripts/runtime-ddl-guard.mjs",
+    "test:ps-455-runtime-schema-migration": "tsx scripts/ps-455-runtime-schema-migration-integration.ts",
     "test:audit-imported-handler-boundary": "tsx scripts/audit-imported-handler-boundary-guard.ts",
     "test:audit-print-queue-merge-durability": "tsx scripts/audit-print-queue-merge-durability-guard.ts",
     "test:audit-structured-money-logging": "tsx scripts/audit-structured-money-logging-guard.ts",

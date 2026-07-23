@@ -66,6 +66,9 @@ Rollback reverts application code only; do not drop additive sidecars.
 
 - `npm run test:runtime-ddl`
 - `npm run test:audit-runtime-schema-readiness`
+- `npm run test:ps-455-runtime-schema-migration` (offline PGlite proof that
+  migration `0062` creates every owned relation on an empty database and is a
+  schema/data no-op when replayed against existing rows)
 - `npm run typecheck`
 - `npm run build:web`
 - affected historical guards plus mandatory SOT guard pack

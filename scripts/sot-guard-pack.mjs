@@ -37,6 +37,7 @@ const REQUIRED_GUARDS = [
   'test:audit-pg-boss-inventory-outbox',
   'test:sync-job-admission',
   'test:audit-runtime-schema-readiness',
+  'test:ps-455-runtime-schema-migration',
   'test:audit-imported-handler-boundary',
   'test:audit-print-queue-merge-durability',
   'test:audit-structured-money-logging',
