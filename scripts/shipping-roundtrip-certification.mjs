@@ -11,6 +11,8 @@ const args = new Set(process.argv.slice(2));
 const notifyDryRun = args.has('--notify-dry-run');
 const npmCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
 const npmPrefix = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm'] : [];
+const certificationChildNodeOptions =
+  process.env.PREPSHIP_CERTIFICATION_CHILD_NODE_OPTIONS ?? process.env.NODE_OPTIONS;
 
 const suites = [
   {
@@ -85,6 +87,11 @@ function runSuite(suite) {
     encoding: 'utf8',
     env: {
       ...process.env,
+      // Render Starter shares 512 MiB across the nested npm/Node process tree.
+      // Keep the build unconstrained and opt in to a lower limit only for suite children.
+      ...(certificationChildNodeOptions
+        ? { NODE_OPTIONS: certificationChildNodeOptions }
+        : {}),
       // Offline children import the normal app config tree. Supply inert values
       // when CI or a clean checkout has no local .env; real configured values
       // still win, and SAFE_MODE keeps every suite fixture/mock/read-only.
