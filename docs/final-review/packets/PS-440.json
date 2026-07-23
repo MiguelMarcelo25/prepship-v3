@@ -1,0 +1,307 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-440",
+  "title": "Connection-layer defects and lanes that fail silently while reporting success",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "1c48b1cdf8c4b04daa7ae25c219e49967b148b9a"
+  },
+  "riskDomains": [
+    "provider_durable_job",
+    "timing_live"
+  ],
+  "claimedScore": 100,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "high",
+      "status": "met",
+      "description": "The main database client remains lifetime-bounded, every pg-boss pool now receives the same configured lifetime bound, and the session lane-lock pool is coupled to the canonical eight-lane set instead of starving eight holders through three connections.",
+      "evidenceIds": [
+        "ps440-owner-integration",
+        "implementation-scope",
+        "live-deployment-readiness"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "A Walmart purchase receipt without a usable label artifact fails closed before local shipment or order persistence, retry reuses the durable receipt without a second provider POST, and two concurrent external-shipped calls can notify the marketplace only once.",
+      "evidenceIds": [
+        "ps440-owner-integration",
+        "ps440-adversarial",
+        "provider-ledger-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "high",
+      "status": "met",
+      "description": "Tracking, Shopify, shipment-sync, and other resolved worker results surface total-account failure instead of recording success; failed webhook-ledger writes return retryable HTTP 503 rather than a false 202 acknowledgment.",
+      "evidenceIds": [
+        "ps440-owner-integration",
+        "source-of-truth-pack"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "All reporting projection replacement transactions are atomic, caller cancellation reaches Shopify before persistence or cursor advancement, fetch timeouts bound response bodies, and one ShipStation deadline covers admission, retries, backoff, headers, and body consumption.",
+      "evidenceIds": [
+        "ps440-failure-injection",
+        "source-of-truth-pack"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "The PS-440 guard, provider-operation ledger integration, rate source-of-truth gate, strict TypeScript check, production web build, and complete 53-command source-of-truth guard pack pass without real provider mutation or production data access.",
+      "evidenceIds": [
+        "ps440-owner-integration",
+        "provider-ledger-failure-injection",
+        "source-of-truth-pack",
+        "typecheck-and-build"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "The exact reviewed SHA is Ready and Promoted on Vercel and live on the existing Render API, sync worker, and print worker; public production, health, readiness, and deep-health endpoints return HTTP 200 with zero GitHub Actions runs.",
+      "evidenceIds": [
+        "live-deployment-readiness"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/db/client.ts, src/lib/pg-boss-pool-lifetime.ts, src/services/sync-job-queue.ts, and src/services/sync-lane-lock.ts own connection lifetime and lane admission",
+      "src/services/fulfillment-operation-ledger.ts, src/services/label-artifact-safety.ts, and src/services/labels.ts own durable purchase receipts and fail-closed label artifact admission",
+      "src/services/order-lifecycle-command.ts and src/services/fulfillment/mark-shipped-externally.ts own the forward-only external-shipped transition and notification gate",
+      "src/services/worker-result-classification.ts and src/services/worker-status.ts own resolved worker outcome classification",
+      "src/lib/fetch-timeout.ts, src/lib/shipstation/v1-client.ts, and src/services/shopify-order-sync.ts own transport deadlines and cooperative cancellation",
+      "src/services/reporting-metrics.ts owns transactional reporting projection replacement"
+    ],
+    "oldOwners": [
+      {
+        "path": "individual pg-boss constructors with unbounded private pools",
+        "disposition": "delegated",
+        "delegatesTo": "src/lib/pg-boss-pool-lifetime.ts"
+      },
+      {
+        "path": "worker-status summary logic that discarded error counters",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/worker-result-classification.ts"
+      },
+      {
+        "path": "inline Walmart empty-artifact handling after durable purchase receipt",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/label-artifact-safety.ts"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/lib/pg-boss-pool-lifetime.ts",
+        "action": "added",
+        "delegatesTo": "the configured DB_MAX_LIFETIME_SECONDS value without owning database policy"
+      },
+      {
+        "path": "src/services/label-artifact-safety.ts",
+        "action": "added",
+        "delegatesTo": "the durable fulfillment-operation receipt and label persistence owners without dispatching a provider"
+      },
+      {
+        "path": "src/services/fulfillment/mark-shipped-externally.ts",
+        "action": "modified",
+        "delegatesTo": "unchanged production lifecycle, provider resolver, credentials, and connector defaults; optional dependencies are offline-test seams only"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "No frontend or route became a business source of truth. Connection policy, durable receipts, notification eligibility, worker outcome classification, transport deadlines, and projection atomicity remain backend-owned. Shipped/cancelled guards, schemas, inventory deductions, and order edit locks were not weakened."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps440-owner-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-440-connection-safety",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-440-connection-safety-guard.ts",
+        "src/lib/pg-boss-pool-lifetime.ts",
+        "src/services/label-artifact-safety.ts",
+        "src/services/worker-result-classification.ts"
+      ],
+      "assertions": [
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "provider_spy_untouched"
+      ],
+      "proves": "In-memory PGlite and fake providers prove eight canonical lanes, lifetime-bounded pg-boss pools, failed all-error outcomes, retryable webhook failure, four transactional projection replacements, one Walmart provider POST with a durable receipt and no local persistence, and one marketplace notification across two concurrent calls."
+    },
+    {
+      "id": "ps440-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-440-connection-safety",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-440-connection-safety-guard.ts",
+        "src/services/fulfillment/mark-shipped-externally.ts",
+        "src/services/labels.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "An empty post-purchase Walmart artifact remains receipt_recorded, retry is forced through resume_receipt rather than a second dispatch, provider-pending recovery remains held, and only the winning forward lifecycle transition reaches the fake marketplace notifier."
+    },
+    {
+      "id": "ps440-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-440-connection-safety",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-440-connection-safety-guard.ts",
+        "src/lib/fetch-timeout.ts",
+        "src/lib/shipstation/v1-client.ts",
+        "src/services/shopify-order-sync.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "fencing_stale_worker_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Injected stalled response bodies, aborted Shopify imports, ShipStation retry backoff, and missing Walmart artifacts terminate within the shared deadline and perform zero cursor, order, shipment, or label persistence after cancellation or artifact failure."
+    },
+    {
+      "id": "provider-ledger-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-423-provider-operation-ledger",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-423-provider-operation-ledger-guard.ts",
+        "scripts/ps-423-provider-operation-ledger-integration.ts",
+        "src/services/fulfillment-operation-ledger.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "The existing PGlite durable-operation suite proves one concurrent dispatch owner, rollback after local failure, receipt resume, single local consumption, held ambiguous outcomes, expired-lease fencing, stale-generation rejection, and exactly-once fake-provider effects."
+    },
+    {
+      "id": "source-of-truth-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert offline environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-432-sync-fulfillment-resilience-guard.ts",
+        "scripts/sync-continuous-self-healing-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 53 source-of-truth, lifecycle, rate, queue, sync, billing, inventory, API, and hygiene commands pass on the final PS-440 files. Two stale source-shape assertions were updated to verify the same canonical production defaults through the new offline-test aliases."
+    },
+    {
+      "id": "typecheck-and-build",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web && npm run test:rate-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts",
+        "scripts/ps-313-rate-source-of-truth-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "Strict TypeScript passes, the production web build completes with 2,977 modules transformed, and the backend rate source-of-truth gate remains green."
+    },
+    {
+      "id": "live-deployment-readiness",
+      "classification": "live",
+      "command": "Read-only Vercel deployment metadata, Render deployment and startup-log inspection, gh run list, and public GET /, /health, /health/ready, and /health/deep on 2026-07-23",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-440.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_implementation_sha_live",
+        "vercel_ready_promoted",
+        "render_api_worker_print_live",
+        "readiness_http_200",
+        "deep_health_http_200",
+        "provider_spy_untouched"
+      ],
+      "proves": "Vercel deployment dpl_Dr4LdVh77tNC74dLdSjszuVW13VQ is READY and PROMOTED in Production for exact SHA 1c48b1cdf8c4b04daa7ae25c219e49967b148b9a. Render API dep-d9glh2brjlhs73clppkg, sync worker dep-d9glh2m1a83c73f0v0p0, and print worker dep-d9glh33eo5us73cbqk50 are live on the same SHA. The production Vercel alias, /health, /health/ready, and /health/deep returned HTTP 200. Startup logs show schema readiness, API listening, durable pg-boss cadence, rate-browse worker, and print-queue worker startup. GitHub Actions returned zero runs. Certification initiated no provider mutation, label purchase, postage charge, marketplace notification, inventory movement, or production order/shipment write."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git show --stat --oneline 1c48b1cdf8c4b04daa7ae25c219e49967b148b9a && git diff --check a09f03b5f682ff293b30ea06421ab7bee83b6469..1c48b1cdf8c4b04daa7ae25c219e49967b148b9a",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-440-connection-safety-guard.ts",
+        "src/lib/pg-boss-pool-lifetime.ts",
+        "src/services/label-artifact-safety.ts",
+        "src/services/worker-result-classification.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed commit contains only PS-440 connection, cancellation, outcome-truth, transactional projection, label-artifact safety, offline proof, and stale-guard maintenance. It adds no migration and does not alter shipped/cancelled schemas, edit locks, inventory auto-deduction, or destructive controls."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git show --name-only --format= 1c48b1cdf8c4b04daa7ae25c219e49967b148b9a",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema or data rollback is required. Forward-revert implementation SHA 1c48b1cdf8c4b04daa7ae25c219e49967b148b9a, push the reviewed revert to prepshipv4-stable, and redeploy the existing Vercel and three Render services."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the closure packet and implementation SHA, push the reviewed revert to prepshipv4-stable, and redeploy the existing Vercel project plus Render API, sync worker, and print worker. Do not mutate orders, shipments, labels, provider state, billing, inventory, or marketplace state during rollback.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Exact reviewed SHA 1c48b1cdf8c4b04daa7ae25c219e49967b148b9a is READY and PROMOTED on Vercel and live on all three existing Render services. Production shell, API health, readiness, and deep health are HTTP 200; startup roles are healthy; GitHub Actions scheduled zero runs. Verification was read-only and initiated no shipping, marketplace, or business-data side effect.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/final-review/packets/PS-440.json"
+    ]
+  },
+  "caveats": [
+    {
+      "id": "vercel-unique-url-protection",
+      "severity": "low",
+      "status": "closed",
+      "description": "The unique Vercel deployment URL returns the expected authenticated redirect, while Vercel metadata reports READY/PROMOTED at the exact SHA and the public production alias returns HTTP 200. No domain or protection setting was changed.",
+      "followUpOwner": null,
+      "followUpTask": null
+    },
+    {
+      "id": "render-root-probe-warning",
+      "severity": "low",
+      "status": "closed",
+      "description": "Render emitted one warning for its Go platform probe requesting the API root, which intentionally returns 404. The configured /health/ready endpoint and explicit /health, /health/ready, and /health/deep checks all returned HTTP 200, and no post-deploy application error was present.",
+      "followUpOwner": null,
+      "followUpTask": null
+    }
+  ]
+}
