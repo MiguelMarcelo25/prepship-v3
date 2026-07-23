@@ -44,6 +44,8 @@ import {
 } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { api, qs } from '../../lib/api'
+import { activeClientRowsQueryOptions, clientQueryKeys } from '../../lib/client-query'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import {
   SortableHeader,
   nextSortState,
@@ -961,11 +963,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // having to refresh the whole page. React Query pauses the interval while
   // the tab is backgrounded — the same effect as the old
   // document.visibilityState gate on the setInterval it replaces.
-  const syncStatusQuery = useQuery({
-    queryKey: ['dashboard', 'sync-status'],
-    queryFn: async (): Promise<SyncStatusChipData> => {
-      const status: any = await apiClient.fetchLegacySyncStatus()
-      return {
+  const syncStatusQuery = useQuery<any, Error, SyncStatusChipData>({
+    queryKey: endpointQueryKeys.legacySyncStatus,
+    queryFn: () => apiClient.fetchLegacySyncStatus(),
+    select: (status: any): SyncStatusChipData => ({
         lastSync: typeof status?.lastSync === 'number' ? status.lastSync : null,
         cadenceMinutes: status?.cadenceMinutes ?? undefined,
         status: (status?.status as SyncStatusChipData['status']) ?? 'idle',
@@ -977,8 +978,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         queuedJobs: Array.isArray(status?.queue?.queues)
           ? status.queue.queues.reduce((sum: number, queue: { size?: number | null }) => sum + Number(queue.size ?? 0), 0)
           : null,
-      }
-    },
+      }),
     refetchInterval: 60_000,
   })
   // Fetch failures are non-fatal: React Query keeps the last successful data,
@@ -987,18 +987,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   // Reporting client scope for the canonical dashboard client filter —
   // transform mirrors the old loadDashboard clients handler verbatim.
-  const reportingClientsQuery = useQuery<Client[]>({
-    queryKey: ['dashboard', 'reporting-clients'],
-    queryFn: async () => {
-      const clientsRes: any[] = await apiClient.listReportingClients()
-      return safeArray<any>(clientsRes)
+  const reportingClientsQuery = useQuery({
+    ...activeClientRowsQueryOptions(),
+    select: (clientsRes): Client[] =>
+      safeArray<any>(clientsRes)
         .map((client) => ({
-          clientId: num(client?.clientId ?? client?.id),
+          clientId: num(client?.id),
           name: String(client?.name ?? '').trim(),
         }))
         .filter((client) => client.clientId > 0 && client.name)
-        .sort((left, right) => left.name.localeCompare(right.name))
-    },
+        .sort((left, right) => left.name.localeCompare(right.name)),
   })
   const clients = reportingClientsQuery.data ?? EMPTY_CLIENTS
   // If the freshly-loaded client list no longer contains the active filter
@@ -1244,7 +1242,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const refreshDashboard = async () => {
     setRefreshing(true)
     try {
-      await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: clientQueryKeys.active }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.legacySyncStatus }),
+      ])
     } finally {
       setRefreshing(false)
     }

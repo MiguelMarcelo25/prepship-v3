@@ -3,6 +3,8 @@
 // Awaiting + Shipped tabs. Returns the stats + load status; OrdersView builds the strip display from them.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '../../../api/client';
+import { endpointQueryKeys } from '../../../lib/endpoint-query-keys';
+import { queryClient } from '../../../lib/query-client';
 import { getMsUntilNextDailyStatsRollover } from '../daily-stats-rollover';
 import { scheduleNonCriticalOrdersWork } from '../orders-non-critical-scheduler';
 import type { OrdersDailyStatsDto } from '../../../types/api';
@@ -25,7 +27,11 @@ export function useDailyStats(currentStatus: string) {
     setDailyStatsStatus('loading');
     setDailyStatsError(null);
     try {
-      const payload = await apiClient.fetchDailyStats();
+      const payload = await queryClient.fetchQuery({
+        queryKey: endpointQueryKeys.dailyStats(),
+        queryFn: () => apiClient.fetchDailyStats(),
+        staleTime: options.skipHidden ? 5 * 60_000 : 0,
+      });
       if (!dailyStatsEnabledRef.current) return;
       setDailyStats(payload);
       setDailyStatsStatus('success');

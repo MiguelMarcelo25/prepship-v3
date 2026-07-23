@@ -73,6 +73,9 @@ const TrackingModal = lazy(() => import('../TrackingModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
 import { api } from '../../lib/api'
+// Per user override unlock shipped data on 2026-07-23: PS-458 changes only
+// shared GET cache identity; shipped/cancelled read-only and action gates remain unchanged.
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 // PS-135: canonical FE rate-proof helpers (extracted from this file; pure backend-DTO reads).
 import {
   BACKEND_RATE_PROOF_SOURCE,
@@ -1368,8 +1371,7 @@ export default function OrdersView({
   useEffect(() => {
     if (!skuOptionsRequested) return
     let cancelled = false
-    void apiClient
-      .fetchDistinctSkus({
+    const filters = {
         // When no specific store is selected, leave clientId/storeId
         // unset so the dropdown shows EVERY SKU. When a store is
         // active, narrow to that store so the list isn't visually
@@ -1379,10 +1381,17 @@ export default function OrdersView({
         dateFrom: dateRange.start,
         dateTo: dateRange.end,
         includeInactiveClients,
-      })
+      }
+    void queryClient.fetchQuery({
+      queryKey: endpointQueryKeys.distinctSkus(filters),
+      queryFn: () => apiClient.fetchDistinctSkus(filters),
+    })
       .then((skus) => {
         if (cancelled) return
         setGlobalSkus(skus)
+      })
+      .catch(() => {
+        if (!cancelled) setGlobalSkus([])
       })
     return () => {
       cancelled = true
@@ -1560,7 +1569,10 @@ export default function OrdersView({
     let cancelled = false
 
     setPackagesLoaded(false)
-    void apiClient.fetchPackages()
+    void queryClient.fetchQuery({
+      queryKey: endpointQueryKeys.packages(),
+      queryFn: () => apiClient.fetchPackages(),
+    })
       .then((payload) => {
         if (!cancelled) {
           setPackages(payload)
@@ -1588,7 +1600,10 @@ export default function OrdersView({
     }
 
     const cancelScheduled = scheduleNonCriticalOrdersWork(() => {
-      void apiClient.fetchColumnPrefs()
+      void queryClient.fetchQuery({
+        queryKey: endpointQueryKeys.columnPrefs,
+        queryFn: () => apiClient.fetchColumnPrefs(),
+      })
         .then((payload) => {
           if (!cancelled) {
             const nextPrefs = payload ?? localPrefs

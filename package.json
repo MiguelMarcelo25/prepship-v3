@@ -240,6 +240,7 @@
     "test:settings-read-scope": "tsx scripts/settings-read-scope-guard.ts",
     "test:settings-query-migration": "node scripts/settings-query-migration-guard.mjs",
     "test:ps-448-view-query-cache": "tsx scripts/ps-448-view-query-cache-guard.ts",
+    "test:ps-458-query-cache-unification": "tsx scripts/ps-458-query-cache-unification-guard.ts",
     "test:ps-448-view-query-cache:browser": "playwright test web/e2e/dashboard-ps325-proof.spec.js --grep PS-448 --reporter=line",
     "audit:ps-448-query-pressure": "tsx scripts/ps-448-production-query-pressure-audit.ts",
     "test:ps-798-per-account-billing": "tsx scripts/ps-798-per-account-billing-guard.ts",

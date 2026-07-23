@@ -14,6 +14,7 @@ import {
   X as XIcon,
 } from 'lucide-react'
 import { apiClient } from '../../api/client'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { LocationDto } from '../../types/api'
 import {
@@ -377,7 +378,7 @@ export default function LocationsView({
   const [saving, setSaving] = useState(false)
 
   const locationsQuery = useQuery<LocationDto[]>({
-    queryKey: ['settings', 'locations'],
+    queryKey: endpointQueryKeys.locations,
     enabled: queriesEnabled,
     queryFn: () => apiClient.fetchLocations(),
   })

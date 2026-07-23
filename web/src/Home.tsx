@@ -18,6 +18,8 @@ import {
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
 import { api } from './lib/api'
+import { endpointQueryKeys } from './lib/endpoint-query-keys'
+import { queryClient } from './lib/query-client'
 // TODO PS-257: SyncWorkerStatusDto is not exported by ./types/api (the worker
 // status DTO was never added there). Until v4 grows a real worker contract it's
 // aliased to `any` locally — matching the per-file DTO alias precedent used
@@ -527,7 +529,11 @@ export default function Home() {
       }
       let nextDelayMs = 120_000
       try {
-        const next = await apiClient.fetchLegacySyncStatus({ forceRefresh: true })
+        const next = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.legacySyncStatus,
+          queryFn: () => apiClient.fetchLegacySyncStatus({ forceRefresh: true }),
+          staleTime: 0,
+        })
         if (!active) return
         setSyncStatus(next)
         nextDelayMs = next.status === 'syncing' ? 10_000 : 120_000
@@ -595,7 +601,11 @@ export default function Home() {
     const poll = async () => {
       if (document.visibilityState !== 'visible') return
       try {
-        const next = await apiClient.fetchSyncWorkerStatus()
+        const next = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.syncWorkerStatus,
+          queryFn: () => apiClient.fetchSyncWorkerStatus(),
+          staleTime: 90_000,
+        })
         if (!active) return
         setWorkerStatus(next)
       } catch {

@@ -62,6 +62,7 @@ import { excludeMarketplaceOwnedRows } from './new-order-rate-preview-rows'
 // the canonical POST /locations owner (apiClient.createLocation).
 import { shouldSaveCustomOrigin, buildSaveLocationBody } from './new-order-save-location'
 import { useQueryClient } from '@tanstack/react-query'
+import { endpointQueryKeys } from '../lib/endpoint-query-keys'
 
 interface LineItem {
   id: string
@@ -622,7 +623,7 @@ export default function NewOrderModal({
                 country: customOriginCountry,
               }),
             )
-            queryClient.invalidateQueries({ queryKey: ['v2-hooks:locations'] })
+            queryClient.invalidateQueries({ queryKey: endpointQueryKeys.locations })
           } catch {
             /* non-blocking: the order saved; the custom origin just isn't kept */
           }

@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import { clientQueryKeys, includeInactiveClientRowsQueryOptions } from '../../lib/client-query'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import {
   ConfirmActiveToggleDialog,
   type ConfirmActiveTogglePending,
@@ -130,8 +131,8 @@ export function useClientsData(): ClientsDataResult {
         ['orders-count'],
         ['v2-hooks:orders'],
         ['inventory'],
-        ['billing-config'],
-        ['billing-summary'],
+        endpointQueryKeys.billingConfigs,
+        endpointQueryKeys.billingSummaryRoot,
         ['analysis-sku-breakdown'],
         ['analysis-sku-daily'],
       ].forEach((key) => queryClient.invalidateQueries({ queryKey: key }))

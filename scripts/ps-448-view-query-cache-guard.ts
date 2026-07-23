@@ -36,8 +36,8 @@ assert.doesNotMatch(home, /<AnimatePresence[^>]*mode=["']wait["']/)
 const requiredKeys: Array<[string, string, string[]]> = [
   ['Dashboard', dashboard, [
     "['dashboard', 'reporting-window'",
-    "['dashboard', 'sync-status'",
-    "['dashboard', 'reporting-clients'",
+    'endpointQueryKeys.legacySyncStatus',
+    'activeClientRowsQueryOptions()',
     "['dashboard', 'metrics'",
     "['dashboard', 'shipping-margin'",
     "['dashboard', 'sku-trends'",
@@ -48,10 +48,10 @@ const requiredKeys: Array<[string, string, string[]]> = [
   ]],
   ['Billing', billing, [
     "['billing', 'preset-window'",
-    "['billing', 'configs'",
-    "['billing', 'package-prices'",
-    "['billing', 'summary'",
-    "['billing', 'shipping-margin'",
+    'endpointQueryKeys.billingConfigs',
+    'endpointQueryKeys.billingPackagePrices',
+    'endpointQueryKeys.billingSummary',
+    'endpointQueryKeys.shippingMargin',
     "['billing', 'details'",
     "['billing', 'finalizations'",
     "['billing', 'credit-notes'",
@@ -67,8 +67,8 @@ const requiredKeys: Array<[string, string, string[]]> = [
     "['settings', 'observability-status'",
     "['settings', 'automation-availability'",
     "['settings', 'marketplace-fee-rules'",
-    "['settings', 'marketplace-fee-stores'",
-    "['settings', 'locations'",
+    'endpointQueryKeys.stores',
+    'endpointQueryKeys.locations',
     "['settings', 'carrier-eligibility-policy'",
     "['settings', 'carrier-accounts'",
     "['settings', 'store-accounts'",
@@ -95,7 +95,7 @@ assert.doesNotMatch(analysis, /(?:function|const)\s+(?:loadAnalysis|loadSkus|loa
 assert.doesNotMatch(settings, /\b(?:setTestClients|setSystemStatus|setAutomationRows)\s*\(/)
 
 assert.match(dashboard, /queryClient\.invalidateQueries\(\{ queryKey: \['dashboard'\] \}\)/)
-assert.match(billing, /queryClient\.invalidateQueries\(\{ queryKey: \['billing', 'summary'\]/)
+assert.match(billing, /queryClient\.invalidateQueries\(\{ queryKey: endpointQueryKeys\.billingSummaryRoot/)
 assert.match(browserProof, /PS-448 Dashboard remount cache proof/)
 assert.match(browserProof, /Dashboard -> Orders -> Dashboard performs zero unchanged-data refetches/)
 assert.match(browserProof, /backend\.captured\.filter\(isDashboardRead\)/)

@@ -51,6 +51,7 @@ const REQUIRED_GUARDS = [
   'test:audit-limiter-fingerprint-hygiene',
   'test:audit-sync-cursor-webhook-hygiene',
   'test:audit-frontend-cache-bundle-hygiene',
+  'test:ps-458-query-cache-unification',
   'test:audit-billing-small-fixes',
   'test:audit-api-process-lifecycle',
   'test:audit-print-queue-small-fixes',

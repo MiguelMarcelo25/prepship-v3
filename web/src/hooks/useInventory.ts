@@ -1,7 +1,6 @@
-import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, qs, type Paginated } from '../lib/api';
-import { activeClientRowsQueryOptions } from '../lib/client-query';
+import { apiClient } from '../api/client';
+import { endpointQueryKeys } from '../lib/endpoint-query-keys';
 
 // ──────────────────────────────────────────────────────────────────
 // useInventory — v4 returns paginated thin rows; adapt to v2's rich
@@ -71,113 +70,31 @@ export interface UseInventoryResult {
   refetch: () => Promise<unknown>;
 }
 
-type V4InventoryRow = {
-  id: number;
-  clientId: number | null;
-  sku: string;
-  name: string | null;
-  imageUrl: string | null;
-  inventoryQuantity: number;
-  stockStatus: 'in' | 'low' | 'out';
-  soldLast30Days?: number;
-  totalReceived?: number;
-  totalSoldAllTime?: number;
-  reorderLevel: number;
-  weightOz: number | null;
-  length: number | null;
-  width: number | null;
-  height: number | null;
-  parentSkuId: number | null;
-  active: boolean;
-};
-
-function transformInventoryRowV4toV2(
-  row: V4InventoryRow,
-  clientNamesById: Map<number, string>
-): InventoryItemDto {
-  const clientId = row.clientId ?? 0;
-  const l = row.length ?? 0;
-  const w = row.width ?? 0;
-  const h = row.height ?? 0;
-  const baseUnitQty = 1;
-  const inventoryQuantity = row.inventoryQuantity;
-
-  return {
-    id: row.id,
-    clientId,
-    sku: row.sku,
-    name: row.name ?? '',
-    minStock: row.reorderLevel,
-    active: row.active,
-    weightOz: row.weightOz ?? 0,
-    parentSkuId: row.parentSkuId,
-    baseUnitQty,
-    packageLength: l,
-    packageWidth: w,
-    packageHeight: h,
-    productLength: l,
-    productWidth: w,
-    productHeight: h,
-    packageId: null,
-    units_per_pack: 1,
-    cuFtOverride: null,
-    clientName: clientId ? clientNamesById.get(clientId) ?? '' : '',
-    packageName: null,
-    packageDimLength: null,
-    packageDimWidth: null,
-    packageDimHeight: null,
-    parentName: null,
-    inventoryQuantity,
-    lastMovement: null,
-    imageUrl: row.imageUrl,
-    baseUnits: inventoryQuantity * baseUnitQty,
-    status: row.stockStatus === 'in' ? 'ok' : row.stockStatus,
-    soldLast30Days: row.soldLast30Days ?? 0,
-    totalReceived: row.totalReceived,
-    totalSoldAllTime: row.totalSoldAllTime,
-  };
-}
-
 export function useInventory(
   options: UseInventoryOptions = {}
 ): UseInventoryResult {
   const { clientId, search, lowStock, pageSize = 200, page = 1 } = options;
 
-  // 2026-05-12: explicit activeOnly=true so the inventory query's
-  // clientName resolution never picks up disabled clients.
-  const clientsQuery = useQuery(activeClientRowsQueryOptions());
-
-  const query = useQuery<Paginated<V4InventoryRow>>({
-    queryKey: [
-      'v2-hooks:inventory',
-      clientId,
-      search,
-      lowStock,
-      page,
-      pageSize,
-    ],
-    queryFn: () =>
-      api.get<Paginated<V4InventoryRow>>(
-        `/inventory${qs({ clientId, search, lowStock, page, pageSize })}`
-      ),
+  const request = { clientId, search, lowStock, page, pageSize };
+  const query = useQuery<{
+    items: InventoryItemDto[];
+    total: number;
+    totalPages: number;
+    page: number;
+    pageSize: number;
+  }>({
+    queryKey: endpointQueryKeys.inventory(request),
+    queryFn: () => apiClient.fetchInventoryPage(request),
     staleTime: 30_000,
     gcTime: 10 * 60_000,
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   });
 
-  const items = useMemo(() => {
-    const clientNamesById = new Map<number, string>();
-    for (const c of clientsQuery.data ?? []) clientNamesById.set(c.id, c.name);
-    return (query.data?.data ?? []).map((row) =>
-      transformInventoryRowV4toV2(row, clientNamesById)
-    );
-  }, [query.data, clientsQuery.data]);
-
   return {
-    items,
-    total: query.data?.pagination.total ?? 0,
-    isLoading: query.isLoading || clientsQuery.isLoading,
+    items: query.data?.items ?? [],
+    total: query.data?.total ?? 0,
+    isLoading: query.isLoading,
     error: (query.error as Error | null) ?? null,
     refetch: () => query.refetch(),
   };

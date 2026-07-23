@@ -25,6 +25,7 @@ import {
   type ConfirmActiveTogglePending,
 } from '../ConfirmActiveToggleDialog'
 import { api } from '../../lib/api'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import { activeClientRowsQueryOptions, clientDtosFromRows, clientQueryKeys } from '../../lib/client-query'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
@@ -851,7 +852,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     select: clientDtosFromRows,
   })
   const packagesQuery = useQuery({
-    queryKey: ['packages', 'custom'],
+    queryKey: endpointQueryKeys.packages('custom'),
     queryFn: () => apiClient.fetchPackages('custom'),
     enabled: activeTab === 'receive',
     staleTime: 5 * 60_000,
@@ -867,7 +868,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     refetchOnWindowFocus: false,
   })
   const inventoryQuery = useQuery({
-    queryKey: ['inventory', 'stock', stockQueryParams],
+    queryKey: endpointQueryKeys.inventory(maybeQueryParams(stockQueryParams)),
     queryFn: () => apiClient.fetchInventoryPage(maybeQueryParams(stockQueryParams)),
     placeholderData: (previousData) => previousData,
     staleTime: 30_000,
@@ -1243,12 +1244,12 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, active: nextActive } : r)))
     try {
       await apiClient.updateInventoryItem(row.id, { active: nextActive })
-      queryClient.setQueriesData({ queryKey: ['inventory', 'stock'] }, (current: any) =>
+      queryClient.setQueriesData({ queryKey: endpointQueryKeys.inventoryRoot }, (current: any) =>
         Array.isArray(current)
           ? current.map((cachedRow) => (cachedRow.id === row.id ? { ...cachedRow, active: nextActive } : cachedRow))
           : current,
       )
-      void queryClient.invalidateQueries({ queryKey: ['inventory'] })
+      void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.inventoryRoot })
     } catch (error) {
       // Roll back — server didn't accept the change.
       setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, active: !nextActive } : r)))
@@ -2253,7 +2254,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
           staleTime: 0,
         }),
         queryClient.fetchQuery({
-          queryKey: ['inventory', 'stock', nextStockQuery],
+          queryKey: endpointQueryKeys.inventory(maybeQueryParams(nextStockQuery)),
           queryFn: () => apiClient.fetchInventoryPage(maybeQueryParams(nextStockQuery)),
           staleTime: 0,
         }),
@@ -2270,7 +2271,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       }
       if (activeTab === 'receive') {
         const nextPackages = await queryClient.fetchQuery({
-          queryKey: ['packages', 'custom'],
+          queryKey: endpointQueryKeys.packages('custom'),
           queryFn: () => apiClient.fetchPackages('custom'),
           staleTime: 0,
         })
@@ -2428,7 +2429,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       if (packages.length === 0) {
         tasks.push(
           queryClient.fetchQuery({
-            queryKey: ['packages', 'custom'],
+            queryKey: endpointQueryKeys.packages('custom'),
             queryFn: () => apiClient.fetchPackages('custom'),
             staleTime: 5 * 60_000,
           }).then((nextPackages) => setPackages(nextPackages))
@@ -2750,9 +2751,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       queryClient.invalidateQueries({ queryKey: ['clients-order-stats'] })
       queryClient.invalidateQueries({ queryKey: ['orders-count'] })
       queryClient.invalidateQueries({ queryKey: ['v2-hooks:orders'] })
-      queryClient.invalidateQueries({ queryKey: ['inventory'] })
-      queryClient.invalidateQueries({ queryKey: ['billing-config'] })
-      queryClient.invalidateQueries({ queryKey: ['billing-summary'] })
+      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.inventoryRoot })
+      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingConfigs })
+      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot })
       queryClient.invalidateQueries({ queryKey: ['analysis-sku-breakdown'] })
       queryClient.invalidateQueries({ queryKey: ['analysis-sku-daily'] })
       await refreshInventoryView()

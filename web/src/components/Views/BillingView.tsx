@@ -11,6 +11,7 @@ import { apiClient } from '../../api/client'
 // (that adapter is out of this ticket's scope); call the shared low-level
 // client directly. Additive, behind the backend shippingZeroNeedsReview flag.
 import { api, qs } from '../../lib/api'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -422,8 +423,8 @@ export default function BillingView() {
 
   // ── FE-2 (audit 2.2 slice 2): billing GETs as React Query hooks ────────────
   // Every queryFn calls the SAME apiClient method the old imperative loaders
-  // used, with byte-identical params, so the adapter-level cachedSafe TTLs and
-  // the mutation clearCachedReads() semantics are unchanged. What changed is the
+  // used, with byte-identical params. TanStack now owns all request freshness
+  // and mutation invalidation for these endpoint families. What changed is the
   // component layer: remounts within the 5-minute staleTime paint from the query
   // cache with zero requests, and mutations invalidate the matching ['billing',…]
   // key prefixes instead of manually refetching + setState. PS-316 holds — the
@@ -434,18 +435,16 @@ export default function BillingView() {
   // Same atomic pair the old loadConfigs effect fetched: packages ride along
   // (non-fatal .catch → []) so the config table and Box Size dropdown appear
   // together, exactly like before.
-  const billingConfigsQuery = useQuery({
-    queryKey: ['billing', 'configs'],
-    queryFn: async () => {
-      const [nextConfigs, nextPackages] = await Promise.all([
-        apiClient.fetchBillingConfigs(),
-        apiClient.fetchPackages().catch(() => [] as PackageDto[]),
-      ])
-      return { configs: nextConfigs as BillingConfigDto[], packages: nextPackages as PackageDto[] }
-    },
+  const billingConfigsQuery = useQuery<BillingConfigDto[]>({
+    queryKey: endpointQueryKeys.billingConfigs,
+    queryFn: () => apiClient.fetchBillingConfigs(),
   })
-  const configs = billingConfigsQuery.data?.configs ?? EMPTY_BILLING_CONFIGS
-  const packages = billingConfigsQuery.data?.packages ?? EMPTY_PACKAGES
+  const billingPackagesQuery = useQuery<PackageDto[]>({
+    queryKey: endpointQueryKeys.packages(),
+    queryFn: () => apiClient.fetchPackages(),
+  })
+  const configs = billingConfigsQuery.data ?? EMPTY_BILLING_CONFIGS
+  const packages = billingPackagesQuery.data ?? EMPTY_PACKAGES
   const configsLoading = billingConfigsQuery.isPending
 
   // Config drafts are operator-editable useState seeded from the loaded configs —
@@ -458,10 +457,10 @@ export default function BillingView() {
     const data = billingConfigsQuery.data
     if (!data || configDraftsSeededRef.current) return
     configDraftsSeededRef.current = true
-    setConfigDrafts(createBillingConfigDraftMap(data.configs))
+    setConfigDrafts(createBillingConfigDraftMap(data))
     setSelectedPkgClientId((current) => {
-      if (current && data.configs.some((config) => String(config.clientId) === current)) return current
-      return data.configs.length > 0 ? String(data.configs[0]!.clientId) : ''
+      if (current && data.some((config) => String(config.clientId) === current)) return current
+      return data.length > 0 ? String(data[0]!.clientId) : ''
     })
   }, [billingConfigsQuery.data])
   // Same error toast the old loadConfigs catch showed (fires once per failure).
@@ -473,7 +472,7 @@ export default function BillingView() {
 
   // Package pricing for the client picked in the pricing table.
   const packagePricesQuery = useQuery<BillingPackagePriceDto[]>({
-    queryKey: ['billing', 'package-prices', selectedPkgClientId ? Number(selectedPkgClientId) : null],
+    queryKey: endpointQueryKeys.billingPackagePrices(selectedPkgClientId ? Number(selectedPkgClientId) : null),
     enabled: Boolean(selectedPkgClientId),
     queryFn: () => apiClient.fetchBillingPackagePrices(Number(selectedPkgClientId)),
   })
@@ -511,7 +510,7 @@ export default function BillingView() {
   // opens (the old handleOpenBillingEdit fetch), served from cache within staleTime.
   const billingEditPricesClientId = billingEditModal && detailState.clientId != null ? Number(detailState.clientId) : null
   const billingEditPackagePricesQuery = useQuery<BillingPackagePriceDto[]>({
-    queryKey: ['billing', 'package-prices', billingEditPricesClientId],
+    queryKey: endpointQueryKeys.billingPackagePrices(billingEditPricesClientId),
     enabled: billingEditPricesClientId != null,
     queryFn: async () => {
       // Defensive: enabled above guarantees a client id when this runs.
@@ -562,7 +561,7 @@ export default function BillingView() {
   // handlers refetched (bulk box-cost refreshes summary but NOT margin).
   const billingRangeReady = Boolean(from && to)
   const summaryQuery = useQuery<BillingSummaryDto[]>({
-    queryKey: ['billing', 'summary', from, to, billingClientQueryIds ?? null],
+    queryKey: endpointQueryKeys.billingSummary(from, to, billingClientQueryIds),
     enabled: billingRangeReady,
     queryFn: () => apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
   })
@@ -576,7 +575,7 @@ export default function BillingView() {
     : null
 
   const shippingMarginQuery = useQuery({
-    queryKey: ['billing', 'shipping-margin', from, to, billingClientQueryIds ?? null],
+    queryKey: endpointQueryKeys.shippingMargin(from, to, billingClientQueryIds),
     enabled: billingRangeReady,
     queryFn: () => apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
   })
@@ -979,17 +978,14 @@ export default function BillingView() {
       await apiClient.updateBillingConfig(clientId, buildBillingConfigInput(draft))
       // Same zero-request local patch the old setConfigs applied, now on the
       // ['billing','configs'] cache entry (the PATCH already cleared the adapter's
-      // cachedSafe config entry, so the next real fetch is fresh).
-      queryClient.setQueryData<{ configs: BillingConfigDto[]; packages: PackageDto[] }>(
-        ['billing', 'configs'],
+      // canonical config entry, so the next real fetch is fresh).
+      queryClient.setQueryData<BillingConfigDto[]>(
+        endpointQueryKeys.billingConfigs,
         (current) => current
-          ? {
-              ...current,
-              configs: current.configs.map((config) => config.clientId === clientId ? {
+          ? current.map((config) => config.clientId === clientId ? {
                 ...config,
                 ...buildBillingConfigInput(draft),
-              } : config),
-            }
+              } : config)
           : current,
       )
       toastContext?.addToast('✅ Config saved', 'success')
@@ -1006,17 +1002,14 @@ export default function BillingView() {
       const shippingMarginPolicyMode =
         result?.shippingMarginPolicyMode ?? (enabled ? 'next_best_customer_rate' : 'pass_through')
       // Same zero-request local patch the old setConfigs applied (see handleSaveConfig).
-      queryClient.setQueryData<{ configs: BillingConfigDto[]; packages: PackageDto[] }>(
-        ['billing', 'configs'],
+      queryClient.setQueryData<BillingConfigDto[]>(
+        endpointQueryKeys.billingConfigs,
         (current) => current
-          ? {
-              ...current,
-              configs: current.configs.map((config) => config.clientId === clientId ? {
+          ? current.map((config) => config.clientId === clientId ? {
                 ...config,
                 houseAccountEnabled: enabled,
                 shippingMarginPolicyMode,
-              } : config),
-            }
+              } : config)
           : current,
       )
       toastContext?.addToast(enabled ? '✅ Margin mode enabled' : 'Margin mode disabled', 'success')
@@ -1182,13 +1175,15 @@ export default function BillingView() {
       // FE-2 (audit 2.2 slice 2): post-generate freshness via key invalidation —
       // the active summary/margin queries refetch immediately, which is the same
       // two requests the old manual Promise.all fired (generateBilling already
-      // cleared the adapter-level cachedSafe entries). throwOnError preserves the
+      // invalidated the canonical endpoint entries). throwOnError preserves the
       // old semantics: a failed refresh rejects into the catch below and toasts.
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
-        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.shippingMarginRoot }, { throwOnError: true }),
       ])
-      const rows = queryClient.getQueryData<BillingSummaryDto[]>(['billing', 'summary', from, to, billingClientQueryIds ?? null]) ?? []
+      const rows = queryClient.getQueryData<BillingSummaryDto[]>(
+        endpointQueryKeys.billingSummary(from, to, billingClientQueryIds),
+      ) ?? []
       const rowsForStatus = targetClientIds.length > 0
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
@@ -1353,8 +1348,8 @@ export default function BillingView() {
       // the old Promise.resolve(null) branch. throwOnError keeps the old
       // semantics: any refetch failure rejects into the catch below and toasts.
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
-        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.shippingMarginRoot }, { throwOnError: true }),
         queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }, { throwOnError: true }),
       ])
     } catch (error) {
@@ -1461,14 +1456,14 @@ export default function BillingView() {
 
       // PS-375: refresh details + summary + margin after the PATCH — the same
       // three requests the old Promise.all fired, via key invalidation (the PATCH
-      // already cleared the adapter cachedSafe entries; the open panel's rows
+      // already invalidated the canonical endpoint entries; the open panel's rows
       // swap in when its active query settles). throwOnError preserves the old
       // semantics: a failed refresh rejects into the catch below (modal stays
       // open with the error) instead of silently showing stale rows.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }, { throwOnError: true }),
-        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
-        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.shippingMarginRoot }, { throwOnError: true }),
       ])
       billingEditDraftCacheRef.current = clearBillingEditDraft(billingEditDraftCacheRef.current, billingEditModal.row)
       setBillingEditModal(null)
@@ -1503,8 +1498,8 @@ export default function BillingView() {
       // throwOnError: a failed refresh rejects into the catch below and toasts.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }, { throwOnError: true }),
-        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }, { throwOnError: true }),
-        queryClient.invalidateQueries({ queryKey: ['billing', 'shipping-margin'] }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }, { throwOnError: true }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.shippingMarginRoot }, { throwOnError: true }),
       ])
       handleCloseBillingEditModal()
       toastContext?.addToast(
@@ -1542,10 +1537,10 @@ export default function BillingView() {
 
       // Same zero-request local update the old setSavedPackagePrices applied, now
       // written to the client's ['billing','package-prices'] cache entry (the PUT
-      // already cleared the adapter cachedSafe entry). The per-client seed ref
+      // already invalidated the canonical endpoint entry). The per-client seed ref
       // above keeps the operator's draft strings untouched by this patch.
       queryClient.setQueryData<BillingPackagePriceDto[]>(
-        ['billing', 'package-prices', Number(selectedPkgClientId)],
+        endpointQueryKeys.billingPackagePrices(Number(selectedPkgClientId)),
         packagePricingRows.map((row) => ({
           packageId: row.packageId,
           price: Number.parseFloat(packagePriceDrafts[row.packageId] ?? String(row.charge)) || 0,
@@ -1934,7 +1929,7 @@ export default function BillingView() {
           // swallowed, like the old .catch(() => {})) + the open client's details.
           // Margin analytics was NOT refreshed here, so its key is deliberately
           // not invalidated ("nothing more" than the old request set).
-          void queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }).catch(() => {})
+          void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }).catch(() => {})
           if (detailState.clientId != null) {
             void queryClient.invalidateQueries({ queryKey: ['billing', 'details'] })
             void handleLoadDetails(detailState.clientId, detailState.clientName || '')
@@ -1943,7 +1938,7 @@ export default function BillingView() {
         onCloseBoxReviewSweep={() => setBoxReviewSweepOpen(false)}
         onBoxReviewSweepApplied={() => {
           // Same refresh set as onBulkBoxCostApplied above (summary + open details).
-          void queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }).catch(() => {})
+          void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }).catch(() => {})
           if (detailState.clientId != null) {
             void queryClient.invalidateQueries({ queryKey: ['billing', 'details'] })
             void handleLoadDetails(detailState.clientId, detailState.clientName || '')
