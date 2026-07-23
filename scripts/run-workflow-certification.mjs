@@ -20,7 +20,31 @@
 // Continues on failure and prints a per-checkpoint summary; exits 1 if any
 // suite fails so it can gate CI.
 
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { delimiter, resolve } from 'node:path';
+
+const packageScripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts ?? {};
+const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+const commandEnv = {
+  ...process.env,
+  [pathKey]: [resolve('node_modules/.bin'), process.env[pathKey]].filter(Boolean).join(delimiter),
+};
+const shellCommand = process.platform === 'win32'
+  ? (process.env.ComSpec ?? 'cmd.exe')
+  : '/bin/sh';
+const shellPrefix = process.platform === 'win32' ? ['/d', '/s', '/c'] : ['-c'];
+
+function directPackageCommand(script, ancestors = []) {
+  if (ancestors.includes(script)) {
+    throw new Error(`recursive package script: ${[...ancestors, script].join(' -> ')}`);
+  }
+  const command = packageScripts[script];
+  if (!command) throw new Error(`missing package script: ${script}`);
+  return command.replace(/\bnpm run ([A-Za-z0-9:_-]+)/g, (_match, nestedScript) => (
+    `(${directPackageCommand(nestedScript, [...ancestors, script])})`
+  ));
+}
 
 // Each script appears once; the first group it is listed under owns it.
 const GROUPS = [
@@ -197,7 +221,19 @@ for (const group of GROUPS) {
     seen.add(script);
     const started = process.hrtime.bigint();
     try {
-      execSync(`npm run ${script}`, { stdio: 'pipe', encoding: 'utf8' });
+      const command = directPackageCommand(script);
+      const result = spawnSync(shellCommand, [...shellPrefix, command], {
+        stdio: 'pipe',
+        encoding: 'utf8',
+        env: commandEnv,
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        const failure = new Error(`${script} exited with status ${result.status ?? 1}`);
+        failure.stdout = result.stdout;
+        failure.stderr = result.stderr;
+        throw failure;
+      }
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       console.log(`  PASS  ${script}  (${ms.toFixed(0)}ms)`);
       results.push({ script, ok: true });

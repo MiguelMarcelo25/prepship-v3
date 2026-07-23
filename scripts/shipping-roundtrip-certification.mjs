@@ -32,7 +32,8 @@ const suites = [
   },
   {
     key: 'offline-workflow-suites',
-    command: [npmCommand, ...npmPrefix, 'run', 'test:workflow-suites'],
+    packageScript: 'test:workflow-suites',
+    command: [process.execPath, 'scripts/run-workflow-certification.mjs'],
     safety: 'offline guards',
   },
 ];
