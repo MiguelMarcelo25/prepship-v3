@@ -27,5 +27,21 @@ ShipStation_API_Fieldr.md
 ruvector.db
 web/ruvector.db
 
+# Local AI/agent runtime state (never project source)
+/.claude-flow/
+/.claude/.proven-config-version
+/.claude/proven-config.json
+/agentdb.rvf*
+/graphify-out/
+
+# Local scratch investigations and generated delivery output
+/.qa-remediation.js
+/callsite_props.txt
+/test_regex.cjs
+/test_regex.js
+/*TEMP*.txt
+/output/
+/tmp/
+
 # PS-107 master regression runner artifacts
 test-results/

@@ -9,6 +9,12 @@ rule belongs deeper.
 AI coding agents must also follow [AGENTS.md](AGENTS.md) (mirrored to `CLAUDE.md` and
 `.cursorrules`), including the shipped/cancelled lockdown.
 
+Project instructions, plans, audits, and generated artifacts have different retention
+rules. Use the [documentation map](docs/README.md) before adding another root-level plan
+or committing tool-generated output. `AGENTS.md` is the canonical agent-instruction file;
+local prompts, agent databases, execution logs, and chat/session memory do not belong in
+Git.
+
 ## What every non-trivial PR must include
 
 1. **Architecture placement notes** (see [ARCHITECTURE.md](ARCHITECTURE.md) and the
