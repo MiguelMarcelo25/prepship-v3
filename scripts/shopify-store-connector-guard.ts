@@ -291,6 +291,38 @@ await check('Shopify GraphQL order normalization supports direct store polling',
   assert(graphqlCalls.some((call) => call.url === 'https://kf-goodies-2.myshopify.com/admin/api/2026-07/graphql.json'));
 });
 
+await check('Shopify order import forwards worker cancellation to the GraphQL request', async () => {
+  const abort = new AbortController();
+  let requestSignal: AbortSignal | null = null;
+  const connector = createShopifyStoreConnector({
+    fetch: async (_url, init) => {
+      requestSignal = init?.signal ?? null;
+      abort.abort(new DOMException('cancelled', 'AbortError'));
+      init?.signal?.throwIfAborted();
+      return new Response(JSON.stringify({ data: { orders: { edges: [], pageInfo: {} } } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+    sleep: async () => undefined,
+    apiVersion: '2026-07',
+  });
+
+  await assert.rejects(
+    connector.importOrders({
+      companyId: 1,
+      accountId: '42',
+      credentials: {
+        shopDomain: 'kf-goodies-2.myshopify.com',
+        adminAccessToken: 'shpat_secret',
+      },
+      signal: abort.signal,
+    }),
+    (error: unknown) => error instanceof DOMException && error.name === 'AbortError',
+  );
+  assert.equal(requestSignal, abort.signal);
+});
+
 await check('Shopify order normalization preserves fulfillment-order facts for label purchase', () => {
   const gqlOrder = {
     id: 'gid://shopify/Order/1234567890',

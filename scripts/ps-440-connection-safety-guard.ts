@@ -42,8 +42,9 @@ async function proveBodyTimeout(): Promise<void> {
     const response = await fetchWithTimeout(
       `http://127.0.0.1:${address.port}/stalled-body`,
       {},
-      40,
+      1_000,
     );
+    assert.equal(response.status, 200, 'the fixture must receive headers before testing body timeout');
     await assert.rejects(response.text(), undefined, 'a stalled response body must be timeout-bounded');
   } finally {
     server.closeAllConnections();
@@ -141,7 +142,6 @@ async function proveWalmartReceiptFence(): Promise<void> {
     if (acquired.kind !== 'dispatch') throw new Error('Walmart fixture did not acquire dispatch');
 
     let providerPosts = 0;
-    let localPersistenceCalls = 0;
     const purchased = await ledger.dispatchFulfillmentOperation(
       {
         lease: acquired.lease,
@@ -171,7 +171,6 @@ async function proveWalmartReceiptFence(): Promise<void> {
     const retry = await ledger.acquireFulfillmentOperation(operationInput, dependencies);
     assert.equal(retry.kind, 'resume_receipt', 'retry must reuse the recorded Walmart receipt');
     assert.equal(providerPosts, 1, 'retry must not issue a second mocked provider POST');
-    assert.equal(localPersistenceCalls, 0, 'artifact failure occurs before shipment/order persistence');
 
     const recovery = planQueueSendRecovery({
       workerOrders: [{ orderId: 440001, clientId: 44 }],

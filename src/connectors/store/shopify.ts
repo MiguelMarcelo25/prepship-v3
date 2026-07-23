@@ -615,12 +615,15 @@ async function postShopifyGraphql<T>(
   creds: ShopifyCredentials,
   body: Record<string, unknown>,
   options: Required<Pick<ShopifyConnectorOptions, 'fetch' | 'sleep' | 'apiVersion'>>,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const url = shopifyGraphqlUrl(creds.shopDomain, options.apiVersion);
   const init: RequestInit = {
     method: 'POST',
     headers: shopifyGraphqlHeaders(creds.accessToken),
     body: JSON.stringify(body),
+    signal,
   };
   const response = options.fetch === fetch
     ? await timedFetch(operationName, url, init)
@@ -1476,6 +1479,7 @@ async function importShopifyOrders(
       },
     },
     options,
+    input.signal,
   );
 
   const ordersConnection = payload.data?.orders;
