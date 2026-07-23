@@ -1,0 +1,69 @@
+{
+  "taskId": "PS-458",
+  "title": "Canonical client-mutation cache invalidation evidence",
+  "baselineSha": "c5e8dada03f6d24624d7849547c51adc5ba08824",
+  "originalCacheUnificationSha": "27b7d2e3c5cfb8a24ced9ae5f9dd31efe02fe8a3",
+  "implementationSha": "c9b0f90032b1798c56fe5e15f9a6853dd5c2da13",
+  "rootCause": "The Clients page used raw client mutations and maintained a separate invalidation list containing the obsolete ['inventory'] key. InventoryView also repeated its own client-dependent invalidation list. Those bypasses could leave the canonical store, count, or inventory endpoint families stale after a successful client mutation.",
+  "canonicalOwner": "web/src/lib/client-cache-invalidation.ts#invalidateClientDependentQueries",
+  "delegatingCallers": [
+    "web/src/lib/v2-apiClient.ts create/update/delete/sync client mutations",
+    "web/src/pages/Clients_variants/useClientsData.tsx delete/toggle/sync mutations",
+    "web/src/components/Views/InventoryView.tsx client mutations through apiClient"
+  ],
+  "canonicalFamilies": [
+    "clientQueryKeys.root",
+    "endpointQueryKeys.storesRoot",
+    "endpointQueryKeys.countsRoot",
+    "endpointQueryKeys.inventoryRoot"
+  ],
+  "verification": [
+    {
+      "command": "npm run test:ps-458-query-cache-unification",
+      "result": "pass"
+    },
+    {
+      "command": "npm run test:audit-frontend-cache-bundle-hygiene",
+      "result": "pass"
+    },
+    {
+      "command": "npm run test:ps-448-view-query-cache",
+      "result": "pass"
+    },
+    {
+      "command": "npm run test:frontend-failure-states",
+      "result": "pass"
+    },
+    {
+      "command": "npm run test:settings-query-migration",
+      "result": "pass"
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "pass"
+    },
+    {
+      "command": "npm run build:web with inert Vite environment values",
+      "result": "pass",
+      "details": "2,979 modules transformed"
+    },
+    {
+      "command": "npm run test:sot-guard-pack with inert localhost/.invalid environment values and a dummy test JWT secret",
+      "result": "pass",
+      "details": "All 56 mandatory commands passed. An earlier attempt stopped before product behavior at the offline fixture's missing SUPABASE_JWT_SECRET precondition; the complete rerun passed after adding a dummy test-only value."
+    },
+    {
+      "command": "git diff --check",
+      "result": "pass"
+    }
+  ],
+  "safety": {
+    "backendBusinessRulesChanged": false,
+    "databaseSchemaOrDataChanged": false,
+    "lockedShippedOrCancelledFilesTouched": [],
+    "liveProviderCalls": 0,
+    "labelsOrPostagePurchases": 0,
+    "marketplaceNotifications": 0,
+    "productionMutations": 0
+  }
+}
