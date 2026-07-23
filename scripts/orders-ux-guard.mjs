@@ -155,9 +155,12 @@ const checks = [
     pass:
       home.includes('translate(calc(-100% - 128px), -50%)') &&
       home.includes('Right edge anchored 128px left of center') &&
-      ordersFilterToolbar.includes("textOverflow: 'ellipsis'") &&
-      ordersFilterToolbar.includes("overflow: 'hidden'") &&
-      ordersFilterToolbar.includes("minWidth: 0"),
+      home.includes('hidden min-[1440px]:block') &&
+      ordersFilterToolbar.includes("QUEUE_PROGRESS_HEADER_QUERY = '(min-width: 1440px)'") &&
+      ordersFilterToolbar.includes('slot && useHeaderSlot ? createPortal(widget, slot) : widget') &&
+      ordersFilterToolbar.includes('w-[clamp(280px,21.5vw,340px)]') &&
+      ordersFilterToolbar.includes('data-queue-progress-detail') &&
+      ordersFilterToolbar.includes('whitespace-normal break-words'),
   },
   {
     name: 'Confirm Printed stays disabled until queued labels are printed first',

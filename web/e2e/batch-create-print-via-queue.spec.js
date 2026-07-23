@@ -7,11 +7,20 @@
 // NOTE: OrdersBatchPanel replaces the right-side detail panel only when the batch selection
 // grows to ≥ 2 orders (OrdersView drawer comment), so this harness selects TWO orders.
 import { test, expect } from 'playwright/test'
+import { mkdir } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ps442ScreenshotDir = path.resolve(__dirname, '../../docs/ps-tickets/evidence/ps-442-queue-progress')
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
 const supabaseProjectRef = 'fdkseckgfuvdczzqmnac'
+
+test.beforeAll(async () => {
+  await mkdir(ps442ScreenshotDir, { recursive: true })
+})
 
 const TEST_CLIENT = { id: 3, name: '__BATCH_PRINT_HARNESS__', active: true, isTest: true, storeId: 103 }
 
@@ -268,4 +277,108 @@ test('PS-444 interrupted batch renders backend recovery outcomes and resumes by 
   await expect(panel.getByRole('button', { name: 'Resume safe items' })).toHaveCount(0)
   await expect(panel).toContainText('Carrier outcome remains unknown')
   expect(printCalls, 'an interrupted recovery must not start PDF printing').toBe(0)
+})
+
+test('PS-442 queue progress stays fully readable at desktop and zoom-equivalent widths', async ({ page }) => {
+  let finishJob = false
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await setup(page)
+  await page.route('**/print-queue/batch-send', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    await route.fulfill(json({ job_id: 'qs_ps442', total: 7 }))
+  })
+  await page.route('**/print-queue/batch-send/status/qs_ps442', async (route) => {
+    await route.fulfill(json(finishJob
+      ? {
+          job_id: 'qs_ps442', status: 'done', progress: 100, total: 7, current: 7,
+          queued: 2, skipped: 4, failed: 1, message: 'done', client_id: TEST_CLIENT.id,
+          queued_entry_ids: ['entry-1', 'entry-2'],
+          results: [
+            { orderId: 990001, success: true, queueEntryId: 'entry-1', labelUrl: PDF_DATAURI },
+            { orderId: 990002, success: true, queueEntryId: 'entry-2', labelUrl: PDF_DATAURI },
+          ],
+          error: null,
+        }
+      : {
+          job_id: 'qs_ps442', status: 'running', progress: 57, total: 7, current: 4,
+          queued: 0, skipped: 4, failed: 0, message: 'working', client_id: TEST_CLIENT.id,
+          queued_entry_ids: [], results: [], error: null,
+        }))
+  })
+
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  const checkboxes = page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]')
+  await checkboxes.nth(0).check()
+  await checkboxes.nth(1).check()
+  await page.getByRole('button', { name: /Create \+ Print Label/ }).click()
+
+  const widget = page.locator('#queue-progress-indicator')
+  const detail = widget.getByText(/4\/7 - working \d+s - 4 skipped/)
+  await expect(widget).toBeVisible()
+  await expect(detail).toBeVisible()
+  await expect(widget).toHaveAttribute('aria-label', /Sending to queue.*57%.*4\/7.*4 skipped/i)
+  await expect(widget.getByRole('progressbar')).toHaveAttribute('aria-label', /Sending to queue.*57%/i)
+
+  const assertReadable = async () => {
+    const metrics = await detail.evaluate((element) => {
+      const style = window.getComputedStyle(element)
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        overflow: style.overflow,
+        textOverflow: style.textOverflow,
+        whiteSpace: style.whiteSpace,
+      }
+    })
+    expect(metrics.scrollWidth, 'detail must not be horizontally clipped').toBeLessThanOrEqual(metrics.clientWidth + 1)
+    expect(metrics.overflow).not.toBe('hidden')
+    expect(metrics.textOverflow).not.toBe('ellipsis')
+    expect(metrics.whiteSpace).not.toBe('nowrap')
+  }
+
+  const assertNoOverlap = async (selector) => {
+    const target = page.locator(selector)
+    if (!await target.isVisible()) return
+    const [widgetBox, targetBox] = await Promise.all([widget.boundingBox(), target.boundingBox()])
+    expect(widgetBox).not.toBeNull()
+    expect(targetBox).not.toBeNull()
+    const overlap = widgetBox.x < targetBox.x + targetBox.width
+      && widgetBox.x + widgetBox.width > targetBox.x
+      && widgetBox.y < targetBox.y + targetBox.height
+      && widgetBox.y + widgetBox.height > targetBox.y
+    expect(overlap, `queue progress must not overlap ${selector}`).toBe(false)
+  }
+
+  expect(await widget.evaluate((element) => element.parentElement?.id)).toBe('queue-progress-slot')
+  await expect(widget).toHaveCSS('z-index', '1300')
+  await assertReadable()
+  await assertNoOverlap('#viewTitle h1')
+  await assertNoOverlap('#pq-toggle-btn')
+  await page.screenshot({ path: path.join(ps442ScreenshotDir, 'after-desktop-100-percent.png') })
+
+  for (const viewport of [
+    { width: 1252, zoom: '115-percent' },
+    { width: 960, zoom: '150-percent' },
+    { width: 720, zoom: '200-percent' },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: 900 })
+    await expect.poll(() => widget.evaluate((element) => element.parentElement?.id)).toBe('filterbar')
+    if (viewport.width <= 768 && await page.locator('.mobile-sidebar-backdrop').isVisible()) {
+      await page.locator('.mobile-sidebar-backdrop').click({ position: { x: viewport.width - 20, y: 100 } })
+      await expect(page.locator('.mobile-sidebar-backdrop')).toHaveCount(0)
+      await page.waitForTimeout(350)
+    }
+    await expect(widget).toBeVisible()
+    await expect(widget).toHaveCSS('z-index', '10')
+    await assertReadable()
+    const box = await widget.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box.x).toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width)
+    await page.screenshot({ path: path.join(ps442ScreenshotDir, `after-${viewport.zoom}.png`) })
+  }
+
+  finishJob = true
 })

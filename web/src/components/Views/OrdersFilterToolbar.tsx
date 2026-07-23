@@ -17,6 +17,7 @@
 // The already-extracted <OrdersSearchBar> is composed here as the first child,
 // reading the same search props OrdersView threads through.
 import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
 import {
   Calendar,
   CheckSquare,
@@ -44,6 +45,25 @@ type QueueToolbarProgress = {
   detail: string
   pct: number
   tone: string
+}
+
+const QUEUE_PROGRESS_HEADER_QUERY = '(min-width: 1440px)'
+
+function useQueueProgressHeaderSlot(): boolean {
+  const [useHeaderSlot, setUseHeaderSlot] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(QUEUE_PROGRESS_HEADER_QUERY).matches,
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const query = window.matchMedia(QUEUE_PROGRESS_HEADER_QUERY)
+    const update = () => setUseHeaderSlot(query.matches)
+    update()
+    query.addEventListener?.('change', update)
+    return () => query.removeEventListener?.('change', update)
+  }, [])
+
+  return useHeaderSlot
 }
 
 type AllMatchingSelectionLike = {
@@ -502,6 +522,8 @@ export function OrdersFilterToolbarExport({
   csvExporting,
   onExportCsv,
 }: OrdersFilterToolbarExportProps) {
+  const useHeaderSlot = useQueueProgressHeaderSlot()
+
   return (
     <>
       {/* Density toggle — segmented control */}
@@ -534,64 +556,55 @@ export function OrdersFilterToolbarExport({
       </div>
       {(() => {
         if (currentStatus !== 'awaiting_shipment' || !queueToolbarProgress) return null
+        const statusLabel = `${queueToolbarProgress.label}. ${queueToolbarProgress.pct}% complete. ${queueToolbarProgress.detail}`
         const widget = (
           <div
             id="queue-progress-indicator"
             role="status"
             aria-live="polite"
-            style={{
-              marginLeft: 8,
-              width: 240,
-              maxWidth: '34vw',
-              minWidth: 170,
-              padding: '5px 8px',
-              border: '1px solid var(--border2)',
-              borderRadius: 6,
-              background: 'var(--surface)',
-              boxShadow: '0 1px 2px rgba(15,23,42,.06)',
-              flexShrink: 1,
-              // Print Queue panel overlays at z-index 1200; lift this above
-              // it so the in-progress label stays visible while a Print All
-              // job is running with the panel still open.
-              position: 'relative',
-              zIndex: 1300,
-            }}
+            aria-atomic="true"
+            aria-label={statusLabel}
+            title={statusLabel}
+            className={`relative ${useHeaderSlot ? 'z-[1300]' : 'z-10'} ml-2 w-[clamp(280px,21.5vw,340px)] max-w-[calc(100vw-2rem)] shrink rounded-md border border-line-2 bg-surface px-2.5 py-1.5 shadow-sm`}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
-              <span
-                style={{
-                  fontWeight: 800,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
+            <div className="flex min-w-0 items-start gap-3 text-[11px] leading-tight text-ink-2">
+              <span className="min-w-0 whitespace-normal break-words font-extrabold">
                 {queueToolbarProgress.label}
               </span>
-              <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-              <div
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={queueToolbarProgress.pct}
-                style={{ height: 5, flex: 1, minWidth: 0, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}
-              >
-                <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`, background: queueToolbarProgress.tone, borderRadius: 999, transition: 'width .25s ease' }} />
-              </div>
-              <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 112 }}>
-                {queueToolbarProgress.detail}
+              <span className="ml-auto shrink-0 whitespace-nowrap font-mono font-bold tabular-nums" style={{ color: queueToolbarProgress.tone }}>
+                {queueToolbarProgress.pct}%
               </span>
             </div>
+            <div
+              role="progressbar"
+              aria-label={`${queueToolbarProgress.label}: ${queueToolbarProgress.pct}% complete`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={queueToolbarProgress.pct}
+              className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-3"
+            >
+              <div
+                className="h-full rounded-full transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                style={{
+                  width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`,
+                  background: queueToolbarProgress.tone,
+                }}
+              />
+            </div>
+            <span
+              data-queue-progress-detail
+              className="mt-1 block w-full whitespace-normal break-words text-[11px] font-semibold leading-tight"
+              style={{ color: queueToolbarProgress.tone }}
+            >
+              {queueToolbarProgress.detail}
+            </span>
           </div>
         )
         // DJ request (2026-06-11): show the progress immediately LEFT of the header Queue
         // button. Home.tsx renders the #queue-progress-slot anchor there; portal into it
         // when present (desktop), else keep the original toolbar position as the fallback.
         const slot = typeof document !== 'undefined' ? document.getElementById('queue-progress-slot') : null
-        return slot ? createPortal(widget, slot) : widget
+        return slot && useHeaderSlot ? createPortal(widget, slot) : widget
       })()}
       {/* Export CSV — stays on the toolbar row, pushed to the far
           right end via ml-auto, per UX request. */}

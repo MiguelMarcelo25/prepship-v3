@@ -955,7 +955,7 @@ export default function Home() {
                   Right edge anchored 128px left of center so the wider Close Queue state cannot overlap. */}
               <div
                 id="queue-progress-slot"
-                className="absolute left-1/2 top-1/2 z-10 hidden md:block"
+                className="absolute left-1/2 top-1/2 z-10 hidden min-[1440px]:block"
                 style={{ transform: 'translate(calc(-100% - 128px), -50%)' }}
               />
             <button
