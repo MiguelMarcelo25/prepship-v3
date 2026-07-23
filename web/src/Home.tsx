@@ -632,8 +632,12 @@ export default function Home() {
   const slowestApiRoute = apiTimingRoutes[0] ?? null
   const ordersApiRoute =
     apiTimingRoutes.find((route) => route.method === 'GET' && route.path === '/orders') ?? null
-  const apiTimingErrorCount = apiTimingRoutes.reduce(
+  const apiTimingHistorical5xxCount = apiTimingRoutes.reduce(
     (sum, route) => sum + Number(route.errorCount ?? 0),
+    0,
+  )
+  const apiTimingCurrent5xxRouteCount = apiTimingRoutes.reduce(
+    (sum, route) => sum + (route.lastStatus >= 500 ? 1 : 0),
     0,
   )
 
@@ -1495,12 +1499,16 @@ export default function Home() {
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Errors
+                        Latest route status
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${apiTimingErrorCount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                        {apiTimingErrorCount}
+                      <div className={`mt-1 text-2xl font-extrabold ${apiTimingCurrent5xxRouteCount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {apiTimingCurrent5xxRouteCount > 0
+                          ? `${apiTimingCurrent5xxRouteCount} ${apiTimingCurrent5xxRouteCount === 1 ? 'route' : 'routes'} need review`
+                          : 'All clear'}
                       </div>
-                      <div className="mt-1 text-[11.5px] text-ink-3">5xx samples</div>
+                      <div className="mt-1 text-[11.5px] text-ink-3">
+                        {apiTimingHistorical5xxCount} past 5xx {apiTimingHistorical5xxCount === 1 ? 'sample' : 'samples'} since API restart
+                      </div>
                     </div>
                   </div>
 
