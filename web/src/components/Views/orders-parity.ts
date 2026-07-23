@@ -850,15 +850,20 @@ export type AwaitingRateCellState =
 
 export type BatchRecalculateRowStatus =
   | 'pending'
+  | 'queued'
   | 'running'
   | 'updated'
   | 'cleared'
   | 'blocked'
   | 'timed-out'
   | 'skipped'
+  | 'failed_retryable'
+  | 'failed_terminal'
+  | 'cancelled'
+  | 'superseded'
 
 export function batchRecalculateStatusIsInFlight(status?: BatchRecalculateRowStatus | null): boolean {
-  return status === 'pending' || status === 'running'
+  return status === 'pending' || status === 'queued' || status === 'running'
 }
 
 export function classifyAwaitingRateCellState(input: {
@@ -874,10 +879,12 @@ export function classifyAwaitingRateCellState(input: {
   isAutoRatingActive?: boolean
   batchRecalculateStatus?: BatchRecalculateRowStatus | null
 }): AwaitingRateCellState {
+  // A durable recalculation is operational health beside the last-known saved
+  // rate; it must not replace valid backend display truth with a spinner.
+  if (input.hasDisplayableBestRate) return 'ready'
   if (batchRecalculateStatusIsInFlight(input.batchRecalculateStatus)) {
     return (!input.hasDims || !input.hasWeight) ? 'add-dims' : 'pending'
   }
-  if (input.hasDisplayableBestRate) return 'ready'
   if (!input.hasDims || !input.hasWeight) return 'add-dims'
   // A resolved error/no-rate is TERMINAL — never a spinner. Error is checked
   // first so a repeatedly-failing passive fetch shows "rate error", not an
@@ -1282,6 +1289,9 @@ export type BatchRecalculateScope = 'selected' | 'filtered'
 export type BatchRecalculateRowState = {
   status: BatchRecalculateRowStatus
   message?: string | null
+  reasonCode?: string | null
+  retryable?: boolean
+  workflowJobId?: string | null
 }
 
 export function batchRecalculateStatusIsTerminal(status: BatchRecalculateRowStatus): boolean {
@@ -1289,7 +1299,11 @@ export function batchRecalculateStatusIsTerminal(status: BatchRecalculateRowStat
     status === 'cleared' ||
     status === 'blocked' ||
     status === 'timed-out' ||
-    status === 'skipped'
+    status === 'skipped' ||
+    status === 'failed_retryable' ||
+    status === 'failed_terminal' ||
+    status === 'cancelled' ||
+    status === 'superseded'
 }
 
 export function buildBatchRecalculateProgress(rows: Record<number, BatchRecalculateRowState>) {
@@ -1298,7 +1312,9 @@ export function buildBatchRecalculateProgress(rows: Record<number, BatchRecalcul
   const completed = values.filter((row) => batchRecalculateStatusIsTerminal(row.status)).length
   const updated = values.filter((row) => row.status === 'updated').length
   const cleared = values.filter((row) => row.status === 'cleared').length
-  const blocked = values.filter((row) => row.status === 'blocked').length
+  const blocked = values.filter((row) =>
+    row.status === 'blocked' || row.status === 'failed_retryable' || row.status === 'failed_terminal'
+  ).length
   const timedOut = values.filter((row) => row.status === 'timed-out').length
   const skipped = values.filter((row) => row.status === 'skipped').length
   const running = values.filter((row) => row.status === 'running').length
@@ -1317,8 +1333,9 @@ export function buildBatchRecalculateProgress(rows: Record<number, BatchRecalcul
   }
 }
 
-export function canRetryBatchRecalculateRow(row: Pick<BatchRecalculateRowState, 'status'>): boolean {
-  return row.status === 'timed-out' || row.status === 'blocked' || row.status === 'cleared'
+export function canRetryBatchRecalculateRow(row: Pick<BatchRecalculateRowState, 'status' | 'retryable'>): boolean {
+  if (typeof row.retryable === 'boolean') return row.retryable
+  return row.status === 'timed-out' || row.status === 'blocked' || row.status === 'cleared' || row.status === 'failed_retryable'
 }
 
 export function selectBatchRecalculateOrderIds(input: {

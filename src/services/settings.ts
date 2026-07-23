@@ -44,6 +44,21 @@ export async function setSetting(key: string, value: string): Promise<void> {
     });
 }
 
+export async function listSettingsByKeyPrefix(prefix: string) {
+  const rows = await db
+    .select({ key: settings.key, value: settings.value })
+    .from(settings)
+    .where(like(settings.key, `${prefix}%`));
+  // SQL LIKE treats underscores as wildcards. Keep this exact JS boundary so a
+  // maintenance caller can never receive an adjacent setting namespace.
+  return rows.filter((row) => row.key.startsWith(prefix));
+}
+
+export async function deleteSettingsByKeys(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  await db.delete(settings).where(inArray(settings.key, keys));
+}
+
 export async function getSettingNumber(key: string): Promise<number | null> {
   const v = await getSetting(key);
   if (v === null) return null;

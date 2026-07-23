@@ -118,6 +118,11 @@ const runnerEnd = ordersView.indexOf('\n  async function closeRateBrowserAfterPe
 const runnerBlock = runnerStart >= 0 && runnerEnd > runnerStart
   ? ordersView.slice(runnerStart, runnerEnd)
   : '';
+const strictPayloadStart = ordersView.indexOf('function buildStrictRateBrowsePayload(');
+const strictPayloadEnd = ordersView.indexOf('\n  async function applyStrictBestRateResponse', strictPayloadStart);
+const strictPayloadBlock = strictPayloadStart >= 0 && strictPayloadEnd > strictPayloadStart
+  ? ordersView.slice(strictPayloadStart, strictPayloadEnd)
+  : '';
 const applierStart = ordersView.indexOf('async function applyStrictBestRateResponse(');
 const applierEnd = ordersView.indexOf('\n  async function runStrictBestRateRecalculation', applierStart);
 const applierBlock = applierStart >= 0 && applierEnd > applierStart
@@ -141,11 +146,15 @@ const batchActionEnd = ordersView.indexOf('\n  // Batch Mark-as-Shipped', batchA
 const batchActionBlock = batchActionStart >= 0 && batchActionEnd > batchActionStart
   ? ordersView.slice(batchActionStart, batchActionEnd)
   : '';
-const strictPathBlock = `${recalcBlock}\n${runnerBlock}\n${applierBlock}`;
+const strictPathBlock = `${recalcBlock}\n${strictPayloadBlock}\n${runnerBlock}\n${applierBlock}`;
 
 check('OrdersView has a Recalculate action', recalcStart >= 0);
 check('Recalculate delegates to reusable strict runner', /runStrictBestRateRecalculation/.test(recalcBlock));
-check('Recalculate uses browseRates strict live endpoint', /apiClient\.browseRates\(\{[\s\S]*forceLive:\s*true[\s\S]*forceRefresh:\s*true/.test(strictPathBlock));
+check('Recalculate uses browseRates strict live endpoint',
+  /apiClient\.browseRates\(buildStrictRateBrowsePayload\(order, request\)\)/.test(runnerBlock) &&
+  /forceLive:\s*true/.test(strictPayloadBlock) &&
+  /forceRefresh:\s*true/.test(strictPayloadBlock) &&
+  /strictRecalculate:\s*true/.test(strictPayloadBlock));
 check('Recalculate does not use fetchRates', !/apiClient\.fetchRates/.test(strictPathBlock));
 check('Recalculate does not pick a client-side fallback best rate', !/pickBestPanelRate/.test(strictPathBlock));
 check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(applierBlock) && /decision\.entry/.test(applierBlock));

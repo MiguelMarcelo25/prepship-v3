@@ -79,6 +79,7 @@ export interface OrderCellsDeps {
   hasDisplayableBestRateForCurrentRequest: (order: OrderSummaryDto) => boolean
   getAwaitingBestRateDisplayState: (order: OrderSummaryDto) => AwaitingBestRateDisplayState
   getRateBaseAmount: (rate: Record<string, unknown>) => number
+  renderRateRecalculateHealth?: (order: OrderSummaryDto) => ReactNode
   shippingAccounts: CarrierAccountDto[]
   // PS-312/PS-317 (S4): combined-shipment bundle state per order id (from the backend read-model).
   // Optional so callers/tests that don't pass it keep the prior behavior exactly.
@@ -310,6 +311,7 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       </div>
       {/* PS-357: HOUSE remains a backend verdict marker, but sits under the single purchase-cost rate. */}
       {bestRatePriceDisplay?.showHouseBadge ? renderHouseBadge() : null}
+      {deps.renderRateRecalculateHealth?.(order)}
     </div>
   )
 }

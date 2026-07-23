@@ -74,8 +74,11 @@ type AllMatchingSelectionLike = {
 type BatchRecalculateProgressLike = {
   total: number
   completed: number
+  remaining: number
   updated: number
   blocked: number
+  retryableFailed: number
+  terminalFailed: number
   timedOut: number
   percent: number
 }
@@ -448,10 +451,10 @@ export function OrdersFilterToolbarBatchControls({
               label="Recalculating selected"
               percent={batchRecalculateProgress.percent}
               completed={batchRecalculateProgress.completed}
-              remaining={Math.max(batchRecalculateProgress.total - batchRecalculateProgress.completed, 0)}
+              remaining={batchRecalculateProgress.remaining}
               total={batchRecalculateProgress.total}
-              detail={`Updated ${batchRecalculateProgress.updated} · Retry ${batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}`}
-              statusMessage="Strict live only: no cached or stale fallback rates are accepted"
+              detail={`Updated ${batchRecalculateProgress.updated} · Retry ${batchRecalculateProgress.retryableFailed} · Terminal ${batchRecalculateProgress.terminalFailed}`}
+              statusMessage="Backend durable batch: exact per-order outcomes survive refresh"
             />
           ) : null}
         </div>

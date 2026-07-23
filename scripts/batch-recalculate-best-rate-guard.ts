@@ -72,8 +72,8 @@ const mixedOrders = [
   const progress = buildBatchRecalculateProgress({
     10: { status: 'updated' },
     12: { status: 'cleared' },
-    14: { status: 'blocked', message: 'carrier error' },
-    15: { status: 'timed-out', message: 'timeout' },
+    14: { status: 'failed_retryable', message: 'carrier error', retryable: true },
+    15: { status: 'failed_terminal', message: 'cancelled', retryable: false },
     16: { status: 'running' },
   });
   check('progress counts all rows', progress.total === 5);
@@ -81,13 +81,13 @@ const mixedOrders = [
   check('progress percent is integer completion percent', progress.percent === 80);
   check('progress counts updated rows', progress.updated === 1);
   check('progress counts cleared rows', progress.cleared === 1);
-  check('progress counts blocked rows', progress.blocked === 1);
-  check('progress counts timed out rows', progress.timedOut === 1);
+  check('progress counts typed failed rows', progress.blocked === 2);
+  check('progress keeps legacy timed-out count separate', progress.timedOut === 0);
   check('progress exposes running count', progress.running === 1);
 }
 
-check('timed-out batch rows are retryable', canRetryBatchRecalculateRow({ status: 'timed-out' }));
-check('blocked batch rows are retryable', canRetryBatchRecalculateRow({ status: 'blocked' }));
+check('backend retryable failures are retryable', canRetryBatchRecalculateRow({ status: 'failed_retryable', retryable: true }));
+check('backend terminal failures are not retryable', !canRetryBatchRecalculateRow({ status: 'failed_terminal', retryable: false }));
 check('cleared no-rate batch rows are retryable', canRetryBatchRecalculateRow({ status: 'cleared' }));
 check('updated batch rows are not retryable', !canRetryBatchRecalculateRow({ status: 'updated' }));
 check('running batch rows are not retryable', !canRetryBatchRecalculateRow({ status: 'running' }));
@@ -104,16 +104,16 @@ const displayableRateCellInput = {
   isAutoRatingActive: true,
 };
 
-check('batch pending hides stale saved awaiting best-rate values',
+check('batch pending preserves last-known saved awaiting best-rate values',
   classifyAwaitingRateCellState({
     ...displayableRateCellInput,
     batchRecalculateStatus: 'pending',
-  }) === 'pending');
-check('batch running hides stale saved awaiting best-rate values',
+  }) === 'ready');
+check('batch running preserves last-known saved awaiting best-rate values',
   classifyAwaitingRateCellState({
     ...displayableRateCellInput,
     batchRecalculateStatus: 'running',
-  }) === 'pending');
+  }) === 'ready');
 check('add-dims wins over batch pending for non-rateable rows',
   classifyAwaitingRateCellState({
     ...displayableRateCellInput,
@@ -128,6 +128,15 @@ check('finalized batch rows can render their current displayable rate',
   }) === 'ready');
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const batchOwner = readFileSync('src/services/rate-recalculate-batch.ts', 'utf8');
+const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
+const batchItemTypeStart = batchOwner.indexOf('export type RateRecalculateBatchItem = {');
+const batchItemTypeEnd = batchOwner.indexOf('\nexport type RateRecalculateBatchCounters', batchItemTypeStart);
+const batchItemTypeBlock = batchItemTypeStart >= 0 && batchItemTypeEnd > batchItemTypeStart
+  ? batchOwner.slice(batchItemTypeStart, batchItemTypeEnd)
+  : '';
 // PS-178 (Phase 6, part 2): the row-display readers (getBestRateBaseCost /
 // getBestRateShippingProviderId / getBestRateServiceCode and friends) were
 // extracted VERBATIM to orders-row-display.tsx — the definition slices below
@@ -138,27 +147,61 @@ const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx
 // (OrdersFilterToolbarBatchControls). The batch RUNNER + state still live in
 // OrdersView; only the toolbar BUTTON markup re-points to the extracted file.
 const filterToolbar = readFileSync('web/src/components/Views/OrdersFilterToolbar.tsx', 'utf8');
-const batchStart = ordersView.indexOf('async function runBatchRecalculateOrder(');
-const batchEnd = ordersView.indexOf('\n  // PS-071', batchStart);
+const batchStart = ordersView.indexOf('async function startBatchRecalculateBestRates(');
+const batchEnd = ordersView.indexOf('\n  function renderRateRecalculateHealth', batchStart);
 const batchBlock = batchStart >= 0 && batchEnd > batchStart
   ? ordersView.slice(batchStart, batchEnd)
   : '';
 
 check('OrdersView has batch Recalculate entrypoint', /async function startBatchRecalculateBestRates\(/.test(batchBlock));
-check('batch Recalculate reuses strict order runner', /runStrictBestRateRecalculation/.test(batchBlock));
-check('batch Recalculate avoids fetchRates fallback', !/apiClient\.fetchRates/.test(batchBlock));
-check('batch Recalculate avoids pickBestPanelRate fallback', !/pickBestPanelRate/.test(batchBlock));
-check('batch Recalculate tracks progress rows', /setBatchRecalculateRows/.test(batchBlock));
-check('batch Recalculate skips missing-dims rows before pending state',
-  /prepareBatchRecalculateRows/.test(batchBlock) &&
-  /getAutoBestRateRequest\(order\)[\s\S]*status:\s*'skipped'[\s\S]*Missing weight, dimensions, or ship-to postal code/.test(batchBlock));
+check('batch Recalculate delegates admission to the durable backend owner',
+  /apiClient\.startRateRecalculateBatch/.test(batchBlock) && /apiClient\.fetchRateRecalculateBatch/.test(ordersView));
+check('batch Recalculate retries only through the durable backend owner',
+  /apiClient\.retryRateRecalculateBatch/.test(batchBlock));
+check('batch Recalculate removed the browser worker queue',
+  !/const queue =/.test(batchBlock) &&
+  !/BATCH_RECALCULATE_CONCURRENCY/.test(ordersView) &&
+  !/runBatchRecalculateOrder/.test(ordersView));
+check('batch Recalculate retains an opaque batch id for refresh reattachment',
+  /SELECTED_RATE_BATCH_STORAGE_KEY/.test(ordersView) &&
+  /window\.localStorage\.setItem\(SELECTED_RATE_BATCH_STORAGE_KEY, batch\.batch_id\)/.test(ordersView) &&
+  /pollRateRecalculateBatch\(savedBatchId/.test(ordersView));
+check('batch Recalculate does not replace saved-rate truth on a failed row',
+  !/setAutoBestRateEntry/.test(batchBlock) &&
+  /renderRateRecalculateHealth/.test(ordersView));
 check('batch Recalculate removed page-only button', !/Recalculate Page/.test(ordersView) && !/Recalculate Page/.test(filterToolbar));
 check('batch Recalculate has filtered all button', /Recalculate All/.test(filterToolbar));
 check('batch Recalculate has selected button', /Recalculate Selected/.test(filterToolbar));
 check('batch Recalculate shows percentage progress', /batchRecalculateProgress\.percent/.test(filterToolbar));
 check('batch Recalculate has per-order retry action', /retryBatchRecalculateOrder/.test(ordersView) && /data-batch-recalculate-retry/.test(ordersView));
-check('batch Recalculate has timeout guard', /BATCH_RECALCULATE_TIMEOUT_MS/.test(ordersView));
-check('batch Recalculate keeps strict live flags', /forceLive:\s*true/.test(ordersView) && /forceRefresh:\s*true/.test(ordersView));
+check('batch Recalculate displays exact backend progress counters',
+  /remaining:\s*batch\.counters\.remaining/.test(ordersView) &&
+  /retryableFailed:\s*batch\.counters\.retryable_failed/.test(ordersView));
+check('batch Recalculate keeps strict live flags',
+  /forceLive:\s*true/.test(ordersView) &&
+  /forceRefresh:\s*true/.test(ordersView) &&
+  /strictRecalculate:\s*true/.test(ordersView));
+check('durable batch routes enforce auth and scoped order ownership',
+  /'\/browse\/workflow\/batch'/.test(ratesRoute) &&
+  /'\/browse\/workflow\/batch\/:batchId'/.test(ratesRoute) &&
+  /'\/browse\/workflow\/batch\/:batchId\/retry'/.test(ratesRoute) &&
+  /ensureRateRecalculateBatchScope/.test(ratesRoute) &&
+  /requireBusinessRoutePolicy\('rates\.browse\.workflow\.start'\)/.test(ratesRoute));
+check('durable batch owner delegates every rate job to the fenced workflow owner',
+  /startRateBrowseWorkflow/.test(batchOwner) &&
+  /deps\.startWorkflow/.test(batchOwner) &&
+  !/getRates\(|fetch\(|axios/.test(batchOwner));
+check('durable batch manifests are retention-bounded and omit request payload fields',
+  /RATE_RECALCULATE_BATCH_RETENTION_MS/.test(batchOwner) &&
+  /rateRecalculateBatchKeysToPrune/.test(batchOwner) &&
+  batchItemTypeBlock.length > 0 &&
+  !/\bbody\??:|address|payload/i.test(batchItemTypeBlock));
+check('typed durable batch DTO is passed through the API client',
+  /startRateRecalculateBatch/.test(apiClient) &&
+  /fetchRateRecalculateBatch/.test(apiClient) &&
+  /retryRateRecalculateBatch/.test(apiClient));
+check('best-rate cell renders saved rate and separate recalculation health',
+  /renderRateRecalculateHealth\?\.\(order\)/.test(orderCells));
 
 const rateBrowserStart = ordersView.indexOf('async function openRateBrowser()');
 const rateBrowserEnd = ordersView.indexOf('\n  async function recalculateBestRate()', rateBrowserStart);

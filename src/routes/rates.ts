@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
 import {
@@ -48,10 +48,18 @@ import {
   getRateBrowseWorkflow,
   startRateBrowseWorkflow,
 } from '../services/rate-browse-workflow';
+import {
+  getRateRecalculateBatch,
+  retryRateRecalculateBatch,
+  startRateRecalculateBatch,
+  type RateRecalculateBatchSnapshot,
+  type RateRecalculateBatchStartItem,
+} from '../services/rate-recalculate-batch';
 import { produceRateBrowsePayload } from '../services/rate-browse-response-producer';
 import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display-fields';
 import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { clients } from '../db/schema/clients';
 import { getShopifyRatesForOrder, ShopifyRatesError } from '../services/shopify-rates';
 import { logStructured, reportError, runWithLogContext } from '../lib/structured-log';
 import { isPoBoxAddress } from '../services/shipping-workflow/address-classification';
@@ -308,6 +316,27 @@ const browseBody = rateBody.extend({
   strictRecalculate: z.boolean().optional(),
 });
 
+const rateRecalculateBatchItemBody = z.object({
+  orderId: z.number().int().positive(),
+  request: browseBody.nullable(),
+});
+
+const rateRecalculateBatchBody = z.object({
+  items: z.array(rateRecalculateBatchItemBody).min(1).max(100),
+}).superRefine((value, ctx) => {
+  const ids = value.items.map((item) => item.orderId);
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Batch order IDs must be unique' });
+  }
+});
+
+const rateRecalculateBatchRetryBody = z.object({
+  items: z.array(z.object({
+    orderId: z.number().int().positive(),
+    request: browseBody,
+  })).min(1).max(100),
+});
+
 const shopifyRatesBody = z.object({
   orderId: z.number().int().positive(),
   weightOz: z.number().positive().optional(),
@@ -362,6 +391,198 @@ function publicRateBrowseWorkflowSnapshot(
     finished_at: snapshot.finishedAt,
   };
 }
+
+function publicRateRecalculateBatchSnapshot(snapshot: RateRecalculateBatchSnapshot) {
+  return {
+    batch_id: snapshot.batchId,
+    status: snapshot.status,
+    counters: {
+      total: snapshot.counters.total,
+      completed: snapshot.counters.completed,
+      remaining: snapshot.counters.remaining,
+      running: snapshot.counters.running,
+      updated: snapshot.counters.updated,
+      cleared: snapshot.counters.cleared,
+      skipped: snapshot.counters.skipped,
+      retryable_failed: snapshot.counters.retryableFailed,
+      terminal_failed: snapshot.counters.terminalFailed,
+    },
+    items: snapshot.items.map((item) => ({
+      order_id: item.orderId,
+      workflow_job_id: item.workflowJobId,
+      status: item.status,
+      reason_code: item.reasonCode,
+      message: item.message,
+      retryable: item.retryable,
+      started_at: item.startedAt,
+      updated_at: item.updatedAt,
+      finished_at: item.finishedAt,
+    })),
+    started_at: snapshot.startedAt,
+    updated_at: snapshot.updatedAt,
+    finished_at: snapshot.finishedAt,
+  };
+}
+
+async function ensureRateRecalculateBatchScope(c: Context, orderIds: number[]) {
+  const decision = await authorizeRateRequestScopes(
+    scopeFromContext(c),
+    orderIds.map((orderId) => ({ orderId })),
+  );
+  return decision.allowed
+    ? null
+    : rateScopeError(c, decision, { orderId: orderIds[0] });
+}
+
+app.post(
+  '/browse/workflow/batch',
+  requireBusinessRoutePolicy('rates.browse.workflow.start'),
+  zValidator('json', rateRecalculateBatchBody),
+  async (c) => {
+    const { items } = c.req.valid('json');
+    const orderIds = items.map((item) => item.orderId);
+    const scopeError = await ensureRateRecalculateBatchScope(c, orderIds);
+    if (scopeError) return scopeError;
+
+    // Read the authoritative order/client flags in the same scoped query. A
+    // process-local test-client cache must not decide whether durable live-rate
+    // work is admitted.
+    const orderRows = await db
+      .select({
+        orderId: orders.id,
+        clientId: orders.clientId,
+        orderStatus: orders.orderStatus,
+        isTestClient: clients.isTest,
+      })
+      .from(orders)
+      .leftJoin(clients, eq(clients.id, orders.clientId))
+      .where(and(inArray(orders.id, orderIds), orderScopePredicate(scopeFromContext(c))));
+    const orderById = new Map(orderRows.map((row) => [row.orderId, row]));
+    if (orderById.size !== new Set(orderIds).size) {
+      return c.json({ error: 'Order not found' }, 404);
+    }
+
+    const startItems: RateRecalculateBatchStartItem[] = items.map((item) => {
+      const order = orderById.get(item.orderId)!;
+      if (order.orderStatus !== 'awaiting_shipment') {
+        return {
+          orderId: item.orderId,
+          initialOutcome: {
+            status: 'skipped',
+            reasonCode: 'skipped_immutable_order',
+            message: 'Only awaiting-shipment orders can be recalculated.',
+            retryable: false,
+          },
+        };
+      }
+      if (order.isTestClient === true) {
+        return {
+          orderId: item.orderId,
+          initialOutcome: {
+            status: 'skipped',
+            reasonCode: 'skipped_test_order',
+            message: 'Test orders use backend fixture rates.',
+            retryable: false,
+          },
+        };
+      }
+      if (!item.request) {
+        return {
+          orderId: item.orderId,
+          initialOutcome: {
+            status: 'failed_retryable',
+            reasonCode: 'missing_shipment_inputs',
+            message: 'Weight, dimensions, and ship-to postal code are required before recalculation.',
+            retryable: true,
+          },
+        };
+      }
+      return {
+        orderId: item.orderId,
+        body: {
+          ...normalizeRateShipFromOrigin(item.request),
+          orderId: item.orderId,
+          forceLive: true,
+          forceRefresh: true,
+          includeVisibleDirectCarriers: true,
+          strictRecalculate: true,
+        },
+      };
+    });
+
+    const snapshot = await startRateRecalculateBatch({
+      items: startItems,
+      canViewFinancials: canViewRateFinancials(c),
+    });
+    return c.json(publicRateRecalculateBatchSnapshot(snapshot), 202);
+  },
+);
+
+app.get('/browse/workflow/batch/:batchId', requirePermission('rates:quote'), async (c) => {
+  const snapshot = await getRateRecalculateBatch(c.req.param('batchId'));
+  if (!snapshot) return c.json({ error: 'Rate recalculation batch not found' }, 404);
+  const scopeError = await ensureRateRecalculateBatchScope(
+    c,
+    snapshot.items.map((item) => item.orderId),
+  );
+  if (scopeError) return scopeError;
+  return c.json(publicRateRecalculateBatchSnapshot(snapshot));
+});
+
+app.post(
+  '/browse/workflow/batch/:batchId/retry',
+  requireBusinessRoutePolicy('rates.browse.workflow.start'),
+  zValidator('json', rateRecalculateBatchRetryBody),
+  async (c) => {
+    const batchId = c.req.param('batchId');
+    const current = await getRateRecalculateBatch(batchId);
+    if (!current) return c.json({ error: 'Rate recalculation batch not found' }, 404);
+    const scopeError = await ensureRateRecalculateBatchScope(
+      c,
+      current.items.map((item) => item.orderId),
+    );
+    if (scopeError) return scopeError;
+    const requested = c.req.valid('json').items;
+    const knownIds = new Set(current.items.map((item) => item.orderId));
+    if (requested.some((item) => !knownIds.has(item.orderId))) {
+      return c.json({ error: 'Retry contains an order outside this batch' }, 400);
+    }
+    const requestedIds = requested.map((item) => item.orderId);
+    const retryOrderRows = await db
+      .select({
+        orderId: orders.id,
+        orderStatus: orders.orderStatus,
+        isTestClient: clients.isTest,
+      })
+      .from(orders)
+      .leftJoin(clients, eq(clients.id, orders.clientId))
+      .where(and(inArray(orders.id, requestedIds), orderScopePredicate(scopeFromContext(c))));
+    if (retryOrderRows.length !== new Set(requestedIds).size) {
+      return c.json({ error: 'Order not found' }, 404);
+    }
+    if (retryOrderRows.some((order) => order.orderStatus !== 'awaiting_shipment')) {
+      return c.json({ error: 'Only awaiting-shipment orders can be retried' }, 409);
+    }
+    if (retryOrderRows.some((order) => order.isTestClient === true)) {
+      return c.json({ error: 'Test orders cannot start live rate retries' }, 409);
+    }
+    const retried = await retryRateRecalculateBatch(batchId, {
+      canViewFinancials: canViewRateFinancials(c),
+      items: requested.map((item) => ({
+        orderId: item.orderId,
+        body: {
+          ...normalizeRateShipFromOrigin(item.request),
+          orderId: item.orderId,
+          forceLive: true,
+          forceRefresh: true,
+          includeVisibleDirectCarriers: true,
+          strictRecalculate: true,
+        },
+      })),
+    });
+    return c.json(publicRateRecalculateBatchSnapshot(retried!), 202);
+  },
+);
 
 app.post(
   '/browse/workflow',

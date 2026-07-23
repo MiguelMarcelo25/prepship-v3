@@ -81,6 +81,47 @@ import {
 // (HIDDEN_CLIENT_IDS, TEST_CLIENT_IDS, isDirectCarrierId, DirectCarrierRateError, …).
 export * from './v2-apiClient/shared';
 
+export type RateRecalculateBatchItemDto = {
+  order_id: number;
+  workflow_job_id: string | null;
+  status:
+    | 'queued'
+    | 'running'
+    | 'updated'
+    | 'cleared'
+    | 'skipped'
+    | 'failed_retryable'
+    | 'failed_terminal'
+    | 'cancelled'
+    | 'superseded';
+  reason_code: string | null;
+  message: string;
+  retryable: boolean;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
+export type RateRecalculateBatchDto = {
+  batch_id: string;
+  status: 'queued' | 'running' | 'complete';
+  counters: {
+    total: number;
+    completed: number;
+    remaining: number;
+    running: number;
+    updated: number;
+    cleared: number;
+    skipped: number;
+    retryable_failed: number;
+    terminal_failed: number;
+  };
+  items: RateRecalculateBatchItemDto[];
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
 // PS-167: stableRateBrowseKey + parseDailyStatsSummary are kept in the barrel (not moved to
 // ./v2-apiClient/shared) because text-blob guards grep THIS file for strings unique to their
 // bodies — recalculate-best-rate-strict reads 'insuranceProvider'/'insuredValue'; daily-strip-progress
@@ -2778,6 +2819,38 @@ export const apiClient = {
 
   fetchRateBrowseWorkflow(jobId: string): Promise<any> {
     return api.get<any>(`/rates/browse/workflow/${encodeURIComponent(jobId)}`);
+  },
+
+  startRateRecalculateBatch(
+    items: Array<{ orderId: number; request: Record<string, unknown> | null }>,
+  ): Promise<RateRecalculateBatchDto> {
+    return api.post<RateRecalculateBatchDto>('/rates/browse/workflow/batch', {
+      items: items.map((item) => ({
+        orderId: item.orderId,
+        request: item.request ? translateRatePayloadToV4(item.request) : null,
+      })),
+    });
+  },
+
+  fetchRateRecalculateBatch(batchId: string): Promise<RateRecalculateBatchDto> {
+    return api.get<RateRecalculateBatchDto>(
+      `/rates/browse/workflow/batch/${encodeURIComponent(batchId)}`,
+    );
+  },
+
+  retryRateRecalculateBatch(
+    batchId: string,
+    items: Array<{ orderId: number; request: Record<string, unknown> }>,
+  ): Promise<RateRecalculateBatchDto> {
+    return api.post<RateRecalculateBatchDto>(
+      `/rates/browse/workflow/batch/${encodeURIComponent(batchId)}/retry`,
+      {
+        items: items.map((item) => ({
+          orderId: item.orderId,
+          request: translateRatePayloadToV4(item.request),
+        })),
+      },
+    );
   },
   // ─── Analysis ──────────────────────────────────────────────────────────────
 
