@@ -186,7 +186,19 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('backfill: would set otherCost to 1.09', plan.updates?.otherCost, '1.09');
   check('backfill: patch totalCost 7.76', plan.updates?.selectedRateJsonPatch.totalCost, 7.76);
 
-  const reconciled = planParcelGuardBackfillRow({ ...localRow, otherCost: 1.09 }, billed);
+  const reconciled = planParcelGuardBackfillRow({
+    ...localRow,
+    otherCost: 1.09,
+    selectedRateCost: 7.76,
+    selectedRateJson: {
+      otherCost: 1.09,
+      insuranceProvider: 'parcelguard',
+      insuredValue: 100,
+      insuranceCost: 1.09,
+      insuranceProvenance: billed.provenance,
+      totalCost: 7.76,
+    },
+  }, billed);
   check('backfill: idempotent — already reconciled is not affected', reconciled.affected, false);
   check('backfill: already_reconciled reason', reconciled.reason, 'already_reconciled');
 

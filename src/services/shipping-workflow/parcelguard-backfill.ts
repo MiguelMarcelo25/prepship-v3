@@ -9,6 +9,9 @@
 
 import { HUGRAB_REQUIRED_INSURED_VALUE } from './insurance-coverage-status';
 import type { BilledInsuranceCost } from './insurance-cost';
+// Per user override unlock shipped data on 2026-07-23: PS-457 delegates only
+// cent rounding; the shipped-history planner and its write gates are unchanged.
+import { roundMoney } from '../../lib/money';
 
 export type LocalShipmentAccounting = {
   shipmentId: number;
@@ -87,10 +90,6 @@ function approxEqual(left: unknown, right: number): boolean {
   return n !== null && Math.abs(n - right) <= EPSILON;
 }
 
-function round2(value: number): number {
-  return Number(value.toFixed(2));
-}
-
 function selectedRateJsonHasProof(
   row: LocalShipmentAccounting,
   base: Pick<ParcelGuardBackfillPlan, 'billedPremium' | 'billedTotal' | 'provenance'>,
@@ -121,9 +120,9 @@ export function planParcelGuardBackfillRow(
   row: LocalShipmentAccounting,
   billed: BilledInsuranceCost | null,
 ): ParcelGuardBackfillPlan {
-  const localPostage = round2(num(row.cost));
-  const localOtherCost = round2(num(row.otherCost));
-  const localTotal = round2(localPostage + localOtherCost);
+  const localPostage = roundMoney(num(row.cost));
+  const localOtherCost = roundMoney(num(row.otherCost));
+  const localTotal = roundMoney(localPostage + localOtherCost);
 
   const base: Omit<ParcelGuardBackfillPlan, 'affected' | 'reason' | 'updates'> = {
     shipmentId: row.shipmentId,
@@ -132,9 +131,9 @@ export function planParcelGuardBackfillRow(
     localPostage,
     localOtherCost,
     localTotal,
-    billedPostage: round2(num(billed?.postageAmount)),
-    billedPremium: round2(num(billed?.insuranceAmount)),
-    billedTotal: round2(num(billed?.totalAmount)),
+    billedPostage: roundMoney(num(billed?.postageAmount)),
+    billedPremium: roundMoney(num(billed?.insuranceAmount)),
+    billedTotal: roundMoney(num(billed?.totalAmount)),
     provenance: billed?.provenance ?? null,
   };
 

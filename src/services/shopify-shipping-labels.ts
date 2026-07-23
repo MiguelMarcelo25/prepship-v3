@@ -468,10 +468,10 @@ function scopeTokens(value: unknown): string[] {
 
 function weightFromOunces(value: number | null | undefined): ShopifyWeightInput | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined;
-  return { unit: 'GRAMS', value: roundMoney(value * GRAMS_PER_OUNCE) };
+  return { unit: 'GRAMS', value: roundWeight(value * GRAMS_PER_OUNCE) };
 }
 
-function roundMoney(value: number): number {
+function roundWeight(value: number): number {
   return Math.round(value * 100) / 100;
 }
 

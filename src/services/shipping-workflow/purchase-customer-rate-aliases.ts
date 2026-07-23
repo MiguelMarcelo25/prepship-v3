@@ -1,4 +1,5 @@
 import { normalizeShippingRateMoney } from './shipping-rate-money-normalizer.js';
+import { roundMoney } from '../../lib/money.js';
 
 type RateRecord = Record<string, unknown>;
 
@@ -33,10 +34,6 @@ function moneyObjectAmount(value: unknown): number {
 
 function moneyObjectMaxAmount(primary: unknown, fallback: unknown): number {
   return Math.max(moneyObjectAmount(primary), moneyObjectAmount(fallback));
-}
-
-function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function rateOtherCostAmount(rate: RateRecord): number {

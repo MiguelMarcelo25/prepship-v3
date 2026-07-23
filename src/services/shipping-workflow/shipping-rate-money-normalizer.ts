@@ -1,3 +1,5 @@
+import { roundMoney } from '../../lib/money.js';
+
 type RateRecord = Record<string, unknown>;
 
 export type ShippingRateMoney = {
@@ -69,10 +71,6 @@ function otherCostAmount(rate: RateRecord, raw: RateRecord): number {
     raw.other_cost,
   );
   return roundMoney(Math.max(0, structuredOtherCost, plainOtherCost ?? 0));
-}
-
-function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function roundPercent(value: number): number {

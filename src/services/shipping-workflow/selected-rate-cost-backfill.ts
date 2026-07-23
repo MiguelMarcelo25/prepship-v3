@@ -1,4 +1,7 @@
 import { resolveBillingSelectedRateCost } from '../billing-selected-rate-cost';
+// Per user override unlock shipped data on 2026-07-23: PS-457 delegates only
+// cent rounding; the shipped-history proof and idempotency gates are unchanged.
+import { roundMoney } from '../../lib/money';
 
 /**
  * PS-370 Phase 2 — pure planner for the shipments.selected_rate_cost HISTORY backfill.
@@ -52,10 +55,6 @@ function toNum(value: unknown): number {
   return toFiniteNumber(value) ?? 0;
 }
 
-function round2(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
 export function planSelectedRateCostBackfillRow(row: SelectedRateCostBackfillRow): SelectedRateCostBackfillPlan {
   const base = { shipmentId: row.shipmentId, orderNumber: row.orderNumber };
 
@@ -80,15 +79,15 @@ export function planSelectedRateCostBackfillRow(row: SelectedRateCostBackfillRow
 
   const postage = toFiniteNumber(row.cost) ?? toFiniteNumber(row.labelCost);
   if (postage == null) {
-    return { ...base, affected: true, value: round2(resolverValue), skipReason: null };
+    return { ...base, affected: true, value: roundMoney(resolverValue), skipReason: null };
   }
 
   // The billing-generate reader's component formula. When postage proof exists,
   // keep the byte-identity gate so a conflicting JSON blob cannot overwrite the
   // component truth.
-  const generateValue = round2((toNum(row.cost) || toNum(row.labelCost)) + toNum(row.otherCost));
+  const generateValue = roundMoney((toNum(row.cost) || toNum(row.labelCost)) + toNum(row.otherCost));
 
-  if (round2(resolverValue) !== generateValue) {
+  if (roundMoney(resolverValue) !== generateValue) {
     return { ...base, affected: false, value: null, skipReason: 'reader_divergent' };
   }
 

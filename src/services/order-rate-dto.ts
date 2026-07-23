@@ -33,6 +33,7 @@ import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label
 // re-deriving the block-list reason client-side. Inert (UNBLOCKED) until a caller passes ctx.eligibility.
 import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibility-stamp';
 import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
+import { roundMoney } from '../lib/money';
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 import { isPricedRate } from './rates-combined';
 // PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
@@ -216,10 +217,6 @@ function readNullableNumber(value: unknown, path: string): number | null {
 function readMoneyAmount(value: unknown): number | null {
   if (isRecord(value)) return readNullableNumber(value.amount ?? null, 'money.amount');
   return readNullableNumber(value ?? null, 'money');
-}
-
-function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function roundPercent(value: number): number {

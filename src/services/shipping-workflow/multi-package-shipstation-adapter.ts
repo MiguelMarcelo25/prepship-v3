@@ -17,6 +17,7 @@ import type {
   MultiPackageLabelPurchaseResult,
   MultiPackageLabelPurchaser,
 } from './multi-package-label-purchase-boundary';
+import { roundMoney } from '../../lib/money.js';
 
 export type ShipStationMultiPackageLabelRequestPackage = {
   weight: { value: number; unit: 'ounce' };
@@ -107,10 +108,6 @@ function requiredPositiveNumber(value: number | null | undefined, field: string,
   return normalized;
 }
 
-function cents(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 function toShipStationAddress(input: MultiPackageCarrierLabelAddress) {
   return {
     name: input.name,
@@ -160,7 +157,7 @@ function toPurchaseResult(
     trackingNumber: String(result.trackingNumber ?? '').trim(),
     labelUrl: String(result.labelUrl ?? '').trim(),
     provider: String(result.provider ?? 'shipstation').trim() || 'shipstation',
-    postageCost: cents(Number(result.cost ?? 0)),
+    postageCost: roundMoney(Number(result.cost ?? 0)),
     isLivePostage: result.isLivePostage === true,
   };
 }

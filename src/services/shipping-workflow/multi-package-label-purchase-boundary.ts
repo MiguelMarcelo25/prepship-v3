@@ -8,6 +8,7 @@ import type {
   MultiPackageShipmentPlan,
   PlannedShipmentPackage,
 } from './multi-package-shipment-plan';
+import { roundMoney } from '../../lib/money.js';
 
 export type MultiPackageLabelPurchaseRequest = {
   orderId: number;
@@ -68,10 +69,6 @@ function optionalText(value: string | number | null | undefined): string | null 
   return text || null;
 }
 
-function cents(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 function validatePurchaseResult(
   request: MultiPackageLabelPurchaseRequest,
   result: MultiPackageLabelPurchaseResult,
@@ -105,7 +102,7 @@ function validatePurchaseResult(
     trackingNumber: result.trackingNumber.trim(),
     labelUrl: result.labelUrl.trim(),
     provider: result.provider.trim(),
-    postageCost: cents(result.postageCost),
+    postageCost: roundMoney(result.postageCost),
   };
 }
 
@@ -173,6 +170,6 @@ export async function purchaseMultiPackageLabels(
       packageCount: plan.packageCount,
     },
     labels,
-    totalPostageCost: cents(labels.reduce((sum, label) => sum + label.postageCost, 0)),
+    totalPostageCost: roundMoney(labels.reduce((sum, label) => sum + label.postageCost, 0)),
   };
 }
