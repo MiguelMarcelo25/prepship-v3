@@ -55,8 +55,9 @@ assert(
 assert(
   scopeSource.includes("auth.role === 'operator'") &&
     scopeSource.includes("auth.role === 'warehouse'") &&
-    scopeSource.includes("'print_queue:write'"),
-  'internal ops scope treats operator/warehouse/print_queue permission as internal authority',
+    scopeSource.includes("'scope:global'") &&
+    !scopeSource.includes("auth.permissions?.includes('print_queue:write')"),
+  'internal ops scope trusts internal roles/global scope without widening a portal principal by permission alone',
 );
 
 assert(

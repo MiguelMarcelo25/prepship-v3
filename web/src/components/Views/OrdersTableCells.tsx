@@ -70,10 +70,11 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
   const fulfillmentConflict = toRecord(order.fulfillmentConflict)
   const fulfillmentConflictLabel = toStringValue(fulfillmentConflict?.label)
   const fulfillmentConflictReason = toStringValue(fulfillmentConflict?.reason)
-  // Per user override unlock shipped data on 2026-05-23: this is a read-only
-  // two-line marker under the order number. Shipped edit/selection locks stay
-  // in OrdersView and all mutations remain protected by assertOrderEditable.
-  const returnSummary = order.orderStatus === 'shipped' ? order.returnSummary : null
+  // Per user override `unlock shipped data` on 2026-07-16: only the distinct
+  // read-only return display row receives return styling. The original shipped
+  // row remains visually and operationally unchanged; mutation locks stay on.
+  const isReturnRow = order.displayRowKind === 'return'
+  const returnSummary = order.orderStatus === 'shipped' && isReturnRow ? order.returnSummary : null
   const returnRate = typeof returnSummary?.returnCustomerShippingRate === 'number'
     && Number.isFinite(returnSummary.returnCustomerShippingRate)
     ? returnSummary.returnCustomerShippingRate
@@ -172,7 +173,14 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
           <span
             className="od-order-link"
             title="Open order detail"
-            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
+            style={{
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              cursor: 'pointer',
+              color: isReturnRow ? 'var(--red)' : 'var(--ss-blue)',
+              fontWeight: isReturnRow ? 800 : undefined,
+            }}
             onClick={(event) => {
               event.stopPropagation()
               openDetailDrawer(order.orderId ?? null)

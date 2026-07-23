@@ -55,6 +55,11 @@ export const billingLineItems = pgTable(
     orderNumber: text(),
     shipmentId: integer().references(() => shipments.id),
     shipDate: timestamp({ withTimezone: true }),
+    // PS-434: shipDate remains the actual activity calendar day. This nullable
+    // field is the invoice/range bucket; NULL preserves all legacy rows through
+    // coalesce(billing_effective_date, ship_date) without a historical backfill.
+    billingEffectiveDate: timestamp('billing_effective_date', { withTimezone: true }),
+    billingPolicyVersion: text('billing_policy_version'),
     lineType: text().notNull(),
     description: text().notNull(),
     qty: numeric({ precision: 10, scale: 2 }).default('1').notNull(),
@@ -65,12 +70,21 @@ export const billingLineItems = pgTable(
     // the box name/dims instead of the shipment-derived package. Never mutates
     // the shipment's selectedPackageId.
     packageId: integer().references(() => packages.id),
+    // PS-449: append-only correction projections live in the current billing
+    // period while retaining an explicit reference to the frozen invoice fact.
+    // The composite foreign keys are migration-owned because the referenced
+    // tables are declared below this table in the Drizzle schema.
+    sourceFinalizationId: text('source_finalization_id'),
+    billingAdjustmentId: text('billing_adjustment_id'),
     invoiced: boolean().default(false).notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index('billing_li_client_idx').on(t.clientId),
     index('billing_li_date_idx').on(t.shipDate),
+    index('billing_li_effective_date_idx').on(
+      sql`coalesce(${t.billingEffectiveDate}, ${t.shipDate})`,
+    ),
     // PS-425: distinct outbound shipments retain their own frozen charge and
     // margin lineage. Shipment-less external/order rows keep their order-level
     // identity, while storage (orderId NULL) remains on its period-specific key.
@@ -90,6 +104,15 @@ export const billingLineItems = pgTable(
     uniqueIndex('billing_li_storage_unique_idx')
       .on(t.clientId, t.lineType, t.shipDate, t.description)
       .where(sql`${t.orderId} is null`),
+    // PS-462: proof/description changes cannot mint a second storage charge for
+    // the same client + UTC calendar month.
+    uniqueIndex('billing_li_storage_month_unq')
+      .on(t.clientId, sql`date_trunc('month', ${t.shipDate} at time zone 'UTC')`)
+      .where(sql`${t.orderId} is null and ${t.lineType} = 'storage' and ${t.shipDate} is not null`),
+    uniqueIndex('billing_li_adjustment_unq')
+      .on(t.billingAdjustmentId)
+      .where(sql`${t.billingAdjustmentId} is not null`),
+    index('billing_li_source_finalization_idx').on(t.sourceFinalizationId),
   ]
 );
 
@@ -139,6 +162,14 @@ export const billingCreditNotes = pgTable(
       .notNull()
       .references(() => clients.id, { onDelete: 'restrict' }),
     amount: numeric({ precision: 12, scale: 2 }).notNull(),
+    // Legacy rows are credits. New PS-449 writes also support debit notes and
+    // always stamp the backend-owned current billing day.
+    adjustmentKind: text('adjustment_kind').default('credit').notNull(),
+    adjustmentSource: text('adjustment_source').default('manual').notNull(),
+    sourceOrderId: integer('source_order_id').references(() => orders.id, { onDelete: 'restrict' }),
+    postingVersion: text('posting_version').default('legacy_credit_v1').notNull(),
+    effectiveDate: timestamp('effective_date', { withTimezone: true }),
+    billingPolicyVersion: text('billing_policy_version'),
     reason: text().notNull(),
     idempotencyKey: text().notNull(),
     createdBy: text().notNull(),
@@ -147,7 +178,11 @@ export const billingCreditNotes = pgTable(
   },
   (t) => [
     unique('billing_credit_notes_idempotency_unq').on(t.idempotencyKey),
+    unique('billing_credit_notes_id_client_unq').on(t.id, t.clientId),
     index('billing_credit_notes_finalization_idx').on(t.finalizationId, t.createdAt),
+    index('billing_credit_notes_source_order_idx')
+      .on(t.finalizationId, t.sourceOrderId, t.createdAt)
+      .where(sql`${t.sourceOrderId} is not null`),
   ],
 );
 

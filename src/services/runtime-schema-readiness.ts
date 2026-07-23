@@ -13,11 +13,14 @@ const REQUIRED_RELATIONS = [
   'client_packing_rules',
   'client_sku_classes',
   'direct_carrier_rate_cache',
+  'external_operations',
   'label_purchase_intents',
   'label_purchase_locks',
   'order_competitive_rate',
+  'order_lifecycle_events',
   'order_rate_jobs',
   'package_consumption_reviews',
+  'fulfillment_line_claims',
   'print_queue_batch_job_items',
   'print_queue_merge_jobs',
   'print_queue_merged_pdfs',
@@ -42,8 +45,46 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'hugrab_shipping_rate_override_threshold',
     'hugrab_shipping_rate_override_amount',
   ],
+  billing_line_items: [
+    'billing_effective_date',
+    'billing_policy_version',
+    'source_finalization_id',
+    'billing_adjustment_id',
+  ],
+  billing_credit_notes: [
+    'adjustment_kind',
+    'adjustment_source',
+    'source_order_id',
+    'posting_version',
+    'effective_date',
+    'billing_policy_version',
+  ],
+  billing_summary_metrics: ['adjustment_total'],
   client_combo_package_defaults: ['source'],
-  inventory_ledger: ['effective_at', 'idempotency_key'],
+  external_operations: [
+    'operation_key',
+    'kind',
+    'provider',
+    'subject_type',
+    'subject_id',
+    'semantic_generation',
+    'request_hash',
+    'idempotency_key',
+    'state',
+    'generation',
+    'lease_token',
+    'lease_expires_at',
+    'provider_receipt',
+    'local_result',
+  ],
+  inventory_ledger: [
+    'effective_at',
+    'idempotency_key',
+    'client_id',
+    'sku',
+    'source_entity',
+    'source_id',
+  ],
   orders: [
     'selling_fee',
     'selling_fee_breakdown',
@@ -70,6 +111,18 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'cancel_requested_at',
     'cancel_acknowledged_at',
   ],
+  // Per user override unlock shipped data on 2026-07-21: PS-452 fails closed
+  // until the Print Queue execution-fence sidecars are migrated.
+  print_queue_send_jobs: [
+    'generation',
+    'current_chunk_sequence',
+    'snapshot_updated_at',
+    'claimed_at',
+    'heartbeat_at',
+    'cancel_requested_at',
+    'cancel_acknowledged_at',
+  ],
+  print_queue_batch_job_items: ['attempt_count', 'generation'],
   print_queue_pdf_chunks: ['generation'],
   rate_browse_jobs: [
     'request_payload',
@@ -91,23 +144,37 @@ const REQUIRED_INDEXES = [
   'billing_manual_overrides_client_order_idx',
   'billing_li_order_unique_idx',
   'billing_li_shipment_unique_idx',
+  'billing_li_storage_month_unq',
+  'billing_li_effective_date_idx',
+  'billing_li_adjustment_unq',
+  'billing_li_source_finalization_idx',
   'billing_ref_rates_identity_unq',
   'billing_credit_notes_finalization_idx',
   'billing_credit_notes_idempotency_unq',
+  'billing_credit_notes_id_client_unq',
+  'billing_credit_notes_source_order_idx',
   'billing_finalizations_client_period_unq',
   'client_packing_rules_client_idx',
   'client_packing_rules_client_key_idx',
   'client_sku_classes_client_idx',
   'client_sku_classes_client_sku_idx',
   'direct_carrier_rate_cache_lookup_idx',
+  'external_operations_idempotency_unq',
+  'external_operations_key_unq',
+  'external_operations_state_lease_idx',
+  'external_operations_subject_idx',
   'inventory_ledger_effective_at_idx',
   'inventory_ledger_idempotency_key_unq',
+  'inventory_ledger_source_identity_unq',
   'label_purchase_intents_unresolved_idx',
   'label_purchase_locks_expires_at_idx',
   'order_competitive_rate_house_idx',
   'order_competitive_rate_order_idx',
   'order_competitive_rate_projected_unq',
   'order_competitive_rate_realized_unq',
+  'order_lifecycle_events_command_unq',
+  'order_lifecycle_events_order_idx',
+  'order_lifecycle_events_shipment_idx',
   'order_rate_jobs_updated_idx',
   'orders_selling_fee_source_idx',
   'package_consumption_reviews_idempotency_unq',
@@ -117,11 +184,16 @@ const REQUIRED_INDEXES = [
   'package_ledger_idempotency_key_unq',
   'package_ledger_order_idx',
   'package_ledger_shipment_idx',
+  'fulfillment_line_claims_event_status_idx',
+  'fulfillment_line_claims_idempotency_unq',
+  'fulfillment_line_claims_original_idx',
+  'fulfillment_line_claims_shipment_idx',
   'print_queue_batch_job_items_job_idx',
   'print_queue_batch_job_items_state_idx',
   'print_queue_merge_jobs_updated_at_idx',
   'print_queue_merge_jobs_recovery_idx',
   'print_queue_send_jobs_updated_at_idx',
+  'print_queue_send_jobs_recovery_idx',
   'rate_browse_job_provider_statuses_status_idx',
   'rate_browse_jobs_order_updated_idx',
   'rate_browse_jobs_request_active_idx',
@@ -145,10 +217,33 @@ const REQUIRED_INDEXES = [
   'worker_status_events_created_at_idx',
 ] as const;
 
+// Per user override unlock shipped data on 2026-07-21: these constraints are
+// part of the PS-452 execution fence. Missing counters must fail boot readiness
+// even when every column and index happens to exist.
+const REQUIRED_CONSTRAINTS = [
+  'billing_credit_notes_adjustment_kind_chk',
+  'billing_credit_notes_adjustment_source_chk',
+  'billing_credit_notes_posting_version_chk',
+  'billing_credit_notes_current_period_fields_chk',
+  'billing_credit_notes_id_client_unq',
+  'billing_credit_notes_finalization_client_fk',
+  'billing_line_items_adjustment_reference_chk',
+  'billing_line_items_source_finalization_client_fk',
+  'billing_line_items_adjustment_client_fk',
+  'print_queue_send_jobs_generation_nonnegative',
+  'print_queue_send_jobs_chunk_sequence_positive',
+  'print_queue_batch_job_items_attempt_count_nonnegative',
+  'print_queue_batch_job_items_generation_nonnegative',
+] as const;
+
 const REQUIRED_FUNCTIONS = [
   'audit_log_block_mutations',
+  'inventory_ledger_prepare_insert',
+  'inventory_ledger_block_mutations',
+  'inventory_block_identity_change_with_ledger',
   'billing_line_item_group_is_finalized',
   'billing_line_item_group_key',
+  'order_lifecycle_events_block_mutations',
   'billing_line_item_lock_group',
   'billing_line_items_block_finalized_mutation',
   'billing_line_items_block_finalized_truncate',
@@ -157,11 +252,18 @@ const REQUIRED_FUNCTIONS = [
   'billing_line_items_block_closed_period_mutation',
   'billing_close_records_block_mutations',
   'billing_credit_notes_block_excess',
+  'billing_credit_notes_require_projection',
+  'billing_line_items_block_adjustment_mutation',
 ] as const;
 
 const REQUIRED_TRIGGERS = [
   'audit_log_no_update_delete',
+  'inventory_ledger_prepare_insert_guard',
+  'inventory_ledger_no_update_delete',
+  'inventory_ledger_no_truncate',
+  'inventory_identity_immutable_with_ledger',
   'billing_line_items_finalized_guard',
+  'order_lifecycle_events_no_update_delete',
   'billing_line_items_finalized_truncate_guard',
   'billing_line_items_mixed_finalization_guard',
   'billing_finalizations_overlap_guard',
@@ -169,6 +271,8 @@ const REQUIRED_TRIGGERS = [
   'billing_finalizations_no_update_delete',
   'billing_credit_notes_no_update_delete',
   'billing_credit_notes_balance_guard',
+  'billing_credit_notes_projection_guard',
+  'billing_line_items_adjustment_immutable_guard',
   'billing_finalizations_no_truncate',
   'billing_credit_notes_no_truncate',
 ] as const;
@@ -231,6 +335,18 @@ async function verifyRuntimeSchema(): Promise<void> {
     if (!presentIndexes.has(index)) missing.push(`index:${index}`);
   }
 
+  const constraintRows = await pg<Array<{ conname: string }>>`
+    select c.conname
+    from pg_constraint c
+    join pg_namespace n on n.oid = c.connamespace
+    where n.nspname = 'public'
+      and c.conname = any(${[...REQUIRED_CONSTRAINTS]})
+  `;
+  const presentConstraints = new Set(constraintRows.map((row) => String(row.conname)));
+  for (const constraint of REQUIRED_CONSTRAINTS) {
+    if (!presentConstraints.has(constraint)) missing.push(`constraint:${constraint}`);
+  }
+
   const functionRows = await pg<Array<{ proname: string }>>`
     select distinct p.proname
     from pg_proc p
@@ -247,6 +363,7 @@ async function verifyRuntimeSchema(): Promise<void> {
     select tgname
     from pg_trigger
     where not tgisinternal
+      and tgenabled <> 'D'
       and tgname = any(${[...REQUIRED_TRIGGERS]})
   `;
   const presentTriggers = new Set(triggerRows.map((row) => String(row.tgname)));
@@ -257,7 +374,9 @@ async function verifyRuntimeSchema(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
-        `0068_billing_shipment_cardinality.sql. Missing: ${missing.slice(0, 20).join(', ')}`,
+        `the current release frontier (0074_billing_current_period_adjustments.sql, ` +
+        `0075_inventory_quantity_sot.sql, and 0077_ps462_billing_storage_month.sql). ` +
+        `Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }
 }

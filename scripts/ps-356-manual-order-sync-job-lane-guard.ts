@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { orderSyncOptionsFromJobPayload } from '../src/services/manual-order-sync-job';
 
 let failures = 0;
 
@@ -83,15 +84,35 @@ check(
 );
 check(
   'queued order worker consumes payload and propagates attempt cancellation context',
-  /await registerWorker\(JOBS\.orders, async \(jobData, \{ identity, signal \}\) => \{/.test(queue) &&
+  /await registerWorker\(JOBS\.orders, \(jobData, \{ identity, signal \}\) =>/.test(queue) &&
+    /runOrderSyncWithOutboxPriority\(jobData, identity, signal\)/.test(queue) &&
     /const options = orderSyncOptionsFromJobPayload\(jobData\);/.test(queue) &&
-    /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue),
+    /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal: workSignal \}\)/.test(queue),
 );
 check(
-  'deferred order sync wake-ups use the awaiting-freshness path',
-  /function isDeferredShipStationOrderSync/.test(queue) &&
-    /options\.skipStatusPasses = true;/.test(queue) &&
-    /wake-ups cannot become another long status catch-up/.test(queue),
+  'deferred cadence and watchdog wake-ups retain status catch-up scope',
+  orderSyncOptionsFromJobPayload({
+    requestedBy: 'busy-defer',
+    deferredLane: 'shipstation-sync',
+    deferCount: 2,
+  }).skipStatusPasses !== true &&
+    orderSyncOptionsFromJobPayload({
+      requestedBy: 'watchdog-recovery',
+      deferredLane: 'shipstation-sync',
+      deferCount: 2,
+    }).skipStatusPasses !== true &&
+    !/function isDeferredShipStationOrderSync/.test(queue) &&
+    !/options\.skipStatusPasses = true;/.test(queue),
+);
+check(
+  'deferred manual incremental wake-ups preserve explicit Awaiting-only intent',
+  orderSyncOptionsFromJobPayload({
+    requestedBy: 'manual-sync',
+    mode: 'incremental',
+    skipStatusPasses: true,
+    deferredLane: 'shipstation-sync',
+    deferCount: 2,
+  }).skipStatusPasses === true,
 );
 check(
   'queued order worker skips stale manual refresh rows when a newer one is queued',

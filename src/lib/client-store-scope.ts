@@ -77,8 +77,7 @@ export function getInternalOpsClientStoreScope(auth: ScopeAuth): ClientStoreScop
     auth.role === 'admin' ||
     auth.role === 'operator' ||
     auth.role === 'warehouse' ||
-    Boolean(auth.permissions?.includes('scope:global')) ||
-    Boolean(auth.permissions?.includes('print_queue:write'));
+    Boolean(auth.permissions?.includes('scope:global'));
 
   if (isInternalOps) {
     return {

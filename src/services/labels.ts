@@ -4,7 +4,6 @@ import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { orders, orderOverrides } from '../db/schema/orders';
-import { clients } from '../db/schema/clients';
 // PS-233 (Per user override unlock shipped data on 2026-06-13): caller-scope
 // enforcement on label/shipment operations. The label services are the attack
 // surface (routes pass them only an id/body); they now require the caller's scope.
@@ -17,19 +16,28 @@ import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
 import {
   assertNoUnresolvedLabelPurchaseIntent,
   classifyBuyErrorForIntent,
-  createLabelPurchaseIntent,
   resolveLabelPurchaseIntent,
 } from '../lib/label-purchase-intent';
+import {
+  acquireFulfillmentOperation,
+  consumeFulfillmentOperation,
+  dispatchFulfillmentOperation,
+  FulfillmentOperationHeldError,
+  refreshFulfillmentOperationReceipt,
+} from './fulfillment-operation-ledger';
+import {
+  buildShipStationForwardLabelOperationRequest,
+  buildShipStationForwardLabelReceipt,
+  canAutomaticallyConsumeShipStationForwardLabelReceipt,
+  readShipStationForwardLabelPersistenceFacts,
+} from './shipstation-forward-label-operation';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
 import { linkBundleShipment } from './shipment-bundles/create-bundle';
 import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
 import { deductBundleMembersOnce } from './shipment-bundles/deduct-bundle-members';
 import { env } from '../lib/env';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
-import {
-  consumeOutboundPackageInTransaction,
-  reverseOutboundPackageConsumptionInTransaction,
-} from './package-consumption';
+import { reverseOutboundPackageConsumptionInTransaction } from './package-consumption';
 import { resolveOrderLabelPackageSelection } from './package-resolution';
 import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 // PS-262a: single canonical owner of the per-marketplace confirmation identity.
@@ -54,6 +62,7 @@ import {
 } from './mock-label-generator';
 import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
 import { packages } from '../db/schema/packages';
+import { locations } from '../db/schema/locations';
 import {
   carrierConnectorSupportsVoid,
   createCarrierLabel,
@@ -65,11 +74,11 @@ import {
   voidNotSupportedMessage,
   type LabelVoidOutcomeStatus,
 } from './label-void-policy';
+import type { ShipmentVoidLifecycleDecision } from './shipment-aggregate';
 import {
-  activeOutboundShipmentPredicate,
-  decideShipmentVoidLifecycle,
-  type ShipmentVoidLifecycleDecision,
-} from './shipment-aggregate';
+  applyOrderLifecycleCommandInTransaction,
+  voidOrderShipmentLifecycleInTransaction,
+} from './order-lifecycle-command';
 import {
   createDirectCarrierLabelForOrder,
   directLabelAccountRefFromProviderId,
@@ -87,6 +96,7 @@ import {
   buildShopifyShippingLabelPurchaseInput,
   createShopifyShippingMockLabel,
   extractShopifyFulfillmentOrderForPurchase,
+  extractShopifyFulfillmentLinesForPurchase,
   fulfillmentOrderPurchaseBlocker,
 } from './shopify-shipping-labels';
 import {
@@ -119,6 +129,22 @@ import {
   residentialForShipping,
 } from './shipping-workflow/address-classification';
 import { assertLabelPurchaseRateSelection } from './shipping-workflow/rate-quote-snapshot-store';
+import {
+  assertShippingQuoteAccountMatches,
+  assertShippingQuoteContextMatches,
+  assertShippingQuoteIntentMatches,
+  normalizeShippingQuoteAddress,
+  shippingQuoteAuthorizedPurchaseFacts,
+  shippingQuoteCredentialFingerprint,
+  ShippingQuoteAuthorizationError,
+  type ShippingQuoteAccountAuthorization,
+} from './shipping-workflow/shipping-quote-authorization';
+import {
+  assertPurchasedLabelArtifact,
+  LabelArtifactMissingAfterPurchaseError,
+} from './label-artifact-safety';
+
+export { LabelArtifactMissingAfterPurchaseError } from './label-artifact-safety';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
 // PS-261 (Per user override unlock shipped data on 2026-06-18): backend-owned HUGRAB
 // label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
@@ -166,11 +192,12 @@ import { loadShippingAutomationRules } from './shipping-automation';
 // Per user override unlock shipped data on 2026-07-14: read the persisted HUGRAB
 // default-insurance intent before quote-proof validation or any postage side effect.
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
+import { resolveShippingClientId } from './shipping-client-identity';
 
 // Batch-label callers often omit a panel-selected package. PS-413 accepts
 // dimensions only when they identify exactly one catalog package; ambiguous
 // matches remain review work and never guess/decrement package stock.
-async function resolveLabelPackageId(args: {
+export async function resolveLabelPackageId(args: {
   orderId: number | null;
   customPackageId?: number | string | null;
   length: number | null;
@@ -420,6 +447,7 @@ export type CreateLabelInputDto = {
   shipTo?: AddressInputDto;
   shipFrom?: AddressInputDto;
   selectedRateProof?: SelectedRateProofInput;
+  selectionRef?: string | null;
   // PS-105: backend-owned rate quote snapshot id + the chosen rate's authority
   // key. Preferred over selectedRateProof at the purchase boundary; selectedRateProof
   // remains a compatibility fallback during migration.
@@ -548,6 +576,44 @@ function defaultShipFromAddress(): ShipstationAddressInput {
   };
 }
 
+async function currentAuthorizedShipFrom(
+  locationId: number | null,
+): Promise<ShipstationAddressInput> {
+  if (locationId != null) {
+    const [row] = await db
+      .select()
+      .from(locations)
+      .where(eq(locations.id, locationId))
+      .limit(1);
+    if (!row || row.active === false) {
+      throw new ShippingQuoteAuthorizationError('ship-from location');
+    }
+    return {
+      name: row.name,
+      company: row.company ?? undefined,
+      street1: row.street1 ?? '',
+      street2: row.street2 ?? undefined,
+      city: row.city ?? '',
+      state: row.state ?? '',
+      postalCode: row.postalCode ?? '',
+      country: row.country,
+      phone: row.phone ?? undefined,
+    };
+  }
+  const from = await getDefaultShipFrom();
+  return {
+    name: from.name,
+    company: from.company_name,
+    street1: from.address_line1,
+    street2: from.address_line2,
+    city: from.city_locality,
+    state: from.state_province,
+    postalCode: from.postal_code,
+    country: from.country_code,
+    phone: from.phone,
+  };
+}
+
 function orderShipToFromRaw(rawOrder: {
   raw: Record<string, unknown>;
   shipToName: string | null;
@@ -630,6 +696,7 @@ async function loadClientCredentials(clientId: number | null | undefined): Promi
   apiKeyV2: string | null;
   apiKey: string | null;
   apiSecret: string | null;
+  sourceClientId: number | null;
 }> {
   return loadClientCredentialsImpl(clientId);
 }
@@ -670,9 +737,10 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
   // Per user override unlock shipped data on 2026-05-23: normalize nested ShipStation label downloads before shipment persistence so queue recovery receives a plain URL string.
   const labelUrl = extractShipstationLabelUrl(label.label_download);
   await ensureShipmentsSelectedRateCostColumn();
-  const [row] = await db
-    .insert(shipments)
-    .values({
+  const row = await db.transaction(async (tx) => {
+    const [persisted] = await tx
+      .insert(shipments)
+      .values({
       orderId,
       clientId: clientId ?? null,
       carrierCode: label.carrier_code,
@@ -695,9 +763,26 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
       voided: !!label.voided,
       source: 'v4',
       isReturn: !!label.is_return_label,
-    })
-    .returning();
-  if (!row) throw new Error('Failed to persist shipment row');
+      })
+      .returning();
+    if (!persisted) throw new Error('Failed to persist shipment row');
+    // Per user override unlock shipped data on 2026-07-16: a legacy label
+    // without shipment-line quantities records review state instead of order.items.
+    await applyOrderLifecycleCommandInTransaction(tx, {
+      orderId,
+      shipmentId: persisted.id,
+      commandKey: `lifecycle:shipment:${persisted.id}:shipped`,
+      transition: 'shipped',
+      source: 'legacy_shipstation_label',
+      effectiveAt: shipDate ?? createdAt,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Legacy ShipStation label response did not identify shipped line quantities',
+      },
+      trackingNumber: label.tracking_number,
+    });
+    return persisted;
+  });
   return row;
 }
 
@@ -858,7 +943,7 @@ async function assertShipmentInScope(
   throw new ResourceScopeError(notFoundMessage);
 }
 
-type MarketplaceConfirmationProvider = 'shipstation' | 'walmart' | 'ebay';
+export type MarketplaceConfirmationProvider = 'shipstation' | 'walmart' | 'ebay';
 
 function firstText(...values: unknown[]): string {
   for (const value of values) {
@@ -883,7 +968,7 @@ function isNoMarketplaceSource(value: unknown): boolean {
 }
 
 
-function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider | null {
+export function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider | null {
   if (isNoMarketplaceSource(order.sourceProvider)) return null;
   const fromSourceProvider = normalizeConfirmationProvider(order.sourceProvider);
   if (fromSourceProvider) return fromSourceProvider;
@@ -905,7 +990,7 @@ function confirmationProviderForOrder(order: typeof orders.$inferSelect): Market
   return fromExternalId ?? 'shipstation';
 }
 
-function baseConfirmationPayload(created: CreatedExternalLabel): Record<string, unknown> {
+export function baseConfirmationPayload(created: CreatedExternalLabel): Record<string, unknown> {
   return {
     carrierProvider: 'shipstation',
     carrierAccountId: created.providerAccountId,
@@ -933,7 +1018,7 @@ function trackingUrlForCarrier(carrierCode: string | null | undefined, trackingN
   return '';
 }
 
-function marketplaceConfirmationPayload(
+export function marketplaceConfirmationPayload(
   order: typeof orders.$inferSelect,
   created: CreatedExternalLabel,
   provider: MarketplaceConfirmationProvider,
@@ -983,13 +1068,51 @@ function serviceCodeFitsPackage(_: string): string {
   return 'package';
 }
 
-// PS-248 (Per user override unlock shipped data on 2026-06-16): a drizzle transaction handle so
-// persistCreatedLabel + markOrderShipped can COMMIT ATOMICALLY — a crash between them must not leave an
-// orphan shipment row with the order still not-shipped (torn state, broken invariant). Falls back to
-// the pool (db) when no tx is supplied, so existing non-transactional callers are unchanged.
+// PS-248 and PS-424 (Per user override unlock shipped data on 2026-07-16): a
+// drizzle transaction handle keeps shipment persistence and the canonical
+// lifecycle command atomic, so a crash cannot leave a persisted shipment with
+// the order still awaiting. The helper still supports legacy read/test callers.
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function persistCreatedLabel(args: {
+// Per user override unlock shipped data on 2026-05-23: PS-423 reads historical
+// outbound/return rows only to derive the next semantic label generation. It
+// does not rewrite, delete, or weaken any shipped/cancelled protection.
+export async function nextLabelSemanticGeneration(orderId: number, returnForShipmentId?: number): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(shipments)
+    .where(
+      returnForShipmentId == null
+        ? and(eq(shipments.orderId, orderId), sql`coalesce(${shipments.isReturn}, false) = false`)
+        : and(
+            eq(shipments.returnForShipmentId, returnForShipmentId),
+            sql`coalesce(${shipments.isReturn}, false) = true`,
+          ),
+    );
+  return Number(row?.total ?? 0) + 1;
+}
+
+export function createdLabelFromOperationReceipt(receipt: Record<string, unknown>): CreatedExternalLabel {
+  const value = receipt.created;
+  if (!value || typeof value !== 'object') throw new Error('Provider operation receipt is missing label data');
+  const created = value as Partial<CreatedExternalLabel>;
+  if (
+    !Number.isFinite(Number(created.shipmentId)) ||
+    typeof created.serviceCode !== 'string' ||
+    typeof created.shipDate !== 'string'
+  ) {
+    throw new Error('Provider operation label receipt is invalid');
+  }
+  return created as CreatedExternalLabel;
+}
+
+function throwForBlockedOperation(
+  action: Exclude<Awaited<ReturnType<typeof acquireFulfillmentOperation>>, { kind: 'dispatch' | 'resume_receipt' }>,
+): never {
+  throw new FulfillmentOperationHeldError(action.operation);
+}
+
+export async function persistCreatedLabel(args: {
   created: CreatedExternalLabel;
   orderId: number;
   orderNumber: string | null;
@@ -1153,64 +1276,9 @@ async function persistCreatedLabel(args: {
   return row.id;
 }
 
-async function markOrderShipped(
-  orderId: number,
-  trackingNumber: string | null,
-  options: { cleanupQueue?: boolean; tx?: DbTx } = {}
-): Promise<void> {
-  // PS-248: run on the caller's transaction when supplied so the order-status flip + tracking
-  // override commit ATOMICALLY with the shipment insert (and atomically with each other).
-  const exec = (options.tx ?? db) as DbTx;
-  await exec
-    .update(orders)
-    .set({ orderStatus: 'shipped', updatedAt: new Date() })
-    .where(eq(orders.id, orderId));
-  if (trackingNumber) {
-    await exec
-      .insert(orderOverrides)
-      .values({ orderId, trackingNumber, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: orderOverrides.orderId,
-        set: { trackingNumber, updatedAt: new Date() },
-      });
-  }
-
-  // Print Queue persistence: shipped status means a label exists, not that an
-  // operator physically printed it. Queue entries persist until explicit
-  // operator action confirms printed or removes them.
-
-}
-
-async function enqueueFulfillmentDeductions(args: {
-  order: typeof orders.$inferSelect;
-  shipmentId: number | null;
-  source: string;
-  tx: DbTx;
-  timer?: LabelTimer;
-}) {
-  const enqueueInventory = () =>
-    enqueueInventoryDeduction(
-      args.order,
-      {
-        shipmentId: args.shipmentId,
-        source: args.source,
-      },
-      args.tx,
-    );
-
-  // Per user override unlock shipped data on 2026-07-15: label persistence,
-  // shipped status, and durable inventory intent now share the caller's
-  // transaction. An enqueue error rolls the local persistence back instead of
-  // leaving a shipped row without retryable intent.
-  if (args.timer) {
-    await args.timer.task('enqueue inventory deduction', enqueueInventory);
-  } else {
-    await enqueueInventory();
-  }
     // NOTE: the bundle MEMBER deduct-once fan-out (PS-312 S6) is NOT here — it is chained AFTER the
     // link keystone in createLabelV2Impl, so it can never race the bundle stamp into a silent
     // under-deduct. This event covers only the primary's own inventory.
-}
 
 /**
  * Create a label (v2-parity). Supports offline testLabel mode (generates a
@@ -1250,6 +1318,28 @@ export async function createShopifyShippingLabelForOrder(
   }
 }
 
+type LabelProviderDispatchOptions = {
+  allowProviderDispatch?: boolean;
+};
+
+export async function resumeLabelV2FromDurableReceipt(
+  body: CreateLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateLabelResponseDto> {
+  // Per user override unlock shipped data on 2026-07-21: bypass only the
+  // crashed process lock; every provider dispatch branch remains forbidden.
+  return createLabelV2Impl(body, scope, { allowProviderDispatch: false });
+}
+
+export async function resumeShopifyShippingLabelFromDurableReceipt(
+  body: CreateShopifyShippingLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateShopifyShippingLabelResponseDto> {
+  // Per user override unlock shipped data on 2026-07-21: resume/poll an
+  // existing durable receipt without another shippingLabelPurchase mutation.
+  return createShopifyShippingLabelForOrderImpl(body, scope, { allowProviderDispatch: false });
+}
+
 type CompletedShopifyPurchase = Exclude<ShopifyShippingLabelPurchaseResult, { pending: true }>;
 
 const SHOPIFY_LABEL_PURCHASE_POLL_ATTEMPTS = Math.max(
@@ -1287,6 +1377,26 @@ function completedShopifyLabelCost(result: CompletedShopifyPurchase | null): num
   return Number.isFinite(cost) && cost > 0 ? cost : 0;
 }
 
+function shopifyPurchaseReceipt(result: ShopifyShippingLabelPurchaseResult): Record<string, unknown> {
+  return { purchase: result as unknown as Record<string, unknown> };
+}
+
+function shopifyPurchaseFromOperationReceipt(
+  receipt: Record<string, unknown>,
+): ShopifyShippingLabelPurchaseResult {
+  const value = receipt.purchase;
+  if (!value || typeof value !== 'object') throw new Error('Shopify operation receipt is missing purchase data');
+  const purchase = value as Partial<ShopifyShippingLabelPurchaseResult>;
+  if (
+    purchase.provider !== SHOPIFY_SHIPPING_PROVIDER ||
+    typeof purchase.purchaseResultId !== 'string' ||
+    typeof purchase.fulfillmentOrderId !== 'string'
+  ) {
+    throw new Error('Shopify operation receipt is invalid');
+  }
+  return purchase as ShopifyShippingLabelPurchaseResult;
+}
+
 async function pollShopifyPurchaseToTerminal(input: {
   accountCredentials: Record<string, unknown>;
   firstResult: ShopifyShippingLabelPurchaseResult;
@@ -1294,6 +1404,7 @@ async function pollShopifyPurchaseToTerminal(input: {
   orderId: unknown;
   orderName: unknown;
   timer: ReturnType<typeof createLabelTimer>;
+  signal?: AbortSignal;
 }): Promise<ShopifyShippingLabelPurchaseResult> {
   let result = input.firstResult;
   for (let attempt = 0; result.pending && attempt < SHOPIFY_LABEL_PURCHASE_POLL_ATTEMPTS; attempt += 1) {
@@ -1305,6 +1416,7 @@ async function pollShopifyPurchaseToTerminal(input: {
         fulfillmentOrderId: input.fulfillmentOrderId,
         orderId: input.orderId,
         orderName: input.orderName,
+        signal: input.signal,
       }),
     );
   }
@@ -1325,7 +1437,9 @@ async function persistShopifyPurchasedLabel(input: {
   height: number;
   purchased: CompletedShopifyPurchase | null;
   mock: ReturnType<typeof createShopifyShippingMockLabel> | null;
+  fulfillmentLines?: unknown[];
   timer: ReturnType<typeof createLabelTimer>;
+  externalOperationId?: number | null;
 }): Promise<CreateShopifyShippingLabelResponseDto> {
   await ensurePackageConsumptionSchema();
   const labelCost = completedShopifyLabelCost(input.purchased);
@@ -1346,7 +1460,7 @@ async function persistShopifyPurchasedLabel(input: {
   };
 
   await ensureShipmentsSelectedRateCostColumn();
-  const localShipmentId = await db.transaction(async (tx) => {
+  const persistLocalShipment = async (tx: DbTx): Promise<number> => {
     const shipmentId = await input.timer.task('persistCreatedShopifyLabel', () => persistCreatedLabel({
       created,
       orderId: input.order.id,
@@ -1373,28 +1487,50 @@ async function persistShopifyPurchasedLabel(input: {
     }));
     // Per user override unlock shipped data on 2026-07-11: PS-413 consumes
     // real outbound package stock in the same transaction as shipment creation.
-    await consumeOutboundPackageInTransaction({
-      shipmentId,
-      orderId: input.order.id,
-      orderNumber: input.order.orderNumber ?? null,
-      source: SHOPIFY_SHIPPING_PROVIDER,
-      sourceAccountId: input.providerAccountId,
-      providerShipmentId: input.purchased?.labelId ?? null,
-      effectiveAt: created.shipDate,
-      selectedPackageId: input.resolvedPackageId ?? input.requestedPackageId,
-      dimensions: { length: input.length, width: input.width, height: input.height },
-      isTest: input.mock != null,
-    }, tx);
-    await input.timer.task('markOrderShipped', () => markOrderShipped(input.order.id, created.trackingNumber, { cleanupQueue: false, tx }));
-    await enqueueFulfillmentDeductions({
-      order: input.order,
-      shipmentId,
-      source: SHOPIFY_SHIPPING_PROVIDER,
-      tx,
-      timer: input.timer,
-    });
+    // Per user override unlock shipped data on 2026-07-16 (PS-424): the
+    // lifecycle owner commits status, tracking, exact SKU claims, package
+    // consumption, and durable work with this shipment insert.
+    await input.timer.task('apply order lifecycle', () =>
+      applyOrderLifecycleCommandInTransaction(tx, {
+        orderId: input.order.id,
+        shipmentId,
+        commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
+        transition: 'shipped',
+        source: SHOPIFY_SHIPPING_PROVIDER,
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
+        effectiveAt: new Date(created.shipDate),
+        fulfillmentFacts: input.fulfillmentLines?.length
+          ? { kind: 'exact', lines: input.fulfillmentLines }
+          : {
+              kind: 'unavailable',
+              description: 'Shopify fulfillment order did not expose exact remaining line quantities',
+            },
+        trackingNumber: created.trackingNumber,
+        packageConsumption: {
+          shipmentId,
+          orderId: input.order.id,
+          orderNumber: input.order.orderNumber ?? null,
+          source: SHOPIFY_SHIPPING_PROVIDER,
+          sourceAccountId: input.providerAccountId,
+          providerShipmentId: input.purchased?.labelId ?? null,
+          effectiveAt: created.shipDate,
+          selectedPackageId: input.resolvedPackageId ?? input.requestedPackageId,
+          dimensions: { length: input.length, width: input.width, height: input.height },
+          isTest: input.mock != null,
+        },
+    }));
     return shipmentId;
-  });
+  };
+  // Per user override unlock shipped data on 2026-05-23: PS-423 atomically
+  // consumes the Shopify provider receipt with the local shipment/lifecycle.
+  const localShipmentId = input.externalOperationId != null
+    ? Number((await consumeFulfillmentOperation(
+        input.externalOperationId,
+        async (tx) => ({ shipmentId: await persistLocalShipment(tx) }),
+      )).localResult?.shipmentId ?? 0)
+    : await db.transaction(persistLocalShipment);
+  if (!localShipmentId) throw new Error('Shopify operation is missing its local shipment id');
   try {
     await input.timer.task('enqueue Shopify confirmation state', () => enqueueShipmentConfirmation({
       order: {
@@ -1466,7 +1602,12 @@ export async function pollShopifyShippingLabelPurchase(
   const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
   if (existing) {
     await markShopifyLabelPurchaseTerminal(pending, 'resolved', 'Existing active label found for order.');
-    if (pending.labelPurchaseIntentId != null) {
+    if (pending.externalOperationId != null) {
+      await consumeFulfillmentOperation(
+        pending.externalOperationId,
+        async () => ({ shipmentId: existing.id }),
+      );
+    } else if (pending.labelPurchaseIntentId != null) {
       await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
         state: 'completed',
         shipmentId: existing.id,
@@ -1517,10 +1658,23 @@ export async function pollShopifyShippingLabelPurchase(
     );
   } catch (error) {
     const code = (error as { code?: unknown })?.code;
-    if (typeof code === 'string' && code.startsWith('SHOPIFY_')) {
+    // Per user override unlock shipped data on 2026-05-23: PS-423 keeps a
+    // durable provider receipt pending when a read/poll fails. A poll error is
+    // not proof that Shopify failed the already-dispatched purchase.
+    if (
+      pending.externalOperationId == null &&
+      typeof code === 'string' &&
+      code.startsWith('SHOPIFY_')
+    ) {
       await markShopifyLabelPurchaseTerminal(pending, 'failed', error instanceof Error ? error.message : String(error));
+    } else if (pending.externalOperationId != null) {
+      await storeShopifyLabelPurchasePendingSnapshot({
+        ...pending,
+        message: `Shopify purchase status could not be read; retry polling the existing result: ${error instanceof Error ? error.message : String(error)}`,
+        updatedAt: new Date().toISOString(),
+      });
     }
-    if (pending.labelPurchaseIntentId != null) {
+    if (pending.externalOperationId == null && pending.labelPurchaseIntentId != null) {
       await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
         state: 'reconcile_required',
         error: error instanceof Error ? error.message : String(error),
@@ -1530,6 +1684,13 @@ export async function pollShopifyShippingLabelPurchase(
   }
 
   if (result.pending) {
+    if (pending.externalOperationId != null) {
+      await refreshFulfillmentOperationReceipt(pending.externalOperationId, {
+        receipt: shopifyPurchaseReceipt(result),
+        providerOperationId: result.purchaseResultId,
+        providerResultId: result.purchaseResultId,
+      });
+    }
     await storeShopifyLabelPurchasePendingSnapshot({
       ...pending,
       updatedAt: new Date().toISOString(),
@@ -1562,6 +1723,13 @@ export async function pollShopifyShippingLabelPurchase(
     width: pending.dims.width,
     height: pending.dims.height,
   });
+  if (pending.externalOperationId != null) {
+    await refreshFulfillmentOperationReceipt(pending.externalOperationId, {
+      receipt: shopifyPurchaseReceipt(result),
+      providerOperationId: result.purchaseResultId,
+      providerResultId: result.labelId,
+    });
+  }
   let response: CreateShopifyShippingLabelResponseDto;
   try {
     response = await persistShopifyPurchasedLabel({
@@ -1578,10 +1746,12 @@ export async function pollShopifyShippingLabelPurchase(
       height: pending.dims.height,
       purchased: result,
       mock: null,
+      fulfillmentLines: pending.fulfillmentLines,
       timer,
+      externalOperationId: pending.externalOperationId,
     });
   } catch (persistError) {
-    if (pending.labelPurchaseIntentId != null) {
+    if (pending.externalOperationId == null && pending.labelPurchaseIntentId != null) {
       await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
         state: 'reconcile_required',
         error: `Shopify label purchased but shipment persist failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
@@ -1590,7 +1760,7 @@ export async function pollShopifyShippingLabelPurchase(
     throw persistError;
   }
   await markShopifyLabelPurchaseTerminal(pending, 'resolved', 'Shopify label purchase persisted.');
-  if (pending.labelPurchaseIntentId != null) {
+  if (pending.externalOperationId == null && pending.labelPurchaseIntentId != null) {
     await resolveLabelPurchaseIntent(pending.labelPurchaseIntentId, {
       state: 'completed',
       shipmentId: response.shipmentId,
@@ -1602,6 +1772,7 @@ export async function pollShopifyShippingLabelPurchase(
 async function createShopifyShippingLabelForOrderImpl(
   body: CreateShopifyShippingLabelInputDto,
   scope: ClientStoreScope,
+  execution: LabelProviderDispatchOptions = {},
 ): Promise<CreateShopifyShippingLabelResponseDto> {
   if (!body.orderId) {
     throw new Error('orderId required');
@@ -1626,15 +1797,7 @@ async function createShopifyShippingLabelForOrderImpl(
   }
   await assertOrderSafeToShip(order, { entryPoint: 'createShopifyShippingLabelForOrder' });
 
-  let clientId = order.clientId;
-  if (!clientId && order.storeId != null) {
-    const [match] = await db
-      .select({ id: clients.id })
-      .from(clients)
-      .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
-      .limit(1);
-    clientId = match?.id ?? null;
-  }
+  const clientId = await resolveShippingClientId(order);
 
   body = {
     ...body,
@@ -1700,6 +1863,7 @@ async function createShopifyShippingLabelForOrderImpl(
       409,
     );
   }
+  const fulfillmentLines = extractShopifyFulfillmentLinesForPurchase(fulfillmentOrder, rawOrder);
   const purchaseInput = buildShopifyShippingLabelPurchaseInput({
     fulfillmentOrderId: fulfillmentOrder.id,
     totalWeightOz: effectiveWeightOz,
@@ -1719,43 +1883,93 @@ async function createShopifyShippingLabelForOrderImpl(
     },
   });
 
-  let shopifyPurchaseIntentId: number | null = null;
+  let shopifyExternalOperationId: number | null = null;
   let purchased: ShopifyShippingLabelPurchaseResult | null = null;
   if (!body.testLabel) {
     await ensurePackageConsumptionSchema();
-    // Per user override unlock shipped data on 2026-07-15: all Shopify
-    // eligibility, scope, account, fulfillment-order, package, and input
-    // preflights run before the durable intent is created. The intent is then
-    // written immediately before the provider call and blocks blind re-buy.
     await assertNoUnresolvedLabelPurchaseIntent(order.id);
-    shopifyPurchaseIntentId = await createLabelPurchaseIntent({
-      orderId: order.id,
+    const action = await acquireFulfillmentOperation({
+      kind: 'shopify_label',
       provider: SHOPIFY_SHIPPING_PROVIDER,
-      requestFingerprint: `fulfillment=${fulfillmentOrder.id}`,
+      subjectType: 'order',
+      subjectId: order.id,
+      semanticGeneration: await nextLabelSemanticGeneration(order.id),
+      request: {
+        fulfillmentOrderId: fulfillmentOrder.id,
+        weightOz: effectiveWeightOz,
+        dimensions: { length, width, height },
+        packageId: resolvedPackageId ?? body.customPackageId ?? null,
+        notifyCustomer: body.notifyCustomer ?? false,
+      },
     });
-    try {
-      const firstPurchaseResult = await timer.task('Shopify shippingLabelPurchase connector', () =>
-        purchaseShopifyShippingLabel(account.credentials, {
-          env: process.env,
+    shopifyExternalOperationId = action.operation.id;
+    if (action.kind === 'resume_receipt') {
+      // Per user override unlock shipped data on 2026-07-22: an operator-supplied
+      // receipt is review evidence, never automatic shipped persistence.
+      if (action.operation.resolvedBy != null) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      purchased = shopifyPurchaseFromOperationReceipt(action.receipt);
+      if (purchased.pending) {
+        // Per user override unlock shipped data on 2026-07-21: PS-452 polls the
+        // existing Shopify purchase result carried by the durable receipt. It
+        // cannot call shippingLabelPurchase or create a second label.
+        purchased = await pollShopifyPurchaseToTerminal({
+          accountCredentials: account.credentials,
+          firstResult: purchased,
+          fulfillmentOrderId: fulfillmentOrder.id,
           orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
           orderName: order.orderNumber,
-          purchaseInput,
+          timer,
+        });
+        await refreshFulfillmentOperationReceipt(action.operation.id, {
+          receipt: shopifyPurchaseReceipt(purchased),
+          providerOperationId: purchased.purchaseResultId,
+          providerResultId: purchased.labelId ?? purchased.purchaseResultId,
+        });
+      }
+    } else if (action.kind === 'dispatch') {
+      if (execution.allowProviderDispatch === false) {
+        // Per user override unlock shipped data on 2026-07-21: PS-452 receipt
+        // recovery may outlive the crashed process's purchase lock. Missing
+        // durable receipt truth fails closed and can never become a new POST.
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      purchased = await dispatchFulfillmentOperation<ShopifyShippingLabelPurchaseResult>({
+        lease: action.lease,
+        label: `Shopify label order ${order.id}`,
+        execute: async ({ signal }) => {
+          const firstPurchaseResult = await timer.task('Shopify shippingLabelPurchase connector', () =>
+            purchaseShopifyShippingLabel(account.credentials, {
+              env: process.env,
+              orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
+              orderName: order.orderNumber,
+              purchaseInput,
+              signal,
+            }),
+          );
+          return pollShopifyPurchaseToTerminal({
+            accountCredentials: account.credentials,
+            firstResult: firstPurchaseResult,
+            fulfillmentOrderId: fulfillmentOrder.id,
+            orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
+            orderName: order.orderNumber,
+            timer,
+            signal,
+          });
+        },
+        normalizeReceipt: (result) => ({
+          receipt: shopifyPurchaseReceipt(result),
+          providerOperationId: result.purchaseResultId,
+          providerResultId: result.labelId ?? result.purchaseResultId,
         }),
-      );
-      purchased = await pollShopifyPurchaseToTerminal({
-        accountCredentials: account.credentials,
-        firstResult: firstPurchaseResult,
-        fulfillmentOrderId: fulfillmentOrder.id,
-        orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
-        orderName: order.orderNumber,
-        timer,
+        classifyError: (error) =>
+          classifyBuyErrorForIntent(error) === 'failed_pre_purchase'
+            ? 'failed_pre_dispatch'
+            : 'reconcile_required',
       });
-    } catch (buyError) {
-      await resolveLabelPurchaseIntent(shopifyPurchaseIntentId, {
-        state: classifyBuyErrorForIntent(buyError),
-        error: buyError instanceof Error ? buyError.message : String(buyError),
-      });
-      throw buyError;
+    } else {
+      throwForBlockedOperation(action);
     }
   }
   const mock = body.testLabel
@@ -1773,7 +1987,7 @@ async function createShopifyShippingLabelForOrderImpl(
       provider: SHOPIFY_SHIPPING_PROVIDER,
       status: 'pending',
       orderId: order.id,
-      labelPurchaseIntentId: shopifyPurchaseIntentId ?? undefined,
+      externalOperationId: shopifyExternalOperationId ?? undefined,
       purchaseResultId: purchased.purchaseResultId,
       fulfillmentOrderId: fulfillmentOrder.id,
       weightOz: effectiveWeightOz,
@@ -1785,6 +1999,7 @@ async function createShopifyShippingLabelForOrderImpl(
       createdAt: now,
       updatedAt: now,
       rawPurchaseResult: purchased.raw,
+      fulfillmentLines,
     });
     timer.done('Shopify purchase pending');
     return {
@@ -1806,8 +2021,7 @@ async function createShopifyShippingLabelForOrderImpl(
     };
   }
 
-  try {
-    const response = await persistShopifyPurchasedLabel({
+  return persistShopifyPurchasedLabel({
       order,
       clientId,
       fulfillmentOrderId: fulfillmentOrder.id,
@@ -1821,32 +2035,19 @@ async function createShopifyShippingLabelForOrderImpl(
       height,
       purchased,
       mock,
+      fulfillmentLines,
       timer,
+      externalOperationId: shopifyExternalOperationId,
     });
-    if (shopifyPurchaseIntentId != null) {
-      await resolveLabelPurchaseIntent(shopifyPurchaseIntentId, {
-        state: 'completed',
-        shipmentId: response.shipmentId,
-      });
-    }
-    return response;
-  } catch (persistError) {
-    if (shopifyPurchaseIntentId != null) {
-      await resolveLabelPurchaseIntent(shopifyPurchaseIntentId, {
-        state: 'reconcile_required',
-        error: `Shopify label purchased but shipment persist failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
-      });
-    }
-    throw persistError;
-  }
 }
 
 async function createLabelV2Impl(
   body: CreateLabelInputDto,
   scope: ClientStoreScope,
+  execution: LabelProviderDispatchOptions = {},
 ): Promise<CreateLabelResponseDto> {
-  if (!body.orderId || !body.serviceCode) {
-    throw new Error('orderId and serviceCode required');
+  if (!body.orderId) {
+    throw new Error('orderId required');
   }
 
   const timer = createLabelTimer(body.orderId);
@@ -1882,14 +2083,60 @@ async function createLabelV2Impl(
   // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
   // through the clients.storeIds array (v2 parity for legacy orders whose
   // clientId was never backfilled).
-  let clientId = order.clientId;
-  if (!clientId && order.storeId != null) {
-    const [match] = await db
-      .select({ id: clients.id })
-      .from(clients)
-      .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
-      .limit(1);
-    clientId = match?.id ?? null;
+  // Per user override unlock shipped data on 2026-07-22: purchase and receipt
+  // recovery seal the same canonical tenant identity for legacy store-only
+  // orders instead of persisting the nullable raw orders.client_id value.
+  const clientId = await resolveShippingClientId(order);
+  const requestedPurchaseIntent = body;
+  // Per user override unlock shipped data on 2026-05-23: PS-422 resolves
+  // test-mode authority before the real-postage authorization.
+  // Real clients cannot use testLabel to bypass selectionRef; test clients stay
+  // on the existing offline-only path and never reach a provider.
+  body = {
+    ...body,
+    testLabel: await resolveEffectiveTestLabel({
+      clientId,
+      requestedTestLabel: body.testLabel === true,
+      orderId: order.id,
+      entryPoint: 'createLabelV2',
+    }),
+  };
+  const purchaseSelection = body.testLabel
+    ? null
+    : await assertLabelPurchaseRateSelection({
+        selectionRef: body.selectionRef,
+      });
+  const authorizedPurchaseFacts = purchaseSelection
+    ? shippingQuoteAuthorizedPurchaseFacts(purchaseSelection)
+    : null;
+  if (purchaseSelection && authorizedPurchaseFacts) {
+    assertShippingQuoteIntentMatches({
+      ...purchaseSelection,
+      intent: requestedPurchaseIntent,
+    });
+    body = {
+      ...body,
+      carrierCode: authorizedPurchaseFacts.carrierCode ?? undefined,
+      serviceCode: authorizedPurchaseFacts.serviceCode,
+      serviceName: authorizedPurchaseFacts.serviceName ?? undefined,
+      serviceType: authorizedPurchaseFacts.serviceName ?? undefined,
+      shippingProviderId: authorizedPurchaseFacts.shippingProviderId,
+      packageCode: authorizedPurchaseFacts.packageCode,
+      customPackageId: authorizedPurchaseFacts.customPackageId,
+      weightOz: authorizedPurchaseFacts.weightOz,
+      length: authorizedPurchaseFacts.length ?? undefined,
+      width: authorizedPurchaseFacts.width ?? undefined,
+      height: authorizedPurchaseFacts.height ?? undefined,
+      confirmation: authorizedPurchaseFacts.confirmation,
+      insuranceProvider: authorizedPurchaseFacts.insuranceProvider,
+      insuredValue: authorizedPurchaseFacts.insuredValue,
+      selectedRateProof: undefined,
+      rateQuoteId: undefined,
+      selectedRateKey: undefined,
+    };
+  }
+  if (!body.serviceCode) {
+    throw new Error('serviceCode required');
   }
   const serviceDescriptor: ShippingServiceDescriptor = {
     carrierCode: body.carrierCode ?? null,
@@ -1950,7 +2197,7 @@ async function createLabelV2Impl(
   }
   const overrides = await loadOrderDimsOverride(order.id);
   const fallbackShipTo = orderShipToFromRaw(order, overrides?.recipientOverride);
-  const shipTo = mergeAddress(body.shipTo, fallbackShipTo);
+  const shipTo = purchaseSelection ? fallbackShipTo : mergeAddress(body.shipTo, fallbackShipTo);
   const rawShipTo = ((order.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
   const labelClassification = classifyShippingAddress({
     orderId: order.id,
@@ -1986,15 +2233,6 @@ async function createLabelV2Impl(
   // request for a REAL client is REJECTED with a structured 409 (TEST_LABEL_REJECTED)
   // instead of silently minting a fake label/tracking on a real customer order. Runs
   // BEFORE every consumption of the flag (rate-limit skip, weight default, mock branch).
-  body = {
-    ...body,
-    testLabel: await resolveEffectiveTestLabel({
-      clientId,
-      requestedTestLabel: body.testLabel === true,
-      orderId: order.id,
-      entryPoint: 'createLabelV2',
-    }),
-  };
   if (clientId && !body.testLabel) checkLabelRateLimit(clientId);
 
   const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
@@ -2013,12 +2251,22 @@ async function createLabelV2Impl(
     throw err;
   }
 
-  const effectiveWeightOz = Number(body.weightOz ?? overrides?.rateWeightOz ?? order.weightOz ?? (body.testLabel ? 1 : 0));
+  const currentWeightOz = Number(overrides?.rateWeightOz ?? order.weightOz ?? 0);
+  const effectiveWeightOz = Number(
+    authorizedPurchaseFacts?.weightOz
+      ?? body.weightOz
+      ?? overrides?.rateWeightOz
+      ?? order.weightOz
+      ?? (body.testLabel ? 1 : 0),
+  );
   if (!effectiveWeightOz) throw new Error('Order weight required to create label');
 
-  const length = Number(body.length ?? overrides?.rateDimsL ?? 0) || null;
-  const width = Number(body.width ?? overrides?.rateDimsW ?? 0) || null;
-  const height = Number(body.height ?? overrides?.rateDimsH ?? 0) || null;
+  const currentLength = Number(overrides?.rateDimsL ?? 0) || null;
+  const currentWidth = Number(overrides?.rateDimsW ?? 0) || null;
+  const currentHeight = Number(overrides?.rateDimsH ?? 0) || null;
+  const length = Number(authorizedPurchaseFacts?.length ?? body.length ?? overrides?.rateDimsL ?? 0) || null;
+  const width = Number(authorizedPurchaseFacts?.width ?? body.width ?? overrides?.rateDimsW ?? 0) || null;
+  const height = Number(authorizedPurchaseFacts?.height ?? body.height ?? overrides?.rateDimsH ?? 0) || null;
 
   // PS-127: the label is the authoritative rate↔label parity point. Classify
   // residential/commercial from the order's OWN evidence (operator override >
@@ -2034,13 +2282,17 @@ async function createLabelV2Impl(
     company: shipTo.company,
     customerEmail: order.customerEmail,
   });
-  const carrierShipTo: ShipstationAddressInput = {
+  let carrierShipTo: ShipstationAddressInput = {
     ...shipTo,
     name: carrierRecipient.name,
     company: carrierRecipient.company,
   };
   let shipFrom: ShipstationAddressInput;
-  if (body.shipFrom?.street1) {
+  if (purchaseSelection) {
+    shipFrom = await currentAuthorizedShipFrom(
+      purchaseSelection.authorizationContext.shipment.shipFromLocationId,
+    );
+  } else if (body.shipFrom?.street1) {
     shipFrom = mergeAddress(body.shipFrom, defaultShipFromAddress());
   } else {
     try {
@@ -2065,13 +2317,71 @@ async function createLabelV2Impl(
   // decremented correctly. Used for both the test-mode and real-postage paths.
   const resolvedPackageId = await resolveLabelPackageId({
     orderId: body.orderId ?? null,
-    customPackageId: body.customPackageId,
+    customPackageId: purchaseSelection
+      ? purchaseSelection.authorizationContext.shipment.package.id
+      : body.customPackageId,
     length,
     width,
     height,
   });
 
   // ── Offline test mode ───────────────────────────────────────────────────────
+  if (purchaseSelection) {
+    const [currentPackage] = resolvedPackageId == null
+      ? []
+      : await db
+          .select({
+            id: packages.id,
+            type: packages.type,
+            packageCode: packages.packageCode,
+            length: packages.length,
+            width: packages.width,
+            height: packages.height,
+          })
+          .from(packages)
+          .where(eq(packages.id, resolvedPackageId))
+          .limit(1);
+    assertShippingQuoteContextMatches({
+      authorized: purchaseSelection.authorizationContext,
+      current: {
+        version: 1,
+        order: {
+          orderId: order.id,
+          clientId,
+          storeId: order.storeId ?? null,
+          sourceProvider: order.sourceProvider ?? null,
+          sourceAccountId: order.sourceAccountId ?? null,
+          sourceOrderId: order.sourceOrderId ?? null,
+        },
+        shipment: {
+          shipFromLocationId: purchaseSelection.authorizationContext.shipment.shipFromLocationId,
+          shipFrom: normalizeShippingQuoteAddress(shipFrom),
+          shipTo: normalizeShippingQuoteAddress(carrierShipTo),
+          package: {
+            id: currentPackage?.id ?? resolvedPackageId,
+            type: currentPackage?.type ?? null,
+            code: currentPackage?.packageCode ?? null,
+          },
+          weightOz: currentWeightOz,
+          dimensions: {
+            length: currentLength ?? currentPackage?.length ?? null,
+            width: currentWidth ?? currentPackage?.width ?? null,
+            height: currentHeight ?? currentPackage?.height ?? null,
+          },
+          residential: labelResidential,
+          confirmation: options.confirmation,
+          insuranceProvider: options.insuranceProvider,
+          insuredValue: Number(options.insuredValue ?? 0) || 0,
+        },
+      },
+    });
+    shipFrom = { ...authorizedPurchaseFacts!.shipFrom };
+    carrierShipTo = {
+      ...authorizedPurchaseFacts!.shipTo,
+      residential: labelResidential,
+    };
+  }
+
   if (body.testLabel === true) {
     const fakeShipmentId = generateFakeShipmentId();
     const fakeTracking = generateFakeTrackingNumber();
@@ -2156,17 +2466,25 @@ async function createLabelV2Impl(
         isReturn: false,
         })
         .returning({ id: shipments.id });
-      await timer.task('markOrderShipped', () =>
-        markOrderShipped(order.id, fakeTracking, { cleanupQueue: false, tx }));
-      await enqueueFulfillmentDeductions({
-        order,
-        // fulfillment_outbox.shipment_id references the local shipment PK, not
-        // the synthetic provider label_shipment_id returned to the test caller.
-        shipmentId: persistedShipment?.id ?? null,
-        source: 'test_label',
-        tx,
-        timer,
-      });
+      if (!persistedShipment) throw new Error('Failed to persist test shipment');
+      // Per user override unlock shipped data on 2026-07-16: offline labels
+      // cannot infer shipment quantities from the mutable order snapshot.
+      await timer.task('apply order lifecycle', () =>
+        applyOrderLifecycleCommandInTransaction(tx, {
+          orderId: order.id,
+          shipmentId: persistedShipment.id,
+          commandKey: `lifecycle:shipment:${persistedShipment.id}:shipped`,
+          transition: 'shipped',
+          source: 'test_label',
+          requireAwaitingOrderStatus: true,
+          requireNoActiveOutboundShipment: true,
+          effectiveAt: createdAt,
+          fulfillmentFacts: {
+            kind: 'unavailable',
+            description: 'Offline test label request did not identify shipped line quantities',
+          },
+          trackingNumber: fakeTracking,
+        }));
       return persistedShipment;
     });
 
@@ -2187,21 +2505,17 @@ async function createLabelV2Impl(
   // Per user override unlock shipped data on 2026-06-05: enforce the
   // selected-rate proof/fingerprint boundary before any real ShipStation
   // postage call. Test labels returned above remain offline-only.
-  // Per user override unlock shipped data on 2026-06-06 (PS-105): prefer the
-  // backend-owned rate quote snapshot id; fall back to the carried proof. Both run
-  // the SAME strict validator — identical to legacy when no rateQuoteId is sent.
+  // Per user override unlock shipped data on 2026-05-23: PS-422 resolved the
+  // opaque selectionRef before request-body purchase
+  // facts were used. Re-resolve only as a defensive invariant; legacy carried
+  // quote ids, keys, and proof never authorize postage.
   await ensurePackageConsumptionSchema();
-  const purchaseRateProof = await assertLabelPurchaseRateSelection({
-    rateQuoteId: body.rateQuoteId,
-    selectedRateKey: body.selectedRateKey,
-    selectedRateProof: body.selectedRateProof,
-    // PS-204: bind the proof to the account being CHARGED. A payload naming a
-    // direct synthetic id while the proof rate belongs to ShipStation (or any
-    // cross-account pair) is blocked here, before either family's provider
-    // call — this gate runs ahead of BOTH the direct branch and the
-    // ShipStation branch.
-    purchaseShippingProviderId: body.shippingProviderId,
+  const purchaseRateProof = purchaseSelection ?? await assertLabelPurchaseRateSelection({
+    selectionRef: body.selectionRef,
   });
+  if (!authorizedPurchaseFacts) {
+    throw new ShippingQuoteAuthorizationError('canonical label persistence facts');
+  }
   // Per user override unlock shipped data on 2026-07-14: bind the current toggle
   // to the backend quote. A setting change makes the old quote stale before any
   // carrier call, preventing an insured/uninsured price or coverage mismatch.
@@ -2283,7 +2597,7 @@ async function createLabelV2Impl(
   // carried proof exposes the per-rate fingerprint; the snapshot path is coherence-checked
   // above and skipped here when no selectedRate fingerprint is present.
   const quotedResidential = residentialFromRequestFingerprint(
-    selectedRateRequestFingerprint(body.selectedRateProof?.selectedRate),
+    selectedRateRequestFingerprint(purchaseRateProof.selectedRate),
   );
   const labelTrusted =
     labelClassification.confidence === 'manual' ||
@@ -2309,15 +2623,15 @@ async function createLabelV2Impl(
   // Vercel api/carriers/labels path (deleted by PS-200), which skipped
   // inventory/package deduction entirely.
   const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);
-  // Per user override unlock shipped data on 2026-07-13 (audit C2/1.20): the
-  // purchase lock (held by the createLabelV2 wrapper) serializes LIVE purchases;
-  // the durable intent record survives crashes. Fail closed while any prior
-  // attempt is unresolved — a dead predecessor may have bought a label that was
-  // never recorded, and only reconciliation (never a blind re-buy) is safe.
+  // Existing unresolved pre-PS-423 label intents remain fail-closed. New
+  // purchases below use the canonical external_operations receipt ledger.
   await assertNoUnresolvedLabelPurchaseIntent(order.id);
-  let purchaseIntentId: number;
+  const semanticGeneration = await nextLabelSemanticGeneration(order.id);
   let created: CreatedExternalLabel;
-  let directWalmartContext: Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>['walmartContext'] = null;
+  let operationId: number;
+  type DirectPurchaseResult = Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>;
+  type DirectWalmartContext = DirectPurchaseResult['walmartContext'];
+  let directWalmartContext: DirectWalmartContext = null;
   let directProviderKey: string | null = null;
   if (directRef) {
     // PS-106: this is the DIRECT family purchase boundary.
@@ -2333,59 +2647,112 @@ async function createLabelV2Impl(
       sourceAccountId: order.sourceAccountId ?? null,
     });
     directProviderKey = normalizeProviderKey(account.provider);
-    // Per user override unlock shipped data on 2026-07-15: create durable
-    // purchase intent only after account/family preflights have passed and
-    // immediately before the provider-capable owner call. Preflight rejects
-    // can no longer strand provider_pending rows.
-    purchaseIntentId = await createLabelPurchaseIntent({
-      orderId: order.id,
-      provider: directProviderKey || 'direct',
-      requestFingerprint: `pid=${body.shippingProviderId}|svc=${body.serviceCode}`,
+    assertShippingQuoteAccountMatches({
+      authorized: purchaseRateProof.accountAuthorization,
+      current: {
+        providerFamily: 'direct',
+        provider: directProviderKey,
+        shippingProviderId: Number(body.shippingProviderId),
+        sourceTable: account.sourceTable,
+        sourceAccountId: account.id,
+        ownerClientId: account.clientId,
+        ownerStoreAccountId: account.linkedStoreAccountId,
+        credentialSource: account.sourceTable === 'store_accounts' ? 'store_account' : 'carrier_account',
+        credentialFingerprint: shippingQuoteCredentialFingerprint(account.credentials),
+        environment: process.env.NODE_ENV ?? 'development',
+      },
     });
-    // Audit C2/1.20: a buy error resolves the intent by classification —
-    // provably-pre-purchase -> failed_pre_purchase, anything else ->
-    // reconcile_required (the label may exist at the provider).
-    let direct: Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>;
-    try {
-    direct = await timer.task(`direct ${directProviderKey} createLabel connector`, () =>
-      createDirectCarrierLabelForOrder({
-        account,
-        providerAccountId: Number(body.shippingProviderId),
-        orderId: order.id,
-        orderNumber: order.orderNumber ?? null,
-        externalOrderId: order.externalOrderId ?? null,
-        clientId: clientId ?? null,
-        storeId: order.storeId ?? null,
+    // Per user override unlock shipped data on 2026-05-23: PS-423 journals
+    // the stable request identity before dispatch and records the normalized
+    // provider receipt before shipment/lifecycle persistence begins.
+    const action = await acquireFulfillmentOperation({
+      kind: 'forward_label',
+      provider: directProviderKey || 'direct',
+      subjectType: 'order',
+      subjectId: order.id,
+      semanticGeneration,
+      request: {
+        shippingProviderId: body.shippingProviderId,
         serviceCode: body.serviceCode,
-        serviceName: body.serviceName ?? null,
         weightOz: effectiveWeightOz,
-        length,
-        width,
-        height,
+        dimensions: { length, width, height },
+        packageId: resolvedPackageId ?? body.customPackageId ?? null,
+        shippingOptions: options,
         shipTo: carrierShipTo,
         shipFrom,
-        shippingOptions: options,
-        rawOrder: order.raw ?? null,
-        // PS-202 verification seam, double-gated: this flag only has an effect
-        // when CARRIER_TEST_MODE is ALSO set in the process env (see
-        // carrier-test-mode.ts) — production never arms the env, so a stray
-        // client-sent flag is inert. With both gates armed, the orchestrator
-        // routes the connector call through the $0 sandbox/replay path
-        // (assertNoLivePostageOrMarketplace enforced) while THIS pipeline —
-        // proof gate, PS-204 account binding, family/scope asserts, persist
-        // tail — runs exactly as production.
-        carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,
-      }),
-    );
-    } catch (buyErr) {
-      await resolveLabelPurchaseIntent(purchaseIntentId, {
-        state: classifyBuyErrorForIntent(buyErr),
-        error: buyErr instanceof Error ? buyErr.message : String(buyErr),
+      },
+    });
+    operationId = action.operation.id;
+    if (action.kind === 'resume_receipt') {
+      // Per user override unlock shipped data on 2026-07-22: direct-provider
+      // operator receipts remain held for manual local recovery.
+      if (action.operation.resolvedBy != null) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      created = createdLabelFromOperationReceipt(action.receipt);
+      const context = action.receipt.walmartContext;
+      directWalmartContext = context && typeof context === 'object'
+        ? { ...(context as Record<string, unknown>), rawOrder: order.raw ?? null } as unknown as DirectWalmartContext
+        : null;
+    } else if (action.kind === 'dispatch') {
+      if (execution.allowProviderDispatch === false) {
+        // Per user override unlock shipped data on 2026-07-21: the receipt-only
+        // Print Queue recovery path bypasses an orphaned process lock, never the
+        // provider ledger. Dispatch is forbidden if receipt truth is absent.
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      const direct = await dispatchFulfillmentOperation<DirectPurchaseResult>({
+        lease: action.lease,
+        label: `forward label order ${order.id} via ${directProviderKey}`,
+        execute: ({ signal, idempotencyKey }) =>
+          timer.task(`direct ${directProviderKey} createLabel connector`, () =>
+            createDirectCarrierLabelForOrder({
+              account,
+              providerAccountId: Number(body.shippingProviderId),
+              orderId: order.id,
+              orderNumber: order.orderNumber ?? null,
+              externalOrderId: order.externalOrderId ?? null,
+              clientId: clientId ?? null,
+              storeId: order.storeId ?? null,
+              serviceCode: body.serviceCode,
+              serviceName: body.serviceName ?? null,
+              weightOz: effectiveWeightOz,
+              length,
+              width,
+              height,
+              shipTo: carrierShipTo,
+              shipFrom,
+              shippingOptions: options,
+              rawOrder: order.raw ?? null,
+              signal,
+              idempotencyKey,
+              carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,
+            }),
+          ),
+        normalizeReceipt: (result) => ({
+          receipt: {
+            created: result.created,
+            walmartContext: result.walmartContext
+              ? {
+                  purchaseOrderId: result.walmartContext.purchaseOrderId,
+                  purchaseOrderSource: result.walmartContext.purchaseOrderSource,
+                  storeAccountId: result.walmartContext.storeAccountId,
+                }
+              : null,
+          },
+          providerOperationId: result.created.labelId ?? result.created.shipmentId,
+          providerResultId: result.created.trackingNumber,
+        }),
+        classifyError: (error) =>
+          classifyBuyErrorForIntent(error) === 'failed_pre_purchase'
+            ? 'failed_pre_dispatch'
+            : 'reconcile_required',
       });
-      throw buyErr;
+      created = direct.created;
+      directWalmartContext = direct.walmartContext;
+    } else {
+      throwForBlockedOperation(action);
     }
-    created = direct.created;
-    directWalmartContext = direct.walmartContext;
   } else {
     // Per user override unlock shipped data on 2026-06-06 (PS-106): carrier-family
     // eligibility — a direct-store order must not buy postage through a ShipStation
@@ -2399,43 +2766,135 @@ async function createLabelV2Impl(
     });
     const creds = await loadClientCredentials(clientId);
     const apiKeyV2 = creds.apiKeyV2 ?? undefined;
-    purchaseIntentId = await createLabelPurchaseIntent({
-      orderId: order.id,
-      provider: 'shipstation',
-      requestFingerprint: `pid=${body.shippingProviderId}|svc=${body.serviceCode}`,
+    const currentShipStationCredential = creds.apiKeyV2 ?? env.SHIPSTATION_API_KEY_V2 ?? null;
+    const currentCredentialSource: ShippingQuoteAccountAuthorization['credentialSource'] =
+      creds.sourceClientId == null
+        ? 'application_default'
+        : creds.sourceClientId === clientId
+          ? 'client'
+          : 'rate_source_client';
+    assertShippingQuoteAccountMatches({
+      authorized: purchaseRateProof.accountAuthorization,
+      current: {
+        providerFamily: 'shipstation',
+        provider: 'shipstation',
+        shippingProviderId: Number(body.shippingProviderId),
+        sourceTable: 'shipstation',
+        sourceAccountId: Number(body.shippingProviderId),
+        ownerClientId: creds.sourceClientId,
+        ownerStoreAccountId: null,
+        credentialSource: currentCredentialSource,
+        credentialFingerprint: shippingQuoteCredentialFingerprint(currentShipStationCredential),
+        environment: process.env.NODE_ENV ?? 'development',
+      },
     });
-    // Audit C2/1.20: same buy-error intent resolution as the direct branch.
-    try {
-    created = await timer.task('ShipStation createLabel connector', async () => {
-      const label = await createCarrierLabel('shipstation', {
-        apiKeyV2,
-        clientId,
-        storeId: order.storeId ?? null,
-        carrierId: `se-${body.shippingProviderId}`,
-        carrierCode: body.carrierCode ?? null,
-        serviceCode: body.serviceCode,
-        packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
+    const action = await acquireFulfillmentOperation({
+      kind: 'forward_label',
+      provider: 'shipstation',
+      subjectType: 'order',
+      subjectId: order.id,
+      semanticGeneration,
+      request: buildShipStationForwardLabelOperationRequest({
+        shippingProviderId: authorizedPurchaseFacts.shippingProviderId,
+        carrierCode: authorizedPurchaseFacts.carrierCode,
+        serviceCode: authorizedPurchaseFacts.serviceCode,
+        packageCode: authorizedPurchaseFacts.packageCode,
         weightOz: effectiveWeightOz,
-        length,
-        width,
-        height,
+        dimensions: { length, width, height },
+        // Per user override unlock shipped data on 2026-07-22: keep the
+        // immutable operation identity reconstructable from the authorized
+        // quote. The resolved catalog package is sealed separately in the
+        // provider receipt for local persistence.
+        packageId: authorizedPurchaseFacts.customPackageId,
+        shippingOptions: options,
         shipTo: carrierShipTo,
         shipFrom,
-        confirmation: options.confirmation,
-        insuranceProvider: options.insuranceProvider,
-        insuredValue: options.insuredValue,
-        ssOrderId: order.id,
         orderNumber: order.orderNumber ?? null,
-        testLabel: false,
-      });
-      return label as CreatedExternalLabel;
+      }),
     });
-    } catch (buyErr) {
-      await resolveLabelPurchaseIntent(purchaseIntentId, {
-        state: classifyBuyErrorForIntent(buyErr),
-        error: buyErr instanceof Error ? buyErr.message : String(buyErr),
+    operationId = action.operation.id;
+    if (action.kind === 'resume_receipt') {
+      // Per user override unlock shipped data on 2026-07-22: every ordinary
+      // label-retry consumer enforces the same sealed-receipt provenance as
+      // Print Queue recovery. Generic operator JSON always remains held.
+      if (!canAutomaticallyConsumeShipStationForwardLabelReceipt(action.operation)) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      const durableFacts = readShipStationForwardLabelPersistenceFacts(action.receipt, {
+        orderId: order.id,
+        clientId: clientId ?? null,
       });
-      throw buyErr;
+      if (
+        durableFacts.effectiveWeightOz !== effectiveWeightOz
+        || durableFacts.dimensions.length !== length
+        || durableFacts.dimensions.width !== width
+        || durableFacts.dimensions.height !== height
+        || durableFacts.selectedPackageId !== resolvedPackageId
+        || durableFacts.insuranceProvider !== options.insuranceProvider
+        || durableFacts.insuredValue !== options.insuredValue
+      ) {
+        throw new ShippingQuoteAuthorizationError('durable label receipt persistence facts');
+      }
+      created = createdLabelFromOperationReceipt(action.receipt);
+    } else if (action.kind === 'dispatch') {
+      // Per user override unlock shipped data on 2026-07-21: receipt-only
+      // ShipStation recovery may never cross the provider POST boundary.
+      if (execution.allowProviderDispatch === false) {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
+      created = await dispatchFulfillmentOperation({
+        lease: action.lease,
+        label: `forward label order ${order.id} via ShipStation`,
+        execute: ({ signal, idempotencyKey }) =>
+          timer.task('ShipStation createLabel connector', async () => {
+            const label = await createCarrierLabel('shipstation', {
+              apiKeyV2,
+              clientId,
+              storeId: order.storeId ?? null,
+              carrierId: `se-${body.shippingProviderId}`,
+              carrierCode: body.carrierCode ?? null,
+              serviceCode: body.serviceCode,
+              packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
+              weightOz: effectiveWeightOz,
+              length,
+              width,
+              height,
+              shipTo: carrierShipTo,
+              shipFrom,
+              confirmation: options.confirmation,
+              insuranceProvider: options.insuranceProvider,
+              insuredValue: options.insuredValue,
+              ssOrderId: order.id,
+              orderNumber: order.orderNumber ?? null,
+              externalShipmentId: idempotencyKey,
+              signal,
+              testLabel: false,
+            });
+            return label as CreatedExternalLabel;
+          }),
+        normalizeReceipt: (label) => ({
+          // Per user override unlock shipped data on 2026-07-22: seal the
+          // post-authorization package/insurance facts with the provider ACK so
+          // crash recovery never trusts a mutable Print Queue payload.
+          receipt: buildShipStationForwardLabelReceipt(label, {
+            orderId: order.id,
+            clientId: clientId ?? null,
+            effectiveWeightOz,
+            dimensions: { length, width, height },
+            selectedPackageId: resolvedPackageId,
+            insuranceProvider: options.insuranceProvider,
+            insuredValue: options.insuredValue,
+          }),
+          providerOperationId: label.labelId ?? label.shipmentId,
+          providerResultId: label.trackingNumber,
+        }),
+        classifyError: (error) =>
+          classifyBuyErrorForIntent(error) === 'failed_pre_purchase'
+            ? 'failed_pre_dispatch'
+            : 'reconcile_required',
+      });
+    } else {
+      throwForBlockedOperation(action);
     }
     // Per user override unlock shipped data on 2026-06-17 (PS-273): stamp the
     // ShipStation account's REAL nickname at purchase time so the shipment row
@@ -2452,25 +2911,31 @@ async function createLabelV2Impl(
       )) ?? created.providerAccountNickname ?? null;
   }
 
+  if (directProviderKey === 'walmart_shipping') {
+    // Per user override unlock shipped data on 2026-07-23: PS-440 keeps the
+    // provider-receipt boundary ahead of artifact validation and local writes.
+    // PS-444 established this fail-closed order; the focused owner makes that
+    // contract directly testable without a live label purchase.
+    // Per user override unlock shipped data on 2026-07-21: PS-444 validates
+    // the Walmart artifact only after its provider receipt is durable and
+    // before shipment/order persistence. Retry therefore reuses the receipt
+    // and cannot issue a second purchase POST.
+    assertPurchasedLabelArtifact('Walmart Shipping', created.labelUrl);
+  }
+
   // PS-370: ensure the additive selected_rate_cost column exists BEFORE the
   // shipment-insert transaction opens. Running the ADD COLUMN (ACCESS EXCLUSIVE)
   // here — outside the tx, on the raw connection — avoids a lock/deadlock against
   // the tx's shipments INSERT. Memoized: real DDL only on the first label after a
   // deploy, then a no-op (and a no-op once migration 0054 is applied).
   await ensureShipmentsSelectedRateCostColumn();
-  // PS-248 (Per user override unlock shipped data on 2026-06-16): persist the shipment AND flip the
-  // order to 'shipped' in ONE transaction, so a crash between them can't orphan a shipment row while
-  // the order stays awaiting (torn state / broken invariant). The external label buy already happened
-  // above; this txn is DB-only + short. enqueueFulfillmentDeductions stays its own unit.
-  // Audit C2/1.20: a persist failure AFTER a successful buy is the exact crash
-  // window — the label exists at the provider and is unrecorded locally. Mark
-  // reconcile_required so every future purchase for this order fails closed
-  // until an operator resolves it; success resolves the intent 'completed'.
-  let localShipmentId: number;
-  try {
-  localShipmentId = await db.transaction(async (tx) => {
+  // Per user override unlock shipped data on 2026-05-23: PS-423 consumes the
+  // durable provider receipt in the same transaction as shipment and lifecycle
+  // persistence. A local fault rolls back both projections; retry reuses receipt.
+  const consumed = await consumeFulfillmentOperation(operationId, async (tx, receipt) => {
+    const durableCreated = createdLabelFromOperationReceipt(receipt);
     const shipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
-      created,
+      created: durableCreated,
       orderId: order.id,
       orderNumber: order.orderNumber ?? null,
       clientId: clientId ?? null,
@@ -2495,40 +2960,41 @@ async function createLabelV2Impl(
     // Per user override unlock shipped data on 2026-07-11: PS-413 makes
     // PrepShip, ShipStation, Shipp, and Walmart package consumption share one
     // atomic owner. Test labels returned above never consume package stock.
-    await consumeOutboundPackageInTransaction({
-      shipmentId,
-      orderId: order.id,
-      orderNumber: order.orderNumber ?? null,
-      source: directProviderKey ?? 'prepship_v2',
-      sourceAccountId: created.providerAccountId ?? null,
-      providerShipmentId: directProviderKey
-        ? created.labelId ?? (created.shipmentId || null)
-        : created.shipmentId || null,
-      effectiveAt: created.shipDate,
-      selectedPackageId: resolvedPackageId ?? body.customPackageId,
-      dimensions: { length, width, height },
-    }, tx);
-    await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false, tx }));
-    await enqueueFulfillmentDeductions({
-      order,
-      shipmentId,
-      source: 'label',
-      tx,
-      timer,
-    });
-    return shipmentId;
+    // Per user override unlock shipped data on 2026-07-16 (PS-424): one
+    // command owns the terminal transition and both fulfillment ledgers.
+    await timer.task('apply order lifecycle', () =>
+      applyOrderLifecycleCommandInTransaction(tx, {
+        orderId: order.id,
+        shipmentId,
+        commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
+        transition: 'shipped',
+        source: directProviderKey ?? 'prepship_v2',
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
+        effectiveAt: new Date(durableCreated.shipDate),
+        fulfillmentFacts: {
+          kind: 'unavailable',
+          description: 'Label purchase request did not identify shipped line quantities',
+        },
+        trackingNumber: durableCreated.trackingNumber,
+        packageConsumption: {
+          shipmentId,
+          orderId: order.id,
+          orderNumber: order.orderNumber ?? null,
+          source: directProviderKey ?? 'prepship_v2',
+          sourceAccountId: durableCreated.providerAccountId ?? null,
+          providerShipmentId: directProviderKey
+            ? durableCreated.labelId ?? (durableCreated.shipmentId || null)
+            : durableCreated.shipmentId || null,
+          effectiveAt: durableCreated.shipDate,
+          selectedPackageId: resolvedPackageId ?? body.customPackageId,
+          dimensions: { length, width, height },
+        },
+      }));
+    return { shipmentId };
   });
-  } catch (persistErr) {
-    await resolveLabelPurchaseIntent(purchaseIntentId, {
-      state: 'reconcile_required',
-      error: `label purchased but shipment persist failed: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`,
-    });
-    throw persistErr;
-  }
-  await resolveLabelPurchaseIntent(purchaseIntentId, {
-    state: 'completed',
-    shipmentId: localShipmentId,
-  });
+  const localShipmentId = Number(consumed.localResult?.shipmentId ?? 0);
+  if (!localShipmentId) throw new Error('Consumed label operation is missing its local shipment id');
   // PS-220 (realized house-margin): SHIPP is DRP's house carrier. After the committed ship txn, freeze
   // the captured margin into the order_competitive_rate sidecar — it READS the projected next-best stamp
   // (best_rate_json), never re-fetches. Best-effort + a SEPARATE write OUTSIDE the locked ship txn —
@@ -2807,9 +3273,10 @@ async function createMockShipmentForOrder(args: {
   saveMockLabel(fakeShipmentId, { ...mockData, pdfBase64 });
 
   await ensureShipmentsSelectedRateCostColumn();
-  const [row] = await db
-    .insert(shipments)
-    .values({
+  const row = await db.transaction(async (tx) => {
+    const [persisted] = await tx
+      .insert(shipments)
+      .values({
       orderId: order.id,
       clientId,
       orderNumber: order.orderNumber,
@@ -2835,11 +3302,26 @@ async function createMockShipmentForOrder(args: {
       source: 'test_offline',
       voided: false,
       isReturn: false,
-    })
-    .returning();
-  if (!row) throw new Error('Failed to persist mock shipment');
-
-  await markOrderShipped(order.id, fakeTracking);
+      })
+      .returning();
+    if (!persisted) throw new Error('Failed to persist mock shipment');
+    // Per user override unlock shipped data on 2026-07-16: legacy mock labels
+    // persist review-only line state and never enqueue guessed inventory work.
+    await applyOrderLifecycleCommandInTransaction(tx, {
+      orderId: order.id,
+      shipmentId: persisted.id,
+      commandKey: `lifecycle:shipment:${persisted.id}:shipped`,
+      transition: 'shipped',
+      source: 'test_label',
+      effectiveAt: createdAt,
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Legacy mock label request did not identify shipped line quantities',
+      },
+      trackingNumber: fakeTracking,
+    });
+    return persisted;
+  });
 
   return row;
 }
@@ -3008,8 +3490,16 @@ export async function voidLabelV2(
 
   if (dispatch.kind === 'already_voided') {
     await ensurePackageConsumptionSchema();
-    await db.transaction((tx) =>
-      reverseOutboundPackageConsumptionInTransaction(row.id, new Date(), tx));
+    if (row.orderId) {
+      await db.transaction((tx) => voidOrderShipmentLifecycleInTransaction(tx, {
+        orderId: row.orderId!,
+        shipmentId: row.id,
+        source: 'label_void_retry',
+      }));
+    } else {
+      await db.transaction((tx) =>
+        reverseOutboundPackageConsumptionInTransaction(row.id, new Date(), tx));
+    }
     return {
       success: true,
       status: 'already_voided',
@@ -3031,19 +3521,54 @@ export async function voidLabelV2(
 
   await ensurePackageConsumptionSchema();
   let provider = 'test_offline';
+  let voidOperationId: number | null = null;
   if (dispatch.kind === 'provider') {
     provider = dispatch.provider;
     if (!carrierConnectorSupportsVoid(dispatch.provider)) {
       return failureShape('not_supported', dispatch.provider, voidNotSupportedMessage(dispatch.provider));
     }
+    // Per user override unlock shipped data on 2026-05-23: PS-423 records a
+    // provider void receipt before the protected local shipment lifecycle is
+    // changed. Unknown outcomes remain active locally and operator-held.
     try {
       const creds =
         dispatch.provider === 'shipstation' ? await loadClientCredentials(row.clientId) : null;
-      await voidCarrierLabel(dispatch.provider, {
-        labelId: dispatch.voidKey,
-        trackingNumber: row.trackingNumber ?? null,
-        ...(creds?.apiKeyV2 ? { apiKeyV2: creds.apiKeyV2 } : {}),
-      } as Parameters<typeof voidCarrierLabel>[1]);
+      const action = await acquireFulfillmentOperation({
+        kind: 'void_label',
+        provider: dispatch.provider,
+        subjectType: 'shipment',
+        subjectId: row.id,
+        request: {
+          labelId: dispatch.voidKey,
+          trackingNumber: row.trackingNumber ?? null,
+        },
+      });
+      voidOperationId = action.operation.id;
+      if (action.kind === 'dispatch') {
+        await dispatchFulfillmentOperation({
+          lease: action.lease,
+          label: `void label shipment ${row.id} via ${dispatch.provider}`,
+          execute: ({ signal, idempotencyKey }) =>
+            voidCarrierLabel(dispatch.provider, {
+              labelId: dispatch.voidKey,
+              trackingNumber: row.trackingNumber ?? null,
+              signal,
+              idempotencyKey,
+              ...(creds?.apiKeyV2 ? { apiKeyV2: creds.apiKeyV2 } : {}),
+            } as Parameters<typeof voidCarrierLabel>[1]),
+          normalizeReceipt: (result) => ({
+            receipt: {
+              voided: result.voided,
+              provider: result.provider,
+              labelId: dispatch.voidKey,
+            },
+            providerOperationId: dispatch.voidKey,
+            providerResultId: row.trackingNumber,
+          }),
+        });
+      } else if (action.kind !== 'resume_receipt' && action.kind !== 'consumed') {
+        throw new FulfillmentOperationHeldError(action.operation);
+      }
     } catch (err) {
       // Per user override unlock shipped data on 2026-07-06 (PS-399): expose
       // sanitized provider detail while preserving the no-local-void invariant.
@@ -3066,49 +3591,26 @@ export async function voidLabelV2(
   // the order row and derives lifecycle from every active outbound shipment.
   // The order reopens only after the final active void, and upstream/external
   // terminal evidence is preserved. Package reversal remains in this tx.
-  const lifecycleDecision = await db.transaction<ShipmentVoidLifecycleDecision | null>(async (tx) => {
-    let decision: ShipmentVoidLifecycleDecision | null = null;
-    const [order] = row.orderId
-      ? await tx
-          .select({
-            orderStatus: orders.orderStatus,
-            canonicalStatus: orders.canonicalStatus,
-            externallyShipped: orders.externallyShipped,
-          })
-          .from(orders)
-          .where(eq(orders.id, row.orderId))
-          .for('update')
-          .limit(1)
-      : [];
-    await tx
-      .update(shipments)
-      .set({ voided: true, updatedAt: now })
-      .where(eq(shipments.id, row.id));
-    if (row.orderId && order) {
-      const [remaining] = await tx
-        .select({ id: shipments.id })
-        .from(shipments)
-        .where(activeOutboundShipmentPredicate({
-          orderId: row.orderId,
-          excludeShipmentId: row.id,
-        }))
-        .limit(1);
-      decision = decideShipmentVoidLifecycle({
-        remainingActiveOutboundShipmentCount: remaining ? 1 : 0,
-        orderStatus: order.orderStatus,
-        canonicalStatus: order.canonicalStatus,
-        externallyShipped: order.externallyShipped,
+  const applyLocalVoid = async (tx: DbTx): Promise<ShipmentVoidLifecycleDecision | null> => {
+    if (row.orderId) {
+      const result = await voidOrderShipmentLifecycleInTransaction(tx, {
+        orderId: row.orderId,
+        shipmentId: row.id,
+        source: `label_void:${provider}`,
+        effectiveAt: now,
       });
+      return result.decision;
     }
-    if (row.orderId && decision?.kind === 'reopen') {
-      await tx
-        .update(orders)
-        .set({ orderStatus: decision.nextOrderStatus, updatedAt: now })
-        .where(eq(orders.id, row.orderId));
-    }
+    await tx.update(shipments).set({ voided: true, updatedAt: now }).where(eq(shipments.id, row.id));
     await reverseOutboundPackageConsumptionInTransaction(row.id, now, tx);
-    return decision;
-  });
+    return null;
+  };
+  const lifecycleDecision = voidOperationId != null
+    ? ((await consumeFulfillmentOperation(
+        voidOperationId,
+        async (tx) => ({ decision: await applyLocalVoid(tx) }),
+      )).localResult?.decision as ShipmentVoidLifecycleDecision | null | undefined) ?? null
+    : await db.transaction<ShipmentVoidLifecycleDecision | null>(applyLocalVoid);
 
   // PS-263 (Per user override unlock shipped data on 2026-06-14): a void must retract the
   // marketplace confirmation. Cancel every not-yet-sent confirmation for this order so it
@@ -3185,53 +3687,110 @@ export async function createReturnLabelV2(
   // carries no rate/insurance selection. So resolveHugrabLabelPurchasePreflight is NOT
   // run here. If HUGRAB returns ever require $100 coverage, gate this path on its OWN
   // flag (NOT the forward HUGRAB_PURCHASE_GATE) + add return-insurance handling.
-  const result = await ssCreateReturnLabel(row.labelShipmentId, reason, creds.apiKeyV2 ?? undefined);
+  // Per user override unlock shipped data on 2026-05-23: PS-423 journals return
+  // postage before dispatch and reuses a recorded receipt after any local fault.
+  const action = await acquireFulfillmentOperation({
+    kind: 'return_label',
+    provider: 'shipstation',
+    subjectType: 'shipment',
+    subjectId: row.id,
+    semanticGeneration: await nextLabelSemanticGeneration(row.orderId ?? 0, row.id),
+    request: { providerShipmentId: row.labelShipmentId, reason },
+  });
+  let result: Awaited<ReturnType<typeof ssCreateReturnLabel>>;
+  if (action.kind === 'resume_receipt' || action.kind === 'consumed') {
+    // Per user override unlock shipped data on 2026-07-22: generic return-label
+    // receipt JSON also cannot cross the automatic persistence boundary.
+    if (action.kind === 'resume_receipt' && action.operation.resolvedBy != null) {
+      throw new FulfillmentOperationHeldError(action.operation);
+    }
+    const receipt = action.operation.providerReceipt;
+    const value = receipt?.returnLabel;
+    if (!value || typeof value !== 'object') throw new Error('Return operation receipt is invalid');
+    result = value as Awaited<ReturnType<typeof ssCreateReturnLabel>>;
+  } else if (action.kind === 'dispatch') {
+    result = await dispatchFulfillmentOperation({
+      lease: action.lease,
+      label: `return label for shipment ${row.id}`,
+      execute: ({ signal }) =>
+        ssCreateReturnLabel(row.labelShipmentId!, reason, creds.apiKeyV2 ?? undefined, signal),
+      normalizeReceipt: (createdReturn) => ({
+        receipt: { returnLabel: createdReturn },
+        providerOperationId: createdReturn.returnShipmentId,
+        providerResultId: createdReturn.returnTrackingNumber,
+      }),
+      classifyError: (error) =>
+        classifyBuyErrorForIntent(error) === 'failed_pre_purchase'
+          ? 'failed_pre_dispatch'
+          : 'reconcile_required',
+    });
+  } else {
+    throwForBlockedOperation(action);
+  }
   const now = new Date();
 
   await ensureShipmentsSelectedRateCostColumn();
-  const [newShipment] = await db
-    .insert(shipments)
-    .values({
-      orderId: row.orderId,
-      clientId: row.clientId,
-      orderNumber: row.orderNumber,
-      carrierCode: row.carrierCode,
-      serviceCode: row.serviceCode,
-      trackingNumber: result.returnTrackingNumber,
-      shipDate: now,
-      createDate: now,
-      cost: result.cost.toFixed(2),
-      labelUrl: result.labelUrl,
-      labelCreatedAt: now,
-      labelFormat: 'pdf',
-      labelCarrier: row.carrierCode,
-      labelService: row.serviceCode,
-      labelTracking: result.returnTrackingNumber,
-      labelCost: result.cost.toFixed(2),
-      // Per user override unlock shipped data on 2026-07-06: PS-381 stamps the
-      // selected/purchased cost SOT on return shipment rows when postage proof exists.
-      selectedRateCost: result.cost.toFixed(2),
-      labelShipDate: now,
-      labelShipmentId: result.returnShipmentId,
-      source: 'prepship_v2',
-      voided: false,
-      isReturn: true,
-      returnForShipmentId: row.id,
-      returnReason: reason,
-    })
-    .returning({ id: shipments.id });
+  const consumed = action.kind === 'consumed'
+    ? { localResult: action.localResult }
+    : await consumeFulfillmentOperation(action.operation.id, async (tx, receipt) => {
+        const durable = receipt.returnLabel;
+        if (!durable || typeof durable !== 'object') throw new Error('Return operation receipt is invalid');
+        const durableResult = durable as Awaited<ReturnType<typeof ssCreateReturnLabel>>;
+        const [newShipment] = await tx
+          .insert(shipments)
+          .values({
+            orderId: row.orderId,
+            clientId: row.clientId,
+            orderNumber: row.orderNumber,
+            carrierCode: row.carrierCode,
+            serviceCode: row.serviceCode,
+            trackingNumber: durableResult.returnTrackingNumber,
+            shipDate: now,
+            createDate: now,
+            cost: durableResult.cost.toFixed(2),
+            labelUrl: durableResult.labelUrl,
+            labelCreatedAt: now,
+            labelFormat: 'pdf',
+            labelCarrier: row.carrierCode,
+            labelService: row.serviceCode,
+            labelTracking: durableResult.returnTrackingNumber,
+            labelCost: durableResult.cost.toFixed(2),
+            selectedRateCost: durableResult.cost.toFixed(2),
+            labelShipDate: now,
+            labelShipmentId: durableResult.returnShipmentId,
+            source: 'prepship_v2',
+            voided: false,
+            isReturn: true,
+            returnForShipmentId: row.id,
+            returnReason: reason,
+          })
+          .returning({ id: shipments.id });
+        if (!newShipment) throw new Error('Return shipment persistence failed');
+        return { shipmentId: newShipment.id };
+      });
+  const localReturnShipmentId = Number(consumed.localResult?.shipmentId ?? 0);
+  if (!localReturnShipmentId) throw new Error('Consumed return operation is missing its local shipment id');
 
   // v2-parity: also record the return in the dedicated return_labels table.
   // Best-effort — failures here don't roll back the shipments insert since
   // the canonical source is shipments.isReturn + returnForShipmentId.
   try {
     const { returnLabels } = await import('../db/schema/return-labels');
-    await db.insert(returnLabels).values({
-      shipmentId: row.id,
-      returnShipmentId: newShipment?.id ?? null,
-      returnTrackingNumber: result.returnTrackingNumber,
-      reason,
-    });
+    // Per user override unlock shipped data on 2026-05-23: PS-423 makes this
+    // compatibility mirror idempotent when a consumed receipt is replayed.
+    const [existingReturnMirror] = await db
+      .select({ id: returnLabels.id })
+      .from(returnLabels)
+      .where(eq(returnLabels.returnShipmentId, localReturnShipmentId))
+      .limit(1);
+    if (!existingReturnMirror) {
+      await db.insert(returnLabels).values({
+        shipmentId: row.id,
+        returnShipmentId: localReturnShipmentId,
+        returnTrackingNumber: result.returnTrackingNumber,
+        reason,
+      });
+    }
   } catch (err) {
     console.warn('[labels] return_labels mirror insert failed:', err);
   }

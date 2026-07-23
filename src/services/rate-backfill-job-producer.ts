@@ -1,11 +1,16 @@
 import PgBoss from 'pg-boss';
 import { env } from '../lib/env';
-import type { DurableRateBackfillJobPayload } from './rate-backfill-job-types';
+import { withPgBossPoolLifetime } from '../lib/pg-boss-pool-lifetime';
+import {
+  rateBackfillPriority,
+  type DurableRateBackfillJobPayload,
+} from './rate-backfill-job-types';
 
 export const RATE_BACKFILL_JOB_NAME = 'prepship.sync.rate-backfill';
 
 export type DurableRateBackfillEnqueueResult = {
   queued: boolean;
+  deduplicated: boolean;
   queueJobId: string | null;
   error: string | null;
 };
@@ -15,7 +20,7 @@ let producerPromise: Promise<PgBoss> | null = null;
 function getRateBackfillProducer(): Promise<PgBoss> {
   if (producerPromise) return producerPromise;
   producerPromise = (async () => {
-    const producer = new PgBoss({
+    const producer = new PgBoss(withPgBossPoolLifetime({
       connectionString: env.DATABASE_URL,
       schema: env.PG_BOSS_SCHEMA,
       application_name: 'prepship-rate-backfill-producer',
@@ -27,7 +32,7 @@ function getRateBackfillProducer(): Promise<PgBoss> {
       retentionDays: 7,
       deleteAfterDays: 7,
       supervise: false,
-    });
+    }, env.DB_MAX_LIFETIME_SECONDS));
     try {
       producer.on('error', (error) => {
         console.error('[rate-backfill-producer] pg-boss error:', error.message);
@@ -66,7 +71,7 @@ export async function enqueueDurableRateBackfillJob(
     const producer = await getRateBackfillProducer();
     const queueJobId = await producer.send(RATE_BACKFILL_JOB_NAME, payload, {
       id: payload.jobId,
-      priority: payload.requestedBy === 'manual' ? 1_000 : 100,
+      priority: rateBackfillPriority(payload),
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
@@ -75,12 +80,14 @@ export async function enqueueDurableRateBackfillJob(
     });
     return {
       queued: Boolean(queueJobId),
+      deduplicated: !queueJobId,
       queueJobId: queueJobId ? String(queueJobId) : null,
-      error: queueJobId ? null : 'pg-boss did not admit the rate backfill job',
+      error: null,
     };
   } catch (error) {
     return {
       queued: false,
+      deduplicated: false,
       queueJobId: null,
       error: error instanceof Error ? error.message : String(error),
     };

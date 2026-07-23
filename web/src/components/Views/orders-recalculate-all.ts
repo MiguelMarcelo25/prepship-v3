@@ -7,17 +7,17 @@
 // states the table already renders via PS-120. The frontend only starts the
 // job and polls its status line; no per-order loop, no rate logic here.
 import { api } from '../../lib/api'
-
-export type RecalculateAllJob = {
-  jobId: string
-  status: string
-  processed?: number
-  total?: number
-  updated?: number
-  skipped?: number
-  failed?: number
-  message?: string
-}
+import {
+  isRecalculateAllRequestSource,
+  type RecalculateAllJob,
+} from './orders-recalculate-all-progress'
+export {
+  buildRecalculateAllProgressView,
+  isManualRecalculateAllJob,
+  type RecalculateAllJob,
+  type RecalculateAllProgressState,
+  type RecalculateAllProgressView,
+} from './orders-recalculate-all-progress'
 
 export const FAST_RECALCULATE_MAX_AGE_HOURS = 6
 
@@ -31,12 +31,17 @@ function normalizeRecalculateAllJob(raw: Record<string, unknown>, fallbackJobId?
   return {
     jobId,
     status: String(raw.status ?? 'unknown'),
+    mode: raw.mode === 'manual_force_live' || raw.mode === 'cache_friendly' ? raw.mode : undefined,
+    requestedBy: isRecalculateAllRequestSource(raw.requestedBy)
+      ? raw.requestedBy
+      : undefined,
     processed: typeof raw.processed === 'number' ? raw.processed : undefined,
     total: typeof raw.total === 'number' ? raw.total : undefined,
     updated: typeof raw.updated === 'number' ? raw.updated : undefined,
     skipped: typeof raw.skipped === 'number' ? raw.skipped : undefined,
     failed: typeof raw.failed === 'number' ? raw.failed : undefined,
     message: typeof raw.message === 'string' ? raw.message : undefined,
+    error: typeof raw.error === 'string' || raw.error === null ? raw.error : undefined,
   }
 }
 
@@ -69,13 +74,21 @@ export async function fetchLatestRecalculateAllJob(): Promise<RecalculateAllJob 
   const payload = await api.get<{
     job?: Record<string, unknown> | null
     durableJob?: Record<string, unknown> | null
+    generation?: Record<string, unknown> | null
   }>('/rates/backfill-best/latest')
   const raw = payload.job && typeof payload.job === 'object'
     ? payload.job
     : payload.durableJob && typeof payload.durableJob === 'object'
       ? payload.durableJob
       : null
-  return raw ? normalizeRecalculateAllJob(raw) : null
+  const job = raw ? normalizeRecalculateAllJob(raw) : null
+  const generation = payload.generation && typeof payload.generation === 'object'
+    ? payload.generation as Record<string, unknown>
+    : null
+  const requestedBy = generation && isRecalculateAllRequestSource(generation.requestedBy)
+    ? generation.requestedBy
+    : undefined
+  return job ? { ...job, requestedBy: job.requestedBy ?? requestedBy } : null
 }
 
 export function isRecalculateAllJobDone(job: RecalculateAllJob): boolean {

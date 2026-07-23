@@ -34,6 +34,7 @@ function read(path: string): string {
 const backendIssued = {
   rateQuoteId: 'rq_backend_302',
   selectedRateKey: 'srk_backend_302',
+  selectionRef: 'sqa_backend_302',
   proofSource: 'backend_rate_response',
   requestFingerprint: 'fp_backend_302',
   serviceCode: 'ups_ground',
@@ -46,9 +47,9 @@ const legacyProof = {
   shippingProviderId: 607855,
 };
 
-check('frontend proof helper prefers backend snapshot id/key when present',
+check('frontend proof helper prefers backend selectionRef when present',
   JSON.stringify(rateQuoteRefFromCandidates([backendIssued, legacyProof])) ===
-    JSON.stringify({ rateQuoteId: 'rq_backend_302', selectedRateKey: 'srk_backend_302' }));
+    JSON.stringify({ selectionRef: 'sqa_backend_302' }));
 check('frontend proof helper does not synthesize a snapshot ref from legacy proof',
   JSON.stringify(rateQuoteRefFromCandidates([legacyProof])) === JSON.stringify({}));
 check('frontend proof helper rejects half refs instead of fabricating the missing key',
@@ -71,9 +72,12 @@ check('single backend finalizer returns bestRate, rates, and rateQuoteId',
 check('single backend finalizer stamps backend proof source',
   /proofSource: BACKEND_RATE_PROOF_SOURCE/.test(rateStore) &&
   /BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'/.test(rateStore));
-check('single backend finalizer stamps rateQuoteId and backend completeness onto each emitted rate',
+check('single backend finalizer stamps selectionRef and backend completeness onto authorized rates',
   /const isComplete = input\.bestRateComplete === true/.test(rateStore) &&
-  /const rates = rateQuoteId[\s\S]{0,500}ratesWithKeys\.map\(\(rate\) => \(\{[\s\S]{0,180}rateQuoteId,[\s\S]{0,180}proofSource: BACKEND_RATE_PROOF_SOURCE,[\s\S]{0,180}isComplete,/.test(rateStore));
+  /const selectionRefFor =/.test(rateStore) &&
+  /\.\.\.\(selectionRef \? \{ selectionRef \} : \{\}\)/.test(rateStore) &&
+  /proofSource: BACKEND_RATE_PROOF_SOURCE/.test(rateStore) &&
+  /isComplete,/.test(rateStore));
 
 const ratesRoute = read('src/routes/rates.ts');
 const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
@@ -129,6 +133,7 @@ check('rate translation passes backend proof fields through without inventing id
   /proofSource:\s*obj\.proofSource\s*\?\?\s*null/.test(shared) &&
   /rateQuoteId:\s*obj\.rateQuoteId\s*\?\?\s*null/.test(shared) &&
   /selectedRateKey:\s*obj\.selectedRateKey\s*\?\?\s*null/.test(shared) &&
+  /selectionRef:\s*obj\.selectionRef\s*\?\?\s*null/.test(shared) &&
   !/rateQuoteId:\s*['"`]/.test(shared) &&
   !/selectedRateKey:\s*['"`]/.test(shared));
 
@@ -165,9 +170,9 @@ check('Apply Best Rate route guards then delegates without owning proof or persi
 const labels = read('src/services/labels.ts');
 check('label creation validates applied best-rate proof before provider purchase',
   /await assertLabelPurchaseRateSelection\(\{/.test(labels) &&
-  /rateQuoteId:\s*body\.rateQuoteId/.test(labels) &&
-  /selectedRateKey:\s*body\.selectedRateKey/.test(labels) &&
-  /selectedRateProof:\s*body\.selectedRateProof/.test(labels));
+  /selectionRef:\s*body\.selectionRef/.test(labels) &&
+  /assertShippingQuoteContextMatches\(\{/.test(labels) &&
+  /assertShippingQuoteAccountMatches\(\{/.test(labels));
 
 const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workflow.md');
 check('workflow doc records PS-302 apply-best-rate authority guard',

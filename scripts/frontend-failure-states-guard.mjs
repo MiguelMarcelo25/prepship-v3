@@ -16,6 +16,9 @@ const queueParsersSource = fs.readFileSync(path.join(root, 'web/src/components/V
 // The "Failed to load orders" + Retry markup now lives in OrdersResultsShell (delegating to
 // onRetry), and OrdersView passes onRetry={refetchOrders}. Same recovery protection, one move.
 const ordersResultsShellSource = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersResultsShell.tsx'), 'utf8');
+const endpointKeysSource = fs.readFileSync(path.join(root, 'web/src/lib/endpoint-query-keys.ts'), 'utf8');
+const sidebarSource = fs.readFileSync(path.join(root, 'web/src/components/Sidebar/variants/useSidebarController.ts'), 'utf8');
+const billingViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/BillingView.tsx'), 'utf8');
 
 function fail(message) {
   console.error(`FAIL ${message}`);
@@ -94,13 +97,18 @@ for (const method of criticalMethods) {
 }
 
 assert(
-  methodBlock('fetchCounts').includes('throwOnError: true'),
-  'fetchCounts keeps stale cached data but rethrows first-load failures',
+  endpointKeysSource.includes("countsRoot: ['endpoint', 'init', 'counts']") &&
+    sidebarSource.includes('queryClient.fetchQuery({') &&
+    sidebarSource.includes('queryKey: endpointQueryKeys.counts(filter)') &&
+    methodBlock('fetchCounts').includes("api.get<any>('/init/counts'"),
+  'fetchCounts delegates stale-data retention to TanStack and rethrows transport failures',
 );
 
 assert(
-  methodBlock('fetchBillingSummary').includes('throwOnError: true'),
-  'fetchBillingSummary keeps stale cached data but rethrows first-load failures',
+  endpointKeysSource.includes("billingSummaryRoot: ['billing', 'summary']") &&
+    billingViewSource.includes('queryKey: endpointQueryKeys.billingSummary(') &&
+    methodBlock('fetchBillingSummary').includes("api.get<any>(`/billing/summary"),
+  'fetchBillingSummary delegates stale-data retention to TanStack and rethrows transport failures',
 );
 
 assert(

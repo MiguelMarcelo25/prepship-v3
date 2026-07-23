@@ -247,6 +247,8 @@ export type DirectLabelPurchaseArgs = {
   shipFrom: Record<string, unknown> | null;
   shippingOptions: NormalizedShippingOptions;
   rawOrder: unknown | null;
+  signal?: AbortSignal;
+  idempotencyKey?: string;
   /** Carrier test-mode passthrough (the orchestrator's $0 seam). */
   carrierTestMode?: boolean;
 };
@@ -300,6 +302,8 @@ export async function createDirectCarrierLabelForOrder(
     externalOrderId: args.externalOrderId,
     orderNumber: args.orderNumber,
     shippingOptions: args.shippingOptions,
+    signal: args.signal,
+    idempotencyKey: args.idempotencyKey,
     ...(args.carrierTestMode ? { __carrierTestMode: true } : {}),
   };
   const input =

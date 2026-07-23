@@ -65,6 +65,8 @@ async function main(): Promise<void> {
     order_number text,
     shipment_id integer,
     ship_date timestamptz,
+    billing_effective_date timestamptz,
+    billing_policy_version text,
     line_type text not null,
     description text not null,
     qty numeric(10,2) not null default '1',

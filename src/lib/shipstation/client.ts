@@ -5,6 +5,8 @@ import { CircuitBreaker } from './circuit-breaker.js';
 import { DurableTokenBucket } from './durable-rate-limiter.js';
 import {
   SHIPSTATION_RATE_LIMIT_BURST,
+  SHIPSTATION_RATE_LIMIT_BATCH_BURST_RESERVE,
+  SHIPSTATION_RATE_LIMIT_BATCH_PER_MINUTE_RESERVE,
   SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE,
   SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE,
   SHIPSTATION_RATE_LIMIT_PER_MINUTE,
@@ -21,7 +23,7 @@ const BASE_URL = 'https://api.shipstation.com';
 const breaker = new CircuitBreaker(5, 30_000);
 const inflight = new Map<string, Promise<unknown>>();
 
-export type ShipStationRequestPriority = 'interactive' | 'background';
+export type ShipStationRequestPriority = 'interactive' | 'batch' | 'background';
 // Audit R-3 (2026-07-13): ShipStation grants the per-minute budget PER API KEY,
 // but this bucket was process-global across ALL keys (DR PREPPER, KFG, per-client)
 // — one tenant's bulk rating starved another key's interactive quotes while the
@@ -32,7 +34,9 @@ export type ShipStationRequestPriority = 'interactive' | 'background';
 const shipStationV2RateLimitTimestampsByKey = new Map<string, number[]>();
 const shipStationV2ObservedAdmissionTimestampsByKey = new Map<string, number[]>();
 const shipStationV2DurableBucketsByKey = new Map<string, DurableTokenBucket>();
+const shipStationV2DurableBatchBucketsByKey = new Map<string, DurableTokenBucket>();
 const shipStationV2DurableBackgroundBucketsByKey = new Map<string, DurableTokenBucket>();
+const shipStationV2PauseUntilByKey = new Map<string, number>();
 
 function shipStationV2BucketId(apiKey: string): string {
   return createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
@@ -63,12 +67,26 @@ function nextShipStationV2BudgetDelayMs(
   now = Date.now(),
 ) {
   trimShipStationV2RateLimitTimestamps(bucket, now);
-  const burstLimit = priority === 'background'
-    ? Math.max(1, SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE)
-    : SHIPSTATION_RATE_LIMIT_BURST;
-  const perMinuteLimit = priority === 'background'
-    ? Math.max(1, SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE)
-    : SHIPSTATION_RATE_LIMIT_PER_MINUTE;
+  const burstLimit = priority === 'interactive'
+    ? SHIPSTATION_RATE_LIMIT_BURST
+    : priority === 'batch'
+      ? Math.max(1, SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE)
+      : Math.max(
+          1,
+          SHIPSTATION_RATE_LIMIT_BURST
+            - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE
+            - SHIPSTATION_RATE_LIMIT_BATCH_BURST_RESERVE,
+        );
+  const perMinuteLimit = priority === 'interactive'
+    ? SHIPSTATION_RATE_LIMIT_PER_MINUTE
+    : priority === 'batch'
+      ? Math.max(1, SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE)
+      : Math.max(
+          1,
+          SHIPSTATION_RATE_LIMIT_PER_MINUTE
+            - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE
+            - SHIPSTATION_RATE_LIMIT_BATCH_PER_MINUTE_RESERVE,
+        );
   const burstWindowMs = Math.ceil(
     (SHIPSTATION_RATE_LIMIT_WINDOW_MS * SHIPSTATION_RATE_LIMIT_BURST) /
       SHIPSTATION_RATE_LIMIT_PER_MINUTE
@@ -83,6 +101,21 @@ function nextShipStationV2BudgetDelayMs(
       ? Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - bucket[0]!))
       : 0;
   return Math.max(burstDelay, minuteDelay);
+}
+
+function shipStationV2DurableBatchBucket(apiKey: string): DurableTokenBucket {
+  const bucketId = shipStationV2BucketId(apiKey);
+  let bucket = shipStationV2DurableBatchBucketsByKey.get(bucketId);
+  if (!bucket) {
+    bucket = new DurableTokenBucket(
+      `shipstation-v2:${bucketId}:batch`,
+      Math.max(1, SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE),
+      Math.max(1, SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE)
+        / SHIPSTATION_RATE_LIMIT_WINDOW_MS,
+    );
+    shipStationV2DurableBatchBucketsByKey.set(bucketId, bucket);
+  }
+  return bucket;
 }
 
 function shipStationV2DurableBucket(apiKey: string): DurableTokenBucket {
@@ -105,8 +138,18 @@ function shipStationV2DurableBackgroundBucket(apiKey: string): DurableTokenBucke
   if (!bucket) {
     bucket = new DurableTokenBucket(
       `shipstation-v2:${bucketId}:background`,
-      Math.max(1, SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE),
-      Math.max(1, SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE)
+      Math.max(
+        1,
+        SHIPSTATION_RATE_LIMIT_BURST
+          - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE
+          - SHIPSTATION_RATE_LIMIT_BATCH_BURST_RESERVE,
+      ),
+      Math.max(
+        1,
+        SHIPSTATION_RATE_LIMIT_PER_MINUTE
+          - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE
+          - SHIPSTATION_RATE_LIMIT_BATCH_PER_MINUTE_RESERVE,
+      )
         / SHIPSTATION_RATE_LIMIT_WINDOW_MS,
     );
     shipStationV2DurableBackgroundBucketsByKey.set(bucketId, bucket);
@@ -137,14 +180,19 @@ async function acquireShipStationV2Budget(
     if (priority === 'background') {
       await shipStationV2DurableBackgroundBucket(apiKey).acquire({ signal });
     }
+    if (priority !== 'interactive') {
+      await shipStationV2DurableBatchBucket(apiKey).acquire({ signal });
+    }
     await shipStationV2DurableBucket(apiKey).acquire({ signal });
     recordShipStationV2Admission(apiKey);
     return;
   }
   const bucket = shipStationV2RateLimitBucket(apiKey);
+  const bucketId = shipStationV2BucketId(apiKey);
   for (;;) {
     signal?.throwIfAborted();
-    const delayMs = nextShipStationV2BudgetDelayMs(bucket, priority);
+    const pauseDelayMs = Math.max(0, (shipStationV2PauseUntilByKey.get(bucketId) ?? 0) - Date.now());
+    const delayMs = Math.max(pauseDelayMs, nextShipStationV2BudgetDelayMs(bucket, priority));
     if (delayMs <= 0) {
       bucket.push(Date.now());
       return;
@@ -153,7 +201,29 @@ async function acquireShipStationV2Budget(
   }
 }
 
+async function deferShipStationV2Budget(apiKey: string, delayMs: number): Promise<void> {
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+  if (process.env.RATE_LIMITER_BACKEND === 'durable') {
+    await shipStationV2DurableBucket(apiKey).deferFor(delayMs);
+    return;
+  }
+  const bucketId = shipStationV2BucketId(apiKey);
+  shipStationV2PauseUntilByKey.set(
+    bucketId,
+    Math.max(shipStationV2PauseUntilByKey.get(bucketId) ?? 0, Date.now() + delayMs),
+  );
+}
+
+function retryAfterDelayMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null;
+}
+
 export class ShipStationError extends Error {
+  code?: string;
   constructor(
     public readonly status: number,
     message: string,
@@ -162,6 +232,15 @@ export class ShipStationError extends Error {
     super(message);
     this.name = 'ShipStationError';
   }
+}
+
+function shipStationError(status: number, message: string, body?: unknown): ShipStationError {
+  const error = new ShipStationError(status, message, body);
+  const detail = extractShipStationMessage(body) ?? '';
+  if (/insufficient[^.]{0,40}balance|balance[^.]{0,40}insufficient/i.test(detail)) {
+    error.code = 'SHIPSTATION_INSUFFICIENT_BALANCE';
+  }
+  return error;
 }
 
 type RequestOpts = {
@@ -195,17 +274,21 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
     throw new Error('SHIPSTATION_API_KEY_V2 is not configured');
   }
 
+  // PS-447: one deadline governs admission, fetch, Retry-After, and retry backoff.
+  // A cancelled browser/job request therefore cannot keep consuming permits as a zombie.
+  const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const requestSignal = opts.signal
+    ? AbortSignal.any([opts.signal, timeoutSignal])
+    : timeoutSignal;
+
   const execute = () =>
     breaker.execute(async () => {
       const maxRetries = opts.maxRetries ?? 5;
       let attempt = 0;
       while (true) {
+        requestSignal.throwIfAborted();
         attempt += 1;
-        await acquireShipStationV2Budget(key, opts.priority ?? 'interactive', opts.signal);
-        const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-        const signal = opts.signal
-          ? AbortSignal.any([opts.signal, timeoutSignal])
-          : timeoutSignal;
+        await acquireShipStationV2Budget(key, opts.priority ?? 'interactive', requestSignal);
         const res = await timedFetch('shipstation.v2.request', `${BASE_URL}${path}`, {
           method: opts.method ?? 'GET',
           headers: {
@@ -213,18 +296,17 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
             'Content-Type': 'application/json',
           },
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-          signal,
+          signal: requestSignal,
         }, { path, attempt });
 
         if (res.status === 429) {
           if (attempt >= maxRetries) {
             throw new ShipStationError(429, 'ShipStation rate-limited after retries');
           }
-          const retryAfter = Number(res.headers.get('Retry-After') ?? 0);
-          const backoffMs = retryAfter
-            ? retryAfter * 1000
-            : Math.min(10_000, 2 ** attempt * 250);
-          await abortableDelay(backoffMs, opts.signal);
+          const backoffMs = retryAfterDelayMs(res.headers.get('Retry-After'))
+            ?? Math.min(10_000, 2 ** attempt * 250);
+          await deferShipStationV2Budget(key, backoffMs);
+          await abortableDelay(backoffMs, requestSignal);
           continue;
         }
 
@@ -243,7 +325,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
             );
           }
           const backoffMs = Math.min(4_000, 2 ** attempt * 1000);
-          await abortableDelay(backoffMs, opts.signal);
+          await abortableDelay(backoffMs, requestSignal);
           continue;
         }
 
@@ -255,7 +337,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
             body = await res.text();
           }
           const detail = extractShipStationMessage(body);
-          throw new ShipStationError(
+          throw shipStationError(
             res.status,
             `ShipStation ${res.status}: ${detail ?? res.statusText}`,
             body

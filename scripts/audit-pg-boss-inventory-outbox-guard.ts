@@ -28,7 +28,17 @@ assert.match(queue, /await boss\.schedule\(/);
 assert.match(queue, /await boss\.unschedule\(name\)/);
 assert.match(queue, /resolveSyncJobAdmission\(name, \{ kind: 'cadence' \}\)/);
 assert.match(queue, /singletonKey: admission\.singletonKey/);
-assert.doesNotMatch(queue, /scheduleEnqueue|SYNC_STARTUP_DELAY_MS|setTimeout\(/);
+assert.doesNotMatch(queue, /scheduleEnqueue|SYNC_STARTUP_DELAY_MS/);
+assert.equal(
+  queue.match(/setTimeout\(/g)?.length ?? 0,
+  1,
+  'only the ShipStation consumer-leadership control-plane retry timer may remain process-local',
+);
+assert.match(
+  queue,
+  /class ShipStationConsumerLeadershipController[\s\S]*private schedule\([\s\S]*dependencies\.setTimer[\s\S]*setTimer: \(callback, delayMs\) => \{[\s\S]{0,120}setTimeout\(callback, delayMs\)/,
+  'the remaining timeout must be scoped to queue-consumer leadership, not durable job cadence',
+);
 assert.equal(
   queue.match(/setInterval\(/g)?.length ?? 0,
   1,
@@ -62,24 +72,31 @@ assert.doesNotMatch(read('src/services/shipstation-carrier-account-snapshot-work
 
 assert.match(deductionOwner, /INVENTORY_AUTO_DEDUCT/);
 assert.match(deductionOwner, /inventory:ship:order:/);
+assert.match(deductionOwner, /export async function applyInventoryClaimsForLifecycleEvent/);
 assert.match(deductionOutbox, /await deductInventoryForOrder\(/);
+assert.match(deductionOutbox, /export async function enqueueInventoryClaimDeduction/);
+assert.match(deductionOutbox, /await applyInventoryClaimsForLifecycleEvent\(lifecycleEventId\)/);
 assert.match(deductionOutbox, /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
 assert.match(deductionOutbox, /executor: InventoryDeductionOutboxExecutor = db/);
 assert.match(deductionOutbox, /export async function enqueueMissingInventoryDeductions/);
 assert.match(deductionOutbox, /o\.order_status = 'shipped'/);
+assert.match(deductionOutbox, /FROM order_lifecycle_events event/);
+assert.match(deductionOutbox, /FROM fulfillment_line_claims claim/);
+assert.match(deductionOutbox, /FROM order_lifecycle_events lifecycle[\s\S]*lifecycle\.transition IN \('shipped', 'external_shipped'\)/);
 assert.doesNotMatch(deductionOutbox, /UPDATE orders|UPDATE shipments|DELETE FROM/);
 
-for (const path of [
-  'src/services/labels.ts',
-  'src/services/order-sync.ts',
-  'src/services/shipment-sync.ts',
-  'src/services/fulfillment/mark-shipped-externally.ts',
-  'scripts/reconcile-orphan-shipstation-shipments.ts',
-]) {
+for (const [path, ownerPattern] of [
+  ['src/services/labels.ts', /applyOrderLifecycleCommandInTransaction/],
+  ['src/services/order-sync.ts', /applyOrderLifecycleCommand/],
+  ['src/services/shipment-sync.ts', /applyOrderLifecycleCommandInTransaction/],
+  ['src/services/fulfillment/mark-shipped-externally.ts', /applyOrderLifecycleCommand/],
+  ['scripts/reconcile-orphan-shipstation-shipments.ts', /upsertNormalizedStoreOrders/],
+] as const) {
   const source = read(path);
-  assert.match(source, /enqueueInventoryDeduction/);
+  assert.match(source, ownerPattern);
   assert.doesNotMatch(source, /await deductInventoryForOrder\(/);
 }
+assert.doesNotMatch(read('scripts/reconcile-orphan-shipstation-shipments.ts'), /enqueueInventoryDeduction/);
 assert.doesNotMatch(read('src/services/labels.ts'), /background\('inventory deduction'/);
 
 assert.match(fulfillmentOutbox, /event_type IN \('shipment_confirmation_requested', \$\{INVENTORY_DEDUCTION_OUTBOX_EVENT\}\)/);

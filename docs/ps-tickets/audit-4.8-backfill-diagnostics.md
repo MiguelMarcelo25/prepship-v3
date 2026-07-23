@@ -1,4 +1,4 @@
-# Audit 4.8 — Backfill diagnostic buffers
+# Audit 4.8 / PS-445 — Backfill diagnostic buffers
 
 ## Architecture placement / source-of-truth gate
 
@@ -25,10 +25,12 @@
 - **Frontend role: display/action only; no authoritative business logic:** No
   frontend changes. Clients may display the backend-provided sample classes but
   do not decide whether an outcome was skipped or failed.
-- **Backend boundary tests required:** The focused guard fills both sample
-  classes beyond their cap, proves each independently retains five entries,
-  proves no cross-contamination, and verifies old durable snapshots normalize
-  a missing `skipSamples` field to an empty array.
+- **Backend boundary tests required:** The focused guard records six dimension
+  skips followed by one thrown error, proves the skip buffer retains five
+  entries without hiding the real failure, separately proves the five-entry
+  failure cap, round-trips both arrays through durable JSON normalization, and
+  verifies old snapshots normalize a missing `skipSamples` field to an empty
+  array.
 - **Workflow/UI proof required:** Focused diagnostic, durable backfill,
   coordination, rate source-of-truth, strict typecheck, production build, and
   mandatory SOT guards pass.

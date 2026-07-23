@@ -119,6 +119,71 @@ const migrationOwnership = [
     'drizzle/0068_billing_shipment_cardinality.sql',
     ['billing_li_shipment_unique_idx', 'billing_li_order_unique_idx', 'shipment_id'],
   ],
+  [
+    'drizzle/0070_order_lifecycle_commands.sql',
+    [
+      'order_lifecycle_events',
+      'fulfillment_line_claims',
+      'order_lifecycle_events_command_unq',
+      'order_lifecycle_events_no_update_delete',
+      'order_lifecycle_events_block_mutations',
+      'fulfillment_line_claims_idempotency_unq',
+    ],
+  ],
+  [
+    'drizzle/0071_billing_weekend_rollforward.sql',
+    ['billing_effective_date', 'billing_policy_version', 'billing_li_effective_date_idx'],
+  ],
+  [
+    'drizzle/0072_external_operations.sql',
+    [
+      'external_operations',
+      'external_operations_key_unq',
+      'external_operations_idempotency_unq',
+      'external_operations_state_lease_idx',
+    ],
+  ],
+  [
+    'drizzle/0073_print_queue_send_execution_fences.sql',
+    [
+      'current_chunk_sequence',
+      'attempt_count',
+      'heartbeat_at',
+      'print_queue_send_jobs_generation_nonnegative',
+      'print_queue_send_jobs_chunk_sequence_positive',
+      'print_queue_batch_job_items_attempt_count_nonnegative',
+      'print_queue_batch_job_items_generation_nonnegative',
+      'print_queue_send_jobs_recovery_idx',
+    ],
+  ],
+  [
+    'drizzle/0074_billing_current_period_adjustments.sql',
+    [
+      'source_finalization_id',
+      'billing_adjustment_id',
+      'adjustment_total',
+      'billing_li_adjustment_unq',
+      'billing_credit_notes_source_order_idx',
+      'billing_credit_notes_projection_guard',
+      'billing_line_items_adjustment_immutable_guard',
+      'billing_credit_notes_require_projection',
+      'billing_line_items_block_adjustment_mutation',
+    ],
+  ],
+  [
+    'drizzle/0075_inventory_quantity_sot.sql',
+    [
+      'inventory_ledger_source_identity_unq',
+      'inventory_ledger_prepare_insert',
+      'inventory_ledger_block_mutations',
+      'inventory_ledger_no_update_delete',
+      'inventory_ledger_no_truncate',
+    ],
+  ],
+  [
+    'drizzle/0077_ps462_billing_storage_month.sql',
+    ['billing_li_storage_month_unq', 'PS462_STORAGE_MONTH_DUPLICATES'],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -164,16 +229,68 @@ assert(
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCardinalityMigration),
   '0068 changes only the generated billing-line key and never mutates orders/shipments',
 );
+const orderLifecycleMigration = read('drizzle/0070_order_lifecycle_commands.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(orderLifecycleMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(orderLifecycleMigration),
+  '0070 adds lifecycle sidecars without mutating or destructively altering orders/shipments',
+);
+const billingWeekendMigration = read('drizzle/0071_billing_weekend_rollforward.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments|billing_line_items)\b/i.test(billingWeekendMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(billingWeekendMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingWeekendMigration),
+  '0071 is additive, performs no backfill, and never mutates orders/shipments or historical billing lines',
+);
+const externalOperationsMigration = read('drizzle/0072_external_operations.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(externalOperationsMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(externalOperationsMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(externalOperationsMigration),
+  '0072 adds the provider-operation sidecar without mutating or destructively altering orders/shipments',
+);
+const printQueueExecutionFenceMigration = read('drizzle/0073_print_queue_send_execution_fences.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(printQueueExecutionFenceMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(printQueueExecutionFenceMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(printQueueExecutionFenceMigration),
+  '0073 changes only Print Queue sidecars and never mutates or destructively alters orders/shipments',
+);
+const billingCurrentPeriodAdjustmentMigration = read('drizzle/0074_billing_current_period_adjustments.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments|billing_line_items|billing_finalizations|billing_credit_notes)\b/i.test(
+    billingCurrentPeriodAdjustmentMigration,
+  ) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(billingCurrentPeriodAdjustmentMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(billingCurrentPeriodAdjustmentMigration),
+  '0074 adds append-only billing adjustment facts without backfill or mutation of historical billing/orders/shipments',
+);
+const inventoryQuantityMigration = read('drizzle/0075_inventory_quantity_sot.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?(?:orders|shipments)\b/i.test(inventoryQuantityMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(inventoryQuantityMigration),
+  '0075 changes only inventory source-of-truth structures and never mutates orders/shipments',
+);
+const storageMonthMigration = read('drizzle/0077_ps462_billing_storage_month.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO|TRUNCATE)\b/i.test(storageMonthMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(storageMonthMigration),
+  '0077 adds a fail-closed monthly storage identity without mutating billing, orders, or shipments',
+);
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
 for (const token of [
   'REQUIRED_RELATIONS',
   'REQUIRED_COLUMNS',
   'REQUIRED_INDEXES',
+  'REQUIRED_CONSTRAINTS',
   'REQUIRED_FUNCTIONS',
   'REQUIRED_TRIGGERS',
   'Runtime schema is not migration-ready',
-  '0068_billing_shipment_cardinality.sql',
+  'current release frontier',
+  'inventory_identity_immutable_with_ledger',
+  'billing_li_storage_month_unq',
 ]) {
   assert(readiness.includes(token), `boot readiness checks ${token}`);
 }

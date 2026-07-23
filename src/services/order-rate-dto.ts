@@ -33,6 +33,7 @@ import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label
 // re-deriving the block-list reason client-side. Inert (UNBLOCKED) until a caller passes ctx.eligibility.
 import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibility-stamp';
 import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
+import { roundMoney } from '../lib/money';
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 import { isPricedRate } from './rates-combined';
 // PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
@@ -72,6 +73,7 @@ export interface OrderBestRateDto {
   proofSource: string | null;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
+  selectionRef: string | null;
   // PS-299: generic runner-up rate for Awaiting Shipment. This is the second cheapest
   // eligible/priced result from the SAME finalized backend rate-shopping pass as this
   // bestRate. It is not the house-account nextBestNonHouseRate competitor.
@@ -215,10 +217,6 @@ function readNullableNumber(value: unknown, path: string): number | null {
 function readMoneyAmount(value: unknown): number | null {
   if (isRecord(value)) return readNullableNumber(value.amount ?? null, 'money.amount');
   return readNullableNumber(value ?? null, 'money');
-}
-
-function roundMoney(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function roundPercent(value: number): number {
@@ -373,6 +371,7 @@ export interface SecondBestRateDto {
   proofSource: string | null;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
+  selectionRef: string | null;
 }
 
 function readRateInsuranceCoverageProofSource(record: Record<string, unknown>): InsuranceCoverageProofSource | null {
@@ -493,6 +492,7 @@ function normalizeSecondBestRate(value: unknown, path = 'bestRate.secondBestRate
     proofSource: readNullableString(value.proofSource ?? null, `${path}.proofSource`),
     rateQuoteId: readNullableString(value.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(value.selectedRateKey ?? null, `${path}.selectedRateKey`),
+    selectionRef: readNullableString(value.selectionRef ?? null, `${path}.selectionRef`),
   };
   return rate.serviceCode || rate.carrierCode || rate.shippingProviderId != null || rate.shipmentCost + rate.otherCost > 0
     ? rate
@@ -606,6 +606,7 @@ export function normalizeOrderBestRateDto(
     proofSource: readNullableString(record.proofSource ?? null, `${path}.proofSource`),
     rateQuoteId: readNullableString(record.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
+    selectionRef: readNullableString(record.selectionRef ?? null, `${path}.selectionRef`),
     secondBestRate: normalizeSecondBestRate(record.secondBestRate ?? record.second_best_rate, `${path}.secondBestRate`),
     nextBestNonHouseRate,
     houseMargin,

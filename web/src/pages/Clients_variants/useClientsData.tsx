@@ -9,6 +9,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
+import { invalidateClientDependentQueries } from '../../lib/client-cache-invalidation'
 import { clientQueryKeys, includeInactiveClientRowsQueryOptions } from '../../lib/client-query'
 import {
   ConfirmActiveToggleDialog,
@@ -94,7 +95,7 @@ export function useClientsData(): ClientsDataResult {
   const remove = useMutation<unknown, Error, number>({
     mutationFn: (id: number) => api.delete(`/clients/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
+      invalidateClientDependentQueries(queryClient)
     },
   })
 
@@ -123,18 +124,7 @@ export function useClientsData(): ClientsDataResult {
       )
     },
     onSettled: () => {
-      // Cascade-invalidate every cache that depends on client active state
-      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
-      ;[
-        ['clients-order-stats'],
-        ['orders-count'],
-        ['v2-hooks:orders'],
-        ['inventory'],
-        ['billing-config'],
-        ['billing-summary'],
-        ['analysis-sku-breakdown'],
-        ['analysis-sku-daily'],
-      ].forEach((key) => queryClient.invalidateQueries({ queryKey: key }))
+      invalidateClientDependentQueries(queryClient)
     },
   })
 
@@ -145,7 +135,7 @@ export function useClientsData(): ClientsDataResult {
         {},
       ),
     onSuccess: (r) => {
-      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
+      invalidateClientDependentQueries(queryClient)
       alert(r.message)
     },
     onError: (err) => alert(`Sync failed: ${err.message}`),

@@ -231,9 +231,10 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
+  const signal = input.signal as AbortSignal | undefined;
   const accountNumber = String(creds?.accountNumber ?? '').trim();
   if (!accountNumber) throw new Error('UPS accountNumber required');
-  const token = await getUpsAccessToken(creds);
+  const token = await getUpsAccessToken(creds, signal);
 
   const weightOz = Number(input.weightOz ?? 16);
   const weightLb = Math.max(0.1, Math.round((weightOz / 16) * 10) / 10);
@@ -341,6 +342,7 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
       transactionSrc: 'prepship',
     },
     body: JSON.stringify(body),
+    signal,
   });
   const text = await res.text();
   let data: any = null;

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { clients } from '../db/schema/clients';
@@ -16,7 +16,11 @@ import {
 } from '../lib/client-store-scope';
 // PS-240 (Per user override unlock shipped data on 2026-06-13): client CRUD is an
 // internal-admin action — block portal roles + scope-check each target client.
-import { requireInternalPermission } from '../middleware/auth';
+import {
+  requireBusinessRoutePolicy,
+  requireInternalPermission,
+} from '../middleware/auth';
+import { intArraySql } from '../lib/scope-sql';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { orderLifecycleEffectiveStatusAliasSql } from '../services/order-lifecycle-status';
 import { manualOrdersOrderPredicateSql } from '../lib/manual-orders-visibility';
@@ -66,6 +70,23 @@ function scopeFromContext(c: Context) {
     clientIds: c.get('clientIds' as never) as number[] | undefined,
     storeIds: c.get('storeIds' as never) as number[] | undefined,
   });
+}
+
+function clientAggregateOrderScopePredicate(
+  scope: ReturnType<typeof scopeFromContext>,
+): SQL {
+  if (!scope.isRestricted) return sql`true`;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length) {
+    predicates.push(sql`o.client_id = any(${intArraySql(scope.clientIds)})`);
+  }
+  if (scope.storeIds.length) {
+    predicates.push(sql`o.store_id = any(${intArraySql(scope.storeIds)})`);
+  }
+  if (!predicates.length) return sql`false`;
+  return predicates.length === 1
+    ? predicates[0]!
+    : sql`(${sql.join(predicates, sql` or `)})`;
 }
 
 const body = z.object({
@@ -132,7 +153,7 @@ app.get('/:id{[0-9]+}', async (c) => {
   return c.json(safeRow);
 });
 
-app.post('/', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
+app.post('/', requireBusinessRoutePolicy('clients.catalog.create'), zValidator('json', body), async (c) => {
   const v = c.req.valid('json');
   const rateSourcePolicy = await validateClientRateSourceWrite({
     clientId: null,
@@ -146,7 +167,7 @@ app.post('/', requireInternalPermission('settings:write'), zValidator('json', bo
   return c.json(publicClient(row), 201);
 });
 
-app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
+app.patch('/:id{[0-9]+}', requireBusinessRoutePolicy('clients.catalog.patch'), zValidator('json', body.partial()), async (c) => {
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
   // PS-240: a scoped caller may only edit a client visible to its scope.
@@ -173,7 +194,7 @@ app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidato
   return c.json(publicClient(row));
 });
 
-app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
+app.delete('/:id{[0-9]+}', requireBusinessRoutePolicy('clients.catalog.delete'), async (c) => {
   const id = Number(c.req.param('id'));
   // PS-240: a scoped caller may only delete a client visible to its scope.
   const [existing] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
@@ -198,7 +219,7 @@ const backfillQuery = z.object({
 
 app.post(
   '/:id{[0-9]+}/backfill-orders',
-  requireInternalPermission('settings:write'),
+  requireBusinessRoutePolicy('clients.orders.backfill'),
   zValidator('query', backfillQuery),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -261,7 +282,7 @@ app.post(
 // mutations (it upserts client rows from ShipStation) — the one clients route the
 // original sweep missed. (/admin/* routes are already gated by requireAdmin at the
 // main.ts mount; this was the only genuinely ungated clients mutation.)
-app.post('/sync-stores', requireInternalPermission('settings:write'), async (c) => {
+app.post('/sync-stores', requireBusinessRoutePolicy('clients.catalog.sync-stores'), async (c) => {
   const stores = await listShipStationStores({
     dedupeKey: 'stores:list',
   });
@@ -325,6 +346,7 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
+    const aggregateScopePredicate = clientAggregateOrderScopePredicate(scopeFromContext(c));
     const activeClientFilter = q.includeInactive
       ? sql``
       : sql`and exists (
@@ -351,6 +373,7 @@ app.get(
       select o.client_id, ${effectiveStatusSql} as order_status, count(*)::int as count
       from orders o
       where o.client_id is not null
+        and ${aggregateScopePredicate}
         and (
           o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
           or ${manualOrdersAwaitingPredicate}
@@ -415,7 +438,10 @@ app.get(
 // decide whether to reassign them or reactivate the client. Before
 // this change, disabling a client silently hid their orphan orders
 // instead of flagging them.
-app.get('/unassigned-orphans', async (c) => {
+app.get(
+  '/unassigned-orphans',
+  requireInternalPermission('settings:read'),
+  async (c) => {
   const rows = await db.execute<{ store_id: number; count: number }>(sql`
     select o.store_id, count(*)::int as count
     from orders o
@@ -430,6 +456,7 @@ app.get('/unassigned-orphans', async (c) => {
     order by count desc
   `);
   return c.json({ data: rows });
-});
+  },
+);
 
 export default app;

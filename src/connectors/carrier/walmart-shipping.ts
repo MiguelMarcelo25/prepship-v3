@@ -371,9 +371,10 @@ async function fetchWalmartEstimatesForLabel(
     body: Record<string, any>;
     fromAddress: Record<string, unknown>;
     boxItems: any[];
+    signal?: AbortSignal;
   },
 ): Promise<{ token: string; rates: any[] }> {
-  const token = await getWalmartAccessToken(creds);
+  const token = await getWalmartAccessToken(creds, input.signal);
   const weightLb = Math.max(0.1, Math.round((input.weightOz / 16) * 10) / 10);
   const estimateBody = {
     purchaseOrderId: input.purchaseOrderId,
@@ -406,6 +407,7 @@ async function fetchWalmartEstimatesForLabel(
     method: 'POST',
     headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
     body: JSON.stringify(estimateBody),
+    signal: input.signal,
   });
   if (!res.ok) {
     throw new Error(`Walmart Shipping Estimates ${res.status}: ${await readWalmartError(res)}`);
@@ -883,6 +885,7 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
 }
 
 async function createLabelWalmartShipping(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const signal = input.signal as AbortSignal | undefined;
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
@@ -917,6 +920,7 @@ async function createLabelWalmartShipping(input: Record<string, unknown>): Promi
     body,
     fromAddress,
     boxItems,
+    signal,
   });
 
   if (!rates.length) {
@@ -978,6 +982,7 @@ async function createLabelWalmartShipping(input: Record<string, unknown>): Promi
     method: 'POST',
     headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
     body: JSON.stringify(labelBody),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`Walmart Create Label ${res.status}: ${await readWalmartError(res)}`);

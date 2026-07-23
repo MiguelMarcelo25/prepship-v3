@@ -1,0 +1,4 @@
+app.post('/inventory', async (c) => {
+  const body = await c.req.json();
+  return db.insert(inventory).values(body);
+});

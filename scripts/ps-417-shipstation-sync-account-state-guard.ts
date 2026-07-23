@@ -14,6 +14,10 @@ const {
   shipStationSyncAccountId,
   summarizeShipStationAccountWatermarks,
 } = await import('../src/services/shipstation-sync-account-state');
+const {
+  OrderSyncCooperativeYieldError,
+  isOrderSyncCooperativeYieldError,
+} = await import('../src/lib/order-sync-cooperative-yield');
 const { classifyOrderSyncQueueRows } = await import('../src/services/order-sync-queue-state');
 const { formatSyncPill } = await import('../web/src/components/Views/orders-parity');
 
@@ -108,6 +112,29 @@ const finished = finishShipStationSyncAccountRun(runningState, attemptOne, {
 });
 assert.equal(finished?.status, 'succeeded');
 assert.equal(finished?.activeJobId, null);
+const deferred = finishShipStationSyncAccountRun(
+  {
+    ...runningState,
+    lastSuccessAt: '2026-07-09T23:59:00.000Z',
+    lastFailureAt: '2026-07-09T23:58:00.000Z',
+    lastError: 'prior real failure',
+  },
+  attemptOne,
+  {
+    status: 'deferred',
+    completedAt: '2026-07-10T00:01:30.000Z',
+  },
+);
+assert.equal(deferred?.status, 'deferred');
+assert.equal(deferred?.activeJobId, null);
+assert.equal(deferred?.lastSuccessAt, '2026-07-09T23:59:00.000Z');
+assert.equal(deferred?.lastFailureAt, '2026-07-09T23:58:00.000Z');
+assert.equal(deferred?.lastError, null);
+assert.equal(
+  isOrderSyncCooperativeYieldError(new OrderSyncCooperativeYieldError()),
+  true,
+  'durable queue-control yields must have an explicit non-failure identity',
+);
 assert.equal(
   finishShipStationSyncAccountRun(
     { ...runningState, activeAttemptId: 'attempt-2' },
@@ -174,6 +201,10 @@ assert.match(accountState, /writeAccountStatesInTransaction\(transaction/);
 assert.doesNotMatch(accountState, /withAdvisorySessionLock/);
 assert.match(accountState, /lastSuccessAt/);
 assert.match(accountState, /lastFailureAt/);
+assert.match(accountState, /markShipStationSyncAccountDeferred/);
+assert.match(orderSync, /isOrderSyncCooperativeYieldError/);
+assert.match(orderSync, /markShipStationSyncAccountDeferred/);
+assert.match(queue, /new OrderSyncCooperativeYieldError\(\)/);
 assert.match(orderSync, /summarizeShipStationAccountWatermarks/);
 assert.match(orderSync, /staleAccountCount/);
 assert.match(orderSync, /\.sort\(\(left, right\) => \(left\.watermarkMs \?\? 0\) - \(right\.watermarkMs \?\? 0\)\)/);

@@ -16,7 +16,7 @@ type ShipStationRateEstimateInput = {
   dedupeKey?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-  priority?: 'interactive' | 'background';
+  priority?: 'interactive' | 'batch' | 'background';
 };
 
 type ShipStationCreateLabelFromRateInput = {
@@ -45,6 +45,7 @@ type ShipStationV2ListInput = {
   dedupeKey?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  priority?: 'interactive' | 'batch' | 'background';
 };
 
 function isRateLabelInput(input: ShipStationCreateLabelInput): input is ShipStationCreateLabelFromRateInput {
@@ -66,6 +67,7 @@ export async function listShipStationV2Shipments<TList>(
     dedupeKey: input.dedupeKey,
     timeoutMs: input.timeoutMs,
     signal: input.signal,
+    priority: input.priority ?? 'background',
   });
 }
 
@@ -78,6 +80,7 @@ export async function listShipStationV2Labels<TList>(
     dedupeKey: input.dedupeKey,
     timeoutMs: input.timeoutMs,
     signal: input.signal,
+    priority: input.priority ?? 'background',
   });
 }
 
@@ -92,6 +95,8 @@ export async function getShipStationV2LabelTracking<TTracking>(
         apiKey: input.apiKeyV2 ?? input.apiKey,
         dedupeKey: input.dedupeKey ?? `labels:track:${labelId}`,
         timeoutMs: input.timeoutMs,
+        signal: input.signal,
+        priority: input.priority ?? 'background',
       },
     );
   } catch (error) {
@@ -157,17 +162,29 @@ export function createShipStationCarrierConnector(): CarrierConnector<
       }
       // Per user override unlock shipped data on 2026-07-06 (PS-399): ShipStation
       // voids are provider-confirmed only through /v2/labels/{label_id}/void.
-      await ssVoidLabel(raw, (input as { apiKeyV2?: string }).apiKeyV2);
+      await ssVoidLabel(
+        raw,
+        (input as { apiKeyV2?: string }).apiKeyV2,
+        input.signal,
+      );
     },
     // Tracking-driven queue retirement: delegate to the TrackingConnector
     // implementation (src/connectors/tracking/shipstation.ts) so the
     // trackCarrierShipment orchestrator works for 'shipstation'. Read-only.
     trackShipment: (input) => shipStationTrackingConnector.trackShipment(input),
     listCarrierAccounts: async (input) => {
-      const row = input as { apiKeyV2?: string; apiKey?: string; dedupeKey?: string };
+      const row = input as {
+        apiKeyV2?: string;
+        apiKey?: string;
+        dedupeKey?: string;
+        signal?: AbortSignal;
+        priority?: 'interactive' | 'batch' | 'background';
+      };
       return ssRequest<CarriersResponse>('/v2/carriers', {
         apiKey: row.apiKeyV2 ?? row.apiKey,
         dedupeKey: row.dedupeKey ?? 'carriers:list',
+        signal: row.signal,
+        priority: row.priority,
       });
     },
   };

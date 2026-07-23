@@ -176,6 +176,7 @@ export type RbAppliedRate = {
   // server-side against the rate-quote snapshot). Pass-through only.
   rateQuoteId?: string;
   selectedRateKey?: string;
+  selectionRef?: string;
   requestFingerprint?: string;
   cacheKey?: string;
   cacheCreatedAt?: string;
@@ -276,6 +277,7 @@ export type RateRow = {
   // backendProofMetadata). The modal only passes these through — never synthesizes.
   rateQuoteId?: string | null;
   selectedRateKey?: string | null;
+  selectionRef?: string | null;
   requestFingerprint?: string | null;
   cacheKey?: string | null;
   cacheCreatedAt?: string | null;
@@ -1383,6 +1385,7 @@ export default function RateBrowserModal({
           l: lenNum,
           w: widNum,
           h: hgtNum,
+          weightOz: totalOz,
         });
       } catch (error) {
         if (browseSequenceRef.current !== requestSeq) return { carriersWithRates, uncoveredPids };
@@ -1437,6 +1440,7 @@ export default function RateBrowserModal({
         toPostalCode: zip,
         toCountry: destinationCountry,
         shipFrom,
+        shipFromLocationId: selectedLocation?.locationId,
         weight: { value: totalOz, units: 'ounces' },
         dimensions: {
           units: 'inches',
@@ -1454,6 +1458,7 @@ export default function RateBrowserModal({
         insuranceProvider: normalizedInsuranceProvider,
         insuredValue: normalizedInsuredValue,
         orderId: toFiniteNumber(order?.orderId ?? (order as Record<string, unknown> | null)?.id) ?? undefined,
+        customPackageId: packageId ? Number(packageId) : undefined,
         orderNumber:
           toOptionalString(order?.orderNumber) ??
           toOptionalString((order as Record<string, unknown> | null)?.order_number) ??
@@ -1934,7 +1939,7 @@ export default function RateBrowserModal({
   function rateBackendProof(r: RateRow): Partial<
     Pick<
       RbAppliedRate,
-      'rateQuoteId' | 'selectedRateKey' | 'requestFingerprint' | 'cacheKey' | 'cacheCreatedAt' | 'cacheExpiresAt' | 'proofSource' | 'isComplete' | 'secondBestRate'
+      'rateQuoteId' | 'selectedRateKey' | 'selectionRef' | 'requestFingerprint' | 'cacheKey' | 'cacheCreatedAt' | 'cacheExpiresAt' | 'proofSource' | 'isComplete' | 'secondBestRate'
     >
   > {
     const raw = (r.raw && typeof r.raw === 'object' ? r.raw : null) as Record<string, unknown> | null;
@@ -1948,6 +1953,7 @@ export default function RateBrowserModal({
     for (const key of [
       'rateQuoteId',
       'selectedRateKey',
+      'selectionRef',
       'requestFingerprint',
       'cacheKey',
       'cacheCreatedAt',

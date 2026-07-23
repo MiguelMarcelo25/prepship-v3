@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { apiClient } from '../../api/client'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
+import { queryClient } from '../../lib/query-client'
 // TODO PS-257: InitCountsDto / InitStoreDto are not exported by ../../types/api
 // yet (the counts/store init DTOs were never added there). apiClient.fetchCounts
 // returns `any` and `stores` is passed through untouched, so alias both locally
@@ -193,7 +195,11 @@ export function SidebarOrders({
     const load = async () => {
       if (disposed || document.visibilityState !== 'visible') return
       try {
-        const nextCounts = await apiClient.fetchCounts()
+        const nextCounts = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.counts(),
+          queryFn: () => apiClient.fetchCounts(),
+          staleTime: 120_000,
+        })
         if (!disposed) setCounts(nextCounts)
       } catch (error) {
         console.error('Failed to fetch sidebar counts:', error)
@@ -208,7 +214,10 @@ export function SidebarOrders({
     // Real-time refresh on client active-toggle (dispatched from
     // InventoryView). Mirrors the listener in useSidebarController so
     // BOTH sidebar implementations refresh immediately on toggle.
-    const onClientActiveChanged = () => void load()
+    const onClientActiveChanged = () => {
+      void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.countsRoot })
+      void load()
+    }
     window.addEventListener('prepship:client-active-changed', onClientActiveChanged)
     return () => {
       disposed = true

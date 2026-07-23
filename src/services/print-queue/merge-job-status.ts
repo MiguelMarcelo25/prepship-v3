@@ -1,10 +1,12 @@
-import { PRINT_QUEUE_WORKER_RUNNING_LEASE_MS } from '../../lib/print-queue-worker-deadline';
+import {
+  PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
+  PRINT_QUEUE_WORKER_RUNNING_LEASE_MS,
+} from '../../lib/print-queue-worker-deadline';
 
 export type MergeJobStatusName = 'pending' | 'running' | 'done' | 'error';
 
-// Never classify a worker generation as stale before its configured execution
-// deadline and cancellation-acknowledgement grace have elapsed.
-export const MERGE_JOB_DURABLE_STALE_AFTER_MS = PRINT_QUEUE_WORKER_RUNNING_LEASE_MS;
+export const MERGE_JOB_DURABLE_STALE_AFTER_MS = PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS;
+export const MERGE_JOB_DURABLE_INTERRUPTED_AFTER_MS = PRINT_QUEUE_WORKER_RUNNING_LEASE_MS;
 
 type MergeJobSnapshotLike = {
   status: string;
@@ -18,7 +20,7 @@ export type DerivedMergeJobStatus = {
   active: boolean;
   message: string;
   errorMessage: string | null;
-  staleReason: 'worker_missing_stale_snapshot' | null;
+  staleReason: 'worker_heartbeat_stale' | 'worker_missing_stale_snapshot' | null;
 };
 
 function isActive(status: MergeJobStatusName): boolean {
@@ -47,6 +49,7 @@ export function deriveMergeJobSnapshotStatus(
     now?: number;
     inMemoryJobPresent: boolean;
     staleAfterMs?: number;
+    interruptedAfterMs?: number;
   },
 ): DerivedMergeJobStatus {
   const status = normalizeStatus(snapshot.status);
@@ -55,8 +58,16 @@ export function deriveMergeJobSnapshotStatus(
     ? Number.POSITIVE_INFINITY
     : Math.max(0, (options.now ?? Date.now()) - updatedAtMs);
   const staleAfterMs = options.staleAfterMs ?? MERGE_JOB_DURABLE_STALE_AFTER_MS;
+  const interruptedAfterMs = Math.max(
+    staleAfterMs,
+    options.interruptedAfterMs ?? MERGE_JOB_DURABLE_INTERRUPTED_AFTER_MS,
+  );
 
-  if (!options.inMemoryJobPresent && isActive(status) && ageMs > staleAfterMs) {
+  // Per user override unlock shipped data on 2026-07-21: PS-453 derives
+  // heartbeat staleness from merge-job metadata only. The generation remains
+  // active until its execution lease expires, so this visibility cannot admit
+  // a second executor or mutate an order, shipment, label, or PDF artifact.
+  if (!options.inMemoryJobPresent && isActive(status) && ageMs > interruptedAfterMs) {
     const errorMessage =
       'PDF merge worker disappeared before completion. Verify the print queue, then start a new merge.';
     return {
@@ -65,6 +76,17 @@ export function deriveMergeJobSnapshotStatus(
       message: 'PDF merge interrupted/stale - no additional labels or postage were created.',
       errorMessage,
       staleReason: 'worker_missing_stale_snapshot',
+    };
+  }
+
+  if (!options.inMemoryJobPresent && isActive(status) && ageMs > staleAfterMs) {
+    return {
+      status,
+      active: true,
+      message:
+        'PDF merge interrupted/stale - waiting for generation-fenced worker recovery. No additional labels or postage were created.',
+      errorMessage: snapshot.errorMessage ?? null,
+      staleReason: 'worker_heartbeat_stale',
     };
   }
 

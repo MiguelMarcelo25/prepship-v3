@@ -85,6 +85,12 @@ const sourcePinOnlyFiles = new Set([
   'scripts/ps-432-sync-fulfillment-resilience-guard.ts',
 ]);
 
+const mockedProviderCertificationFiles = new Set([
+  // PS-440 executes the ShipStation client against a replaced global fetch
+  // to prove total-deadline behavior. It cannot reach a provider.
+  'scripts/ps-440-connection-safety-guard.ts',
+]);
+
 const ignoredFiles = new Set([
   'scripts/api-contracts-guard.mjs',
   'scripts/ebay-confirmation-mocked-guard.ts',
@@ -101,6 +107,7 @@ const ignoredFiles = new Set([
   // Static source-pin guards: provider URLs appear only in assertions that
   // verify their connector remains the owner. These files make no API calls.
   ...sourcePinOnlyFiles,
+  ...mockedProviderCertificationFiles,
 ]);
 
 function normalize(filePath) {
@@ -147,6 +154,16 @@ for (const file of sourcePinOnlyFiles) {
   assert(
     !/\b(?:ssRequest|ssV1Request|timedFetch|fetch)\s*(?:<[^>]+>)?\s*\(/.test(source),
     `PS-032 source-pin guard contains an executable provider call: ${file}`,
+  );
+}
+for (const file of mockedProviderCertificationFiles) {
+  const source = readFileSync(file, 'utf8');
+  assert(
+    source.includes('All provider calls are mocked') &&
+      source.includes('const originalFetch = globalThis.fetch;') &&
+      source.includes('globalThis.fetch = originalFetch;') &&
+      /ssV1Request\('\/offline'/.test(source),
+    `PS-032 mocked provider certification lost its offline fetch boundary: ${file}`,
   );
 }
 

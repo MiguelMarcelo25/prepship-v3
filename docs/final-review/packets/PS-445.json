@@ -1,0 +1,281 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-445",
+  "title": "Independent rate-backfill skip and failure diagnostic buffers",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "cfd9d2ac51e23d8896e0afbcd6071bdde4e4f4e8"
+  },
+  "riskDomains": [
+    "provider_durable_job"
+  ],
+  "claimedScore": 97,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Six dimension skips retain five skip samples while a later thrown rate error remains visible in the independent failureSamples buffer.",
+      "evidenceIds": [
+        "ps445-diagnostic-unit",
+        "implementation-scope-proof"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "high",
+      "status": "met",
+      "description": "Both diagnostic arrays survive the durable settings JSON write/read path, and legacy snapshots without skipSamples remain backward-compatible.",
+      "evidenceIds": [
+        "ps445-diagnostic-unit",
+        "durable-backfill-regressions"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "high",
+      "status": "met",
+      "description": "The backend classifies outcomes once, serializes both arrays, and the Rates and Orders DTOs pass them through without frontend or route reclassification.",
+      "evidenceIds": [
+        "ps445-diagnostic-unit",
+        "rate-source-of-truth",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Durable backfill crash, uncertain enqueue, restart, concurrency, and stale-generation fencing remain green, together with focused backfill regressions, strict TypeScript, and the production frontend build.",
+      "evidenceIds": [
+        "backfill-generation-integration",
+        "backfill-generation-adversarial",
+        "backfill-generation-failure-injection",
+        "durable-backfill-regressions",
+        "strict-typecheck",
+        "frontend-build",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "Verification is offline and non-mutating: no provider request, label purchase, postage charge, marketplace notification, production database write, or shipped/cancelled lifecycle change occurred.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "backfill-generation-failure-injection",
+        "full-sot-guard-pack"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/rates-backfill.ts owns per-order skip/failure classification plus durable BackfillJobSnapshot serialization and settings reads",
+      "src/services/rate-backfill-diagnostics.ts owns the two independent five-entry buffers and backward-compatible diagnostic normalization",
+      "src/routes/rates.ts and src/routes/orders.ts are thin DTO pass-through consumers of backend-classified samples"
+    ],
+    "oldOwners": [
+      {
+        "path": "src/services/rates-backfill.ts skip branches writing into the shared failureSamples capacity",
+        "disposition": "delegated",
+        "delegatesTo": "recordRateBackfillDiagnostic with explicit skip or failure classification"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/rates.ts",
+        "action": "none",
+        "delegatesTo": "durable BackfillJobSnapshot fields without reclassification"
+      },
+      {
+        "path": "src/routes/orders.ts",
+        "action": "none",
+        "delegatesTo": "backend rate-job diagnostics as read-only DTO fields"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Outcome classification, buffer capacity, serialization, and normalization remain backend-owned. Routes and clients only receive the two already-classified arrays."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps445-diagnostic-unit",
+      "classification": "unit",
+      "command": "npm run test:ps-445-backfill-diagnostics",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-backfill-diagnostics-guard.ts",
+        "src/services/rate-backfill-diagnostics.ts",
+        "src/services/rates-backfill.ts",
+        "docs/ps-tickets/audit-4.8-backfill-diagnostics.md"
+      ],
+      "assertions": [
+        "six_skips_keep_five",
+        "later_failure_visible",
+        "durable_json_both_arrays",
+        "legacy_snapshot_compatible"
+      ],
+      "proves": "The exact PS-445 sequence records six dimension skips followed by one thrown error, retains the first five skips, preserves the real error independently, round-trips both arrays through durable JSON normalization, and defaults missing legacy skipSamples to an empty array."
+    },
+    {
+      "id": "durable-backfill-regressions",
+      "classification": "unit",
+      "command": "npm run test:rate-backfill-durable && npm run test:rate-backfill-db-pool-concurrency && npm run test:ps-120-rate-job-status && npm run test:ps-163-backfill-owner && npm run test:ps-276-backfill-residential-parity && npm run test:ps-350-backend-rate-jobs",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/rate-backfill-durable-guard.mjs",
+        "scripts/rate-backfill-db-pool-concurrency-guard.ts",
+        "scripts/ps-350-backend-rate-jobs-guard.ts",
+        "src/services/rates-backfill.ts"
+      ],
+      "assertions": [
+        "durable_snapshot_reader",
+        "bounded_db_concurrency",
+        "awaiting_only_backfill",
+        "durable_job_owner_preserved"
+      ],
+      "proves": "The settings-backed snapshot reader, database-pool limit, awaiting-only owner, per-order status projection, residential evidence parity, and durable backend job contract remain intact."
+    },
+    {
+      "id": "backfill-generation-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-436-sync-starvation through npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/services/rates-backfill.ts",
+        "src/services/rate-backfill-job-types.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "restart_idempotency"
+      ],
+      "proves": "Offline injected work resumes one durable rate-backfill generation through deterministic chunks after failure and preserves terminal/current generation identity."
+    },
+    {
+      "id": "backfill-generation-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-436-sync-starvation through npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/services/rates-backfill.ts",
+        "src/services/rate-backfill-job-producer.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Repeated wakeups and an uncertain enqueue retain one persisted generation; stale retries join current continuation instead of producing a second active effect."
+    },
+    {
+      "id": "backfill-generation-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-436-sync-starvation through npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/lib/sync-job-cancellation.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Injected non-cooperative and never-settling work fails closed, remains fenced, and performs zero live provider calls or production mutations."
+    },
+    {
+      "id": "rate-source-of-truth",
+      "classification": "static",
+      "command": "npm run test:rate-source-of-truth",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-313-rate-source-of-truth-guard.ts",
+        "src/services/rates-backfill.ts"
+      ],
+      "assertions": [],
+      "proves": "Backend rate ranking, proof, and persistence ownership remains unchanged; this diagnostic change cannot select or mint a rate."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/audit-backfill-diagnostics-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 49 mandatory backend-truth, rate, durable-worker, authorization, lifecycle, billing, inventory, and safety gates pass, including Audit 4.8."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully with 2,979 modules transformed."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git diff --name-status 00a22939682fe063ad945a3b6a3980fec45f3a6f..cfd9d2ac51e23d8896e0afbcd6071bdde4e4f4e8 && git merge-base --is-ancestor 97bda73dd02976a6ea3f1fa5268e5a26a8d74906 cfd9d2ac51e23d8896e0afbcd6071bdde4e4f4e8",
+      "result": "pass",
+      "artifactPaths": [
+        "package.json",
+        "scripts/audit-backfill-diagnostics-guard.ts",
+        "docs/ps-tickets/audit-4.8-backfill-diagnostics.md",
+        "src/services/rate-backfill-diagnostics.ts",
+        "src/services/rates-backfill.ts"
+      ],
+      "assertions": [],
+      "proves": "PS-445 changes only the ticket-specific offline guard, command alias, and architecture evidence. The already-deployed canonical runtime split is present in the reviewed history, and no runtime, provider, order, shipment, label, migration, billing, or inventory file changed for this ticket."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git diff --name-status 00a22939682fe063ad945a3b6a3980fec45f3a6f..cfd9d2ac51e23d8896e0afbcd6071bdde4e4f4e8",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema or data rollback is required. Forward-revert the PS-445 guard, package alias, documentation, and packet commits only; leave durable settings and historical diagnostic snapshots intact."
+  },
+  "rollback": {
+    "strategy": "Forward-revert only the PS-445 ticket-specific proof and packet. The previously deployed independent diagnostic buffers remain safe and backward-compatible; do not rewrite durable settings, orders, shipments, or provider job history.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "The canonical runtime buffer split was already present in the deployed baseline, while PS-445 adds offline executable acceptance proof only. Live rate backfill would call carriers and write operational settings, so closure deliberately uses injected/static evidence and performs no provider or production mutation.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}

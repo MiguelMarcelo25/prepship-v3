@@ -29,10 +29,16 @@ import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
+import { billingLineEffectiveDaySql } from '../services/billing-calendar-policy';
 import { logStructured, reportError } from '../lib/structured-log';
-import { requirePermission } from '../middleware/auth';
+import { requireAdmin, requirePermission } from '../middleware/auth';
 // PS-234: durable audit trail for billing generation.
-import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
+import {
+  auditActorFromContext,
+  ensureAuditLogSchema,
+  recordAuditEvent,
+  recordRequiredAuditEventInTransaction,
+} from '../services/audit-log';
 // PS-132: synthetic/system clients excluded from Config + Summary grids — single source.
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
@@ -94,8 +100,8 @@ import { renderInvoiceCsv } from './billing-invoice-csv';
 import {
   INVOICE_SHIP_DATE_HEADER,
   INVOICE_XLSX_SHIP_DATE_HEADER,
+  invoiceBillingActivityDateCell,
   invoiceOneLineCell,
-  invoiceShipDateCell,
   invoiceShipDateTimeCell,
 } from './billing-invoice-text';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
@@ -107,6 +113,7 @@ import {
   isBillingRegenerationBlockedError,
   requireBillingRegenerationRead,
 } from '../services/billing-regeneration-readiness';
+import { isBillingCalendarPolicyError } from '../services/billing-calendar-policy';
 import {
   resolveBillingPresetWindow,
   type BillingWindowPreset,
@@ -156,6 +163,18 @@ app.use('*', async (c, next) => {
         regenerationAllowed: error.regenerationAllowed,
         source: error.source,
       }, 503);
+    }
+    if (isBillingCalendarPolicyError(error)) {
+      logStructured('warn', 'billing.request.rejected', {
+        ...logFields,
+        status: error.status,
+        errorCode: error.code,
+      });
+      return c.json({
+        error: error.message,
+        code: error.code,
+        operationDay: error.operationDay,
+      }, error.status);
     }
     const closeError = asBillingCloseWorkflowError(error);
     if (closeError) {
@@ -321,7 +340,7 @@ app.get('/config', async (c) => {
   const data = rows.map((r) => {
     const houseAccountEnabled = houseAccountIds.has(r.clientId);
     const hugrabOverride = hugrabOverrideByClient.get(r.clientId) ?? {
-      enabled: String(r.clientName ?? '').trim().toUpperCase() === 'HUGRAB',
+      enabled: false,
       threshold: DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
       amount: DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
     };
@@ -509,6 +528,7 @@ const finalizeSchema = finalizeRawSchema
 const creditNoteSchema = z.object({
   clientId: z.coerce.number().int().positive(),
   finalizationId: z.string().trim().min(1).max(100),
+  adjustmentKind: z.enum(['credit', 'debit']).default('credit'),
   amount: z.union([z.string(), z.number()]).transform((value) => String(value)),
   reason: z.string().trim().min(3).max(500),
   idempotencyKey: z.string().trim().min(8).max(100),
@@ -545,6 +565,9 @@ const detailPatchSchema = z.object({
   packageId: z.coerce.number().int().positive().nullable().optional(),
   // PS-207: optional operator note stored on the box resolution.
   note: z.string().max(500).optional(),
+  // PS-462: every direct invoice-line edit requires an explicit reason. This
+  // reason is frozen with actor + before/after values in the atomic audit row.
+  reason: z.string().trim().min(3).max(500),
 });
 
 const hugrabShippingFloorRawSchema = z.object({
@@ -591,14 +614,16 @@ function money(value: number): string {
 // capability, never financials:write.
 app.post('/generate', requirePermission('billing:generate'), zValidator('json', generateSchema), async (c) => {
   const body = c.req.valid('json');
+  const actor = auditActorFromContext(c);
   const result = await generateLineItems(withBillingScope(c, {
     clientId: body.clientId,
     dateFrom: body.dateFrom!,
     dateTo: body.dateTo!,
+    ...actor,
   }));
   // PS-234: audit billing generation (request facts only — no PII/secret values).
   await recordAuditEvent({
-    ...auditActorFromContext(c),
+    ...actor,
     eventType: 'billing',
     resourceType: 'billing_generation',
     resourceId: body.clientId ?? null,
@@ -666,7 +691,8 @@ app.get('/finalizations', zValidator('query', finalizeSchema), async (c) => {
 });
 
 // Corrections never rewrite an invoice. They append a reasoned, idempotent
-// credit against the frozen close record and cannot exceed its balance.
+// signed adjustment against the frozen close record and atomically project it
+// into the backend-selected current billing period.
 app.post(
   '/credit-notes',
   requirePermission('financials:write'),
@@ -689,13 +715,20 @@ app.post(
     await recordAuditEvent({
       ...actor,
       eventType: 'billing',
-      resourceType: 'billing_credit_note',
+      resourceType: 'billing_adjustment',
       resourceId: result.creditNote.id,
-      action: result.alreadyCreated ? 'credit_note_replay' : 'credit_note_create',
+      action: result.alreadyCreated
+        ? `${result.creditNote.adjustmentKind}_note_replay`
+        : `${result.creditNote.adjustmentKind}_note_create`,
       details: {
         clientId: body.clientId,
         finalizationId: body.finalizationId,
+        sourceFinalizationId: result.creditNote.sourceFinalizationId,
+        adjustmentKind: result.creditNote.adjustmentKind,
         amount: result.creditNote.amount,
+        signedAmount: result.creditNote.signedAmount,
+        effectiveDate: result.creditNote.effectiveDate,
+        billingLineItemId: result.creditNote.billingLineItemId,
       },
     });
     return c.json({ data: result });
@@ -778,9 +811,9 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
 // ─── Storage-fee PROOF drilldown (admin) ───────────────────────────────
 // PS-373 (slice 2): return the FROZEN per-SKU / per-interval evidence behind a
 // client's single storage line for a billing period. financials:read-gated (the
-// global app.use above) + per-client scope. The period is matched on the SAME
-// canonical UTC-midnight [dateFrom, dateTo) bounds generateSchema produces — the
-// exact instants billing froze at generate time. The route only reads and
+// global app.use above) + per-client scope. The clicked storage line supplies
+// its activity day; the route finds the frozen UTC calendar-month proof that
+// contains that day. The route only reads and
 // returns the sidecar row; the FE renders it verbatim and never recomputes
 // storage (the backend rate owner stays the source of truth).
 app.get('/storage-proof', zValidator('query', generateSchema), async (c) => {
@@ -799,10 +832,11 @@ app.get('/storage-proof', zValidator('query', generateSchema), async (c) => {
     .where(
       and(
         eq(billingStorageProof.clientId, q.clientId),
-        sql`${billingStorageProof.periodStart} = ${q.dateFrom}::timestamptz`,
-        sql`${billingStorageProof.periodEnd} = ${q.dateTo}::timestamptz`,
+        sql`${billingStorageProof.periodStart} < ${q.dateTo}::timestamptz`,
+        sql`${billingStorageProof.periodEnd} > ${q.dateFrom}::timestamptz`,
       ),
     )
+    .orderBy(desc(billingStorageProof.periodStart))
     .limit(1);
   if (!row) {
     // 200 with found:false — a valid period that simply has no storage proof yet
@@ -891,10 +925,12 @@ app.post(
   },
 );
 
-app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zValidator('json', detailPatchSchema), async (c) => {
+app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financials:write'), zValidator('json', detailPatchSchema), async (c) => {
   const orderId = Number(c.req.param('orderId'));
   const body = c.req.valid('json');
   const scope = billingScopeFromContext(c);
+  const actor = auditActorFromContext(c);
+  if (!actor.actorId) return c.json({ error: 'Authenticated actor is required' }, 401);
 
   const [base] = await db
     .select({
@@ -904,6 +940,8 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       orderNumber: billingLineItems.orderNumber,
       shipmentId: billingLineItems.shipmentId,
       shipDate: billingLineItems.shipDate,
+      billingEffectiveDate: billingLineItems.billingEffectiveDate,
+      billingPolicyVersion: billingLineItems.billingPolicyVersion,
       packageId: billingLineItems.packageId,
     })
     .from(billingLineItems)
@@ -961,6 +999,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   // change and needs no lockdown override.
   await ensureBillingFinalizationPolicySchema();
   await ensureBillingBoxResolutionsSchema();
+  await ensureAuditLogSchema();
   if (prepFeePatchTouched) await ensureBillingFeeWaiverSchema();
   if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
 
@@ -973,6 +1012,24 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       },
       tx,
     );
+
+    const before = await tx
+      .select({
+        id: billingLineItems.id,
+        lineType: billingLineItems.lineType,
+        qty: billingLineItems.qty,
+        unitCost: billingLineItems.unitCost,
+        totalCost: billingLineItems.totalCost,
+        packageId: billingLineItems.packageId,
+      })
+      .from(billingLineItems)
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId),
+        ),
+      )
+      .orderBy(asc(billingLineItems.id));
 
     const [currentPackageCostLineBeforeEdit] = await tx
       .select({ totalCost: billingLineItems.totalCost })
@@ -1057,6 +1114,8 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           orderNumber: base.orderNumber,
           shipmentId: base.shipmentId,
           shipDate: base.shipDate,
+          billingEffectiveDate: base.billingEffectiveDate,
+          billingPolicyVersion: base.billingPolicyVersion,
           lineType,
           description,
           qty: '1.00',
@@ -1080,7 +1139,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
         const value = body[bodyKey];
         if (typeof value !== 'number') continue;
         const amount = money(value);
-        const note = body.note ?? `Manual Billing edit set ${label} to $${amount}`;
+        const note = body.note ?? `${body.reason} (${label})`;
         await upsertBillingManualOverride(
           {
             orderId,
@@ -1137,11 +1196,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           orderId,
           decision: manualPrepFeeDecision,
           reviewer: (c.get('email' as never) as string | undefined) ?? null,
-          note:
-            body.note ??
-            (manualPrepFeeDecision === 'waived'
-              ? 'Manual Billing edit set Pick & Pack to $0.00'
-              : 'Manual Billing edit restored prep fee'),
+          note: body.note ?? body.reason,
           originalPrepAmount: Number.isFinite(originalPrepAmount as number)
             ? originalPrepAmount
             : null,
@@ -1216,7 +1271,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
             shipmentId: base.shipmentId,
             packageId: newPackageId,
             overridePrice,
-            note: body.note ?? null,
+            note: body.note ?? body.reason,
             resolvedBy,
           })
           .onConflictDoUpdate({
@@ -1225,7 +1280,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
               shipmentId: base.shipmentId,
               packageId: newPackageId,
               overridePrice,
-              ...(body.note !== undefined ? { note: body.note } : {}),
+              note: body.note ?? body.reason,
               resolvedBy,
               resolvedAt: new Date(),
               updatedAt: new Date(),
@@ -1241,7 +1296,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
                 resolvedBy: existing.resolvedBy ?? null,
               }
             : null,
-          after: { packageId: newPackageId, overridePrice, note: body.note ?? null, resolvedBy },
+          after: { packageId: newPackageId, overridePrice, note: body.note ?? body.reason, resolvedBy },
         };
 
         const [shipmentBoxFacts] = base.shipmentId != null
@@ -1280,7 +1335,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           operator: {
             packageId: newPackageId,
             overridePrice: overridePrice != null ? Number(overridePrice) : null,
-            note: body.note ?? existing?.note ?? null,
+            note: body.note ?? body.reason,
           },
           selectedPid: shipmentBoxFacts?.selectedPid ?? null,
           selectedPackageId: shipmentBoxFacts?.selectedPackageId ?? null,
@@ -1317,6 +1372,41 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
           );
       }
     }
+
+    const after = await tx
+      .select({
+        id: billingLineItems.id,
+        lineType: billingLineItems.lineType,
+        qty: billingLineItems.qty,
+        unitCost: billingLineItems.unitCost,
+        totalCost: billingLineItems.totalCost,
+        packageId: billingLineItems.packageId,
+      })
+      .from(billingLineItems)
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId),
+        ),
+      )
+      .orderBy(asc(billingLineItems.id));
+
+    // PS-462: the edit and its append-only audit fact are one transaction. An
+    // audit insert failure rolls back every line/override/resolution mutation.
+    await recordRequiredAuditEventInTransaction(tx, {
+      ...actor,
+      eventType: 'billing',
+      resourceType: 'billing_invoice_line_edit',
+      resourceId: orderId,
+      action: 'invoice_line_edit',
+      details: {
+        clientId: body.clientId,
+        orderId,
+        reason: body.reason,
+        before,
+        after,
+      },
+    });
   });
 
   const manualPrepFeeAudit = manualPrepFeeAuditRef.current;
@@ -1484,7 +1574,12 @@ app.post(
     // regenerated range matches exactly what was re-priced (and what the invoice shows).
     if (result.appliedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+        withBillingScope(c, {
+          clientId: body.clientId,
+          dateFrom: body.dateFrom!,
+          dateTo: body.dateTo!,
+          ...auditActorFromContext(c),
+        }),
       );
     }
     // Append-only audit of the bulk money action (actor + scope + result; secrets auto-redacted).
@@ -1573,7 +1668,12 @@ app.post(
     // regeneration — PS-207). Same normalized [fromUtc, toUtcExclusive) bounds as the fetch.
     if (result.appliedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+        withBillingScope(c, {
+          clientId: body.clientId,
+          dateFrom: body.dateFrom!,
+          dateTo: body.dateTo!,
+          ...auditActorFromContext(c),
+        }),
       );
     }
     await recordAuditEvent({
@@ -1616,7 +1716,12 @@ app.post(
     );
     if (result.revertedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+        withBillingScope(c, {
+          clientId: body.clientId,
+          dateFrom: body.dateFrom!,
+          dateTo: body.dateTo!,
+          ...auditActorFromContext(c),
+        }),
       );
     }
     await recordAuditEvent({
@@ -1756,6 +1861,7 @@ type InvoiceTotals = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  adjustmentTotal: number;
   grandTotal: number;
   fulfillmentFeeTotal: number;
 };
@@ -1769,6 +1875,11 @@ type InvoiceDetailRow = {
   order_number: string | null;
   shipment_id: number | null;
   ship_date: string | null;
+  billing_effective_date: string | null;
+  billing_policy_version: string | null;
+  billing_adjustment_id: string | null;
+  source_finalization_id: string | null;
+  adjustment_description: string | null;
   base_qty: string;
   addl_qty: string;
   pickpack_amt: string;
@@ -1868,6 +1979,10 @@ async function billingInvoiceData(
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const invoiceEffectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
 
   const rawDetails = await db.execute<InvoiceDetailSqlRow>(sql`
     select
@@ -1879,6 +1994,11 @@ async function billingInvoiceData(
       -- the day AT UTC. The previous America/Los_Angeles conversion turned a
       -- May 1 row into April 30 before display even started.
       to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD') as ship_date,
+      to_char(${invoiceEffectiveDay} at time zone 'UTC', 'YYYY-MM-DD') as billing_effective_date,
+      b.billing_policy_version,
+      b.billing_adjustment_id,
+      b.source_finalization_id,
+      max(case when b.line_type = 'billing_adjustment' then b.description else null end) as adjustment_description,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then ${detailAmount} else 0 end), 0)::text as pickpack_amt,
@@ -1927,10 +2047,12 @@ async function billingInvoiceData(
     where b.client_id = ${clientId}
       -- PS-208: identical date-only bounds as every billing endpoint — UTC
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
-      and b.ship_date >= ${dateFrom}::timestamptz
-      and b.ship_date < ${dateTo}::timestamptz
-    group by b.order_id, b.order_number, b.shipment_id, b.ship_date
-    order by b.ship_date desc, b.order_id desc, b.shipment_id desc nulls last
+      and ${invoiceEffectiveDay} >= ${dateFrom}::timestamptz
+      and ${invoiceEffectiveDay} < ${dateTo}::timestamptz
+    group by b.order_id, b.order_number, b.shipment_id, b.ship_date,
+      b.billing_effective_date, b.billing_policy_version,
+      b.billing_adjustment_id, b.source_finalization_id
+    order by ${invoiceEffectiveDay} desc, b.order_id desc, b.shipment_id desc nulls last
   `);
 
   // PS-217: resolve the human-readable billed box from the stamped package_id.
@@ -1978,6 +2100,11 @@ async function billingInvoiceData(
       order_number: r.order_number,
       shipment_id: r.shipment_id,
       ship_date: r.ship_date,
+      billing_effective_date: r.billing_effective_date,
+      billing_policy_version: r.billing_policy_version,
+      billing_adjustment_id: r.billing_adjustment_id,
+      source_finalization_id: r.source_finalization_id,
+      adjustment_description: r.adjustment_description,
       base_qty: r.base_qty,
       addl_qty: r.addl_qty,
       pickpack_amt: r.pickpack_amt,
@@ -1986,11 +2113,13 @@ async function billingInvoiceData(
       storage_amt: r.storage_amt,
       row_total: r.row_total,
       billing_status_label: billingStatus.billingStatusLabel,
-      item_names: itemSummary.itemNames,
+      item_names: r.adjustment_description ?? itemSummary.itemNames,
       // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
       // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
       // the order has no order_items rows so legacy/imported orders still show their SKUs.
-      skus: itemSummary.itemSkus ?? r.skus,
+      skus: r.source_finalization_id
+        ? `Original invoice ${r.source_finalization_id}`
+        : itemSummary.itemSkus ?? r.skus,
       carrier_code: r.carrier_code,
       package_cost_amt: r.package_cost_amt,
       box_label: cancelledNoCharge ? '—' : box_label,
@@ -2026,6 +2155,7 @@ export function renderInvoiceHtml(args: {
     packageTotal,
     shippingTotal,
     storageTotal,
+    adjustmentTotal,
     grandTotal,
     fulfillmentFeeTotal,
   } = totals;
@@ -2068,11 +2198,20 @@ export function renderInvoiceHtml(args: {
         shipping: shippingAmt,
         storage: storageAmt,
       });
-      const shipDate = invoiceShipDateTimeCell(d.ship_date);
+      const billingDate = invoiceShipDateTimeCell(
+        d.billing_effective_date ?? d.ship_date,
+      );
+      const actualDate = invoiceShipDateTimeCell(d.ship_date);
+      const dateCell =
+        d.ship_date &&
+        d.billing_effective_date &&
+        d.ship_date !== d.billing_effective_date
+          ? `Billed ${billingDate}<br><small>Fulfilled ${actualDate}</small>`
+          : billingDate;
       return `
       <tr>
-        <td class="ship-date">${escHtml(shipDate)}</td>
-        <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
+        <td class="ship-date">${dateCell}</td>
+        <td class="mono">${escHtml(d.billing_adjustment_id ? `Adjustment ${d.billing_adjustment_id.slice(0, 8)}` : d.order_number ?? d.order_id ?? '')}</td>
         <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
@@ -2083,7 +2222,7 @@ export function renderInvoiceHtml(args: {
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
-        <td class="mono">${escHtml(d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
+        <td class="mono">${escHtml(d.billing_adjustment_id ? 'Adjustment' : d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
       </tr>`;
     })
     .join('');
@@ -2149,11 +2288,12 @@ export function renderInvoiceHtml(args: {
     <div class="card"><div class="cl">Packages</div><div class="cv">${packageTotal > 0 ? fmt(packageTotal) : '—'}</div></div>
     <div class="card"><div class="cl">Shipping</div><div class="cv">${fmt(shippingTotal)}</div></div>
     <div class="card"><div class="cl">Storage</div><div class="cv">${storageTotal > 0 ? fmt(storageTotal) : '—'}</div></div>
-    <div class="card"><div class="cl">Fulfillment Fee</div><div class="cv">${fmt(fulfillmentFeeTotal || grandTotal)}</div></div>
+    <div class="card"><div class="cl">Adjustments</div><div class="cv">${adjustmentTotal !== 0 ? fmt(adjustmentTotal) : '-'}</div></div>
+    <div class="card"><div class="cl">Fulfillment Fee</div><div class="cv">${fmt(fulfillmentFeeTotal)}</div></div>
   </div>
   <div class="grand-total">
     <div class="gtl">Total Amount Due — ${fromDisplay} → ${toDisplay}</div>
-    <div class="gtv">${fmt(fulfillmentFeeTotal || grandTotal)}</div>
+    <div class="gtv">${fmt(grandTotal)}</div>
   </div>
   ${waiverNote ? `<div class="waiver-note">${escHtml(waiverNote)}</div>` : ''}
   <table>
@@ -2170,7 +2310,7 @@ export function renderInvoiceHtml(args: {
         <th class="num">Add'l Units</th>
         <th class="num">Shipping</th>
         <th class="num">Storage</th>
-        <th class="num">Fulfillment Fee</th>
+        <th class="num">Total</th>
         <th>Shipment #</th>
       </tr>
     </thead>
@@ -2184,7 +2324,7 @@ export function renderInvoiceHtml(args: {
         <td class="num">${fmt(additionalTotal)}</td>
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
-        <td class="num" style="font-size:14px">${fmt(fulfillmentFeeTotal || grandTotal)}</td>
+        <td class="num" style="font-size:14px">${fmt(grandTotal)}</td>
         <td></td>
       </tr>
     </tfoot>
@@ -2255,7 +2395,7 @@ export async function renderInvoiceXlsx(args: {
     { header: 'Box Size', key: 'boxSize', width: 14 },
     { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: NUMBER_FMT } },
     { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
-    { header: 'Fulfillment Fee', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
+    { header: 'Total', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
     { header: 'Shipment #', key: 'shipmentId', width: 14 },
   ];
   invoice.getRow(1).font = { bold: true };
@@ -2278,9 +2418,14 @@ export async function renderInvoiceXlsx(args: {
       storage: storageAmt,
     });
     invoice.addRow({
-      orderNumber: String(d.order_number ?? d.order_id ?? ''),
+      orderNumber: d.billing_adjustment_id
+        ? `Adjustment ${d.billing_adjustment_id.slice(0, 8)}`
+        : String(d.order_number ?? d.order_id ?? ''),
       status: d.billing_status_label || 'Fulfilled',
-      shipDate: invoiceShipDateCell(d.ship_date),
+      shipDate: invoiceBillingActivityDateCell(
+        d.ship_date,
+        d.billing_effective_date,
+      ),
       carrier: invoiceCarrierCell(d.carrier_code),
       itemName: invoiceOneLineCell(d.item_names),
       sku: invoiceOneLineCell(d.skus),
@@ -2292,7 +2437,11 @@ export async function renderInvoiceXlsx(args: {
       shipping: shippingAmt,
       storage: storageAmt,
       fulfillmentFee: fulfillmentFeeAmt,
-      shipmentId: d.shipment_id == null ? 'External' : `#${d.shipment_id}`,
+      shipmentId: d.billing_adjustment_id
+        ? 'Adjustment'
+        : d.shipment_id == null
+          ? 'External'
+          : `#${d.shipment_id}`,
     });
   }
   if (details.length) {

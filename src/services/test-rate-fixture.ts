@@ -19,6 +19,8 @@
  * by the PS-186 test-label policy regardless — fixtures never buy postage.
  */
 
+import { roundMoney } from '../lib/money.js';
+
 export const TEST_FIXTURE_CARRIER_CODE = 'prepship_test';
 export const TEST_FIXTURE_SERVICE_CODE = 'prepship_test_standard';
 
@@ -71,10 +73,6 @@ function seededUnit(seed: string): number {
   return (hash >>> 0) / 4294967295;
 }
 
-function roundMoney(value: number): number {
-  return Math.round(Math.max(0, value) * 100) / 100;
-}
-
 export type TestFixtureRateInput = {
   orderId: number | string | null | undefined;
   weightOz: number;
@@ -105,8 +103,8 @@ export function buildTestFixtureRates(input: TestFixtureRateInput): Array<Record
     TEST_FIXTURE_SERVICE_TEMPLATES.map((template, templateIndex) => {
       const jitter = seededUnit(`${seedBase}:${account.shippingProviderId}:${template.code}`);
       const surchargeSeed = seededUnit(`${seedBase}:fuel:${account.shippingProviderId}:${templateIndex}`);
-      const shipmentCost = roundMoney(template.base + template.spread * jitter + weightLb * template.perLb + dimFactor);
-      const otherCost = roundMoney(surchargeSeed > 0.72 ? 0.55 + surchargeSeed * 1.45 : 0);
+      const shipmentCost = roundMoney(Math.max(0, template.base + template.spread * jitter + weightLb * template.perLb + dimFactor));
+      const otherCost = roundMoney(Math.max(0, surchargeSeed > 0.72 ? 0.55 + surchargeSeed * 1.45 : 0));
       return {
         rate_id: `test-fixture:${seedBase}:${account.shippingProviderId}:${template.code}`,
         rate_type: 'check',

@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss';
 import { z } from 'zod';
 import { env } from '../lib/env';
+import { withPgBossPoolLifetime } from '../lib/pg-boss-pool-lifetime';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
 import { runDurableWorkerAttempt } from './durable-worker-attempt';
@@ -41,7 +42,7 @@ let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 let started = false;
 
 function createBoss(applicationName: string, consumerRole: boolean): PgBoss {
-  return new PgBoss({
+  return new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: applicationName,
@@ -52,10 +53,14 @@ function createBoss(applicationName: string, consumerRole: boolean): PgBoss {
     expireInSeconds: 30 * 60,
     retentionDays: 7,
     deleteAfterDays: 7,
-    supervise: false,
+    // Rate browse provider work is durable, but the worker process can be
+    // replaced during a deploy. Let pg-boss expire abandoned active claims so
+    // they cannot consume the only browse slot after the replacement starts.
+    supervise: consumerRole,
+    maintenanceIntervalSeconds: 60,
     schedule: false,
     migrate: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 }
 
 async function ensureQueue(target: PgBoss): Promise<void> {
@@ -166,13 +171,14 @@ async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, u
       requestCancellation: () => requestRateBrowseJobCancellation(running.jobId, claim.generation),
       acknowledgeCancellation: () => acknowledgeRateBrowseJobCancellation(running.jobId, claim.generation),
     },
-    execute: async () => {
+    execute: async (signal) => {
       if (claim.input.includeCachedPartial) {
         try {
           const partial = await produceRateBrowsePayload({
             body: cachedPreviewBody(claim.input.body),
             canViewFinancials: claim.input.canViewFinancials,
             browseStartedAt: Date.now(),
+            signal,
           });
           if (Array.isArray(partial.rates) && partial.rates.length > 0) {
             await persistCurrent(buildRateBrowseResultSnapshot({
@@ -200,6 +206,7 @@ async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, u
         body: claim.input.body,
         canViewFinancials: claim.input.canViewFinancials,
         browseStartedAt: Date.now(),
+        signal,
       });
     },
   });

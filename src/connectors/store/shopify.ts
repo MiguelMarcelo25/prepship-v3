@@ -256,6 +256,7 @@ export type ShopifyShippingPurchaseInput = {
   orderId?: unknown;
   orderName?: unknown;
   purchaseInput: BuildShopifyShippingLabelPurchaseInput;
+  signal?: AbortSignal;
 };
 
 export type ShopifyDraftOrderDeliveryOptionsInput = Record<string, unknown>;
@@ -614,12 +615,15 @@ async function postShopifyGraphql<T>(
   creds: ShopifyCredentials,
   body: Record<string, unknown>,
   options: Required<Pick<ShopifyConnectorOptions, 'fetch' | 'sleep' | 'apiVersion'>>,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const url = shopifyGraphqlUrl(creds.shopDomain, options.apiVersion);
   const init: RequestInit = {
     method: 'POST',
     headers: shopifyGraphqlHeaders(creds.accessToken),
     body: JSON.stringify(body),
+    signal,
   };
   const response = options.fetch === fetch
     ? await timedFetch(operationName, url, init)
@@ -741,6 +745,7 @@ export async function purchaseShopifyShippingLabel(
         query: SHOPIFY_SHIPPING_LABEL_PURCHASE_MUTATION,
         variables: { shippingLabelPurchase: purchaseInput },
       }),
+      signal: input.signal,
     },
     { fulfillmentOrderId: purchaseInput.fulfillmentOrderId },
   );
@@ -767,6 +772,7 @@ export async function fetchShopifyShippingLabelPurchaseResult(
     orderName?: unknown;
     preferredCarrierCode?: unknown;
     preferredServiceCode?: unknown;
+    signal?: AbortSignal;
   },
 ): Promise<ShopifyShippingLabelPurchaseResult> {
   const creds = await shopifyCredentials(rawCredentials);
@@ -780,6 +786,7 @@ export async function fetchShopifyShippingLabelPurchaseResult(
         query: SHOPIFY_SHIPPING_LABEL_PURCHASE_RESULT_QUERY,
         variables: { id: input.purchaseResultId },
       }),
+      signal: input.signal,
     },
     { purchaseResultId: input.purchaseResultId },
   );
@@ -1472,6 +1479,7 @@ async function importShopifyOrders(
       },
     },
     options,
+    input.signal,
   );
 
   const ordersConnection = payload.data?.orders;
@@ -1567,7 +1575,7 @@ async function confirmShopifyShipment(input: ShipmentConfirmationInput): Promise
     'shopify.fulfillment-orders',
     creds,
     `/orders/${encodeURIComponent(orderId)}/fulfillment_orders.json`,
-    {},
+    { signal: input.signal },
     { orderId },
   );
   if (!fulfillmentOrdersRes.ok) {
@@ -1610,6 +1618,7 @@ async function confirmShopifyShipment(input: ShipmentConfirmationInput): Promise
     {
       method: 'POST',
       body: JSON.stringify(body),
+      signal: input.signal,
     },
     { orderId },
   );

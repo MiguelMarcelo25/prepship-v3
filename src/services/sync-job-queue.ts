@@ -1,11 +1,19 @@
 // Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import PgBoss from 'pg-boss';
+import postgres from 'postgres';
 import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
+import { withPgBossPoolLifetime } from '../lib/pg-boss-pool-lifetime';
 import { DeadlineExceededError, withDeadline } from '../lib/with-deadline';
+import {
+  requireCancellationAcknowledgement,
+  terminateWorkerForUnacknowledgedCancellation,
+} from '../lib/sync-job-cancellation';
 import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
+import { OrderSyncCooperativeYieldError } from '../lib/order-sync-cooperative-yield';
 import {
   getSyncJobLaneBlocker,
   syncJobLaneFor,
@@ -47,24 +55,42 @@ import {
   recordWorkerJobSuccess,
   setWorkerMode,
 } from './worker-status';
+import { classifyWorkerResolvedResult } from './worker-result-classification';
 import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
-import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
+import {
+  SYNC_JOB_CANCELLATION_GRACE_MS,
+  SYNC_JOB_HANDLER_TIMEOUT_MS,
+} from '../lib/sync-job-deadline';
 import {
   markShipStationSyncRunFailed,
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
 import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-account-snapshot-worker';
+import { isSupabaseTransactionPoolerUrl } from './print-queue-worker-policy';
 import {
+  FULFILLMENT_OUTBOX_JOB_NAME,
+  rateBackfillOperationalBlocker,
   resolveSyncJobAdmission,
+  runnableOperationalSyncQueueSizes,
   SHIPSTATION_SYNC_JOBS,
+  shipmentSyncRequestHasRecoveryPriority,
+  shouldYieldOrderSyncToFulfillmentOutbox,
+  shouldYieldOrderSyncToShipmentRecovery,
+  shouldYieldShipmentSyncToOrders,
+  SYNC_STARVATION_DEFER_THRESHOLD,
   syncQueuePolicyForJob,
+  type OperationalSyncQueueRow,
   type SyncJobAdmissionIntent,
 } from './sync-job-admission';
 import { RATE_BACKFILL_JOB_NAME } from './rate-backfill-job-producer';
-import { parseDurableRateBackfillJobPayload } from './rate-backfill-job-types';
+import {
+  parseDurableRateBackfillJobPayload,
+  rateBackfillPriority,
+} from './rate-backfill-job-types';
 import { runDurableRateBackfillJob } from './rates-backfill';
 import { runLocalTariffCalibrationTick } from './local-tariff-calibration';
 import {
+  hasPendingOrderSyncWork,
   orderSyncQueueBlocker,
   readOrderSyncQueueTruth,
   type OrderSyncQueueState,
@@ -89,7 +115,7 @@ const JOBS = {
   rateBackfill: RATE_BACKFILL_JOB_NAME,
   inventoryImport: 'prepship.sync.inventory-import',
   syncProducts: 'prepship.sync.products',
-  fulfillmentOutbox: 'prepship.sync.fulfillment-outbox',
+  fulfillmentOutbox: FULFILLMENT_OUTBOX_JOB_NAME,
   reportingRefresh: 'prepship.reporting.refresh',
   externalShippedClassifier: 'prepship.shipping.external-shipped-classifier',
   shipmentTracking: 'prepship.tracking.poll',
@@ -117,11 +143,348 @@ type SyncJobHandlerContext = {
 let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let shipStationConsumerLeadership: ShipStationConsumerLeadershipController | null = null;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
-const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
-const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments, JOBS.rateBackfill]);
+// Per user override unlock shipped data on 2026-07-23: queue wake-up control
+// only. These entries never mutate orders, shipments, labels, or providers.
+const BUSY_DEFER_JOB_NAMES = new Set<JobName>([
+  JOBS.orders,
+  JOBS.shipments,
+  JOBS.inventoryImport,
+  JOBS.syncProducts,
+  JOBS.rateBackfill,
+  JOBS.fulfillmentOutbox,
+]);
+const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
+const SHIPSTATION_CONSUMER_LEADER_RETRY_MS = 5_000;
+const SHIPSTATION_CONSUMER_LEADER_HEALTH_MS = 15_000;
+const SHARED_LANE_PRIORITY_POLL_MS = 5_000;
+
+export type ActiveShipStationSyncJob = {
+  id: string;
+  name: string;
+};
+
+export type ShipStationConsumerLeadershipConnection = {
+  ping(): Promise<void>;
+  tryAcquire(): Promise<boolean>;
+  unlock(): Promise<void>;
+  release(): void;
+};
+
+type ShipStationConsumerLeadershipDependencies = {
+  reserveConnection(): Promise<ShipStationConsumerLeadershipConnection>;
+  recoverActiveJobs(): Promise<void>;
+  readActiveJobs(): Promise<ActiveShipStationSyncJob[]>;
+  registerConsumers(): Promise<void>;
+  unregisterConsumers(): Promise<void>;
+  requestRestart(reason: string): void;
+  setTimer(callback: () => void, delayMs: number): unknown;
+  clearTimer(handle: unknown): void;
+  info(message: string): void;
+  warn(message: string, error: unknown): void;
+  error(message: string, error: unknown): void;
+};
+
+export type ShipStationConsumerLeadershipSnapshot = {
+  started: boolean;
+  stopping: boolean;
+  ownsLock: boolean;
+  consumersRegistered: boolean;
+  scheduledDelayMs: number | null;
+};
+
+/**
+ * Per user override unlock shipped data on 2026-07-16: this controller changes
+ * only queue-consumer leadership and never writes order or shipment data.
+ *
+ * Canonical lifecycle owner for the ShipStation stately-consumer leadership
+ * session. Queue registration, handoff, connection loss, retry, and shutdown
+ * all pass through this controller so they can be proven at one boundary.
+ */
+export class ShipStationConsumerLeadershipController {
+  private connection: ShipStationConsumerLeadershipConnection | null = null;
+  private timer: unknown = null;
+  private scheduledDelayMs: number | null = null;
+  private operation: Promise<void> = Promise.resolve();
+  private started = false;
+  private stopping = false;
+  private consumersRegistered = false;
+  private handoffLogged = false;
+
+  constructor(
+    private readonly dependencies: ShipStationConsumerLeadershipDependencies,
+    private readonly retryMs = SHIPSTATION_CONSUMER_LEADER_RETRY_MS,
+    private readonly healthMs = SHIPSTATION_CONSUMER_LEADER_HEALTH_MS,
+  ) {}
+
+  snapshot(): ShipStationConsumerLeadershipSnapshot {
+    return {
+      started: this.started,
+      stopping: this.stopping,
+      ownsLock: Boolean(this.connection),
+      consumersRegistered: this.consumersRegistered,
+      scheduledDelayMs: this.scheduledDelayMs,
+    };
+  }
+
+  async start(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+    this.stopping = false;
+    await this.enqueueMaintenance();
+  }
+
+  async runMaintenanceNow(): Promise<void> {
+    if (!this.started || this.stopping) return;
+    this.clearScheduledTimer();
+    await this.enqueueMaintenance();
+  }
+
+  async notifyConnectionClosed(): Promise<void> {
+    if (!this.started || this.stopping || !this.connection) return;
+    await this.enqueue(async () => {
+      if (!this.connection || this.stopping) return;
+      this.dependencies.error(
+        '[job-queue] ShipStation consumer leadership connection closed',
+        new Error('leadership_session_closed'),
+      );
+      this.clearScheduledTimer();
+      await this.restartAfterLostConnection('shipstation_consumer_leadership_closed');
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (!this.started && !this.connection && !this.consumersRegistered) return;
+    this.stopping = true;
+    this.clearScheduledTimer();
+    await this.operation.catch(() => undefined);
+    try {
+      await this.unregisterConsumers();
+    } catch (error) {
+      this.dependencies.warn(
+        '[job-queue] ShipStation consumers could not unregister cleanly',
+        error,
+      );
+    }
+    await this.releaseLeadership();
+    this.handoffLogged = false;
+    this.started = false;
+  }
+
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const next = this.operation.catch(() => undefined).then(task);
+    this.operation = next;
+    return next;
+  }
+
+  private enqueueMaintenance(): Promise<void> {
+    return this.enqueue(() => this.maintain());
+  }
+
+  private clearScheduledTimer(): void {
+    if (this.timer === null) return;
+    this.dependencies.clearTimer(this.timer);
+    this.timer = null;
+    this.scheduledDelayMs = null;
+  }
+
+  private schedule(delayMs: number): void {
+    if (this.stopping || !this.started || this.timer !== null) return;
+    this.scheduledDelayMs = delayMs;
+    this.timer = this.dependencies.setTimer(() => {
+      this.timer = null;
+      this.scheduledDelayMs = null;
+      void this.enqueueMaintenance();
+    }, delayMs);
+  }
+
+  private async unregisterConsumers(): Promise<void> {
+    if (!this.consumersRegistered) return;
+    try {
+      await this.dependencies.unregisterConsumers();
+    } finally {
+      this.consumersRegistered = false;
+    }
+  }
+
+  private async dropLostConnection(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    if (!connection) return;
+    try {
+      await this.unregisterConsumers();
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async restartAfterLostConnection(reason: string): Promise<void> {
+    await this.dropLostConnection();
+    // Per user override unlock shipped data on 2026-05-23: a lost
+    // leadership session can leave its server-side advisory lock alive after
+    // a network abort. Restart the worker so the OS closes every stale socket
+    // and the durable queue can elect a clean consumer generation. This is
+    // queue control-plane recovery only; it does not mutate orders,
+    // shipments, labels, postage, or marketplace state.
+    this.schedule(this.retryMs);
+    this.dependencies.requestRestart(reason);
+  }
+
+  private async releaseLeadership(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    if (!connection) return;
+    try {
+      await connection.unlock();
+    } catch (error) {
+      this.dependencies.warn(
+        '[job-queue] ShipStation consumer leadership release skipped',
+        error,
+      );
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async maintain(): Promise<void> {
+    if (this.stopping || !this.started) return;
+
+    try {
+      if (this.connection) {
+        try {
+          await this.connection.ping();
+        } catch (error) {
+          this.dependencies.error(
+            '[job-queue] ShipStation consumer leadership connection lost',
+            error,
+          );
+          await this.restartAfterLostConnection('shipstation_consumer_leadership_ping_failed');
+          return;
+        }
+      }
+
+      if (!this.connection) {
+        const reserved = await this.dependencies.reserveConnection();
+        try {
+          if (!(await reserved.tryAcquire())) {
+            reserved.release();
+            this.schedule(this.retryMs);
+            return;
+          }
+          this.connection = reserved;
+        } catch (error) {
+          reserved.release();
+          throw error;
+        }
+      }
+
+      if (!this.consumersRegistered) {
+        // Per user override unlock shipped data on 2026-07-18: recover only
+        // allow-listed orphaned pg-boss control rows before applying the active
+        // deploy handoff fence. This handoff loop stays alive even when the
+        // queue-maintenance consumer is itself orphaned.
+        await this.dependencies.recoverActiveJobs();
+        const activeJobs = await this.dependencies.readActiveJobs();
+        if (activeJobs.length > 0) {
+          if (!this.handoffLogged) {
+            this.dependencies.info(
+              `[job-queue] ShipStation consumers waiting for active deploy handoff: ${activeJobs.map((job) => `${job.name}:${job.id}`).join(', ')}`,
+            );
+            this.handoffLogged = true;
+          }
+          this.schedule(this.retryMs);
+          return;
+        }
+
+        await this.dependencies.registerConsumers();
+        this.consumersRegistered = true;
+        this.handoffLogged = false;
+        this.dependencies.info('[job-queue] ShipStation stately consumer leadership acquired');
+      }
+
+      this.schedule(this.healthMs);
+    } catch (error) {
+      this.dependencies.error(
+        '[job-queue] ShipStation consumer leadership check failed',
+        error,
+      );
+      this.schedule(this.retryMs);
+    }
+  }
+}
+
+export function resolveShipStationConsumerLeaderDatabaseUrl(input: {
+  databaseUrl: string;
+  dedicatedDatabaseUrl?: string;
+}): string {
+  const dedicated = input.dedicatedDatabaseUrl?.trim();
+  const fallback = isSupabaseTransactionPoolerUrl(input.databaseUrl)
+    ? input.databaseUrl.replace(':6543/', ':5432/')
+    : input.databaseUrl;
+  const selected = dedicated || fallback;
+  if (isSupabaseTransactionPoolerUrl(selected)) {
+    throw new Error(
+      'ShipStation consumer leadership cannot use the Supabase transaction pooler on port 6543; configure a direct or session-mode port 5432 URL.',
+    );
+  }
+  return selected;
+}
+
+// Per user override unlock shipped data on 2026-07-16: this dedicated session
+// owns only pg-boss consumer leadership. It never reads or mutates orders,
+// shipments, labels, postage, marketplace notifications, or customer data.
+const shipStationConsumerLeaderSql = postgres(
+  resolveShipStationConsumerLeaderDatabaseUrl({
+    databaseUrl: env.DATABASE_URL,
+    dedicatedDatabaseUrl: env.SHIPSTATION_CONSUMER_LEADER_DATABASE_URL,
+  }),
+  {
+    prepare: false,
+    max: 1,
+    idle_timeout: 0,
+    max_lifetime: null,
+    connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+    connection: {
+      application_name: 'prepship-shipstation-consumer-leader',
+      statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+    },
+    // Per user override unlock shipped data on 2026-07-16: stop polling the
+    // stately queues as soon as the leadership session closes. The periodic
+    // ping remains a fallback, but an old worker no longer waits for that tick
+    // before surrendering its consumers during a connection-loss handoff.
+    onclose: () => {
+      const leadership = shipStationConsumerLeadership;
+      if (!leadership) return;
+      void leadership.notifyConnectionClosed().catch((error) => {
+        console.error(
+          '[job-queue] ShipStation leadership close handler failed:',
+          error instanceof Error ? error.message : error,
+        );
+      });
+    },
+  },
+);
+
+// Leadership handoff is queue control-plane state. Its active-job read must
+// stay available while DB-heavy sync work occupies the shared application
+// pool, otherwise the new deploy owns leadership but never registers the
+// order/shipment/outbox consumers.
+const shipStationConsumerStatePoolerCompatibility = { max_pipeline: 1 } as const;
+const shipStationConsumerStateSql = postgres(env.DATABASE_URL, {
+  prepare: false,
+  max: 1,
+  idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
+  connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+  connection: {
+    application_name: 'prepship-shipstation-consumer-state',
+    statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+  },
+  ...shipStationConsumerStatePoolerCompatibility,
+});
 
 function queueOptionsFor(name: JobName): PgBoss.Queue {
   return {
@@ -141,7 +504,7 @@ async function ensureQueue(targetBoss: PgBoss, name: JobName): Promise<void> {
   if (options.policy !== 'stately') return;
   // Per user override unlock shipped data on 2026-07-14: createQueue is a
   // no-op for existing pg-boss queues, so updateQueue is required to move the
-  // two ShipStation queues to the canonical stately coalescing policy.
+  // shared-lane control queues to the canonical stately coalescing policy.
   await targetBoss.updateQueue(name, options);
 }
 
@@ -193,12 +556,6 @@ function dateFromUnknown(value: unknown): Date | null {
     return Number.isFinite(parsed.getTime()) ? parsed : null;
   }
   return null;
-}
-
-function isDeferredShipStationOrderSync(data: unknown): boolean {
-  if (!data || typeof data !== 'object') return false;
-  const source = data as { deferredLane?: unknown; deferCount?: unknown };
-  return source.deferredLane === 'shipstation-sync' && Number(source.deferCount) > 0;
 }
 
 async function findSupersedingManualOrderSyncJob(
@@ -389,7 +746,7 @@ export async function enqueueManualOrderSyncJob(
     return sendManualOrderSyncJob(boss, true, request);
   }
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-manual-order-sync',
@@ -401,7 +758,7 @@ export async function enqueueManualOrderSyncJob(
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -430,7 +787,7 @@ export async function enqueueOrderSyncWatchdogJob(): Promise<ManualOrderSyncEnqu
     return sendOrderSyncWatchdogJob(boss, true);
   }
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-order-sync-watchdog',
@@ -442,7 +799,7 @@ export async function enqueueOrderSyncWatchdogJob(): Promise<ManualOrderSyncEnqu
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -516,7 +873,7 @@ export async function enqueueManualShipmentSyncJob(
   const payload = buildManualShipmentSyncJobPayload(request);
   if (boss && started) return sendManualShipmentSyncJob(boss, true, request);
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-manual-shipment-sync',
@@ -528,7 +885,7 @@ export async function enqueueManualShipmentSyncJob(
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -553,7 +910,7 @@ export async function enqueueShipmentSyncWatchdogJob(): Promise<ShipmentSyncWatc
     return sendShipmentSyncWatchdogJob(boss, true);
   }
 
-  const transientBoss = new PgBoss({
+  const transientBoss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-api-watchdog',
@@ -565,7 +922,7 @@ export async function enqueueShipmentSyncWatchdogJob(): Promise<ShipmentSyncWatc
     retentionDays: 7,
     deleteAfterDays: 7,
     supervise: false,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   try {
     await transientBoss.start();
@@ -594,7 +951,9 @@ async function deferBusySyncJob(
   try {
     const deferCount = Math.max(0, Math.trunc(priorDeferCount)) + 1;
     const orderStarvation =
-      name === JOBS.orders && deferCount >= ORDER_STARVATION_DEFER_THRESHOLD;
+      name === JOBS.orders && deferCount >= SYNC_STARVATION_DEFER_THRESHOLD;
+    const fulfillmentOutboxRecovery = name === JOBS.fulfillmentOutbox;
+    const recoveryPriority = orderStarvation || fulfillmentOutboxRecovery;
     const delaySeconds = orderStarvation ? ORDER_STARVATION_DEFER_SECONDS : BUSY_DEFER_SECONDS;
     const isRateBackfill = name === JOBS.rateBackfill;
     const ratePayload = isRateBackfill
@@ -602,12 +961,14 @@ async function deferBusySyncJob(
       : null;
     const admission = isRateBackfill
       ? {
-          singletonKey: `rate-backfill-request:${ratePayload?.jobId ?? 'cadence'}`,
-          priority: ratePayload?.requestedBy === 'manual' ? 1_000 : ratePayload ? 100 : 0,
+          singletonKey:
+            `rate-backfill-defer:${ratePayload?.generationId ?? ratePayload?.jobId ?? 'cadence'}`
+            + `:${ratePayload?.chunkIndex ?? 0}`,
+          priority: rateBackfillPriority(ratePayload),
         }
       : resolveSyncJobAdmission(name, {
           kind: 'busy-defer',
-          orderStarvation,
+          recoveryPriority,
         });
     const deferredMetadata = {
       requestedAt: new Date().toISOString(),
@@ -615,21 +976,27 @@ async function deferBusySyncJob(
       deferredLane: lane,
       deferCount,
       orderStarvation,
+      fulfillmentOutboxRecovery,
     };
-    // Per user override unlock shipped data on 2026-07-15: this only creates a
-    // replacement pg-boss wake-up when the shared database lane is busy. Rate
-    // payloads retain their exact awaiting-only target IDs. This does not touch
-    // orders, shipments, labels, postage, or marketplace notifications.
+    // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+    // 2026-07-21; this only creates a coalesced replacement pg-boss wake-up
+    // when the shared database lane is busy. The stately outbox key permits one
+    // created replacement beside the active attempt; no provider handler runs
+    // here. Rate payloads retain their
+    // exact awaiting-only target IDs. This does not touch orders, shipments,
+    // labels, postage, or marketplace notifications.
+    const deferredPayload =
+      ratePayload
+        ? { ...ratePayload, ...deferredMetadata }
+        : jobData && typeof jobData === 'object' && !Array.isArray(jobData)
+          ? { ...(jobData as Record<string, unknown>), ...deferredMetadata }
+          : deferredMetadata;
     const id = await boss.sendAfter(
       name,
-      ratePayload ? { ...ratePayload, ...deferredMetadata } : deferredMetadata,
+      deferredPayload,
       {
-        ...(isRateBackfill
-          ? {}
-          : {
-              singletonKey: admission.singletonKey,
-              singletonSeconds: delaySeconds,
-            }),
+        singletonKey: admission.singletonKey,
+        singletonSeconds: delaySeconds,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
@@ -647,13 +1014,34 @@ async function deferBusySyncJob(
     } else {
       console.log(`[job-queue] ${name} already has a busy-defer job queued`);
     }
-    return id;
+    // A null pg-boss id means the canonical singleton wake-up already exists.
+    // Treat that as successful coalescing instead of retrying the active row
+    // and creating a second source of retry pressure.
+    return id ?? `coalesced:${admission.singletonKey}`;
   } catch (err) {
     console.error(
       `[job-queue] failed to defer ${name}:`,
       err instanceof Error ? err.message : err
     );
     return null;
+  }
+}
+
+// Per user override unlock shipped data on 2026-05-23: queue-control fail-closed
+// assertion only; it cannot call fulfillment providers or mutate order data.
+function assertDurableBusyDeferral(
+  name: JobName,
+  deferredJobId: string | null,
+): void {
+  if (deferredJobId) return;
+  if (name === JOBS.rateBackfill) {
+    throw new Error('durable rate-backfill deferral failed; retrying original queue job');
+  }
+  if (name === JOBS.fulfillmentOutbox) {
+    throw new Error('durable fulfillment-outbox deferral failed; retrying original queue job');
+  }
+  if (BUSY_DEFER_JOB_NAMES.has(name)) {
+    throw new Error(`durable ${name} deferral failed; retrying original queue job`);
   }
 }
 
@@ -670,7 +1058,10 @@ async function reconcileDurableSchedule(
     return;
   }
 
-  const admission = resolveSyncJobAdmission(name, { kind: 'cadence' });
+  const admission = name === JOBS.rateBackfill
+    ? { singletonKey: 'rate-backfill-cadence', priority: rateBackfillPriority(null) }
+    : resolveSyncJobAdmission(name, { kind: 'cadence' });
+  const priority = admission.priority;
 
   // Per user override unlock shipped data on 2026-07-14: pg-boss persists
   // cadence in Postgres. The canonical admission owner gives equivalent
@@ -684,7 +1075,7 @@ async function reconcileDurableSchedule(
       tz: 'UTC',
       singletonKey: admission.singletonKey,
       singletonSeconds: jobSingletonSeconds(intervalMs),
-      priority: admission.priority,
+      priority,
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
@@ -798,6 +1189,197 @@ function busyDeferCount(jobData: unknown): number {
   return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
 }
 
+async function pendingOperationalBlockerForRateBackfill(): Promise<string | null> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  // Per user override unlock shipped data on 2026-07-18: rate admission reads
+  // queue control-plane rows only. Future shipment/order defer wake-ups are not
+  // runnable blockers; active work remains protected by the local/advisory lane.
+  const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
+    SELECT
+      name,
+      state,
+      start_after AS "startAfter"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ANY(${[JOBS.orders, JOBS.shipments] as string[]})
+      AND state IN ('created', 'retry')
+  `;
+  return rateBackfillOperationalBlocker(
+    runnableOperationalSyncQueueSizes(rows),
+  );
+}
+
+async function pendingShipmentRecoveryBlockerForOrders(): Promise<string | null> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
+    SELECT
+      name,
+      state,
+      start_after AS "startAfter",
+      priority,
+      data->>'deferCount' AS "deferCount"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ${JOBS.shipments}
+      AND state IN ('active', 'created', 'retry')
+  `;
+  return shouldYieldOrderSyncToShipmentRecovery(rows)
+    ? JOBS.shipments
+    : null;
+}
+
+async function pendingFulfillmentOutboxBlockerForOrders(
+  priorOrderDeferCount: number = 0,
+): Promise<string | null> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  const rows = await shipStationConsumerStateSql<OperationalSyncQueueRow[]>`
+    SELECT
+      name,
+      state,
+      start_after AS "startAfter",
+      priority,
+      data->>'deferCount' AS "deferCount"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ${JOBS.fulfillmentOutbox}
+      AND state IN ('active', 'created', 'retry')
+  `;
+  return shouldYieldOrderSyncToFulfillmentOutbox(rows, Date.now(), priorOrderDeferCount)
+    ? JOBS.fulfillmentOutbox
+    : null;
+}
+
+async function runOrderSyncWithOutboxPriority(
+  jobData: unknown,
+  identity: ShipStationSyncRunIdentity,
+  parentSignal: AbortSignal,
+): Promise<unknown> {
+  const priorDeferCount = busyDeferCount(jobData);
+  const preempt = new AbortController();
+  const stopMonitor = new AbortController();
+  const workSignal = AbortSignal.any([parentSignal, preempt.signal]);
+  const monitorSignal = AbortSignal.any([parentSignal, stopMonitor.signal]);
+  const monitor = (async () => {
+    while (!monitorSignal.aborted) {
+      const outboxBlocker = await pendingFulfillmentOutboxBlockerForOrders(priorDeferCount);
+      if (outboxBlocker) {
+        // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+        // 2026-07-21; cooperatively stop only this bounded order attempt so the
+        // already-durable outbox wake-up gets the shared lane. Order cursors and
+        // normal transaction boundaries remain authoritative; no shipped lock
+        // is bypassed.
+        // Per user override unlock shipped data on 2026-07-22: identify this
+        // durable queue-control deferral separately from real provider or
+        // persistence failures so account health remains truthful.
+        preempt.abort(new OrderSyncCooperativeYieldError());
+        return;
+      }
+      await sleep(SHARED_LANE_PRIORITY_POLL_MS, undefined, {
+        signal: monitorSignal,
+      });
+    }
+  })();
+
+  try {
+    const options = orderSyncOptionsFromJobPayload(jobData);
+    // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+    // 2026-07-21; a durable retry preserves the originating payload's scope.
+    // Manual incremental refresh remains Awaiting-only, while cadence/watchdog
+    // retries retain status catch-up. The cooperative outbox monitor below is
+    // now the canonical starvation guard for long status passes.
+    // Per user override unlock shipped data on 2026-07-14: order ingestion no
+    // longer starts a detached broad rate backfill outside its durable queue
+    // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
+    // owns both that targeted handoff and the separate broad cadence.
+    return await syncOrders({ ...options, runIdentity: identity, signal: workSignal });
+  } catch (err) {
+    if (!preempt.signal.aborted || parentSignal.aborted) throw err;
+    const deferredJobId = await deferBusySyncJob(
+      JOBS.orders,
+      JOBS.fulfillmentOutbox,
+      syncJobLaneFor(JOBS.orders),
+      priorDeferCount,
+      jobData,
+    );
+    if (!deferredJobId) {
+      throw new Error('Order sync outbox-priority deferral failed; retrying original queue job');
+    }
+    return {
+      ok: true,
+      skipped: true,
+      deferred: true,
+      deferredJobId,
+      blockedBy: JOBS.fulfillmentOutbox,
+      reason: 'yielded_to_pending_fulfillment_outbox',
+    };
+  } finally {
+    stopMonitor.abort();
+    await monitor.catch((err) => {
+      if (!monitorSignal.aborted) throw err;
+    });
+  }
+}
+
+async function runShipmentSyncWithOrderPriority(
+  jobData: unknown,
+  parentSignal: AbortSignal,
+): Promise<unknown> {
+  const priorDeferCount = busyDeferCount(jobData);
+  const recoveryRequested = shipmentSyncRequestHasRecoveryPriority(jobData);
+  const preempt = new AbortController();
+  const stopMonitor = new AbortController();
+  const workSignal = AbortSignal.any([parentSignal, preempt.signal]);
+  const monitorSignal = AbortSignal.any([parentSignal, stopMonitor.signal]);
+  const monitor = (async () => {
+    while (!monitorSignal.aborted) {
+      const queueTruth = await readOrderSyncQueueTruth();
+      if (shouldYieldShipmentSyncToOrders({
+        ordersPending: hasPendingOrderSyncWork(queueTruth),
+        priorDeferCount,
+        recoveryRequested,
+      })) {
+        // Per user override unlock shipped data on 2026-07-18: this cancels
+        // only the current bounded shipment worker attempt. Existing database
+        // transactions finish or roll back normally; no protection is bypassed.
+        preempt.abort(new Error('Shipment sync yielded to pending order refresh'));
+        return;
+      }
+      await sleep(SHARED_LANE_PRIORITY_POLL_MS, undefined, {
+        signal: monitorSignal,
+      });
+    }
+  })();
+
+  try {
+    return await syncShipments({
+      ...shipmentSyncOptionsFromJobPayload(jobData),
+      signal: workSignal,
+    });
+  } catch (err) {
+    if (!preempt.signal.aborted || parentSignal.aborted) throw err;
+    const deferredJobId = await deferBusySyncJob(
+      JOBS.shipments,
+      JOBS.orders,
+      syncJobLaneFor(JOBS.shipments),
+      priorDeferCount,
+      jobData,
+    );
+    if (!deferredJobId) {
+      throw new Error('Shipment sync priority deferral failed; retrying original queue job');
+    }
+    return {
+      ok: true,
+      skipped: true,
+      deferred: true,
+      deferredJobId,
+      blockedBy: JOBS.orders,
+      reason: 'yielded_to_pending_order_sync',
+    };
+  } finally {
+    stopMonitor.abort();
+    await monitor.catch((err) => {
+      if (!monitorSignal.aborted) throw err;
+    });
+  }
+}
+
 // Handler deadline is below pg-boss's 30-minute expiry. Timed-out order work
 // also receives an AbortSignal so stale attempts stop before later persistence.
 async function registerWorker(
@@ -826,7 +1408,75 @@ async function registerWorker(
         };
       }
 
+      if (name === JOBS.orders) {
+        const fulfillmentOutboxBlocker = await pendingFulfillmentOutboxBlockerForOrders(
+          busyDeferCount(job?.data),
+        );
+        const shipmentBlocker = fulfillmentOutboxBlocker
+          ? null
+          : await pendingShipmentRecoveryBlockerForOrders();
+        const recoveryBlocker = fulfillmentOutboxBlocker ?? shipmentBlocker;
+        if (recoveryBlocker) {
+          // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+          // 2026-07-21; this yields only the queue attempt. The canonical sync
+          // handlers and shipped / cancelled protections remain unchanged.
+          await recordWorkerJobSkipped(name, `${recoveryBlocker} recovery pending`);
+          const deferredJobId = await deferBusySyncJob(
+            name,
+            recoveryBlocker,
+            syncJobLaneFor(name),
+            busyDeferCount(job?.data),
+            job?.data,
+          );
+          if (!deferredJobId) {
+            throw new Error('order-sync fairness deferral failed; retrying original queue job');
+          }
+          return {
+            ok: true,
+            skipped: true,
+            deferred: true,
+            deferredJobId,
+            blockedBy: recoveryBlocker,
+            reason: fulfillmentOutboxBlocker
+              ? 'fulfillment_outbox_recovery_pending'
+              : 'shipment_recovery_pending',
+          };
+        }
+      }
+
       const lane = syncJobLaneFor(name);
+      if (name === JOBS.rateBackfill) {
+        const operationalBlocker = await pendingOperationalBlockerForRateBackfill();
+        if (operationalBlocker) {
+          console.log(
+            `[job-queue] ${name} yielded because ${operationalBlocker} is pending in ${lane} lane`
+          );
+          await recordWorkerJobSkipped(
+            name,
+            `${operationalBlocker} pending in ${lane} lane`,
+          );
+          const deferredJobId = await deferBusySyncJob(
+            name,
+            operationalBlocker,
+            lane,
+            busyDeferCount(job?.data),
+            job?.data,
+          );
+          if (!deferredJobId) {
+            throw new Error('durable rate-backfill yield failed; retrying original queue job');
+          }
+          return {
+            ok: true,
+            skipped: true,
+            deferred: true,
+            deferredJobId,
+            blockedBy: operationalBlocker,
+            lane,
+            reason: 'operational_sync_pending',
+          };
+        }
+      }
+
       const blockedBy = getSyncJobLaneBlocker(activeJobsByLane, name);
       if (blockedBy) {
         console.log(
@@ -840,9 +1490,7 @@ async function registerWorker(
           busyDeferCount(job?.data),
           job?.data,
         );
-        if (name === JOBS.rateBackfill && !deferredJobId) {
-          throw new Error('durable rate-backfill deferral failed; retrying original queue job');
-        }
+        assertDurableBusyDeferral(name, deferredJobId);
         return {
           ok: true,
           skipped: true,
@@ -861,9 +1509,18 @@ async function registerWorker(
           attemptId: randomUUID(),
         };
         const abortController = new AbortController();
+        const ratePayload = name === JOBS.rateBackfill
+          ? parseDurableRateBackfillJobPayload(job?.data)
+          : null;
         console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
         try {
-          await recordWorkerJobStart(name);
+          await recordWorkerJobStart(name, {
+            jobId: identity.queueJobId,
+            generationId: ratePayload?.generationId ?? ratePayload?.jobId ?? null,
+            lane,
+            startedAtMs: startedAt,
+            timeoutMs: SYNC_JOB_HANDLER_TIMEOUT_MS,
+          });
         } catch (err) {
           if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
           throw err;
@@ -890,17 +1547,32 @@ async function registerWorker(
             name,
             { onTimeout: (error) => abortController.abort(error) },
           );
+          const classification = classifyWorkerResolvedResult(result);
+          if (classification.status === 'failed') {
+            throw new Error(`${name}: ${classification.error ?? 'all attempted work failed'}`);
+          }
           const durationMs = Date.now() - startedAt;
           console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
           await recordWorkerJobSuccess(name, startedAt, result);
           return { ok: true, durationMs };
         } catch (err) {
           if (err instanceof DeadlineExceededError) {
-            // Per user override unlock shipped data on 2026-07-15: PS-428 keeps
-            // the cross-process lane fence until the timed-out handler has
-            // acknowledged cancellation by settling. No successor generation
-            // can overlap abandoned shipment/order work.
-            await handlerPromise.catch(() => undefined);
+            // Per user override unlock shipped data on 2026-07-17 (PS-436):
+            // keep the advisory fence while cooperative work receives a bounded
+            // cancellation grace. If it ignores abort, do not return from this
+            // callback (which would release the lane): fail closed by terminating
+            // the worker and let Render/pg-boss recover the durable job.
+            await requireCancellationAcknowledgement({
+              work: handlerPromise,
+              graceMs: SYNC_JOB_CANCELLATION_GRACE_MS,
+              beforeTerminate: () =>
+                recordWorkerJobFailure(name, startedAt, err).catch(() => undefined),
+              terminate: () => terminateWorkerForUnacknowledgedCancellation({
+                jobName: name,
+                jobId: identity.queueJobId,
+                graceMs: SYNC_JOB_CANCELLATION_GRACE_MS,
+              }),
+            });
           }
           const durationMs = Date.now() - startedAt;
           if (name === JOBS.orders) {
@@ -933,9 +1605,7 @@ async function registerWorker(
           busyDeferCount(job?.data),
           job?.data,
         );
-        if (name === JOBS.rateBackfill && !deferredJobId) {
-          throw new Error('durable rate-backfill deferral failed; retrying original queue job');
-        }
+        assertDurableBusyDeferral(name, deferredJobId);
         return {
           ok: true,
           skipped: true,
@@ -952,6 +1622,118 @@ async function registerWorker(
   );
 }
 
+async function readActiveShipStationSyncJobs(): Promise<ActiveShipStationSyncJob[]> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  return shipStationConsumerStateSql<ActiveShipStationSyncJob[]>`
+    SELECT id::text AS id, name
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE state = 'active'
+      AND name = ANY(${[JOBS.orders, JOBS.shipments, JOBS.fulfillmentOutbox] as string[]})
+    ORDER BY started_on ASC NULLS LAST
+  `;
+}
+
+async function registerShipStationStatelyWorkers(): Promise<void> {
+  if (!boss) return;
+
+  try {
+    // Per user override unlock shipped data on 2026-07-02: pg-boss owns
+    // queue locking, deadlines, and worker-status writes. Call the canonical
+    // ShipStation sync services directly so queued mode does not also take the
+    // legacy interval-scheduler advisory lock and starve worker heartbeats.
+    // Per user override unlock shipped data on 2026-05-23: reconfirmed on
+    // 2026-07-21; one leadership owner consumes all stately shared-lane queues,
+    // including the outbox. This avoids deploy-overlap consumer races while
+    // provider execution remains inside the unchanged fulfillment handler.
+    await registerWorker(JOBS.orders, (jobData, { identity, signal }) =>
+      runOrderSyncWithOutboxPriority(jobData, identity, signal),
+    );
+    // Audit SY-3 (2026-07-13): thread the queue deadline signal into shipment
+    // sync so abandoned page walks stop before a retry can become a second writer.
+    await registerWorker(JOBS.shipments, (jobData, { signal }) =>
+      runShipmentSyncWithOrderPriority(jobData, signal),
+    );
+    await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
+  } catch (err) {
+    await Promise.allSettled([
+      boss.offWork(JOBS.orders),
+      boss.offWork(JOBS.shipments),
+      boss.offWork(JOBS.fulfillmentOutbox),
+    ]);
+    throw err;
+  }
+}
+
+async function unregisterShipStationStatelyWorkers(): Promise<void> {
+  if (!boss) return;
+  await Promise.allSettled([
+    boss.offWork(JOBS.orders),
+    boss.offWork(JOBS.shipments),
+    boss.offWork(JOBS.fulfillmentOutbox),
+  ]);
+}
+
+function leadershipError(error: unknown): unknown {
+  return error instanceof Error ? error.message : error;
+}
+
+function createShipStationConsumerLeadership(): ShipStationConsumerLeadershipController {
+  return new ShipStationConsumerLeadershipController({
+    reserveConnection: async () => {
+      const reserved = await shipStationConsumerLeaderSql.reserve();
+      return {
+        ping: async () => {
+          await reserved`select 1`;
+        },
+        tryAcquire: async () => {
+          const [row] = await reserved<{ acquired: boolean }[]>`
+            select pg_try_advisory_lock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK})) as acquired
+          `;
+          return Boolean(row?.acquired);
+        },
+        unlock: async () => {
+          await reserved`
+            select pg_advisory_unlock(hashtext(${SHIPSTATION_CONSUMER_LEADER_LOCK}))
+          `;
+        },
+        release: () => reserved.release(),
+      };
+    },
+    recoverActiveJobs: async () => {
+      const recovery = await reapStuckActiveJobs();
+      if (recovery.reaped > 0) {
+        console.log(
+          `[job-queue] leadership handoff reaper cleared ${recovery.reaped} orphan(s): ${recovery.names.join(', ')}`,
+        );
+      }
+    },
+    readActiveJobs: readActiveShipStationSyncJobs,
+    registerConsumers: async () => {
+      await registerShipStationStatelyWorkers();
+    },
+    unregisterConsumers: unregisterShipStationStatelyWorkers,
+    requestRestart: (reason) => {
+      console.error(`[job-queue] unhealthy; requesting supervisor restart (${reason})`);
+      process.exit(1);
+    },
+    setTimer: (callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref?.();
+      return timer;
+    },
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    info: (message) => console.log(message),
+    warn: (message, error) => console.warn(`${message}:`, leadershipError(error)),
+    error: (message, error) => console.error(`${message}:`, leadershipError(error)),
+  });
+}
+
+async function maintainShipStationConsumerLeadership(): Promise<void> {
+  if (!boss || !started) return;
+  shipStationConsumerLeadership ??= createShipStationConsumerLeadership();
+  await shipStationConsumerLeadership.start();
+}
+
 async function createQueues(): Promise<void> {
   if (!boss) return;
   for (const name of Object.values(JOBS)) {
@@ -966,7 +1748,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   }
   started = true;
 
-  boss = new PgBoss({
+  boss = new PgBoss(withPgBossPoolLifetime({
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-worker',
@@ -986,7 +1768,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     // ON, pg-boss reaps them itself on a 60s cadence; the SYNC_STUCK_JOB_REAPER stays as a backstop.
     supervise: true,
     maintenanceIntervalSeconds: 60,
-  });
+  }, env.DB_MAX_LIFETIME_SECONDS));
 
   boss.on('error', (err) => {
     console.error('[job-queue] pg-boss error:', err.message);
@@ -996,40 +1778,19 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await setWorkerMode('worker-scheduler');
   await createQueues();
 
-  // Per user override unlock shipped data on 2026-07-02: pg-boss owns
-  // queue locking, deadlines, and worker-status writes. Call the canonical
-  // ShipStation sync services directly so queued mode does not also take the
-  // legacy interval-scheduler advisory lock and starve worker heartbeats.
-  await registerWorker(JOBS.orders, async (jobData, { identity, signal }) => {
-    const options = orderSyncOptionsFromJobPayload(jobData);
-    if (isDeferredShipStationOrderSync(jobData)) {
-      // Per user override unlock shipped data on 2026-05-23, reconfirmed on
-      // 2026-07-07: a busy-defer row is just a retry wake-up after the
-      // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
-      // wake-ups cannot become another long status catch-up that starves labels.
-      options.skipStatusPasses = true;
-    }
-    // Per user override unlock shipped data on 2026-07-14: order ingestion no
-    // longer starts a detached broad rate backfill outside its durable queue
-    // lane. The import owner enqueues only newly imported Awaiting IDs; pg-boss
-    // owns both that targeted handoff and the separate broad cadence.
-    return syncOrders({ ...options, runIdentity: identity, signal });
-  });
-  // Audit SY-3 (2026-07-13): thread the deadline signal into the shipments and
-  // Shopify handlers too (orders already had it) — withDeadline races and
-  // ABANDONS the work, so without checkpoints an abandoned walk kept writing
-  // (pages, enrichment, cursors) after its lane lock was released and the
-  // pg-boss retry started a second writer. The label_shipment_id UNIQUE index
-  // is the DB backstop; this stops the zombie at the source.
+  // Per user override unlock shipped data on 2026-07-16: pg-boss v10 stately
+  // queues need one polling consumer across deploy overlap. The database-backed
+  // leader waits for an existing active generation before registering these two
+  // consumers, preventing the repeated stately singleton 23505 conflict.
+  await maintainShipStationConsumerLeadership();
+  // Audit SY-3 (2026-07-13): Shopify also receives the queue deadline signal.
   await registerWorker(JOBS.shopifyOrders, (_jobData, { signal }) =>
     runShopifyOrderSyncTick(signal),
   );
-  await registerWorker(JOBS.shipments, (jobData, { signal }) =>
-    syncShipments({ ...shipmentSyncOptionsFromJobPayload(jobData), signal }),
-  );
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
-  await registerWorker(JOBS.syncProducts, runSyncProductsTick);
-  await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
+  await registerWorker(JOBS.syncProducts, (_jobData, { signal }) =>
+    runSyncProductsTick(signal),
+  );
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
   // Per user override unlock shipped data on 2026-07-02: queued mode already
   // owns the external-shipped lane via pg-boss + advisory locks. Call the
@@ -1038,11 +1799,11 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierJob);
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
-  await registerWorker(JOBS.rateBackfill, (jobData) => {
+  await registerWorker(JOBS.rateBackfill, (jobData, { identity, signal }) => {
     const explicitRequest = parseDurableRateBackfillJobPayload(jobData);
     return explicitRequest
-      ? runDurableRateBackfillJob(explicitRequest)
-      : runBackfillTick();
+      ? runDurableRateBackfillJob(explicitRequest, signal)
+      : runBackfillTick(identity.queueJobId, signal);
   });
   await registerWorker(JOBS.rateMaintenance, async () => {
     await runReapStaleRateJobsTick();
@@ -1079,12 +1840,21 @@ export async function startQueuedSyncScheduler(): Promise<void> {
 }
 
 export async function stopQueuedSyncScheduler(): Promise<void> {
+  // Per user override unlock shipped data on 2026-07-16: unregister the two
+  // ShipStation pollers before releasing their advisory leadership session.
+  // Any still-active pg-boss row remains the durable handoff fence for the
+  // next worker generation while the rest of this boss shuts down gracefully.
+  await shipStationConsumerLeadership?.stop();
+  shipStationConsumerLeadership = null;
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
   }
-  if (boss) {
-    await boss.stop({ graceful: true, timeout: 30_000 });
+  try {
+    if (boss) {
+      await boss.stop({ graceful: true, timeout: 30_000 });
+    }
+  } finally {
     boss = null;
   }
   activeJobsByLane.clear();

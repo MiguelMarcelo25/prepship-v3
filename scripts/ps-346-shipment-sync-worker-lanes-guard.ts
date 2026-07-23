@@ -40,6 +40,7 @@ const trackingJob = 'prepship.tracking.poll';
 const reportingJob = 'prepship.reporting.refresh';
 const rateBackfillJob = 'prepship.sync.rate-backfill';
 const carrierSnapshotsJob = 'prepship.maintenance.carrier-account-snapshots';
+const queueMaintenanceJob = 'prepship.maintenance.job-queue';
 
 const shipmentsLane = syncJobLaneFor(shipmentsJob);
 const activeShipmentSync = new Map([[shipmentsLane, shipmentsJob]]);
@@ -81,6 +82,11 @@ check(
   getSyncJobLaneBlocker(activeShipmentSync, carrierSnapshotsJob) === shipmentsJob
 );
 check(
+  'queue maintenance can reap an orphan blocking the ShipStation sync lane',
+  syncJobLaneFor(queueMaintenanceJob) === 'misc' &&
+    getSyncJobLaneBlocker(activeShipmentSync, queueMaintenanceJob) === null
+);
+check(
   'unclassified maintenance defaults to the DB-heavy lane',
   getSyncJobLaneBlocker(activeShipmentSync, 'prepship.maintenance.rate-cache') === shipmentsJob
 );
@@ -102,10 +108,10 @@ check(
   /activeJobsByLane/.test(queue) && !/let activeJobName/.test(queue)
 );
 check(
-  'pg-boss admission prevents duplicate order/shipment backlog across workers',
+  'pg-boss admission prevents duplicate order/shipment/outbox backlog across workers',
   /await targetBoss\.updateQueue\(name, options\)/.test(queue) &&
     /policy: syncQueuePolicyForJob\(name\)/.test(queue) &&
-    /return name === SHIPSTATION_SYNC_JOBS\.orders \|\| name === SHIPSTATION_SYNC_JOBS\.shipments[\s\S]*\? 'stately'/.test(admission)
+    /name === SHIPSTATION_SYNC_JOBS\.orders[\s\S]*name === SHIPSTATION_SYNC_JOBS\.shipments[\s\S]*name === FULFILLMENT_OUTBOX_JOB_NAME[\s\S]*\? 'stately'/.test(admission)
 );
 
 const scheduler = read('src/services/sync-scheduler.ts');

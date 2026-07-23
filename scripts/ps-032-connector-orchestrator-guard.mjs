@@ -477,13 +477,15 @@ assert(
   'imported rates-multi must read the durable snapshot owner and keep CarrierConnector as its live fallback',
 );
 assert(
-  shipStationCarrierSnapshotWorker.includes('pg_try_advisory_lock') &&
+  !shipStationCarrierSnapshotWorker.includes('pg_try_advisory_lock') &&
+    !shipStationCarrierSnapshotWorker.includes('pg_advisory_unlock') &&
     shipStationCarrierSnapshotWorker.includes('refreshDueShipStationCarrierAccountSnapshots') &&
     syncJobQueue.includes('runShipStationCarrierAccountSnapshotTick') &&
     syncJobQueue.includes('JOBS.carrierAccountSnapshots') &&
+    syncJobQueue.includes('withSyncLaneAdvisoryLock(lane, async () =>') &&
     !workerEntry.includes('startShipStationCarrierAccountSnapshotWorker') &&
     !printQueueWorker.includes('ShipStationCarrierAccountSnapshotWorker'),
-  'the durable pg-boss worker must refresh ShipStation carrier snapshots under an advisory lock',
+  'the durable pg-boss worker must refresh ShipStation carrier snapshots under the queue-owned transaction lock',
 );
 assert(
   verifyGroundSaverScript.includes('listCarrierAccounts') &&

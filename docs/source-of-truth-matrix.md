@@ -146,11 +146,11 @@ External source truth:
   warehouse stock once inventory is received or deducted.
 
 Normalized operational truth:
-- `inventory.stockQty` owns current on-hand stock.
+- `inventoryQuantity = SUM(inventory_ledger.qty)` is the only on-hand quantity.
 - Product/SKU defaults live on inventory rows where PrepShip manages them.
 
 Frozen/snapshot truth:
-- `inventory_ledger` owns inventory movement history: receives, deductions,
+- Immutable `inventory_ledger` rows own inventory movement history: receives, deductions,
   returns, corrections, and manual adjustments.
 
 Derived/read-model/cache truth:
@@ -165,7 +165,7 @@ Read/API owner:
 - Dashboard/reporting APIs for stock summaries.
 
 Freshness/staleness rules:
-- Current quantity is immediately updated by inventory actions.
+- Current quantity is derived immediately from committed movement rows; no balance cache exists.
 - Velocity and days-supply metrics may lag until reporting refresh.
 
 Audit/provenance requirements:
@@ -806,9 +806,9 @@ future refactors must follow.
 | Labels / shipments | `shipments` durable label, tracking, carrier, cost, and provider account snapshot | Reprint, tracking, billing, manifest, reporting views | Mock/test label stores only in non-production flows | Shipment row itself | Label service and shipment sync | Orders, print queue, billing, marketplace confirmation | Shipping label creation currently triggers WMS deductions directly | `shipping-core` emits shipment events; WMS/Billing consume |
 | Print queue | `print_queue_orders` active/printed/removed status in DB | Queue drawer grouping and history view | None | Queue status transitions and print confirmation timestamps | Print queue service/routes | Orders UI print queue drawer | Frontend must never be queue source of truth | `shipping-core` print workflow |
 | Marketplace confirmation / outbox | `fulfillment_outbox` plus shipment confirmation status fields | Marketplace status/retry UI | None | Provider response/status history at processing time | Fulfillment outbox service and store confirmation connectors | Orders/ops status views | Unsupported providers need explicit not-supported state, not silent success | `shipping-core` event/outbox boundary |
-| Inventory | `inventory` operational stock/config row | Stock tables, low/out badges, receiving UI | None | Ledger entries for each stock movement | WMS inventory services/routes | Inventory UI, reporting, billing read models | Shipping services call fulfillment deductions directly | `wms` event consumer; Shipping emits shipment/deduction intent |
-| Inventory ledger | `inventory_ledger` movement history | History panel, reconciliation reports, storage billing inputs | None | Ledger row with quantity/source/reason | WMS receive/deduct/adjust services | Inventory history, billing/reporting | Some repair/admin scripts can touch ledger and must stay scoped | `wms` immutable movement log |
-| Inventory balance / read model | Current `inventory.stockQty`; target single balance projection | Stock-level table, dashboard counts, alerts | Reporting caches with generation metadata | Ledger history remains proof | WMS balance service | Inventory/dashboard/analytics | Pages can recalculate stock/velocity differently | `wms` owns balance projection; others read it |
+| Inventory | `inventory` SKU/config row plus ledger-derived `inventoryQuantity` | Stock tables, low/out badges, receiving UI | None | Ledger entries for each stock movement | WMS inventory movement owner/routes | Inventory UI, reporting, billing read models | Shipping services still call fulfillment deductions directly | `wms` event consumer; Shipping emits shipment/deduction intent |
+| Inventory ledger | Immutable `inventory_ledger` signed movement history | History panel, discrepancy reports, storage billing inputs | None | Ledger row with client/SKU/source/effective/posted/actor/reason identity | `src/services/inventory-movement.ts` | Inventory history, billing/reporting | Historical repair scripts must emit reviewed append-only reversals | `wms` immutable movement log |
+| Inventory balance / read model | `SUM(inventory_ledger.qty)` exposed only as `inventoryQuantity` | Stock-level table, dashboard counts, alerts | Reporting caches may store velocity, never a competing balance | Ledger history remains proof | `src/services/inventory-stock-math.ts` | Inventory/dashboard/analytics/Client Portal | Missing history is reported, never replaced by order/cache fallback | `wms` owns the ledger projection; others render it |
 | Products / SKU defaults | `products` canonical SKU defaults; `product_defaults` compatibility/read model | Inventory/product forms and defaults display | None | Defaults copied into order/shipment/billing snapshots when used | Product/WMS services | Inventory, products, rate/package helpers | Product route mirrors into `product_defaults`; dual writes need a single service | `wms` product catalog boundary |
 | Packages / package stock | Package catalog/package stock tables and package ledger where applicable | Package UI and shipping package choices | None | Package choice frozen on shipment; package movement ledger | WMS package service and shipping package selection service | Packages UI, Orders rate/label UI | Label creation can deduct package stock directly | `wms` owns stock; `shipping-core` owns chosen package snapshot |
 | Billing config | Billing config/rate tables | Billing preview DTOs | None | Billing config copied into generated line items/invoices | Billing service/routes | Billing UI and exports | Billing reads across live domains and raw order JSON in places | `billing` module consumes stable read models/snapshots |

@@ -1,0 +1,98 @@
+-- PS-462 phase 1 (renumbered from duplicate PS-439): prepare immutable,
+-- identity-complete inventory movements.
+-- Additive only: this file never repairs balances, rewrites ledger history, or drops
+-- the legacy stock_qty cache. Apply it immediately before deploying the PS-462 runtime;
+-- older runtimes do not provide the movement identity required by the insert guard.
+
+ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS client_id integer REFERENCES public.clients(id);
+ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS sku text;
+ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS source_entity text;
+ALTER TABLE public.inventory_ledger ADD COLUMN IF NOT EXISTS source_id text;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'inventory_ledger_nonzero_qty_chk'
+      AND conrelid = 'public.inventory_ledger'::regclass
+  ) THEN
+    ALTER TABLE public.inventory_ledger
+      ADD CONSTRAINT inventory_ledger_nonzero_qty_chk CHECK (qty <> 0) NOT VALID;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.inventory_ledger_prepare_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  owner_client_id integer;
+  owner_sku text;
+BEGIN
+  SELECT client_id, sku INTO owner_client_id, owner_sku
+  FROM public.inventory WHERE id = NEW.inventory_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PS462_INVENTORY_IDENTITY_NOT_FOUND'; END IF;
+  IF NEW.type NOT IN ('receive', 'adjust', 'pick', 'ship', 'return', 'damage') THEN
+    RAISE EXCEPTION 'PS462_INVENTORY_MOVEMENT_TYPE_INVALID';
+  END IF;
+  IF (NEW.type IN ('receive', 'return') AND NEW.qty <= 0)
+     OR (NEW.type IN ('pick', 'ship', 'damage') AND NEW.qty >= 0) THEN
+    RAISE EXCEPTION 'PS462_INVENTORY_MOVEMENT_DIRECTION_INVALID';
+  END IF;
+  NEW.client_id := owner_client_id;
+  NEW.sku := owner_sku;
+  IF NEW.effective_at IS NULL OR NULLIF(BTRIM(NEW.created_by), '') IS NULL
+     OR NULLIF(BTRIM(NEW.idempotency_key), '') IS NULL
+     OR NULLIF(BTRIM(NEW.source_entity), '') IS NULL
+     OR NULLIF(BTRIM(NEW.source_id), '') IS NULL THEN
+    RAISE EXCEPTION 'PS462_INVENTORY_MOVEMENT_IDENTITY_REQUIRED';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS inventory_ledger_prepare_insert_guard ON public.inventory_ledger;
+CREATE TRIGGER inventory_ledger_prepare_insert_guard
+BEFORE INSERT ON public.inventory_ledger
+FOR EACH ROW EXECUTE FUNCTION public.inventory_ledger_prepare_insert();
+
+CREATE OR REPLACE FUNCTION public.inventory_ledger_block_mutations()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  RAISE EXCEPTION 'PS462_INVENTORY_LEDGER_IMMUTABLE: append an idempotent reversal movement';
+END $$;
+
+DROP TRIGGER IF EXISTS inventory_ledger_no_update_delete ON public.inventory_ledger;
+CREATE TRIGGER inventory_ledger_no_update_delete
+BEFORE UPDATE OR DELETE ON public.inventory_ledger
+FOR EACH ROW EXECUTE FUNCTION public.inventory_ledger_block_mutations();
+
+DROP TRIGGER IF EXISTS inventory_ledger_no_truncate ON public.inventory_ledger;
+CREATE TRIGGER inventory_ledger_no_truncate
+BEFORE TRUNCATE ON public.inventory_ledger
+FOR EACH STATEMENT EXECUTE FUNCTION public.inventory_ledger_block_mutations();
+
+CREATE UNIQUE INDEX IF NOT EXISTS inventory_ledger_source_identity_unq
+ON public.inventory_ledger (source_entity, source_id, inventory_id, type)
+WHERE source_entity IS NOT NULL AND source_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.inventory_block_identity_change_with_ledger()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF (OLD.client_id IS DISTINCT FROM NEW.client_id OR OLD.sku IS DISTINCT FROM NEW.sku)
+     AND EXISTS (SELECT 1 FROM public.inventory_ledger movement WHERE movement.inventory_id = OLD.id) THEN
+    RAISE EXCEPTION 'PS462_INVENTORY_IDENTITY_IMMUTABLE: create a new inventory row and append paired movements';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS inventory_identity_immutable_with_ledger ON public.inventory;
+CREATE TRIGGER inventory_identity_immutable_with_ledger
+BEFORE UPDATE OF client_id, sku ON public.inventory
+FOR EACH ROW EXECUTE FUNCTION public.inventory_block_identity_change_with_ledger();

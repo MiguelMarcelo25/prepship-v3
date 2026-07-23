@@ -22,11 +22,18 @@ import {
   getBackfillJob,
   getBackfillJobSnapshot,
   getLatestBackfillJobSnapshot,
+  getRateBackfillGenerationState,
+  reconcileBackfillJobWithGeneration,
   enqueueBackfillBestRates,
 } from '../services/rates-backfill';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
-import { hasAppPermission, requireInternalPermission } from '../middleware/auth';
+import {
+  hasAppPermission,
+  requireBusinessRoutePolicy,
+  requireInternalPermission,
+  requirePermission,
+} from '../middleware/auth';
 // PS-250 (Card 5): the shared order-scope owner — so a rate route can't read/persist
 // against another tenant's order (cross-tenant IDOR on /browse).
 import { scopeFromContext, orderScopePredicate } from '../lib/order-scope';
@@ -48,10 +55,20 @@ import { orderOverrides, orders } from '../db/schema/orders';
 import { getShopifyRatesForOrder, ShopifyRatesError } from '../services/shopify-rates';
 import { logStructured, reportError, runWithLogContext } from '../lib/structured-log';
 import { isPoBoxAddress } from '../services/shipping-workflow/address-classification';
+import {
+  authorizeRateRequestScope,
+  authorizeRateRequestScopes,
+  type RateRequestScopeDecision,
+  type RateRequestScopeInput,
+} from '../services/rate-request-authorization';
 
 const app = new Hono();
 
-app.all('/multi', runNodeHandler(multiCarrierHandler));
+app.all(
+  '/multi',
+  requireInternalPermission('credentials:read'),
+  runNodeHandler(multiCarrierHandler),
+);
 
 const rateCachePublicColumns = {
   cacheKey: rateCache.cacheKey,
@@ -167,6 +184,29 @@ function canViewRateAccountMetadata(c: Context): boolean {
   );
 }
 
+function rateScopeError(
+  c: Context,
+  decision: Exclude<RateRequestScopeDecision, { allowed: true }>,
+  input: RateRequestScopeInput,
+) {
+  if (input.orderId != null) {
+    return c.json({ error: 'Order not found' }, 404);
+  }
+  return c.json(
+    {
+      error: decision.source === 'missing-context'
+        ? 'A scoped client or store context is required'
+        : 'Rate context out of scope',
+    },
+    403,
+  );
+}
+
+async function ensureRateScope(c: Context, input: RateRequestScopeInput) {
+  const decision = await authorizeRateRequestScope(scopeFromContext(c), input);
+  return decision.allowed ? null : rateScopeError(c, decision, input);
+}
+
 function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown; secondBestRate?: unknown }>(
   result: T,
   canViewFinancials: boolean
@@ -198,6 +238,7 @@ const rateBody = z.object({
   weightOz: z.number().positive(),
   fromZip: z.string().min(3).optional(),
   shipFrom: z.object({}).catchall(z.unknown()).optional(),
+  shipFromLocationId: z.number().int().positive().nullable().optional(),
   toZip: z.string().min(3),
   toCountry: z.string().optional(),
   toState: z.string().optional(),
@@ -209,6 +250,7 @@ const rateBody = z.object({
   dimsL: z.number().positive().optional(),
   dimsW: z.number().positive().optional(),
   dimsH: z.number().positive().optional(),
+  customPackageId: z.number().int().positive().nullable().optional(),
   carrierIds: z.array(z.string()).optional(),
   storeId: z.number().int().nullable().optional(),
   clientId: z.number().int().nullable().optional(),
@@ -221,8 +263,14 @@ const rateBody = z.object({
   forceRefresh: z.boolean().optional(),
 });
 
-app.post('/', zValidator('json', rateBody), async (c) => {
+app.post(
+  '/',
+  requireBusinessRoutePolicy('rates.quote'),
+  zValidator('json', rateBody),
+  async (c) => {
   const body = normalizeRateShipFromOrigin(c.req.valid('json'));
+  const scopeError = await ensureRateScope(c, body);
+  if (scopeError) return scopeError;
   const canViewFinancials = canViewRateFinancials(c);
   const { forceRefresh, signature, confirmation, ...input } = body;
   try {
@@ -235,7 +283,8 @@ app.post('/', zValidator('json', rateBody), async (c) => {
     reportError('rate.quote.failed', error, { operation: 'rate_quote' });
     throw error;
   }
-});
+  },
+);
 
 const browseBody = rateBody.extend({
   carrierId: z.string().min(1).optional(),
@@ -314,19 +363,15 @@ function publicRateBrowseWorkflowSnapshot(
   };
 }
 
-app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
+app.post(
+  '/browse/workflow',
+  requireBusinessRoutePolicy('rates.browse.workflow.start'),
+  zValidator('json', browseBody),
+  async (c) => {
   const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
-
-  if (body.orderId) {
-    const browseScope = scopeFromContext(c);
-    const [inScope] = await db
-      .select({ id: orders.id })
-      .from(orders)
-      .where(and(eq(orders.id, body.orderId), orderScopePredicate(browseScope)))
-      .limit(1);
-    if (!inScope) return c.json({ error: 'Order not found' }, 404);
-  }
+  const scopeError = await ensureRateScope(c, body);
+  if (scopeError) return scopeError;
 
   try {
     const snapshot = await runWithLogContext(
@@ -348,15 +393,22 @@ app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
     });
     throw error;
   }
-});
+  },
+);
 
-app.get('/browse/workflow/:jobId', async (c) => {
+app.get('/browse/workflow/:jobId', requirePermission('rates:quote'), async (c) => {
   const snapshot = await getRateBrowseWorkflow(c.req.param('jobId'));
   if (!snapshot) return c.json({ error: 'Rate browse workflow job not found' }, 404);
+  const scopeError = await ensureRateScope(c, {
+    orderId: snapshot.orderId,
+    clientId: snapshot.clientId,
+    storeId: snapshot.storeId,
+  });
+  if (scopeError) return scopeError;
   return c.json(publicRateBrowseWorkflowSnapshot(snapshot, canViewRateFinancials(c)));
 });
 
-app.post('/shopify', requireInternalPermission('print_queue:write'), zValidator('json', shopifyRatesBody), async (c) => {
+app.post('/shopify', requireBusinessRoutePolicy('rates.shopify.quote'), zValidator('json', shopifyRatesBody), async (c) => {
   const body = c.req.valid('json');
   const browseScope = scopeFromContext(c);
   const [inScope] = await db
@@ -461,22 +513,16 @@ function cacheMetadata(
   };
 }
 
-app.post('/browse', zValidator('json', browseBody), async (c) => {
+app.post(
+  '/browse',
+  requireBusinessRoutePolicy('rates.browse'),
+  zValidator('json', browseBody),
+  async (c) => {
   const browseStartedAt = Date.now();
   const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
-  // PS-250 (Card 5): an order-scoped browse must belong to the caller. A restricted
-  // (client_user) caller passing another tenant's orderId gets 404 before the shared
-  // backend producer can load order evidence or persist awaiting-only rate state.
-  if (body.orderId) {
-    const browseScope = scopeFromContext(c);
-    const [inScope] = await db
-      .select({ id: orders.id })
-      .from(orders)
-      .where(and(eq(orders.id, body.orderId), orderScopePredicate(browseScope)))
-      .limit(1);
-    if (!inScope) return c.json({ error: 'Order not found' }, 404);
-  }
+  const scopeError = await ensureRateScope(c, body);
+  if (scopeError) return scopeError;
   try {
     const payload = await runWithLogContext(
       { orderId: body.orderId ?? null },
@@ -494,7 +540,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     });
     throw error;
   }
-});
+  },
+);
 // v2-parity: supports v2's param aliases (wt, zip, l, w, h) AND the modern
 // names. Adds optional dims + residential + storeId filters so the rate
 // browser's cache hits return match-quality rates instead of a generic
@@ -515,6 +562,7 @@ const cachedQuery = z
       .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
       .optional(),
     storeId: z.coerce.number().int().optional(),
+    clientId: z.coerce.number().int().optional(),
     signature: z.string().nullable().optional(),
   })
   .transform((v) => ({
@@ -532,6 +580,7 @@ const cachedQuery = z
             ? false
             : undefined,
     storeId: v.storeId,
+    clientId: v.clientId,
     signature: v.signature,
   }))
   .refine(
@@ -576,8 +625,20 @@ const bulkBody = z.object({
     .max(200),
 });
 
-app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
+app.post(
+  '/cached/bulk',
+  requireBusinessRoutePolicy('rates.cache.bulk-read'),
+  zValidator('json', bulkBody),
+  async (c) => {
   const { items } = c.req.valid('json');
+  const scopeDecision = await authorizeRateRequestScopes(scopeFromContext(c), items);
+  if (!scopeDecision.allowed) {
+    const scopedInput =
+      items.find((item) => item.orderId != null) ??
+      items.find((item) => item.clientId != null || item.storeId != null) ??
+      {};
+    return rateScopeError(c, scopeDecision, scopedInput);
+  }
   const canViewFinancials = canViewRateFinancials(c);
   const automationRules = await loadShippingAutomationRules();
   // PS-203 (stage 2): one account-table load per request; each item's order
@@ -799,10 +860,16 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
     };
   });
   return c.json({ data: results });
-});
+  },
+);
 
 app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   const q = c.req.valid('query');
+  const scopeError = await ensureRateScope(c, {
+    clientId: q.clientId,
+    storeId: q.storeId,
+  });
+  if (scopeError) return scopeError;
   const canViewFinancials = canViewRateFinancials(c);
   // weightOz + toZip are required by the schema, so the non-null
   // assertion is safe.
@@ -816,7 +883,7 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   return c.json({ data: sanitizedRows.map((row) => publicRateCacheRow(row, canViewFinancials)) });
 });
 
-app.get('/carriers', async (c) => {
+app.get('/carriers', requireInternalPermission('credentials:read'), async (c) => {
   const data = await listCarrierAccounts('shipstation', {
     dedupeKey: 'carriers:list',
   });
@@ -881,7 +948,7 @@ app.get('/carriers-for-store', zValidator('query', carriersForStoreQuery), async
 app.post(
   '/backfill-best',
   // PS-250 (Card 5): a global best-rate backfill is an admin/internal op, not tenant-scoped.
-  requireInternalPermission('scope:global'),
+  requireBusinessRoutePolicy('rates.backfill.start'),
   zValidator(
     'json',
     z
@@ -900,7 +967,7 @@ app.post(
   }
 );
 
-app.get('/backfill-best/status/:jobId', async (c) => {
+app.get('/backfill-best/status/:jobId', requireInternalPermission('scope:global'), async (c) => {
   const jobId = c.req.param('jobId');
   const job = getBackfillJob(c.req.param('jobId'));
   if (!job) {
@@ -926,24 +993,35 @@ app.get('/backfill-best/status/:jobId', async (c) => {
     }
     return c.json({ error: 'Job not found', durableJob }, 404);
   }
-  return c.json(job);
+  const generation = await getRateBackfillGenerationState(jobId);
+  return c.json(reconcileBackfillJobWithGeneration(job, generation));
 });
 
-app.get('/backfill-best/active', async (c) => {
+app.get('/backfill-best/active', requireInternalPermission('scope:global'), async (c) => {
   const durableJob = await getLatestBackfillJobSnapshot();
-  return c.json({ job: durableJob?.active ? durableJob : null });
+  const generation = durableJob
+    ? await getRateBackfillGenerationState(durableJob.jobId)
+    : null;
+  return c.json({
+    job: durableJob?.active ? durableJob : null,
+    generation: generation?.status === 'active' ? generation : null,
+  });
 });
 
-app.get('/backfill-best/latest', async (c) => {
+app.get('/backfill-best/latest', requireInternalPermission('scope:global'), async (c) => {
   const durableJob = await getLatestBackfillJobSnapshot();
+  const generation = durableJob
+    ? await getRateBackfillGenerationState(durableJob.jobId)
+    : null;
   return c.json({
     job: durableJob,
     durableJob,
+    generation,
   });
 });
 
 // PS-250 (Card 5): wiping the WHOLE rate cache is a global admin op — not reachable by a tenant-scoped caller.
-app.delete('/cache', requireInternalPermission('scope:global'), async (c) => {
+app.delete('/cache', requireBusinessRoutePolicy('rates.cache.delete'), async (c) => {
   const counts = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
@@ -954,7 +1032,7 @@ app.delete('/cache', requireInternalPermission('scope:global'), async (c) => {
 // v2 parity: POST /rates/cache-clear-and-refetch — clears rate cache and
 // kicks off a best-rate backfill. v2 exposed this at /cache/clear-and-refetch;
 // mounting under /rates/ keeps the auth + route ownership clean.
-app.post('/cache-clear-and-refetch', requireInternalPermission('scope:global'), async (c) => {
+app.post('/cache-clear-and-refetch', requireBusinessRoutePolicy('rates.cache.clear-refetch'), async (c) => {
   const counts = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);

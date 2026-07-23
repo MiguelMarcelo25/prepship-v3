@@ -5,12 +5,15 @@
 // no real labels, no postage purchase, no live marketplace notification, and
 // no production shipped/cancelled mutation.
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 const args = new Set(process.argv.slice(2));
 const notifyDryRun = args.has('--notify-dry-run');
 const npmCommand = process.platform === 'win32' ? 'cmd.exe' : 'npm';
 const npmPrefix = process.platform === 'win32' ? ['/d', '/s', '/c', 'npm'] : [];
+const certificationChildNodeOptions =
+  process.env.PREPSHIP_CERTIFICATION_CHILD_NODE_OPTIONS ?? process.env.NODE_OPTIONS;
+const failureOutputTailChars = 32_768;
 
 const suites = [
   {
@@ -30,7 +33,8 @@ const suites = [
   },
   {
     key: 'offline-workflow-suites',
-    command: [npmCommand, ...npmPrefix, 'run', 'test:workflow-suites'],
+    packageScript: 'test:workflow-suites',
+    command: [process.execPath, 'scripts/run-workflow-certification.mjs'],
     safety: 'offline guards',
   },
 ];
@@ -78,29 +82,60 @@ const storeMatrix = [
   },
 ];
 
-function runSuite(suite) {
+function appendOutputTail(current, chunk) {
+  const next = `${current}${chunk}`;
+  return next.length > failureOutputTailChars
+    ? next.slice(-failureOutputTailChars)
+    : next;
+}
+
+async function runSuite(suite) {
   const started = Date.now();
-  const result = spawnSync(suite.command[0], suite.command.slice(1), {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      // Offline children import the normal app config tree. Supply inert values
-      // when CI or a clean checkout has no local .env; real configured values
-      // still win, and SAFE_MODE keeps every suite fixture/mock/read-only.
-      NODE_ENV: process.env.NODE_ENV ?? 'test',
-      VERCEL: process.env.VERCEL ?? '1',
-      DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test',
-      SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://example.supabase.co',
-      PREPSHIP_CERTIFICATION_SAFE_MODE: '1',
-    },
+  console.log(`\n[shipping-roundtrip-certification] running ${suite.key}`);
+
+  const result = await new Promise((resolve) => {
+    let outputTail = '';
+    const child = spawn(suite.command[0], suite.command.slice(1), {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        // Render Starter shares 512 MiB across the nested npm/Node process tree.
+        // Keep the build unconstrained and opt in to a lower limit only for suite children.
+        ...(certificationChildNodeOptions
+          ? { NODE_OPTIONS: certificationChildNodeOptions }
+          : {}),
+        // Offline children import the normal app config tree. Supply inert values
+        // when CI or a clean checkout has no local .env; real configured values
+        // still win, and SAFE_MODE keeps every suite fixture/mock/read-only.
+        NODE_ENV: process.env.NODE_ENV ?? 'test',
+        VERCEL: process.env.VERCEL ?? '1',
+        DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test',
+        SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://example.supabase.co',
+        PREPSHIP_CERTIFICATION_SAFE_MODE: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    child.stdout.on('data', (chunk) => {
+      outputTail = appendOutputTail(outputTail, chunk);
+      process.stdout.write(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      outputTail = appendOutputTail(outputTail, chunk);
+      process.stderr.write(chunk);
+    });
+    child.once('error', (error) => resolve({ status: 1, outputTail, error }));
+    child.once('close', (status, signal) => resolve({ status, signal, outputTail }));
   });
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}${result.error ? `\n${result.error.message}` : ''}`.trim();
+
+  const output = `${result.outputTail}${result.error ? `\n${result.error.message}` : ''}`.trim();
   const tail = output.split(/\r?\n/).slice(-12).join('\n');
   return {
     ...suite,
     ok: result.status === 0,
     status: result.status ?? 1,
+    signal: result.signal ?? null,
     durationMs: Date.now() - started,
     tail,
   };
@@ -131,8 +166,8 @@ function buildNotificationPayload(results) {
       ? 'PrepShip shipping roundtrip certification failed'
       : 'PrepShip shipping roundtrip certification passed',
     status: failed.length ? 'failed' : 'passed',
-    branch: process.env.GITHUB_REF_NAME ?? 'local',
-    commit: (process.env.GITHUB_SHA ?? 'local').slice(0, 12),
+    branch: process.env.GITHUB_REF_NAME ?? process.env.RENDER_GIT_BRANCH ?? 'local',
+    commit: (process.env.GITHUB_SHA ?? process.env.RENDER_GIT_COMMIT ?? 'local').slice(0, 12),
     runUrl,
     failedSuites: failed.map((result) => ({
       suite: result.key,
@@ -162,7 +197,10 @@ async function sendFailureNotification(payload) {
   console.log('\n[shipping-roundtrip-certification] failure notification sent.');
 }
 
-const results = suites.map(runSuite);
+const results = [];
+for (const suite of suites) {
+  results.push(await runSuite(suite));
+}
 printTable(results);
 printMatrix();
 

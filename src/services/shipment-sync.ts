@@ -11,7 +11,7 @@ import {
   listShipStationV2Labels,
   listShipStationV2Shipments,
 } from '../connectors/carrier/shipstation';
-import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
+import { applyOrderLifecycleCommandInTransaction, applyOrderLifecycleCommand } from './order-lifecycle-command';
 import { consumeOutboundPackageInTransaction } from './package-consumption';
 import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 import { getSettingNumber, setSetting } from './settings';
@@ -28,6 +28,7 @@ import {
   syncRunBudgetTimeExhausted,
 } from '../lib/sync-run-budget';
 import { shipStationSyncWatermarkKeys } from './shipstation-sync-account-state';
+import { orderShipmentSyncAccountsByWatermark } from './shipment-sync-fairness';
 // PS-286 (per user override `unlock shipped data` on 2026-06-17): best-effort capture of
 // shipments.label_url after each account's sync — the v1 list payload omits it.
 import { enrichLabelUrls } from './shipment-label-url-enrich';
@@ -183,11 +184,11 @@ async function upsertShipmentsBatch(
   inserted: number;
   updated: number;
   matched: number;
-  shippedOrderIds: number[];
+  ordersMarkedShipped: number;
 }> {
   throwIfShipmentSyncAborted(signal);
   if (!pageShipments.length) {
-    return { inserted: 0, updated: 0, matched: 0, shippedOrderIds: [] };
+    return { inserted: 0, updated: 0, matched: 0, ordersMarkedShipped: 0 };
   }
 
   const sourceIdentities = pageShipments
@@ -310,9 +311,10 @@ async function upsertShipmentsBatch(
   // creating duplicates. Source: apps/api/src/modules/sync/order-status-sync.ts:207-216.
   const orderIdsForCheck = orderRows.map((o) => o.id);
   const prepshipOrderIds = new Set<number>();
+  const prepshipShipmentByOrder = new Map<number, number>();
   if (orderIdsForCheck.length) {
     const prepshipRows = await db
-      .select({ orderId: shipments.orderId })
+      .select({ id: shipments.id, orderId: shipments.orderId })
       .from(shipments)
       .where(
         and(
@@ -323,15 +325,28 @@ async function upsertShipmentsBatch(
       );
     throwIfShipmentSyncAborted(signal);
     for (const r of prepshipRows) {
-      if (r.orderId !== null) prepshipOrderIds.add(r.orderId);
+      if (r.orderId !== null) {
+        prepshipOrderIds.add(r.orderId);
+        prepshipShipmentByOrder.set(r.orderId, r.id);
+      }
     }
   }
 
   // Build insert / update batches
-  const toInsert: ShipmentValues[] = [];
-  const toUpdate: Array<{ id: number; values: ShipmentValues }> = [];
+  const toInsert: Array<{
+    values: ShipmentValues;
+    source: SSShipment;
+    order: { id: number; clientId: number | null; status: string } | null;
+  }> = [];
+  const toUpdate: Array<{
+    id: number;
+    values: ShipmentValues;
+    source: SSShipment;
+    order: { id: number; clientId: number | null; status: string } | null;
+  }> = [];
+  const prepshipTransitions = new Map<number, number>();
   let matched = 0;
-  const shippedOrderIds: number[] = [];
+  let ordersMarkedShipped = 0;
 
   for (const s of pageShipments) {
     const identity = shipStationShipmentSourceIdentity(s);
@@ -353,7 +368,8 @@ async function upsertShipmentsBatch(
         Boolean(s.voided) === false &&
         Boolean(s.isReturnLabel) === false
       ) {
-        shippedOrderIds.push(ord.id);
+        const existingShipmentId = prepshipShipmentByOrder.get(ord.id);
+        if (existingShipmentId) prepshipTransitions.set(ord.id, existingShipmentId);
       }
       continue;
     }
@@ -394,7 +410,7 @@ async function upsertShipmentsBatch(
       // drop a labeled row's insurance/other and change its billed total. Updates
       // keep the column untouched; a labeled row keeps its exact persisted value,
       // an un-backfilled row stays NULL and reads its fallback.
-      toUpdate.push({ id: existing.id, values });
+      toUpdate.push({ id: existing.id, values, source: s, order: ord ?? null });
     } else {
       // Per user override unlock shipped data on 2026-07-06: PS-381 stamps the
       // selected/purchased cost SOT on NEW ShipStation sync rows only. Updates
@@ -406,7 +422,7 @@ async function upsertShipmentsBatch(
         otherCost: values.otherCost,
         selectedRateJson: null,
       })?.toFixed(2) ?? null;
-      toInsert.push(values);
+      toInsert.push({ values, source: s, order: ord ?? null });
     }
 
     // v2-parity: collect shippedOrderIds ONLY for rows that will be
@@ -422,7 +438,7 @@ async function upsertShipmentsBatch(
       values.voided === false &&
       values.isReturn === false
     ) {
-      shippedOrderIds.push(ord.id);
+      // The lifecycle command below owns this promotion and its exact claims.
     }
   }
 
@@ -444,9 +460,12 @@ async function upsertShipmentsBatch(
       throwIfShipmentSyncAborted(signal);
       await db.transaction(async (tx) => {
         throwIfShipmentSyncAborted(signal);
+        const byProviderShipmentId = new Map(
+          chunk.map((entry) => [entry.source.shipmentId, entry]),
+        );
         const insertedRows = await tx
           .insert(shipments)
-          .values(chunk)
+          .values(chunk.map((entry) => entry.values))
           // Audit SY-3 / 1.21 (Per user override unlock shipped data on
           // 2026-07-13): label_shipment_id is UNIQUE now — a racing writer
           // (deadline-abandoned zombie + fresh run) loses quietly instead of
@@ -474,7 +493,10 @@ async function upsertShipmentsBatch(
           });
         for (const row of insertedRows) {
           throwIfShipmentSyncAborted(signal);
-          const result = await consumeOutboundPackageInTransaction({
+          const candidate = row.labelShipmentId == null
+            ? undefined
+            : byProviderShipmentId.get(row.labelShipmentId);
+          const packageConsumption = {
             shipmentId: row.id,
             orderId: row.orderId,
             orderNumber: row.orderNumber,
@@ -487,11 +509,37 @@ async function upsertShipmentsBatch(
             voided: row.voided,
             isReturn: row.isReturn,
             isTest: sourceAccountIsTest,
-          }, tx);
-          if (result.status === 'review') {
-            console.warn(
-              `[shipment-sync] package consumption review for shipment ${row.id}: ${result.reason}`,
-            );
+          };
+          if (row.orderId && !row.voided && !row.isReturn) {
+            const fulfillmentFacts =
+              Array.isArray(candidate?.source.shipmentItems) && candidate.source.shipmentItems.length > 0
+                ? { kind: 'exact' as const, lines: candidate.source.shipmentItems }
+                : {
+                    kind: 'unavailable' as const,
+                    description: 'ShipStation shipment did not include fulfillment-line quantities',
+                  };
+            // Per user override unlock shipped data on 2026-07-16 (PS-424):
+            // shipment insert, terminal state, exact line claims, package
+            // consumption, and outbox intent share this transaction.
+            const command = await applyOrderLifecycleCommandInTransaction(tx, {
+              orderId: row.orderId,
+              shipmentId: row.id,
+              commandKey: `lifecycle:shipment:${row.id}:shipped`,
+              transition: 'shipped',
+              source: 'shipment_sync',
+              effectiveAt: row.shipDate ?? row.createDate ?? new Date(),
+              fulfillmentFacts,
+              provenance: {
+                provider: 'shipstation',
+                sourceAccountId,
+                providerShipmentId: row.labelShipmentId,
+                lineFacts: candidate?.source.shipmentItems?.length ? 'shipment_items' : 'review_missing',
+              },
+              packageConsumption,
+            });
+            if (command.statusChanged) ordersMarkedShipped += 1;
+          } else {
+            await consumeOutboundPackageInTransaction(packageConsumption, tx);
           }
         }
         inserted += insertedRows.length;
@@ -516,11 +564,63 @@ async function upsertShipmentsBatch(
     updated += batch.length;
   }
 
+  for (const row of toUpdate) {
+    if (!row.order || row.order.status !== 'awaiting_shipment' || row.values.voided || row.values.isReturn) continue;
+    // Per user override unlock shipped data on 2026-07-16: existing provider
+    // shipments use exact shipmentItems or an explicit review receipt.
+    const fulfillmentFacts = Array.isArray(row.source.shipmentItems) && row.source.shipmentItems.length > 0
+      ? { kind: 'exact' as const, lines: row.source.shipmentItems }
+      : {
+          kind: 'unavailable' as const,
+          description: 'ShipStation shipment did not include fulfillment-line quantities',
+        };
+    const command = await applyOrderLifecycleCommand({
+      orderId: row.order.id,
+      shipmentId: row.id,
+      commandKey: `lifecycle:shipment:${row.id}:shipped`,
+      transition: 'shipped',
+      source: 'shipment_sync_existing',
+      effectiveAt: row.values.shipDate ?? row.values.createDate ?? new Date(),
+      fulfillmentFacts,
+      provenance: {
+        provider: 'shipstation',
+        sourceAccountId,
+        providerShipmentId: row.source.shipmentId,
+        lineFacts: row.source.shipmentItems?.length ? 'shipment_items' : 'review_missing',
+      },
+    });
+    if (command.statusChanged) ordersMarkedShipped += 1;
+  }
+
+  for (const [orderId, shipmentId] of prepshipTransitions) {
+    // Per user override unlock shipped data on 2026-07-16: recovery status
+    // without retained line facts must not guess order-level quantities.
+    const command = await applyOrderLifecycleCommand({
+      orderId,
+      shipmentId,
+      commandKey: `lifecycle:shipment:${shipmentId}:shipped`,
+      transition: 'shipped',
+      source: 'shipment_sync_prepship_recovery',
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'PrepShip shipment recovery did not retain exact line quantities',
+      },
+      provenance: { provider: 'shipstation', sourceAccountId, recoveryOnly: true },
+    });
+    if (command.statusChanged) ordersMarkedShipped += 1;
+  }
+
   throwIfShipmentSyncAborted(signal);
-  return { inserted, updated, matched, shippedOrderIds };
+  return { inserted, updated, matched, ordersMarkedShipped };
 }
 
+// Per user override unlock shipped data on 2026-07-23: PS-440 adds result-only
+// observability counters; shipment and order mutation semantics are unchanged.
 export type ShipmentSyncResult = {
+  accounts: number;
+  attemptedAccounts: number;
+  successfulAccounts: number;
+  errors: number;
   fetched: number;
   inserted: number;
   updated: number;
@@ -528,6 +628,8 @@ export type ShipmentSyncResult = {
   orphaned: number; // shipments with no matching order row
   ordersMarkedShipped: number;
   pages: number;
+  deferredAccounts: number;
+  timeBudgetExhausted: boolean;
   lastSyncedAt: string;
   sinceIso: string;
 };
@@ -629,14 +731,35 @@ export async function syncShipments(
   let totalMatched = 0;
   let maxPages = 1;
   let earliestSinceIso = new Date(runStartMs).toISOString();
-  const shippedOrderIds: number[] = [];
+  let ordersMarkedShipped = 0;
+  let attemptedAccounts = 0;
+  let successfulAccounts = 0;
+  let errors = 0;
 
   const accounts = await loadShipmentSyncAccounts();
-  for (const acct of accounts) {
+  // Per user override unlock shipped data on 2026-07-23: schedule account
+  // polling by oldest durable cursor only. This does not weaken shipped or
+  // cancelled locks, rewrite shipment history, or change provider side effects.
+  const accountProgress = await Promise.all(
+    accounts.map(async (account) => {
+      const watermark = await readShipmentSyncWatermark(account);
+      return {
+        account,
+        accountId: account.sourceAccountId,
+        watermarkMs: watermark.value,
+        primaryKey: watermark.primaryKey,
+      };
+    }),
+  );
+  const fairAccounts = orderShipmentSyncAccountsByWatermark(accountProgress);
+  for (const accountProgressEntry of fairAccounts) {
+    const acct = accountProgressEntry.account;
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
+    attemptedAccounts += 1;
     try {
       throwIfShipmentSyncAborted(opts.signal);
-      const { primaryKey: key, value: storedLastSync } = await readShipmentSyncWatermark(acct);
+      const key = accountProgressEntry.primaryKey;
+      const storedLastSync = accountProgressEntry.watermarkMs;
       const lastSync =
         opts.sinceMs ??
         (storedLastSync != null
@@ -686,7 +809,7 @@ export async function syncShipments(
         totalInserted += batch.inserted;
         totalUpdated += batch.updated;
         totalMatched += batch.matched;
-        shippedOrderIds.push(...batch.shippedOrderIds);
+        ordersMarkedShipped += batch.ordersMarkedShipped;
         pagesThisAccount += 1;
         // PS-265: track the newest CreateDate processed (results are CreateDate ASC) as a
         // resume cursor for a budget-bounded run.
@@ -779,8 +902,10 @@ export async function syncShipments(
       const nextWatermarkMs = Math.max(storedLastSync ?? 0, candidateMs);
       throwIfShipmentSyncAborted(opts.signal);
       await setSetting(key, String(nextWatermarkMs));
+      successfulAccounts += 1;
     } catch (err) {
       throwIfShipmentSyncAborted(opts.signal);
+      errors += 1;
       console.error(
         `[shipment-sync] account "${acct.label}" failed:`,
         (err as Error).message
@@ -792,45 +917,21 @@ export async function syncShipments(
   }
 
   throwIfShipmentSyncAborted(opts.signal);
-  let ordersMarkedShipped = 0;
-  if (shippedOrderIds.length) {
-    const uniqueIds = Array.from(new Set(shippedOrderIds));
-    for (let i = 0; i < uniqueIds.length; i += 500) {
-      throwIfShipmentSyncAborted(opts.signal);
-      // Per user override unlock shipped data on 2026-07-15: the canonical
-      // shipment-sync transition and its durable inventory intent commit in
-      // one transaction. An enqueue failure now rolls the status flip back;
-      // it can no longer leave a shipped order without retryable intent.
-      const rows = await db.transaction(async (tx) => {
-        const transitioned = await tx
-          .update(orders)
-          .set({ orderStatus: 'shipped', updatedAt: new Date() })
-          .where(
-            and(
-              inArray(orders.id, uniqueIds.slice(i, i + 500)),
-              eq(orders.orderStatus, 'awaiting_shipment')
-            )
-          )
-          .returning();
-        for (const row of transitioned) {
-          throwIfShipmentSyncAborted(opts.signal);
-          await enqueueInventoryDeduction(row, { source: 'shipment_sync' }, tx);
-        }
-        return transitioned;
-      });
-      ordersMarkedShipped += rows.length;
-    }
-  }
-
   const fetched = totalFetched;
   const inserted = totalInserted;
   const updated = totalUpdated;
   const matchedOrders = totalMatched;
   const pages = maxPages;
   const sinceIso = earliestSinceIso;
+  const timeBudgetExhausted = syncRunBudgetTimeExhausted(budget);
+  const deferredAccounts = Math.max(accounts.length - attemptedAccounts, 0);
 
   throwIfShipmentSyncAborted(opts.signal);
   return {
+    accounts: accounts.length,
+    attemptedAccounts,
+    successfulAccounts,
+    errors,
     fetched,
     inserted,
     updated,
@@ -838,6 +939,8 @@ export async function syncShipments(
     orphaned: fetched - matchedOrders,
     ordersMarkedShipped,
     pages,
+    deferredAccounts,
+    timeBudgetExhausted,
     lastSyncedAt: new Date(runStartMs).toISOString(),
     sinceIso,
   };

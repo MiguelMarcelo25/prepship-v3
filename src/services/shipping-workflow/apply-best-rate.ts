@@ -12,6 +12,12 @@
 
 import { validateExactSelectedRate } from './rate-fingerprint.js';
 import { stampPurchaseCustomerRateAliases } from './purchase-customer-rate-aliases.js';
+import {
+  createShippingQuoteSelectionRef,
+  shippingProviderIdFromAuthorizedRate,
+  type ShippingQuoteAccountAuthorization,
+  type ShippingQuoteAuthorizationContext,
+} from './shipping-quote-authorization.js';
 
 type ApplyRateQuoteSnapshot = {
   cacheKey: string;
@@ -19,6 +25,10 @@ type ApplyRateQuoteSnapshot = {
   fetchedAt: string | number | null;
   bestRateKey?: string | null;
   bestRateComplete?: boolean | null;
+  authorization?: {
+    context: ShippingQuoteAuthorizationContext;
+    accounts: ShippingQuoteAccountAuthorization[];
+  } | null;
 };
 
 const DEFAULT_APPLY_RATE_QUOTE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -154,6 +164,15 @@ export function finalizeAppliedBestRateFromSnapshot(input: {
   }
   const cacheCreatedAt = fetchedAtIso(input.snapshot.fetchedAt) ?? new Date(input.now ?? Date.now()).toISOString();
   const cacheExpiresAt = new Date(Date.parse(cacheCreatedAt) + ttlMs).toISOString();
+  const selectedProviderId = shippingProviderIdFromAuthorizedRate(selected);
+  const selectionRef =
+    input.snapshot.authorization
+    && selectedProviderId != null
+    && input.snapshot.authorization.accounts.some(
+      (account) => account.shippingProviderId === selectedProviderId,
+    )
+      ? createShippingQuoteSelectionRef(rateQuoteId, selectedRateKey)
+      : null;
   const proofRate = {
     ...selected,
     requestFingerprint: input.snapshot.cacheKey,
@@ -162,6 +181,7 @@ export function finalizeAppliedBestRateFromSnapshot(input: {
     cacheExpiresAt,
     rateQuoteId,
     selectedRateKey,
+    ...(selectionRef ? { selectionRef } : {}),
     proofSource: 'backend_rate_response',
     isComplete: input.snapshot.bestRateComplete === true,
   };

@@ -1,43 +1,18 @@
-import { ssRequest } from './client.js';
+import { ShipStationError, ssRequest } from './client.js';
 import { ssV1Request } from './v1-client.js';
-import { normalizeShippingOptions } from '../shipping-options.js';
-import type { Address } from './types.js';
-
-export type ShipstationAddressInput = {
-  name?: string | null;
-  company?: string | null;
-  street1?: string | null;
-  street2?: string | null;
-  city?: string | null;
-  state?: string | null;
-  postalCode?: string | null;
-  country?: string | null;
-  phone?: string | null;
-  // PS-127: residential/commercial for the LABEL must match what the rate was quoted
-  // under. true=residential, false=commercial, null/undefined=unknown (carrier decides).
-  // Previously omitted entirely, so labels silently let the carrier reclassify and could
-  // be billed differently than the residential-quoted rate.
-  residential?: boolean | null;
-};
-
-export type CreateExternalLabelInput = {
-  apiKeyV2?: string;
-  carrierId: string;
-  serviceCode: string;
-  packageCode: string;
-  weightOz: number;
-  length: number | null;
-  width: number | null;
-  height: number | null;
-  shipTo: ShipstationAddressInput;
-  shipFrom: ShipstationAddressInput;
-  confirmation?: string | null;
-  insuranceProvider?: string | null;
-  insuredValue?: number | null;
-  ssOrderId: number | null;
-  orderNumber: string | null;
-  testLabel?: boolean;
-};
+import {
+  buildSsLabelRequestBody,
+  normalizeShipStationExternalShipmentId,
+  type CreateExternalLabelInput,
+} from './label-request-body.js';
+// Per user override unlock shipped data on 2026-07-22: the network connector
+// and durable-operation hash share the pure request-body source of truth.
+export {
+  assertSsCarrierIdIsNotSynthetic,
+  buildSsLabelRequestBody,
+  normalizeShipStationExternalShipmentId,
+} from './label-request-body.js';
+export type { CreateExternalLabelInput, ShipstationAddressInput } from './label-request-body.js';
 
 export type CreatedExternalLabel = {
   labelId: string | null;
@@ -101,24 +76,6 @@ export type ReturnLabelResult = {
   labelUrl: string | null;
 };
 
-function toAddress(input: ShipstationAddressInput, fallbackPhone = '000-000-0000'): Address {
-  return {
-    name: input.name ?? undefined,
-    company_name: input.company ?? undefined,
-    phone: input.phone || fallbackPhone,
-    address_line1: input.street1 ?? '',
-    address_line2: input.street2 ?? undefined,
-    city_locality: input.city ?? '',
-    state_province: input.state ?? '',
-    postal_code: input.postalCode ?? '',
-    country_code: input.country ?? 'US',
-    // PS-127: send the SAME residential indicator the rate was quoted under so ShipStation
-    // bills the label exactly as quoted. Omit (carrier decides) only when truly unknown.
-    address_residential_indicator:
-      input.residential === true ? 'yes' : input.residential === false ? 'no' : 'unknown',
-  };
-}
-
 function stripSePrefix(value: unknown): number | null {
   if (value == null) return null;
   const stripped = String(value).replace(/^se-/, '');
@@ -179,72 +136,46 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
   return pick(labelDownload);
 }
 
-// PS-204 defense-in-depth: synthetic direct-account ids (se-1xxxxxxx
-// carrier_accounts / se-2xxxxxxx store_accounts) are PrepShip-internal — they
-// do not exist at ShipStation, which rejects them ("carrier_id 10000025 not
-// found"... after the request was already sent). This last-mile check makes it
-// structurally impossible for PrepShip to EMIT such a request body, whatever
-// upstream routing bug produced the id. Pure + offline-testable.
-const SS_SYNTHETIC_CARRIER_ID_FLOOR = 10_000_000;
-
-export function assertSsCarrierIdIsNotSynthetic(carrierId: unknown): void {
-  const match = String(carrierId ?? '').trim().match(/^se-(\d+)$/i);
-  const numeric = match ? Number(match[1]) : NaN;
-  if (Number.isFinite(numeric) && numeric >= SS_SYNTHETIC_CARRIER_ID_FLOOR) {
-    const err = new Error(
-      `Direct-carrier account id ${numeric} cannot be sent to ShipStation (carrier_id ${String(carrierId)} is a PrepShip-internal synthetic id). Re-rate/select the matching account or route through the direct-carrier label path. No postage was purchased.`,
-    ) as Error & { code?: string };
-    err.code = 'DIRECT_CARRIER_ON_SHIPSTATION_PATH';
-    throw err;
-  }
-}
-
-/**
- * Build the ShipStation v2 POST /v2/labels request body. Pure (no network) so
- * the payload SHAPE — especially PS-072's package-level insured_value vs
- * shipment-level insurance_provider — is unit-testable offline without buying
- * postage. ssCreateLabel uses this.
- */
-export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
-  assertSsCarrierIdIsNotSynthetic(input.carrierId);
-  const options = normalizeShippingOptions(input);
-  const pkg: Record<string, unknown> = {
-    weight: { value: Number(input.weightOz.toFixed(2)), unit: 'ounce' },
-    package_code: input.packageCode || 'package',
-  };
-  if (input.length && input.width && input.height) {
-    pkg.dimensions = {
-      length: Number(input.length.toFixed(2)),
-      width: Number(input.width.toFixed(2)),
-      height: Number(input.height.toFixed(2)),
-      unit: 'inch',
+export async function ssGetLabelByExternalShipmentId(
+  externalShipmentId: string,
+  options: { apiKeyV2?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<{ status: string | null; label: CreatedExternalLabel } | null> {
+  const normalizedId = normalizeShipStationExternalShipmentId(externalShipmentId);
+  if (!normalizedId) throw new Error('ShipStation external shipment id is required');
+  try {
+    const payload = await ssRequest<Record<string, unknown>>(
+      `/v2/labels/external_shipment_id/${encodeURIComponent(normalizedId)}`,
+      {
+        apiKey: options.apiKeyV2,
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+        dedupeKey: `label:external-shipment:${normalizedId}`,
+      },
+    );
+    const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
+    const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
+    const insuranceCost = payload.insurance_cost as Record<string, unknown> | undefined;
+    return {
+      status: payload.status ? String(payload.status) : null,
+      label: {
+        labelId: payload.label_id ? String(payload.label_id) : null,
+        shipmentId: stripSePrefix(payload.shipment_id) ?? 0,
+        trackingNumber: payload.tracking_number ? String(payload.tracking_number) : null,
+        labelUrl: extractShipstationLabelUrl(labelDownload),
+        labelFormat: payload.label_format ? String(payload.label_format) : null,
+        cost: Number(shipmentCost?.amount ?? 0),
+        insuranceCost: Number(insuranceCost?.amount ?? 0),
+        voided: Boolean(payload.voided),
+        carrierCode: payload.carrier_code ? String(payload.carrier_code) : null,
+        serviceCode: payload.service_code ? String(payload.service_code) : '',
+        shipDate: payload.ship_date ? String(payload.ship_date) : '',
+        providerAccountId: stripSePrefix(payload.carrier_id),
+      },
     };
+  } catch (error) {
+    if (error instanceof ShipStationError && error.status === 404) return null;
+    throw error;
   }
-  const hasInsurance = options.insuranceProvider !== 'none' && options.insuredValue != null;
-  if (hasInsurance) {
-    // PS-072: ShipStation v2 schema requires insured_value at the PACKAGE level
-    // (insurance_provider stays shipment-level). This was previously emitted as a
-    // shipment-level sibling, where v2 may ignore it — leaving labels uninsured.
-    pkg.insured_value = { amount: options.insuredValue, currency: 'usd' };
-  }
-
-  return {
-    shipment: {
-      carrier_id: input.carrierId,
-      service_code: input.serviceCode,
-      ship_date: new Date().toISOString().slice(0, 10),
-      ship_from: toAddress(input.shipFrom),
-      ship_to: toAddress(input.shipTo),
-      packages: [pkg],
-      confirmation: options.confirmation,
-      ...(hasInsurance ? { insurance_provider: options.insuranceProvider } : {}),
-      external_order_id: input.orderNumber ?? undefined,
-    },
-    is_return_label: false,
-    label_layout: '4x6',
-    label_format: 'pdf',
-    label_download_type: 'url',
-  };
 }
 
 export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {
@@ -260,6 +191,7 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
     body,
     apiKey: input.apiKeyV2,
     retryOn5xx: false,
+    signal: input.signal,
   });
 
   const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
@@ -291,11 +223,12 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
   };
 }
 
-export async function ssVoidLabel(labelId: string, apiKeyV2?: string): Promise<void> {
+export async function ssVoidLabel(labelId: string, apiKeyV2?: string, signal?: AbortSignal): Promise<void> {
   await ssRequest(`/v2/labels/${labelId}/void`, {
     method: 'PUT',
     body: {},
     apiKey: apiKeyV2,
+    signal,
   });
 }
 
@@ -311,7 +244,8 @@ export async function ssVoidShipment(shipmentId: number | string, apiKeyV2?: str
 export async function ssCreateReturnLabel(
   shipmentId: number,
   reason: string,
-  apiKeyV2?: string
+  apiKeyV2?: string,
+  signal?: AbortSignal,
 ): Promise<ReturnLabelResult> {
   // v2-parity: ShipStation's documented return-label endpoint is
   // POST /v2/shipments/{shipmentId}/returnlabel — singular, lowercase, no
@@ -327,6 +261,7 @@ export async function ssCreateReturnLabel(
       // Audit C1 (see ssCreateLabel): return-label creation also buys postage —
       // never blind-retry a 5xx on it.
       retryOn5xx: false,
+      signal,
     }
   );
   const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
@@ -358,6 +293,7 @@ export async function ssListRecentLabels(
         // Per user override unlock shipped data on 2026-07-14: do not let
         // label enrichment swallow the owning shipment-sync cancellation.
         signal: opts.signal,
+        priority: 'background',
       }
     );
     return (payload.labels ?? []).map((label) => {
@@ -380,7 +316,7 @@ export async function ssListRecentLabels(
 
 export async function ssGetShipmentV1(
   shipmentId: number,
-  opts: { apiKey?: string; apiSecret?: string } = {}
+  opts: { apiKey?: string; apiSecret?: string; signal?: AbortSignal } = {}
 ): Promise<ShipstationShipmentDetailsV1 | null> {
   try {
     const data = await ssV1Request<Record<string, unknown>>(`/shipments/${shipmentId}`, {
@@ -492,7 +428,7 @@ export async function ssMarkOrderShippedV1(
      *  loop with the upstream sales channel. */
     notifySalesChannel?: boolean;
   },
-  opts: { apiKey?: string; apiSecret?: string } = {}
+  opts: { apiKey?: string; apiSecret?: string; signal?: AbortSignal } = {}
 ): Promise<void> {
   await ssV1Request('/orders/markasshipped', {
     method: 'POST',
@@ -506,5 +442,6 @@ export async function ssMarkOrderShippedV1(
     },
     apiKey: opts.apiKey,
     apiSecret: opts.apiSecret,
+    signal: opts.signal,
   });
 }

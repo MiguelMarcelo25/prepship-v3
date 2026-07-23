@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { roundMoney } from '../lib/money.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
+import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
 
 export type BillingInvoiceHeaderTotals = {
   orderCount: number;
@@ -11,6 +12,7 @@ export type BillingInvoiceHeaderTotals = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  adjustmentTotal: number;
   grandTotal: number;
   fulfillmentFeeTotal: number;
 };
@@ -34,12 +36,17 @@ export async function billingInvoiceHeaderTotals(
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
   const summaryRow = await conn.execute<{
     pickpack_total: string;
     additional_total: string;
     package_total: string;
     shipping_total: string;
     storage_total: string;
+    adjustment_total: string;
     order_count: number;
     grand_total: string;
   }>(sql`
@@ -49,13 +56,14 @@ export async function billingInvoiceHeaderTotals(
       coalesce(sum(case when b.line_type in ('package_cost', 'package') then ${invoiceAmount} else 0 end), 0)::text as package_total,
       coalesce(sum(case when b.line_type = 'shipping' then ${invoiceAmount} else 0 end), 0)::text as shipping_total,
       coalesce(sum(case when b.line_type = 'storage' then ${invoiceAmount} else 0 end), 0)::text as storage_total,
+      coalesce(sum(case when b.line_type = 'billing_adjustment' then ${invoiceAmount} else 0 end), 0)::text as adjustment_total,
       count(distinct b.order_id)::int as order_count,
       coalesce(sum(${invoiceAmount}), 0)::text as grand_total
     from billing_line_items b
     left join orders o on o.id = b.order_id
     where b.client_id = ${clientId}
-      and b.ship_date >= ${dateFrom}::timestamptz
-      and b.ship_date < ${dateTo}::timestamptz
+      and ${effectiveDay} >= ${dateFrom}::timestamptz
+      and ${effectiveDay} < ${dateTo}::timestamptz
   `);
   const rows = Array.isArray(summaryRow)
     ? summaryRow
@@ -66,6 +74,7 @@ export async function billingInvoiceHeaderTotals(
           package_total: string;
           shipping_total: string;
           storage_total: string;
+          adjustment_total: string;
           order_count: number;
           grand_total: string;
         }> }).rows
@@ -79,6 +88,7 @@ export async function billingInvoiceHeaderTotals(
   const packageTotal = roundMoney(Number(s?.package_total ?? 0));
   const shippingTotal = roundMoney(Number(s?.shipping_total ?? 0));
   const storageTotal = roundMoney(Number(s?.storage_total ?? 0));
+  const adjustmentTotal = roundMoney(Number(s?.adjustment_total ?? 0));
   const grandTotal = roundMoney(Number(s?.grand_total ?? 0));
   const fulfillmentFeeTotal = roundMoney(
     shippingTotal + pickPackFeeTotal + packageTotal + storageTotal,
@@ -92,6 +102,7 @@ export async function billingInvoiceHeaderTotals(
     packageTotal,
     shippingTotal,
     storageTotal,
+    adjustmentTotal,
     grandTotal,
     fulfillmentFeeTotal,
   };

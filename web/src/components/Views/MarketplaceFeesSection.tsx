@@ -8,6 +8,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, Save } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { activeClientRowsQueryOptions, clientDtosFromRows } from '../../lib/client-query'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import { SkeletonStack, StatusLine } from './settings-ui'
 import { MarketplaceFeeScopeSelectors } from './MarketplaceFeesScopeSelectors'
 import { toClientLites, toStoreLites, type ClientLite, type StoreLite } from './marketplace-fee-scope-options'
@@ -62,7 +63,7 @@ export function MarketplaceFeesSection({ queriesEnabled = true }: { queriesEnabl
     select: clientDtosFromRows,
   })
   const storesQuery = useQuery<unknown[]>({
-    queryKey: ['settings', 'marketplace-fee-stores'],
+    queryKey: endpointQueryKeys.stores,
     enabled: queriesEnabled,
     queryFn: () => apiClient.fetchStores(),
   })

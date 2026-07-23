@@ -1,11 +1,8 @@
 import { env } from '../lib/env';
 import { sql as pg } from '../db/client';
 import { syncShopifyOrders } from './shopify-order-sync';
-import {
-  startBackfillBestRates,
-  getActiveBackfillJob,
-  waitForBackfillJob,
-} from './rates-backfill';
+import { runDurableRateBackfillJob } from './rates-backfill';
+import { buildCadenceRateBackfillJobPayload } from './rate-backfill-job-types';
 import { reapStaleOrderRateJobs } from './shipping-workflow/reap-stale-rate-jobs';
 import {
   importSkusFromOrders,
@@ -33,6 +30,11 @@ let shopifyOrderSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
+// Per user override unlock shipped data on 2026-07-18: one durable
+// marketplace-confirmation operation can use its full two-minute provider
+// timeout. Claim one per shared-lane tick so order refresh regains the lane
+// inside its three-minute freshness budget; the minute cadence drains more.
+export const FULFILLMENT_OUTBOX_BATCH_LIMIT = 1;
 let reportingRefreshRunning = false;
 let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
@@ -80,28 +82,19 @@ export async function runShopifyOrderSyncTick(signal?: AbortSignal): Promise<voi
   }
 }
 
-export async function runBackfillTick(): Promise<void> {
-  // startBackfillBestRates is already idempotent (activeJobId guard).
-  // Just trigger it — if a job is running we'll be a no-op. PS-348 keeps this as a
-  // cache-friendly backend refresh of visible tuples before proof expiry, never manual force-live.
-  const active = getActiveBackfillJob();
-  if (active && active.status === 'running') {
-    console.log(
-      `[scheduler] rate backfill already running (job ${active.jobId}, ${active.processed}/${active.total}) — skipping tick`
-    );
-    await waitForBackfillJob(active.jobId);
-    return;
-  }
-  const job = startBackfillBestRates({ mode: 'preexpiry_refresh' });
+export async function runBackfillTick(
+  queueJobId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  // PS-436: a cron row is only a wake-up. The durable backfill owner converts
+  // it into (or joins) one persisted generation and runs exactly one bounded
+  // chunk before releasing the shared ShipStation lane.
+  const payload = buildCadenceRateBackfillJobPayload(queueJobId);
+  const job = await runDurableRateBackfillJob(payload, signal);
   console.log(
-    `[scheduler] rate backfill kicked off (job ${job.jobId}) — stale, missing, or near-expiry rate tuples will be refreshed`
-  );
-  // Per user override unlock shipped data on 2026-07-14: pg-boss is the
-  // canonical worker owner. Hold its shared critical-worker lane until the underlying
-  // service settles instead of leaving detached work to starve sync/status IO.
-  await waitForBackfillJob(job.jobId);
-  console.log(
-    `[scheduler] rate backfill finished (job ${job.jobId}, ${job.processed}/${job.total})`
+    job
+      ? `[scheduler] rate backfill chunk finished (generation ${payload.generationId}, ${job.processed}/${job.total})`
+      : '[scheduler] rate backfill cadence coalesced into the active durable generation',
   );
 }
 
@@ -185,19 +178,23 @@ export async function runInventoryImportFromOrders(): Promise<void> {
 // only overwrite when SS actually returned a value (so a null SS
 // response doesn't destroy a URL we already extracted from an order
 // item).
-export async function runSyncProductsTick(): Promise<void> {
+export async function runSyncProductsTick(signal?: AbortSignal): Promise<void> {
   if (syncProductsRunning) {
     console.log('[scheduler] inventory sync-products already running — skipping tick');
     return;
   }
   syncProductsRunning = true;
   try {
-    const result = await runSchedulerJob('inventory sync-products', () => syncShipStationProducts());
+    const result = await runSchedulerJob('inventory sync-products', () =>
+      syncShipStationProducts({ signal }),
+    );
     if (!result) return;
     console.log(
-      `[scheduler] inventory sync-products: ${result.inserted} new + ${result.updated} updated across ${Object.keys(result.byAccount).length} account(s)`
+      `[scheduler] inventory sync-products: ${result.inserted} new + ${result.updated} updated across ${Object.keys(result.byAccount).length} account(s); ` +
+      `pages=${result.pages}, deferredAccounts=${result.deferredAccounts}, errors=${result.errors.length}`
     );
   } catch (err) {
+    if (signal?.aborted) throw err;
     console.error(
       '[scheduler] inventory sync-products failed:',
       err instanceof Error ? err.message : err
@@ -219,7 +216,9 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
       // Per user override unlock shipped data on 2026-07-14: repair missing
       // deduction intent only; execution remains in the kill-switched owner.
       const inventoryRecovered = await enqueueMissingInventoryDeductions(100);
-      const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
+      const outboxResult = await processFulfillmentOutboxOnce({
+        limit: FULFILLMENT_OUTBOX_BATCH_LIMIT,
+      });
       return { ...outboxResult, autoRecovered: recoveryResult, inventoryRecovered };
     });
     if (!result) return;

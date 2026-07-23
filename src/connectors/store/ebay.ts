@@ -37,7 +37,7 @@ async function readEbayError(res: Response): Promise<string> {
   }
 }
 
-async function getEbayAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getEbayAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const appId = firstString(creds.appId, creds.app_id);
   const certId = firstString(creds.certId, creds.cert_id);
   const refreshToken = firstString(creds.refreshToken, creds.refresh_token);
@@ -62,6 +62,7 @@ async function getEbayAccessToken(creds: Record<string, unknown>): Promise<strin
       refresh_token: refreshToken,
       scope: 'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
     }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`eBay OAuth ${res.status}: ${await readEbayError(res)}`);
@@ -269,7 +270,7 @@ export function createEbayStoreConnector(): StoreConnector {
 
       let accessToken: string;
       try {
-        accessToken = await getEbayAccessToken(input.credentials ?? {});
+        accessToken = await getEbayAccessToken(input.credentials ?? {}, input.signal);
       } catch (err) {
         return {
           ok: false,
@@ -299,6 +300,7 @@ export function createEbayStoreConnector(): StoreConnector {
             Accept: 'application/json',
           },
           body: JSON.stringify(body),
+          signal: input.signal,
         },
         { orderId },
       );

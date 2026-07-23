@@ -193,26 +193,6 @@ export async function applyOrderOverridesPatch(
     persistOrderOverridesPatch(tx, id, patch));
 }
 
-export async function applyEditableOrderPatch(
-  id: number,
-  input: {
-    externallyShipped?: boolean;
-    overridesPatch: OrderOverridesPatch;
-  },
-  authorization: OrderEditWriteAuthorization,
-): Promise<OrderOverridesWriteResult> {
-  await ensureOrderRecipientOverrideSchema();
-  return withOrderEditableWrite(id, authorization, async (tx) => {
-    if (input.externallyShipped !== undefined) {
-      await tx
-        .update(orders)
-        .set({ externallyShipped: input.externallyShipped, updatedAt: new Date() })
-        .where(eq(orders.id, id));
-    }
-    return persistOrderOverridesPatch(tx, id, input.overridesPatch);
-  });
-}
-
 export async function applyBestRateForOrder(
   id: number,
   body: ApplyBestRateCommandInput,

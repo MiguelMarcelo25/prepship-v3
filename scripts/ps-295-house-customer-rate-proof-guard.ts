@@ -167,7 +167,7 @@ check(
 const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');
 check(
   'label purchase captures realized House sidecar after committed SHIPP label transaction',
-  /await timer\.task\('markOrderShipped'[\s\S]*?if \(directProviderKey === 'shipp'\) \{[\s\S]*?captureRealizedHouseMargin\(\{[\s\S]*?shipmentId: localShipmentId,[\s\S]*?drpCost: Number\(created\.cost \?\? 0\)/.test(labelsSrc),
+  /await timer\.task\('apply order lifecycle'[\s\S]*?if \(directProviderKey === 'shipp'\) \{[\s\S]*?captureRealizedHouseMargin\(\{[\s\S]*?shipmentId: localShipmentId,[\s\S]*?drpCost: Number\(created\.cost \?\? 0\)/.test(labelsSrc),
 );
 
 const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
@@ -198,8 +198,8 @@ check(
 const orderCellsSrc = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 check(
   'shipped Orders UI renders House badge and selected-rate tuple only from backend money',
-  /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderHouseBadge\(\)/.test(orderCellsSrc) &&
-    /shippedMoney\?\.markupSource === 'house_account'/.test(orderCellsSrc),
+  /const shippedBackendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCellsSrc) &&
+    /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderHouseBadge\(\)/.test(orderCellsSrc),
 );
 
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
@@ -211,11 +211,12 @@ check(
 );
 check(
   'billing generator persists customer_rate as the shipping line unit/total cost',
-  /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
+    /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
     /cShippingRateAmount,/.test(billingSrc) &&
-    /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
-    /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc) &&
-    /totalCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc),
+    /resolveCustomerShippingMoney\(\{/.test(billingSrc) &&
+    /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
+    /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc) &&
+    /totalCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc),
 );
 check(
   'billing details expose billed customer_rate and actual SHIPP cost for margin review',

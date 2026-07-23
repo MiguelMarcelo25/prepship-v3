@@ -70,11 +70,12 @@ check('importSkusFromOrders NOT-EXISTS predicate is the durable cursor (excludes
 check('importSkusFromOrders has a defense-in-depth wall-clock break',
   inv.includes('syncRunBudgetTimeExhausted(budget)'));
 
-// ── 4. runFulfillmentOutboxTick: bounded to limit:25 per tick ────────────────────────────────
+// ── 4. runFulfillmentOutboxTick: one provider operation per shared-lane tick ─────────────────
 const scheduler = read('src/services/sync-scheduler.ts');
 check('runFulfillmentOutboxTick is defined in the scheduler', /export async function runFulfillmentOutboxTick\(/.test(scheduler));
-check('the outbox tick processes at most 25 jobs per run (bounded)',
-  /processFulfillmentOutboxOnce\(\{ limit: 25 \}\)/.test(scheduler));
+check('the outbox tick processes one confirmation per shared-lane run (bounded)',
+  /FULFILLMENT_OUTBOX_BATCH_LIMIT = 1/.test(scheduler) &&
+    /processFulfillmentOutboxOnce\(\{[\s\S]*limit: FULFILLMENT_OUTBOX_BATCH_LIMIT/.test(scheduler));
 check('the outbox tick auto-recovers at most 25 missing confirmations per run (bounded)',
   /enqueueMissingShipmentConfirmations\(\{ limit: 25 \}\)/.test(scheduler));
 
@@ -87,7 +88,7 @@ check('queued order worker delegates to the bounded syncOrders service',
   /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue) &&
     !/syncOrders\(\{[^}]*(?:limit|batch|maxPages)/.test(queue));
 check('queued shipment worker delegates to the bounded syncShipments service',
-  /syncShipments\(\{ \.\.\.shipmentSyncOptionsFromJobPayload\(jobData\), signal \}\)/.test(queue) &&
+  /runShipmentSyncWithOrderPriority[\s\S]*syncShipments\(\{[\s\S]*shipmentSyncOptionsFromJobPayload\(jobData\)[\s\S]*signal: workSignal/.test(queue) &&
     !/syncShipments\(\{[^}]*(?:limit|batch|maxPages|pageSize)/.test(queue));
 check('runInventoryImportFromOrders delegates to importSkusFromOrders (bound owned by the service)',
   /importSkusFromOrders\(\)/.test(read('src/services/sync-scheduler.ts')));

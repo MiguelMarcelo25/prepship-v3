@@ -122,7 +122,7 @@ check(
   'Rate Browser saved-rate seed consumes the backend-stamped otherCost (insurance folded backend-side)',
   modal.includes('const otherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost) ?? 0;') &&
     purchaseAliases.includes('otherCost: money.otherCost,') &&
-    purchaseAliases.includes('moneyObjectAmount(rate.insurance_amount'),
+    purchaseAliases.includes('moneyObjectMaxAmount(rate.insurance_amount, raw.insurance_amount)'),
 );
 
 check(

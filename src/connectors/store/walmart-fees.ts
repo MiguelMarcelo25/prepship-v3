@@ -28,6 +28,12 @@
 // ──────────────────────────────────────────────────────────────────
 
 import type postgres from 'postgres';
+import { fetchWithTimeout } from '../../lib/fetch-timeout.js';
+
+// Per user override unlock shipped data on 2026-07-23: bound and cancel
+// provider transport only. Fee matching/update semantics and historical order
+// protections are unchanged.
+const WALMART_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface WalmartFeesSyncResult {
   ok: true;
@@ -61,7 +67,10 @@ async function ensureSellingFeeColumns(_sql: ReturnType<typeof postgres>): Promi
 // caller is typically a short-lived function. Walmart's basic-auth
 // pattern: clientId:clientSecret base64-encoded, swapped for an
 // access_token via client_credentials grant.
-async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getWalmartAccessToken(
+  creds: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<string> {
   const clientId = String(creds?.clientId ?? '').trim();
   const clientSecret = String(creds?.clientSecret ?? '').trim();
   if (!clientId || !clientSecret) {
@@ -78,14 +87,14 @@ async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<st
     'WM_SVC.NAME': 'Walmart Marketplace',
   };
   if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+  const res = await fetchWithTimeout('https://marketplace.walmartapis.com/v3/token', {
     method: 'POST',
     headers,
     body: 'grant_type=client_credentials',
-  });
+    signal,
+  }, WALMART_REQUEST_TIMEOUT_MS);
   if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
-    throw new Error(`Walmart OAuth ${res.status}: ${t || res.statusText}`);
+    throw new Error(`Walmart OAuth ${res.status}: provider rejected token request`);
   }
   const data = (await res.json()) as { access_token?: string };
   if (!data?.access_token) throw new Error('Walmart OAuth response missing access_token');
@@ -153,12 +162,14 @@ async function fetchWalmartFeeTransactions(
   fromDate: string,
   toDate: string,
   channelType: string,
+  signal?: AbortSignal,
 ): Promise<{ transactions: WalmartTransaction[]; fetchedCount: number }> {
   const transactions: WalmartTransaction[] = [];
   const PAGE_LIMIT = 200;
   let offset = 0;
   let safety = 0;
   while (safety < 100) {
+    signal?.throwIfAborted();
     safety += 1;
     const correlationId = `prepship-fees-${Date.now().toString(36)}-${safety}`;
     const headers: Record<string, string> = {
@@ -173,10 +184,13 @@ async function fetchWalmartFeeTransactions(
     url.searchParams.set('toDate', toDate);
     url.searchParams.set('limit', String(PAGE_LIMIT));
     url.searchParams.set('offset', String(offset));
-    const res = await fetch(url, { method: 'GET', headers });
+    const res = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers, signal },
+      WALMART_REQUEST_TIMEOUT_MS,
+    );
     if (!res.ok) {
-      const txt = await res.text().then((s) => s.slice(0, 400)).catch(() => '');
-      throw new Error(`Walmart /v3/payments ${res.status}: ${txt || res.statusText}`);
+      throw new Error(`Walmart /v3/payments ${res.status}: provider request failed`);
     }
     const data = (await res.json()) as Record<string, unknown>;
     // Defensive shape extraction — Walmart wraps in different keys
@@ -243,8 +257,10 @@ export async function syncWalmartFeesForAccount(
   storeAccountId: number,
   fromDate: string,
   toDate: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<WalmartFeesSyncOutcome> {
   try {
+    options.signal?.throwIfAborted();
     await ensureSellingFeeColumns(sql);
 
     // Read the store-account credentials.
@@ -268,12 +284,13 @@ export async function syncWalmartFeesForAccount(
     const channelType = String((creds as { channelType?: unknown }).channelType ?? '').trim();
 
     // Mint token + paginate fees.
-    const accessToken = await getWalmartAccessToken(creds);
+    const accessToken = await getWalmartAccessToken(creds, options.signal);
     const { transactions, fetchedCount } = await fetchWalmartFeeTransactions(
       accessToken,
       fromDate,
       toDate,
       channelType,
+      options.signal,
     );
 
     // Aggregate by customerOrderId.
@@ -332,6 +349,7 @@ export async function syncWalmartFeesForAccount(
       toDate,
     };
   } catch (err) {
+    if (options.signal?.aborted) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[walmart-fees-sync]', `account=${storeAccountId}`, msg);
     return { ok: false, error: msg };
@@ -348,6 +366,7 @@ export async function syncWalmartFeesAllAccounts(
   sql: ReturnType<typeof postgres>,
   fromDate: string,
   toDate: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<Array<WalmartFeesSyncOutcome & { storeAccountId: number; storeAccountLabel: string | null }>> {
   await ensureSellingFeeColumns(sql);
   const accounts = await sql<Array<{ id: number; label: string | null }>>`
@@ -359,7 +378,8 @@ export async function syncWalmartFeesAllAccounts(
   `;
   const results: Array<WalmartFeesSyncOutcome & { storeAccountId: number; storeAccountLabel: string | null }> = [];
   for (const acct of accounts) {
-    const r = await syncWalmartFeesForAccount(sql, acct.id, fromDate, toDate);
+    options.signal?.throwIfAborted();
+    const r = await syncWalmartFeesForAccount(sql, acct.id, fromDate, toDate, options);
     results.push({ ...r, storeAccountId: acct.id, storeAccountLabel: acct.label });
   }
   return results;

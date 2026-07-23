@@ -1,0 +1,323 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-464",
+  "title": "Enforce frontend/backend layer boundaries with import graph and shrinking route-debt allowlists",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "a696b9e4422812e1d25d7836a5dadda4843105c8"
+  },
+  "riskDomains": [
+    "governance"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "One executable TypeScript-AST owner defines and enforces dependency direction from frontend/public contracts through routes, services/policies/read models, adapters/connectors, and persistence, and runs first in the mandatory CI source-of-truth pack.",
+      "evidenceIds": [
+        "ps464-unit",
+        "full-sot-pack",
+        "implementation-scope"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "New frontend imports into backend-private modules fail, while every current exception names its exact source/target, removal PS owner, reason, and a stale-on-removal ratchet; the older card baseline has already shrunk to 17 imports across 12 files.",
+      "evidenceIds": [
+        "ps464-unit",
+        "ps464-adversarial"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "New route-local database writes fail, and the current 80 writes across 11 route files are pinned by exact route endpoint/site counts, reasons, PS owners, and shrinking count ratchets.",
+      "evidenceIds": [
+        "ps464-unit",
+        "ps464-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "AST/semantic negative controls catch renamed frontend authority for rates/money, selected-rate proof, label/provider choice, inventory, billing finalization, auth/scope/status locks, and provider/store capability routing, while positive display/DTO, provider-adapter, and thin-route fixtures remain allowed.",
+      "evidenceIds": [
+        "ps464-adversarial",
+        "ps464-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "The two stale PS-279 assertions now inspect actual delegation semantics in createLabelV2Impl and processQueueSendOrder instead of obsolete call syntax, and the PS-279/305/313/320/321/329/335 regression guards pass.",
+      "evidenceIds": [
+        "ps279-delegation",
+        "full-sot-pack"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "The complete 57-command source-of-truth pack, strict backend/frontend TypeScript, production web build, diff check, and protected-surface audit pass at the exact reviewed implementation SHA with no runtime, migration, provider, customer-data, or shipped/cancelled change.",
+      "evidenceIds": [
+        "full-sot-pack",
+        "strict-typecheck",
+        "frontend-build",
+        "implementation-scope",
+        "governance-unit",
+        "governance-adversarial",
+        "governance-failure-injection"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "scripts/ps-464-architecture-boundary-guard.ts owns executable layer-direction and debt-ratchet enforcement",
+      "scripts/lib/architecture-boundary-analyzer.ts owns TypeScript AST discovery of imports, route persistence, and frontend semantic authority",
+      "scripts/ps-464-architecture-boundary-policy.ts owns reviewed exact-site exceptions, counts, reasons, and removal-card mapping",
+      "scripts/sot-guard-pack.mjs owns mandatory sequential CI execution before typecheck/build"
+    ],
+    "oldOwners": [
+      {
+        "path": "scripts/ps-305-authority-drift-guard.ts lexical frontend scan",
+        "disposition": "retained-with-caveat",
+        "delegatesTo": "scripts/ps-464-architecture-boundary-guard.ts for the complete AST dependency/route/semantic boundary"
+      },
+      {
+        "path": "scripts/ps-279-web-boundary-guards.ts obsolete exact-call syntax assertions",
+        "disposition": "delegated",
+        "delegatesTo": "scripts/lib/architecture-boundary-analyzer.ts#functionCalls plus canonical owner facts"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "scripts/lib/architecture-boundary-analyzer.ts",
+        "action": "added",
+        "delegatesTo": "TypeScript compiler AST; it owns static discovery only and imports no product runtime"
+      },
+      {
+        "path": "scripts/ps-464-architecture-boundary-policy.ts",
+        "action": "added",
+        "delegatesTo": "named PS removal owners; it cannot authorize runtime business truth"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "PS-464 adds enforcement around existing canonical backend owners. It changes no runtime business logic and does not move money, rate, label, inventory, billing, auth/scope, provider, or persistence truth into a wrapper or frontend surface."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps464-unit",
+      "classification": "unit",
+      "command": "npm run test:ps-464-architecture-boundaries",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-464-architecture-boundary-guard.ts",
+        "scripts/lib/architecture-boundary-analyzer.ts",
+        "scripts/ps-464-architecture-boundary-policy.ts"
+      ],
+      "assertions": [
+        "private import inventory and exact allowlist equality",
+        "route-local write endpoint counts and exact allowlist equality",
+        "frontend semantic site equality and stale-exception rejection",
+        "every exception has a reason and PS owner"
+      ],
+      "proves": "The current commit has one deterministic executable boundary owner and reviewed debt cannot grow or silently disappear without updating the ratchet."
+    },
+    {
+      "id": "ps464-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-464-architecture-boundaries",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/fixtures/ps-464/negative-renamed-authority.ts.fixture",
+        "scripts/fixtures/ps-464/positive-display.ts.fixture",
+        "scripts/fixtures/ps-464/positive-provider-adapter.ts.fixture"
+      ],
+      "assertions": [
+        "renamed high-risk helper names do not evade AST semantic checks",
+        "valid display formatting and DTO pass-through remain allowed",
+        "provider payload translation outside the frontend authority layer remains allowed"
+      ],
+      "proves": "The guard distinguishes backend-critical frontend authority from permitted presentation and adapter work without relying on legacy helper names."
+    },
+    {
+      "id": "ps464-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-464-architecture-boundaries",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/fixtures/ps-464/negative-fat-route.ts.fixture",
+        "scripts/fixtures/ps-464/positive-thin-route.ts.fixture",
+        "scripts/fixtures/ps-464/negative-renamed-authority.ts.fixture"
+      ],
+      "assertions": [
+        "an injected route-local db.insert is rejected",
+        "an injected thin route delegating to a command service is accepted",
+        "injected money/rate/proof/label/inventory/billing/auth/provider authority is rejected"
+      ],
+      "proves": "The architecture guard has executable fail controls and cannot pass merely because its scanners return no findings."
+    },
+    {
+      "id": "ps279-delegation",
+      "classification": "unit",
+      "command": "npm run test:ps-279-backend-orchestration && npm run test:ps-279-web-boundary-guards && npm run test:ps-279-backend-boundary-closeout",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-279-web-boundary-guards.ts",
+        "src/services/labels.ts",
+        "src/services/print-queue.ts"
+      ],
+      "assertions": [
+        "createLabelV2Impl delegates proof resolution and intent/account binding to canonical backend owners",
+        "processQueueSendOrder delegates purchase and durable receipt recovery with labelPurchaseScope",
+        "frontend Print Queue routing remains intent-only"
+      ],
+      "proves": "The corrected assertions verify current delegation behavior rather than obsolete object-literal call syntax."
+    },
+    {
+      "id": "full-sot-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert localhost/.invalid environment values and a dummy test-only JWT secret",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/ps-464-architecture-boundary-guard.ts"
+      ],
+      "assertions": [
+        "all 57 mandatory architecture, source-of-truth, safety, lifecycle, and governance commands pass",
+        "PS-464 executes first before the remaining guard pack"
+      ],
+      "proves": "The new enforcement composes with every existing mandatory guard and runs before CI typecheck/build."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "scripts/lib/architecture-boundary-analyzer.ts"
+      ],
+      "assertions": [
+        "backend and frontend strict TypeScript compilation pass",
+        "the new scripts also pass an explicit strict noEmit compiler invocation"
+      ],
+      "proves": "No backend/frontend contract regressed and the AST tooling is strictly typed."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "web/src",
+        "vite.config.ts"
+      ],
+      "assertions": [
+        "the production Vite bundle completes with 2,979 modules transformed"
+      ],
+      "proves": "The enforcement-only change introduces no production frontend build regression."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git show --name-status a696b9e4422812e1d25d7836a5dadda4843105c8 && git diff --check",
+      "result": "pass",
+      "artifactPaths": [
+        "ARCHITECTURE.md",
+        "docs/engineering/ps-464-architecture-boundary-report.md",
+        ".github/workflows/ci.yml",
+        "package.json"
+      ],
+      "assertions": [
+        "only scripts, fixtures, architecture documentation, package wiring, and CI wiring changed",
+        "no runtime route/service/frontend product file, schema, migration, protected shipped/cancelled file, provider payload, or production data changed",
+        "git diff check passes"
+      ],
+      "proves": "The reviewed implementation is a surgical enforcement-only diff with zero live/provider/customer-data side effects."
+    },
+    {
+      "id": "governance-unit",
+      "classification": "unit",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs",
+        "docs/final-review/evidence-packet.schema.json"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "The process owner accepts complete packets and rejects malformed or false-green closure claims deterministically."
+    },
+    {
+      "id": "governance-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Wrong SHA, wrong branch, source-of-truth bypass, and incomplete evidence cannot produce an eligible Final Review."
+    },
+    {
+      "id": "governance-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Injected malformed, stale, incomplete, and false-green evidence is rejected or score-capped."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git show --name-only a696b9e4422812e1d25d7836a5dadda4843105c8 -- drizzle",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema or data rollback exists. Forward-revert a696b9e4422812e1d25d7836a5dadda4843105c8 and redeploy the prior stable tip; do not change production data or historical order/shipment records."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the PS-464 packet commit and implementation commit. The prior CI/SOT pack and lexical guards resume unchanged; no SQL, provider replay, queue cleanup, or customer-data mutation is required.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "PS-464 changes offline scripts, fixtures, documentation, package wiring, and CI wiring only. Runtime provider or production-data certification would add risk without testing this governance boundary; post-push commit parity is verified separately.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}

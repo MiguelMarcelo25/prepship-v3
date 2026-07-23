@@ -32,7 +32,7 @@ jobs:
           FINAL_REVIEW_TARGET_BRANCH: ${{ github.event.pull_request.base.ref || github.ref_name }}
         run: npm run test:final-review-closure
 
-      - name: SOT / backend-truth / no-wrapper guard pack (PS-335)
+      - name: Architecture / SOT / backend-truth guard pack (PS-464 / PS-335)
         run: npm run test:sot-guard-pack
 
       - name: ShipStation batched rate fan-out guard

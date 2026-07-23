@@ -40,7 +40,8 @@ check('finalizer reuses the canonical pieces (keys + snapshot + opaque key)',
     const block = store.slice(start, end > 0 ? end : start + 2000);
     return /withSelectedRateKeys\(input\.rates\)/.test(block) &&
       /storeRateQuoteSnapshot\(\{/.test(block) &&
-      /selectedRateKey: selectedRateOpaqueKey\(input\.bestRate\)/.test(block);
+      /const bestRateSelectedKey = selectedRateOpaqueKey\(input\.bestRate\)/.test(block) &&
+      /createShippingQuoteSelectionRef\(rateQuoteId, rate\.selectedRateKey\)/.test(block);
   })());
 check('single backend proof-source constant, stamped by the finalizer',
   /export const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'/.test(store) &&
@@ -66,7 +67,8 @@ check('backfill keeps its existing metadata stamps (expiry/eligibility/completen
   /eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION/.test(backfill));
 
 check('purchase boundary is strict backend-snapshot authority after PS-419',
-  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(store) &&
+  /parseShippingQuoteSelectionRef\(body\.selectionRef\)/.test(store) &&
+  /if \(!ref\)/.test(store) &&
   !/assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(store));
 const ratesProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 // PS-244: /rates/browse now routes through the SINGLE finalizer (finalizeBestRateWithQuote)

@@ -77,7 +77,9 @@ check('the void-retract owner stops pending confirmations (PS-263, no zombie con
 // The operator non-label external path delegates to the OWNER, never a raw connector dispatch.
 const markExt = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
 check('mark-shipped-externally delegates to the owner confirmShipmentDirectNow (not a raw dispatch)',
-  /confirmShipmentDirectNow\(/.test(markExt) && !DISPATCH_CALL.test(markExt));
+  /const confirmDirect = dependencies\.confirmDirect \?\? confirmShipmentDirectNow;/.test(markExt) &&
+  /notify = await confirmDirect\(\{/.test(markExt) &&
+  !DISPATCH_CALL.test(markExt));
 
 // confirmStoreShipment is the connector RESOLVE+DISPATCH wrapper. It must be reachable only from its
 // own file. After PS-209 retired api/carriers/labels.ts to a 410 stub (its old direct-label immediate

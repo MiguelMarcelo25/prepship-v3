@@ -33,3 +33,22 @@ export const SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE = Math.max(
     Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE ?? '40', 10) || 40,
   ),
 );
+
+// PS-447: batch work (rate backfills/recalculation) may use more of the shared
+// budget than background sync/polling, while still preserving the interactive
+// reserve for operator quotes and label purchases.
+export const SHIPSTATION_RATE_LIMIT_BATCH_BURST_RESERVE = Math.max(
+  0,
+  Math.min(
+    SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE - 1,
+    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BATCH_BURST_RESERVE ?? '4', 10) || 4,
+  ),
+);
+
+export const SHIPSTATION_RATE_LIMIT_BATCH_PER_MINUTE_RESERVE = Math.max(
+  0,
+  Math.min(
+    SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE - 1,
+    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BATCH_PER_MINUTE_RESERVE ?? '20', 10) || 20,
+  ),
+);

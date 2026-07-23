@@ -47,7 +47,9 @@ const skuQueryBlock = analysis.slice(
   indexOfOrEnd('const analysisSkusSettled = !analysisSkusQuery.isPending'),
 );
 assert(
-  skuQueryBlock.length > 0 && !skuQueryBlock.includes('enabled:'),
+  skuQueryBlock.length > 0 &&
+    skuQueryBlock.includes('enabled: Boolean(to && (from || presetDays === 0))') &&
+    !skuQueryBlock.includes('dailySalesReady'),
   'Analysis SKU table query is ungated on the critical first-paint path',
 );
 

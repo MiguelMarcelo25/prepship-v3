@@ -4,6 +4,7 @@ import { api, qs, type Paginated } from '../lib/api';
 import { californiaDayEndIso, californiaDayStartIso } from '../lib/ca-time';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
 import { activeClientRowsQueryOptions } from '../lib/client-query';
+import type { ReturnOrderSummaryDto } from '../types/api';
 import { createOrdersRefetchCoordinator } from './orders-refetch-coordinator';
 import {
   ORDERS_STALE_MS,
@@ -362,6 +363,135 @@ function transformOrderRowV4toV2(
   };
 }
 
+function expandReturnDisplayRows(order: OrderSummaryDto): OrderSummaryDto[] {
+  if (order.orderStatus !== 'shipped') return [order];
+
+  const summaries: ReturnOrderSummaryDto[] = Array.isArray(order.returnSummaries)
+    ? order.returnSummaries as ReturnOrderSummaryDto[]
+    : order.returnSummary
+      ? [order.returnSummary]
+      : [];
+  if (summaries.length === 0) return [order];
+
+  // Per user override `unlock shipped data` on 2026-07-16: arrange the
+  // backend-owned return projections as separate read-only table rows. The
+  // original order is retained and no shipped/return record is mutated here.
+  const originalRow: OrderSummaryDto = {
+    ...order,
+    displayRowKey: `order:${order.orderId}`,
+    displayRowKind: 'order',
+    returnSummary: null,
+  };
+
+  const returnRows = summaries.map((summary, summaryIndex): OrderSummaryDto => {
+    const shipment = toRecordValue(summary.shipment);
+    const returnReference = summary.returnReference?.trim()
+      || `${order.orderNumber ?? order.orderId}-RETURN`;
+    const items = (Array.isArray(summary.items) ? summary.items : []).map((item, itemIndex) => ({
+      id: `return:${summary.returnId}:item:${itemIndex}`,
+      orderItemId: null,
+      sku: item.sku,
+      name: item.name,
+      quantity: item.quantity,
+      imageUrl: null,
+    }));
+    const trackingNumber = typeof shipment?.trackingNumber === 'string' ? shipment.trackingNumber : null;
+    const carrierCode = typeof shipment?.carrierCode === 'string' ? shipment.carrierCode : null;
+    const serviceCode = typeof shipment?.serviceCode === 'string' ? shipment.serviceCode : null;
+    const providerAccountId = toProviderAccountId(shipment?.providerAccountId);
+    const accountNickname = typeof shipment?.providerAccountNickname === 'string'
+      ? shipment.providerAccountNickname
+      : null;
+    const returnMoney = toRecordValue(summary.money);
+    const returnSelectedRateCost = toFiniteNumber(returnMoney?.selectedRateCost);
+    const returnCustomerRate = toFiniteNumber(returnMoney?.cShippingRateAmount)
+      ?? summary.returnCustomerShippingRate;
+    const returnShipping = shipment
+      ? {
+          shipmentId: toNumericValue(shipment.shipmentId),
+          trackingNumber,
+          carrierCode,
+          serviceCode,
+          shipDate: shipment.shipDate ?? null,
+          labelCreatedAt: shipment.labelCreatedAt ?? null,
+          providerAccountId,
+          accountNickname,
+          selectedRateAmount: returnSelectedRateCost,
+          labelCost: null,
+          selectedRate: null,
+        }
+      : null;
+    const returnLabel = shipment
+      ? {
+          id: toNumericValue(shipment.labelShipmentId),
+          trackingNumber,
+          carrierCode,
+          serviceCode,
+          shippingProviderId: providerAccountId,
+          labelUrl: shipment.labelUrl ?? null,
+          voided: shipment.voided === true,
+          cost: null,
+        }
+      : null;
+    const canonicalOrder = toRecordValue(order.canonicalOrder);
+    const canonicalTotals = toRecordValue(canonicalOrder?.totals);
+    const weightOz = toFiniteNumber(shipment?.weightOz);
+    const dimsL = toFiniteNumber(shipment?.dimsL);
+    const dimsW = toFiniteNumber(shipment?.dimsW);
+    const dimsH = toFiniteNumber(shipment?.dimsH);
+
+    return {
+      ...order,
+      displayRowKey: `return:${summary.returnId}`,
+      displayRowKind: 'return',
+      orderNumber: returnReference,
+      orderDate: summary.createdAt ?? order.orderDate,
+      items,
+      orderTotal: null,
+      shippingAmount: returnCustomerRate,
+      weight: weightOz != null ? { value: weightOz, units: 'ounces' } : null,
+      rateDims: dimsL != null && dimsW != null && dimsH != null
+        ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
+        : null,
+      label: returnLabel,
+      shipping: returnShipping,
+      selectedRate: null,
+      bestRate: null,
+      // PS-437: a return row consumes the backend-frozen shipment money tuple.
+      // The frontend only adapts the DTO into the existing display envelope.
+      bestRateWorkflow: returnMoney ? { money: returnMoney } : null,
+      shippingWorkflowState: null,
+      shippedLabelDisplayState: shipment
+        ? shipment.voided === true ? 'voided_label' : 'active_label'
+        : 'missing_shipment_sync',
+      returnSummary: summary,
+      returnSummaries: [],
+      canonicalOrder: canonicalOrder
+        ? {
+            ...canonicalOrder,
+            orderNumber: returnReference,
+            orderDate: summary.createdAt ?? order.orderDate,
+            items,
+            shipping: returnShipping,
+            weightOz,
+            dimensions: dimsL != null && dimsW != null && dimsH != null
+              ? { length: dimsL, width: dimsW, height: dimsH }
+              : null,
+            totals: {
+              ...(canonicalTotals ?? {}),
+              orderTotal: null,
+              shippingAmount: returnCustomerRate,
+            },
+          }
+        : null,
+      // Stable ordering if legacy rows ever omit a return timestamp.
+      returnDisplayIndex: summaryIndex,
+    };
+  });
+
+  return [originalRow, ...returnRows];
+}
+
 function toIsoStart(d: string | undefined): string | undefined {
   if (!d) return undefined;
   if (d.includes('T')) return d;
@@ -513,8 +643,10 @@ export function useOrders(
   const transformedOrders = useMemo(() => {
     const clientsById = new Map<number, string>();
     for (const c of clientsQuery.data ?? []) clientsById.set(c.id, c.name);
-    return (query.data?.data ?? []).map((row) =>
-      transformOrderRowV4toV2(row as Record<string, unknown>, clientsById)
+    return (query.data?.data ?? []).flatMap((row) =>
+      expandReturnDisplayRows(
+        transformOrderRowV4toV2(row as Record<string, unknown>, clientsById),
+      )
     );
   }, [query.data, clientsQuery.data]);
 

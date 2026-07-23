@@ -68,8 +68,8 @@ check(
     /runInventoryImportFromOrders delegates to importSkusFromOrders/.test(boundedGuard),
 );
 check(
-  'bounded guard proves fulfillment outbox recovery remains bounded to 25 per tick',
-  /processes at most 25 jobs per run/.test(boundedGuard) &&
+  'bounded guard proves fulfillment outbox work remains bounded per tick',
+  /processes one confirmation per shared-lane run/.test(boundedGuard) &&
     /auto-recovers at most 25 missing confirmations per run/.test(boundedGuard),
 );
 
@@ -94,8 +94,9 @@ check(
 );
 check(
   'queued worker registers the bounded sync workers and schedules the default-off reaper',
-  /registerWorker\(JOBS\.orders, async \(jobData, \{ identity, signal \}\) => \{[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(syncJobQueue) &&
-    /registerWorker\(JOBS\.shipments, \(jobData, \{ signal \}\) =>[\s\S]*syncShipments\(\{ \.\.\.shipmentSyncOptionsFromJobPayload\(jobData\), signal \}\)/.test(syncJobQueue) &&
+  /registerWorker\(JOBS\.orders, \(jobData, \{ identity, signal \}\) =>[\s\S]*runOrderSyncWithOutboxPriority\(jobData, identity, signal\)/.test(syncJobQueue) &&
+    /runOrderSyncWithOutboxPriority[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal: workSignal \}\)/.test(syncJobQueue) &&
+    /registerWorker\(JOBS\.shipments, \(jobData, \{ signal \}\) =>[\s\S]*runShipmentSyncWithOrderPriority\(jobData, signal\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.inventoryImport, runInventoryImportFromOrders\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.externalShippedClassifier, runExternalShippedClassifierJob\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.queueMaintenance,[\s\S]*reapStuckActiveJobs\(\)[\s\S]*reapStaleQueuedCadenceJobs\(\)/.test(syncJobQueue) &&
@@ -104,7 +105,7 @@ check(
 check(
   'effectful reaper is env-gated default-off and mutates only pgboss job rows',
   /if \(!env\.SYNC_STUCK_JOB_REAPER\)/.test(stuckReaper) &&
-    /UPDATE \$\{pg\(jobTable\)\}/.test(stuckReaper) &&
+    /UPDATE \$\{reaperSql\(jobTable\)\}/.test(stuckReaper) &&
     !/UPDATE\s+(orders|shipments)\b/i.test(stuckReaper),
 );
 

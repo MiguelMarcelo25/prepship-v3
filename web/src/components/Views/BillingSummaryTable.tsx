@@ -99,16 +99,16 @@ export function BillingSummaryTable({
         { key: 'shipping', label: 'Shipping', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.shippingTotal ?? 0), render: (row) => formatBillingMoney(row.shippingTotal || 0) },
         {
           key: 'total',
-          label: 'Fulfillment Fee',
+          label: 'Total',
           width: 120,
           minWidth: 100,
           align: 'right',
           sortable: true,
           // 2026-05-13: every column toggleable + draggable
           // per operator request (Awaiting-Shipment parity).
-          sortValue: (row) => Number(row.fulfillmentFeeTotal ?? row.grandTotal ?? 0),
+          sortValue: (row) => Number(row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal ?? 0),
           render: (row) => (
-            <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.fulfillmentFeeTotal ?? row.grandTotal ?? 0)}</span>
+            <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal ?? 0)}</span>
           ),
         },
       ]}
@@ -145,7 +145,7 @@ export function BillingSummaryTable({
           case 'package': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
           case 'storage': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
           case 'shipping': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.shipping)}</td>
-          case 'total': return <td key={c.key} {...common} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.fulfillmentFee)}</td>
+          case 'total': return <td key={c.key} {...common} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.grand)}</td>
           default: return <td key={c.key} {...common} style={tdStyle} />
         }
       })}

@@ -10,6 +10,7 @@ import { rateCostTotal, rateTotal, type CombinableRate } from '../rates-combined
 import { resolveNextBestNonHouseRate } from '../../lib/next-best-non-house-rate.js';
 import { shippingMarginPolicyForClient } from '../house-account-opt-in.js';
 import { loadShippingAutomationRules } from '../shipping-automation.js';
+import { roundMoney } from '../../lib/money.js';
 
 export async function stampHouseTuple(
   bestRate: Record<string, unknown>,
@@ -38,10 +39,9 @@ export async function stampHouseTuple(
       automationRules: houseAutomationRules,
       client: { houseAccountOptIn: shippingMarginPolicy.legacyHouseAccountEnabled, shippingMarginPolicy },
     });
-    const round2 = (value: number): number => Math.round(value * 100) / 100;
-    const drpCost = round2(rateCostTotal(input.cheapest));
-    const customerRate = round2(nextBest ? nextBest.total : drpCost);
-    const houseMargin = round2(nextBest ? Math.max(0, customerRate - drpCost) : 0);
+    const drpCost = roundMoney(rateCostTotal(input.cheapest));
+    const customerRate = roundMoney(nextBest ? nextBest.total : drpCost);
+    const houseMargin = roundMoney(nextBest ? Math.max(0, customerRate - drpCost) : 0);
     const shippingMarginPct =
       houseMargin >= 0.005 && customerRate > 0 ? Math.round((houseMargin / customerRate) * 1000) / 10 : null;
     const providerMatch = nextBest ? /^se-(\d+)$/i.exec(String(nextBest.rate.carrier_id ?? '')) : null;

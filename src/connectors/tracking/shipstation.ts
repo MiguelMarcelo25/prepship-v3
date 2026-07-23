@@ -53,6 +53,7 @@ export function createShipStationTrackingConnector(): TrackingConnector {
         const payload = await ssRequest<Record<string, unknown>>(`/v2/tracking?${params.toString()}`, {
           dedupeKey: `tracking:${normalizedCarrier ?? 'any'}:${trackingNumber}`,
           maxRetries: 3,
+          priority: 'background',
         });
         return toNormalizedStatus(normalizeShipStationTrackingPayload(payload, trackingNumber));
       } catch (err) {

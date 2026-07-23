@@ -1,0 +1,3 @@
+export function translateProviderPayload(payload: { carrier_code: string; service_code: string }) {
+  return { carrierCode: payload.carrier_code, serviceCode: payload.service_code };
+}

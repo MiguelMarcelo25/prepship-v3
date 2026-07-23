@@ -14,6 +14,7 @@ const writeOwner = read('src/services/order-editable-write.ts');
 const commandOwner = read('src/services/orders-overrides-command.ts');
 const comboOwner = read('src/services/combo-package-defaults.ts');
 const externalOwner = read('src/services/fulfillment/mark-shipped-externally.ts');
+const lifecycleOwner = read('src/services/order-lifecycle-command.ts');
 const packageJson = read('package.json');
 const guardPack = read('scripts/sot-guard-pack.mjs');
 
@@ -35,6 +36,8 @@ assert.equal(
 
 assert.match(writeOwner, /db\.transaction\(async \(tx\) =>/,
   'final editability check and write must share one DB transaction');
+assert.match(writeOwner, /withOrderEditableWriteInTransaction\(tx, orderId, authorization, write\)/,
+  'production edits must delegate to the transaction-time boundary used by behavioral proof');
 assert.match(writeOwner, /\.for\('update'\)/,
   'final editability owner must lock the order row before deciding');
 assert.match(writeOwner, /resolveOrderLifecycleStatus\(\{/,
@@ -58,12 +61,32 @@ assert.ok(
   'every guarded order command must carry its authorization into the final write boundary',
 );
 
+const guardedRouteBlocks = [
+  ["app.patch('/:id{[0-9]+}'", '// v2-parity POST aliases', 'PATCH /:id'],
+  ["'/:id{[0-9]+}/residential'", "'/:id{[0-9]+}/selected-pid'", 'POST /:id/residential'],
+  ["'/:id{[0-9]+}/selected-pid'", "'/:id{[0-9]+}/apply-best-rate'", 'POST /:id/selected-pid'],
+  ["'/:id{[0-9]+}/selected-package-id'", '// PS-037:', 'POST /:id/selected-package-id'],
+  ["'/:id{[0-9]+}/best-rate'", "'/:id{[0-9]+}/shipped-external'", 'POST /:id/best-rate'],
+  ["'/:id{[0-9]+}/shipped-external'", 'const saveDimsBody', 'POST /:id/shipped-external'],
+  ["'/:id{[0-9]+}/save-dims'", "app.get('/:id{[0-9]+}/dims'", 'POST /:id/save-dims'],
+] as const;
+for (const [startMarker, endMarker, label] of guardedRouteBlocks) {
+  const start = route.indexOf(startMarker);
+  const end = route.indexOf(endMarker, start + startMarker.length);
+  assert.ok(start >= 0 && end > start, `${label} route block must be discoverable`);
+  const block = route.slice(start, end);
+  assert.match(block, /assertOrderEditable\(c, id\)/,
+    `${label} must retain the fast-path editability guard`);
+  assert.match(block, /guard\.writeAuthorization/,
+    `${label} must carry authorization into its atomic final write owner`);
+}
+
 const patchStart = route.indexOf("app.patch('/:id{[0-9]+}'");
 const patchEnd = route.indexOf('// v2-parity POST aliases', patchStart);
 const patchBlock = route.slice(patchStart, patchEnd);
 assert.ok(
   patchBlock.indexOf('assertOrderEditable(c, id)') >= 0 &&
-    patchBlock.indexOf('assertOrderEditable(c, id)') < patchBlock.indexOf('applyEditableOrderPatch('),
+    patchBlock.indexOf('assertOrderEditable(c, id)') < patchBlock.indexOf('applyOrderOverridesPatch('),
   'PATCH must retain the early route guard before final command delegation',
 );
 assert.doesNotMatch(patchBlock, /\.insert\(orderOverrides\)|\.update\(orders\)/,
@@ -73,8 +96,8 @@ assert.match(commandOwner, /export async function applyOrderOverridesPatch\([\s\
   'override command must require the route authorization');
 assert.match(commandOwner, /return withOrderEditableWrite\(id, authorization/,
   'override command must run persistence through the final row-lock owner');
-assert.match(commandOwner, /export async function applyEditableOrderPatch\(/,
-  'mixed orders/override PATCH persistence must have one atomic command owner');
+assert.doesNotMatch(patchBlock, /externallyShipped:\s*z\.boolean/,
+  'generic PATCH must not accept lifecycle state; the dedicated endpoint owns it');
 assert.doesNotMatch(comboOwner, /await db\s*\.insert\(orderOverrides\)/,
   'combo propagation/materialization must not write overrides outside the final guard');
 assert.ok(
@@ -82,16 +105,18 @@ assert.ok(
   'combo source, propagation, and materialization writes must each re-check lifecycle under lock',
 );
 
-assert.match(externalOwner, /orderLifecycleEffectiveStatusSql\(\)/,
-  'manual external shipment updates must use canonical effective lifecycle SQL');
+assert.match(externalOwner, /dependencies\.applyLifecycleCommand \?\? applyOrderLifecycleCommand/,
+  'manual external shipment test seams must default to the lifecycle command owner');
+assert.match(externalOwner, /applyLifecycle\(\{/,
+  'manual external shipment updates must delegate to the lifecycle command owner');
 assert.ok(
-  (externalOwner.match(/input\.writeAuthorization\.allowTerminal \? undefined : mutableLifecycle/g) ?? []).length >= 2,
-  'both mark and unmark UPDATE predicates must carry the final lifecycle guard',
+  (externalOwner.match(/allowCanonicalOverride: input\.writeAuthorization\.allowTerminal/g) ?? []).length >= 2,
+  'both mark and unmark commands must carry audited terminal authorization',
 );
 assert.match(
-  externalOwner,
-  /db\.transaction\([\s\S]*?if \(transitioned\.length > 0\) \{[\s\S]*?enqueueInventoryDeduction\([\s\S]*?tx,[\s\S]*?\);[\s\S]*?return transitioned;/,
-  'inventory intent must share the guarded transition transaction and a lost race must enqueue nothing',
+  lifecycleOwner,
+  /\.for\('update'\)[\s\S]*?insert\(orderLifecycleEvents\)[\s\S]*?enqueueInventoryClaimDeduction\([\s\S]*?, tx\)/,
+  'row lock, terminal receipt, exact claims, and inventory intent must share one transaction',
 );
 assert.match(externalOwner, /flag &&\s*statusFlipped &&/,
   'a lost transition race must not notify a marketplace');

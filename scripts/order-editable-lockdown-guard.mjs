@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 // Static/offline (readFileSync only) — safe for the master workflow cert.
 
 const orders = readFileSync('src/routes/orders.ts', 'utf8');
+const lifecycle = readFileSync('src/services/order-lifecycle-command.ts', 'utf8');
 const agents = readFileSync('AGENTS.md', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
@@ -95,16 +96,20 @@ assert.equal(
 
 // 8. PS-136 (extract-and-delegate): the manual mark-shipped-externally transition is owned by
 //    the canonical service, the route still calls assertOrderEditable BEFORE delegating, and the
-//    service adds a defense-in-depth forward-only WHERE order_status='awaiting_shipment' guard so
-//    the awaiting->shipped flip can never re-flip a shipped/cancelled order.
+//    service delegates to the row-locked lifecycle owner, which rejects
+//    cancelled/effectively-terminal orders before any terminal write.
 const markShippedExternally = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
 assert(
   /export async function markOrderShippedExternally\b/.test(markShippedExternally),
   'mark-shipped-externally.ts must export the canonical markOrderShippedExternally() owner',
 );
 assert(
-  /eq\(orders\.orderStatus,\s*'awaiting_shipment'\)/.test(markShippedExternally),
-  'markOrderShippedExternally must gate the awaiting->shipped flip with a forward-only WHERE order_status=awaiting_shipment guard',
+  /applyLifecycle\(\{/.test(markShippedExternally) &&
+    /dependencies\.applyLifecycleCommand \?\? applyOrderLifecycleCommand/.test(markShippedExternally) &&
+    /transition: 'external_shipped'/.test(markShippedExternally) &&
+    /\.for\('update'\)/.test(lifecycle) &&
+    /order\.orderStatus === 'cancelled'/.test(lifecycle),
+  'markOrderShippedExternally must delegate to the row-locked lifecycle owner with terminal rejection',
 );
 assert(
   orders.includes('markOrderShippedExternally({'),

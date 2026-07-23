@@ -13,6 +13,10 @@
  */
 import 'dotenv/config';
 import assert from 'node:assert/strict';
+import {
+  KNOWN_CARRIER_ACCOUNTS,
+  carrierIdForProvider,
+} from '../src/lib/carrier-account-registry';
 
 type Money = { amount?: number | string | null };
 type ProbeRate = {
@@ -69,6 +73,12 @@ const RATEABLE_CARRIER_CODES = new Set([
   'dhl_express',
   'stamps_com',
 ]);
+
+const PRIMARY_UPS_CARRIER_IDS = KNOWN_CARRIER_ACCOUNTS
+  .filter((account) => account.clientId === null)
+  .filter((account) => account.carrierCode === 'ups' || account.carrierCode === 'ups_walleted')
+  .map((account) => carrierIdForProvider(account.shippingProviderId));
+const MIN_PRIMARY_UPS_ACCOUNTS = 2;
 
 const usage = `
 ShipStation batched-rate estimate probe (no purchases or order mutations)
@@ -170,17 +180,23 @@ function parseArgs(argv: string[]): ProbeOptions {
   return result;
 }
 
-function rateTotal(rate: ProbeRate): number {
-  return [rate.shipping_amount, rate.other_amount, rate.insurance_amount, rate.confirmation_amount]
-    .reduce((sum, money) => sum + (Number(money?.amount) || 0), 0);
+function moneySignature(money: Money | null | undefined): string {
+  const raw = money?.amount;
+  if (raw === null || raw === undefined) return 'missing';
+  const value = typeof raw === 'string' ? raw.trim() : raw;
+  const numeric = Number(value);
+  return value !== '' && Number.isFinite(numeric) ? String(numeric) : `invalid:${String(raw)}`;
 }
 
 function rateSignature(rate: ProbeRate): string {
   return [
     String(rate.carrier_id ?? ''),
-    String(rate.service_code ?? rate.service_type ?? ''),
+    String(rate.service_code ?? ''),
     String(rate.package_type ?? ''),
-    rateTotal(rate).toFixed(4),
+    moneySignature(rate.shipping_amount),
+    moneySignature(rate.other_amount),
+    moneySignature(rate.insurance_amount),
+    moneySignature(rate.confirmation_amount),
   ].join('|');
 }
 
@@ -237,11 +253,39 @@ function compareBatchAgainstSingles(
 function runSelfTest(): void {
   const carrierIds = ['se-1', 'se-2'];
   const singleRates = new Map<string, ProbeRate[]>([
-    ['se-1', stampSingleCarrierRates('se-1', [{ service_code: 'ups_ground', shipping_amount: { amount: 8.25 } }])],
-    ['se-2', stampSingleCarrierRates('se-2', [{ service_code: 'usps_priority', shipping_amount: { amount: 9.1 } }])],
+    ['se-1', stampSingleCarrierRates('se-1', [{
+      service_code: 'ups_ground',
+      package_type: 'package',
+      shipping_amount: { amount: 8.25 },
+      other_amount: { amount: 1 },
+      insurance_amount: { amount: 0.5 },
+      confirmation_amount: { amount: 0.25 },
+    }])],
+    ['se-2', stampSingleCarrierRates('se-2', [{
+      service_code: 'usps_priority',
+      package_type: 'package',
+      shipping_amount: { amount: 9.1 },
+      other_amount: { amount: 0 },
+      insurance_amount: { amount: 0 },
+      confirmation_amount: { amount: 0 },
+    }])],
   ]);
   const pass = compareBatchAgainstSingles(carrierIds, [...singleRates.values()].flat(), singleRates);
   assert.equal(pass.go, true);
+
+  const offsettingMoneyDrift = compareBatchAgainstSingles(
+    carrierIds,
+    [...singleRates.values()].flat().map((rate) => rate.carrier_id === 'se-1'
+      ? { ...rate, shipping_amount: { amount: 9.25 }, other_amount: { amount: 0 } }
+      : rate),
+    singleRates,
+  );
+  assert.equal(
+    offsettingMoneyDrift.go,
+    false,
+    'equal totals must not hide drift between shipping, other, insurance, or confirmation amounts',
+  );
+
   const missing = compareBatchAgainstSingles(carrierIds, singleRates.get('se-1')!, singleRates);
   assert.equal(missing.go, false);
   assert.equal(missing.comparisons.find((row) => row.carrierId === 'se-2')?.missingFromBatch.length, 1);
@@ -252,17 +296,69 @@ function runSelfTest(): void {
   );
   assert.equal(unattributed.go, false);
   assert.equal(unattributed.rejectedBatchRows, 1);
+
+  const primaryUpsCarriers: Carrier[] = PRIMARY_UPS_CARRIER_IDS.map((carrierId, index) => ({
+    carrier_id: carrierId,
+    carrier_code: index === 0 ? 'ups_walleted' : 'ups',
+  }));
+  const livePrimaryUpsCarriers = primaryUpsCarriers.filter((carrier) => carrier.carrier_id !== 'se-604209');
+  const selectedPrimary = chooseCarriers(
+    livePrimaryUpsCarriers.concat({ carrier_id: 'se-usps', carrier_code: 'stamps_com' }),
+    parseArgs([]),
+    'env:primary',
+  );
+  assert.deepEqual(
+    selectedPrimary.slice(0, livePrimaryUpsCarriers.length).map((carrier) => carrier.carrier_id),
+    livePrimaryUpsCarriers.map((carrier) => carrier.carrier_id),
+    'DR PREPPER auto-selection must include every live UPS account',
+  );
+  assert.throws(
+    () => chooseCarriers(livePrimaryUpsCarriers.slice(0, 1), parseArgs([]), 'env:primary'),
+    /requires at least 2 live UPS accounts/,
+    'DR PREPPER probe must fail closed without a genuine multi-UPS case',
+  );
+  assert.throws(
+    () => chooseCarriers(primaryUpsCarriers, { ...parseArgs([]), maxCarriers: 5 }, 'env:primary'),
+    /requires --max-carriers >= 6 to cover every live UPS account/,
+    'DR PREPPER probe must never truncate live UPS account coverage',
+  );
   console.log('PASS batched-rate live probe comparison self-test (no DB/provider calls)');
 }
 
-function chooseCarriers(carriers: Carrier[], options: ProbeOptions): Carrier[] {
+function chooseCarriers(carriers: Carrier[], options: ProbeOptions, sourceKey: string): Carrier[] {
   const eligible = carriers
     .filter((carrier) => !carrier.disabled_by_billing_plan)
     .filter((carrier) => RATEABLE_CARRIER_CODES.has(String(carrier.carrier_code ?? '').toLowerCase()))
     .filter((carrier) => Boolean(String(carrier.carrier_id ?? '').trim()))
     .sort((left, right) => String(left.carrier_id).localeCompare(String(right.carrier_id)));
-  if (!options.carrierIds.length) return eligible.slice(0, options.maxCarriers);
   const byId = new Map(eligible.map((carrier) => [String(carrier.carrier_id), carrier]));
+  if (!options.carrierIds.length) {
+    if (sourceKey !== 'env:primary') return eligible.slice(0, options.maxCarriers);
+    const primaryUps = eligible.filter((carrier) => {
+      const code = String(carrier.carrier_code ?? '').toLowerCase();
+      return code === 'ups' || code === 'ups_walleted';
+    });
+    if (primaryUps.length < MIN_PRIMARY_UPS_ACCOUNTS) {
+      throw new Error(
+        `env:primary has ${primaryUps.length} live UPS account(s); the rollout probe requires at least ${MIN_PRIMARY_UPS_ACCOUNTS} live UPS accounts`,
+      );
+    }
+    if (options.maxCarriers < primaryUps.length) {
+      throw new Error(
+        `env:primary requires --max-carriers >= ${primaryUps.length} to cover every live UPS account`,
+      );
+    }
+    const knownUpsOrder = new Map(PRIMARY_UPS_CARRIER_IDS.map((carrierId, index) => [carrierId, index]));
+    const prioritizedUps = primaryUps.sort((left, right) => {
+      const leftOrder = knownUpsOrder.get(String(left.carrier_id)) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = knownUpsOrder.get(String(right.carrier_id)) ?? Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || String(left.carrier_id).localeCompare(String(right.carrier_id));
+    });
+    const primaryUpsIds = new Set(prioritizedUps.map((carrier) => String(carrier.carrier_id)));
+    return prioritizedUps.concat(
+      eligible.filter((carrier) => !primaryUpsIds.has(String(carrier.carrier_id))),
+    ).slice(0, options.maxCarriers);
+  }
   const missing = options.carrierIds.filter((carrierId) => !byId.has(carrierId));
   if (missing.length) {
     throw new Error(`requested carrier IDs are unavailable or not generic-rate eligible: ${missing.join(', ')}`);
@@ -315,7 +411,7 @@ async function runLive(options: ProbeOptions): Promise<void> {
         timeoutMs: options.timeoutMs,
         priority: 'interactive',
       });
-      const carriers = chooseCarriers(carriersPayload.carriers ?? [], options);
+      const carriers = chooseCarriers(carriersPayload.carriers ?? [], options, source.sourceKey);
       if (carriers.length < 2) {
         throw new Error(`${source.sourceKey} has only ${carriers.length} generic-rate eligible carrier account(s); batching needs at least 2`);
       }

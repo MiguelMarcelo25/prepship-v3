@@ -79,6 +79,7 @@ export type ShipmentSyncWatchdogState =
   | 'order_stale'
   | 'order_account_stale'
   | 'order_status_backlog'
+  | 'sync_lane_stuck'
   | 'shipment_job_stuck'
   | 'shipment_backlog'
   | 'shipment_stale'
@@ -104,6 +105,7 @@ export type ShipmentSyncWatchdogVerdict = {
   orderStale: boolean;
   shipmentStale: boolean;
   workerStale: boolean;
+  currentJobAgeSeconds: number | null;
   queueBacklog: number;
   consecutiveBacklogChecks: number;
   missingShipmentRate: number;
@@ -168,6 +170,15 @@ export type ShipmentSyncWatchdogStatus = {
     heartbeatAgeSeconds: number | null;
     stale: boolean;
     currentJob: string | null;
+    currentJobId: string | null;
+    currentGenerationId: string | null;
+    currentLane: string | null;
+    currentJobStartedAt: string | null;
+    currentJobAgeSeconds: number | null;
+    currentJobDeadlineAt: string | null;
+    currentJobTimeoutMs: number | null;
+    lastCompletedOrderSyncAt: string | null;
+    lastCompletedShipmentSyncAt: string | null;
   };
   queue: ShipmentSyncQueueHealth;
   missingShipments: ShipmentSyncMissingHealth;
@@ -333,6 +344,8 @@ export function evaluateShipmentSyncWatchdog(
     orderLastSyncedAt: string | null;
     shipmentLastSyncedAt: string | null;
     workerHeartbeatAgeSeconds: number | null;
+    workerCurrentLane?: string | null;
+    workerCurrentJobAgeSeconds?: number | null;
     queue: ShipmentSyncWatchdogQueueInput;
     missingShipments: ShipmentSyncWatchdogMissingInput;
     consecutiveBacklogChecks: number;
@@ -368,6 +381,7 @@ export function evaluateShipmentSyncWatchdog(
     missingShipmentRate >= thresholds.missingShipmentRateThreshold;
   const orderStatusBacklog = input.orderStatusCatchupBacklog === true;
   const orderStatusBacklogCount = Math.max(0, Number(input.orderStatusCatchupBacklogCount ?? 0) || 0);
+  const currentJobAgeSeconds = input.workerCurrentJobAgeSeconds ?? null;
 
   const base = {
     orderAgeSeconds,
@@ -376,6 +390,7 @@ export function evaluateShipmentSyncWatchdog(
     orderStale,
     shipmentStale,
     workerStale,
+    currentJobAgeSeconds,
     queueBacklog,
     consecutiveBacklogChecks: input.consecutiveBacklogChecks,
     missingShipmentRate,
@@ -383,6 +398,20 @@ export function evaluateShipmentSyncWatchdog(
     orderStatusBacklogCount,
     staleOrderAccountCount,
   };
+
+  if (
+    input.workerCurrentLane === 'shipstation-sync'
+    && currentJobAgeSeconds !== null
+    && currentJobAgeSeconds > thresholds.activeJobStuckSeconds
+  ) {
+    return {
+      ...base,
+      state: 'sync_lane_stuck',
+      alert: true,
+      reason: `shared sync lane held ${currentJobAgeSeconds}s`,
+      recommendedAction: 'restart_worker',
+    };
+  }
 
   if (
     input.queue.active > 0 &&
@@ -671,6 +700,8 @@ async function buildShipmentSyncWatchdogStatus(
       orderLastSyncedAt: orders.lastSyncedAt,
       shipmentLastSyncedAt: shipments.lastSyncedAt,
       workerHeartbeatAgeSeconds: worker.heartbeatAgeSeconds,
+      workerCurrentLane: worker.activeLane?.lane ?? null,
+      workerCurrentJobAgeSeconds: worker.activeLane?.ageSeconds ?? null,
       queue,
       missingShipments,
       consecutiveBacklogChecks,
@@ -701,7 +732,16 @@ async function buildShipmentSyncWatchdogStatus(
     worker: {
       heartbeatAgeSeconds: worker.heartbeatAgeSeconds,
       stale: worker.stale,
-      currentJob: worker.status?.currentJob ?? null,
+      currentJob: worker.activeLane?.jobName ?? worker.status?.currentJob ?? null,
+      currentJobId: worker.activeLane?.jobId ?? null,
+      currentGenerationId: worker.activeLane?.generationId ?? null,
+      currentLane: worker.activeLane?.lane ?? null,
+      currentJobStartedAt: worker.activeLane?.startedAt ?? null,
+      currentJobAgeSeconds: worker.activeLane?.ageSeconds ?? null,
+      currentJobDeadlineAt: worker.activeLane?.deadlineAt ?? null,
+      currentJobTimeoutMs: worker.activeLane?.timeoutMs ?? null,
+      lastCompletedOrderSyncAt: worker.status?.syncWatermarks?.ordersCompletedAt ?? null,
+      lastCompletedShipmentSyncAt: worker.status?.syncWatermarks?.shipmentsCompletedAt ?? null,
     },
     queue,
     missingShipments,

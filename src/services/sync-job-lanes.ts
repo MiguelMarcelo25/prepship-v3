@@ -1,16 +1,19 @@
 // Per user override unlock shipped data on 2026-07-01: backend worker lane ownership
 // only; this does not mutate shipped/cancelled orders or shipment history.
-export type SyncJobLane =
-  | 'shipstation-sync'
-  | 'rate-backfill'
-  | 'fulfillment-outbox'
-  | 'reporting'
-  | 'external-shipped-classifier'
-  | 'shipment-tracking'
-  | 'walmart-fees'
-  | 'misc';
+export const SYNC_JOB_LANE_VALUES = [
+  'shipstation-sync',
+  'rate-backfill',
+  'fulfillment-outbox',
+  'reporting',
+  'external-shipped-classifier',
+  'shipment-tracking',
+  'walmart-fees',
+  'misc',
+] as const;
 
-const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
+export type SyncJobLane = (typeof SYNC_JOB_LANE_VALUES)[number];
+
+const SYNC_JOB_LANE_BY_NAME = new Map<string, SyncJobLane>([
   ['prepship.sync.orders', 'shipstation-sync'],
   ['orders sync', 'shipstation-sync'],
   ['prepship.sync.shipments', 'shipstation-sync'],
@@ -43,6 +46,12 @@ const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
   ['prepship.fees.walmart-sync', 'walmart-fees'],
   ['walmart fees sync', 'walmart-fees'],
 
+  // Queue maintenance is the recovery control plane for orphaned pg-boss
+  // work. It must remain runnable when the DB-heavy ShipStation lane is
+  // blocked by the stale job that maintenance needs to reap.
+  ['prepship.maintenance.job-queue', 'misc'],
+  ['job queue maintenance', 'misc'],
+
   // Per user override unlock shipped data on 2026-07-14: carrier snapshot
   // refresh performs provider reads plus database cache writes. Production
   // proof showed it can wedge the transaction-pool client when it starts in
@@ -61,7 +70,7 @@ export function syncJobLaneFor(name: string): SyncJobLane {
   // are conservatively database-heavy. They must opt into an independent lane
   // explicitly instead of silently overlapping sync through the old misc
   // fallback (production rate-cache overlap reproduced the pool wedge).
-  return SYNC_JOB_LANES.get(name) ?? 'shipstation-sync';
+  return SYNC_JOB_LANE_BY_NAME.get(name) ?? 'shipstation-sync';
 }
 
 export function getSyncJobLaneBlocker(

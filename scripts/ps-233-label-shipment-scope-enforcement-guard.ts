@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 import {
   getClientStoreScope,
+  getInternalOpsClientStoreScope,
   GLOBAL_SCOPE,
 } from '../src/lib/client-store-scope';
 import {
@@ -62,6 +63,15 @@ try {
 behavioral('restricted client_user is ALLOWED its own in-scope order', inScopeThrew === false);
 behavioral('restricted client_user passes isResourceInScope for in-scope client',
   isResourceInScope(restricted, { clientId: 7, storeId: 1 }) === true);
+const restrictedQueueWriter = getInternalOpsClientStoreScope({
+  role: 'client_user',
+  permissions: ['print_queue:write'],
+  clientIds: [7],
+});
+behavioral('print_queue:write alone does not widen a client principal to global scope',
+  restrictedQueueWriter.isRestricted === true &&
+  restrictedQueueWriter.isGlobal === false &&
+  isResourceInScope(restrictedQueueWriter, { clientId: 99, storeId: 99 }) === false);
 
 // An admin / GLOBAL caller passes any resource (no per-tenant restriction) — proves
 // global callers are not falsely blocked.
@@ -135,9 +145,14 @@ check('no unscoped voidLabelV2(id) in labels route', !/voidLabelV2\(id\)/.test(l
 // 5. Defense-in-depth: portal roles blocked from label mutations.
 check('label mutation routes use requireInternalPermission', count(labelsRoute, "requireInternalPermission('print_queue:write')") >= 5);
 
-// 6. Trusted internal worker passes GLOBAL_SCOPE (explicit, not unscoped).
-check('print-queue worker passes GLOBAL_SCOPE to createLabelV2', printQueueSvc.includes('}, GLOBAL_SCOPE);'));
-check('print-queue imports GLOBAL_SCOPE', printQueueSvc.includes("import { GLOBAL_SCOPE }"));
+// 6. PS-422: the durable worker preserves the initiating tenant scope.
+check('print-queue worker derives labelPurchaseScope from the queued route scope',
+  /const labelPurchaseScope = queueWorkerClientStoreScope\(scope\)/.test(printQueueSvc));
+check('print-queue worker passes labelPurchaseScope to createLabelV2',
+  /createLabelV2\(\{[\s\S]*?\}, labelPurchaseScope\)/.test(printQueueSvc));
+check('print-queue worker does not import or pass GLOBAL_SCOPE',
+  !printQueueSvc.includes("import { GLOBAL_SCOPE }") &&
+  !printQueueSvc.includes('}, GLOBAL_SCOPE);'));
 
 // 7. Shipments routes scoped (list + detail) — both were unscoped before.
 check('shipments list applies shipmentScopePredicate', shipmentsRoute.includes('shipmentScopePredicate(shipmentScopeFromContext(c))'));
@@ -149,10 +164,15 @@ check('assertOrderEditable enforces order scope before force-override', ordersRo
 check('POST /manual blocks portal roles', /app\.post\('\/manual', requireInternalPermission\('print_queue:write'\)/.test(ordersRoute));
 
 // 9. PS-240 — clients write paths gated + scope-checked.
-check('clients POST gated', /app\.post\('\/', requireInternalPermission\('settings:write'\)/.test(clientsRoute));
-check('clients PATCH gated + scope-checked', /app\.patch\('\/:id\{\[0-9\]\+\}', requireInternalPermission\('settings:write'\)/.test(clientsRoute) && count(clientsRoute, 'isClientVisibleToScope(publicClient(') >= 3);
-check('clients DELETE gated', /app\.delete\('\/:id\{\[0-9\]\+\}', requireInternalPermission\('settings:write'\)/.test(clientsRoute));
-check('clients backfill gated', /backfill-orders',\s*requireInternalPermission\('settings:write'\)/.test(clientsRoute));
+check('clients POST gated',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.create')"));
+check('clients PATCH gated + scope-checked',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.patch')") &&
+    count(clientsRoute, 'isClientVisibleToScope(publicClient(') >= 3);
+check('clients DELETE gated',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.delete')"));
+check('clients backfill gated',
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.orders.backfill')"));
 
 // 10. Lockdown citation present on the touched locked surfaces.
 check('labels service cites the override', labelsSvc.includes('unlock shipped data on 2026-06-13'));

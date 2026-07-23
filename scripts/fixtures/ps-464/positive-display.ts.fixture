@@ -1,0 +1,12 @@
+export function formatOrderRow(dto: { totalAmount: number; status: string }) {
+  return { total: `$${dto.totalAmount.toFixed(2)}`, status: dto.status.toUpperCase() };
+}
+
+export function backendProofPassThrough(dto: {
+  rateQuoteId: string;
+  selectedRateKey: string;
+  proofSource: string;
+  requestFingerprint: string;
+}) {
+  return { ...dto };
+}

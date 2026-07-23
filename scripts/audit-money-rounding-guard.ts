@@ -3,7 +3,7 @@
  *
  * Pure/offline: no DB, providers, labels, notifications, or order mutations.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { roundMoney } from '../src/lib/money';
 import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
 import { applyCanonicalMarkup } from '../src/services/shipping-workflow/markup-resolver';
@@ -25,6 +25,14 @@ function read(path: string): string {
   } catch {
     return '';
   }
+}
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) return sourceFiles(path);
+    return entry.isFile() && path.endsWith('.ts') ? [path] : [];
+  });
 }
 
 const exactCases: Array<[string, number, number]> = [
@@ -62,6 +70,61 @@ check('quote and invoice share canonical half-cent result',
   markup === 14.38 && billing.billedAmount === markup,
   { markup, billedAmount: billing.billedAmount });
 
+const samplePeriodBytes = JSON.stringify([
+  {
+    order: 'SAMPLE-1',
+    input: {
+      labelCost: 12.34,
+      cShippingRateAmount: null,
+      billingMode: 'label_cost',
+      isBaselineCarrier: true,
+      refUspsRate: 0,
+      refUpsRate: 0,
+      shippingMarkupPct: 15,
+      shippingMarkupFlat: 0.25,
+    },
+  },
+  {
+    order: 'SAMPLE-2',
+    input: {
+      labelCost: 9.87,
+      cShippingRateAmount: 11.23,
+      billingMode: 'label_cost',
+      isBaselineCarrier: true,
+      refUspsRate: 0,
+      refUpsRate: 0,
+      shippingMarkupPct: 0,
+      shippingMarkupFlat: 0,
+    },
+  },
+  {
+    order: 'SAMPLE-3',
+    input: {
+      labelCost: 8.16,
+      cShippingRateAmount: null,
+      billingMode: 'reference_rate',
+      isBaselineCarrier: false,
+      refUspsRate: 9.11,
+      refUpsRate: 10.22,
+      shippingMarkupPct: 0,
+      shippingMarkupFlat: 0,
+    },
+  },
+].map(({ order, input }) => {
+  const decision = decideShippingLineBilling(input);
+  return {
+    order,
+    unitCost: decision.billedAmount.toFixed(2),
+    totalCost: decision.billedAmount.toFixed(2),
+    source: decision.source,
+    suffix: decision.descriptionSuffix,
+  };
+}));
+const expectedSamplePeriodBytes = '[{"order":"SAMPLE-1","unitCost":"14.44","totalCost":"14.44","source":"label_cost","suffix":" (15% + $0.25)"},{"order":"SAMPLE-2","unitCost":"11.23","totalCost":"11.23","source":"c_shipping_rate","suffix":""},{"order":"SAMPLE-3","unitCost":"9.11","totalCost":"9.11","source":"reference_rate","suffix":""}]';
+check('representative billing period export stays byte-identical',
+  samplePeriodBytes === expectedSamplePeriodBytes,
+  { expectedSamplePeriodBytes, samplePeriodBytes });
+
 const delegatedFiles = [
   'src/services/billing.ts',
   'src/services/billing-box-cost-bulk.ts',
@@ -74,16 +137,31 @@ const delegatedFiles = [
   'src/services/billing-shipping-line.ts',
   'src/services/billing-storage.ts',
   'src/services/hugrab-billing-shipping-floor.ts',
+  'src/services/order-rate-dto.ts',
+  'src/services/test-rate-fixture.ts',
+  'src/services/shipping-workflow/house-tuple-stamp.ts',
   'src/services/shipping-workflow/markup-resolver.ts',
+  'src/services/shipping-workflow/multi-package-label-purchase-boundary.ts',
+  'src/services/shipping-workflow/multi-package-shipstation-adapter.ts',
+  'src/services/shipping-workflow/parcelguard-backfill.ts',
+  'src/services/shipping-workflow/purchase-customer-rate-aliases.ts',
   'src/services/shipping-workflow/rate-money.ts',
+  'src/services/shipping-workflow/selected-rate-cost-backfill.ts',
+  'src/services/shipping-workflow/shipping-rate-money-normalizer.ts',
 ] as const;
 
-const localOwnerPattern = /function\s+(?:round2|roundCents|roundMoney)\s*\(/;
+const localOwnerPattern = /(?:function\s+(?:round2|roundCents|roundMoney|cents)\s*\(|const\s+(?:round2|roundCents|roundMoney)\s*=)/;
 for (const path of delegatedFiles) {
   const source = read(path);
   check(`${path} delegates to roundMoney`, source.includes('roundMoney'));
   check(`${path} has no local cent-rounding owner`, !localOwnerPattern.test(source));
 }
+
+const canonicalMoneyPath = 'src/lib/money.ts';
+const competingMoneyOwners = sourceFiles('src').filter(
+  (path) => path !== canonicalMoneyPath && localOwnerPattern.test(read(path)),
+);
+check('src has one named cent-rounding owner', competingMoneyOwners.length === 0, competingMoneyOwners);
 
 const billingSource = read('src/services/billing.ts');
 check('billing amount serialization rounds through owner first',

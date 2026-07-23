@@ -1,9 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
+import { packages } from '../db/schema/packages';
 import { settings } from '../db/schema/settings';
-import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getDirectCarrierRatesForRateInput, getRates } from './rates';
+import {
+  CACHE_TTL_MS,
+  RATE_FETCH_CONCURRENCY,
+  getDirectCarrierRatesForRateInput,
+  getRates,
+  resolveRateInput,
+} from './rates';
 import { combineCarrierUniverses } from './rates-combined';
 import {
   buildResidentialEvidenceFromOrder,
@@ -19,6 +26,12 @@ import {
 } from './shipping-workflow/rate-quote-snapshot-store';
 import { persistBestRateWithRatchet } from './best-rate-ratchet-db';
 import type { Rate } from '../lib/shipstation';
+import {
+  createRateSignatureCacheMetrics,
+  rateSourcesArePurchaseProofEligible,
+  recordRateSignatureCacheLookup,
+  type RateSignatureCacheMetrics,
+} from './shipping-workflow/rate-signature-cache-policy';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 import {
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -57,10 +70,22 @@ import {
   toGetRatesOptions,
 } from './rate-preexpiry-refresh-request';
 import { env } from '../lib/env';
+import { getDefaultShipFrom } from '../lib/ship-from';
+import { normalizeShippingOptions } from '../lib/shipping-options';
+import { resolveOutboundPackageSelection } from './package-consumption';
+import { resolveCarrierRecipientName } from './carrier-recipient-name';
+import { getDefaultLocation } from './locations';
+import {
+  normalizeShippingQuoteAddress,
+  shippingProviderIdFromAuthorizedRate,
+  type ShippingQuoteAuthorizationContext,
+} from './shipping-workflow/shipping-quote-authorization';
+import { shipStationQuoteAccountAuthorizations } from './shipping-workflow/quote-account-authorization';
 import {
   resolveRateBackfillConcurrency,
   resolveRateBackfillDbWriteConcurrency,
 } from './rate-backfill-execution-policy';
+import { awaitSettledWork } from '../lib/sync-job-cancellation';
 import {
   createRateBackfillDiagnosticBuffers,
   normalizeRateBackfillDiagnosticSamples,
@@ -69,13 +94,62 @@ import {
 import { enqueueDurableRateBackfillJob } from './rate-backfill-job-producer';
 import type {
   DurableRateBackfillJobPayload,
+  RateBackfillCursor,
   RateBackfillOptions,
   RateBackfillRequestSource,
 } from './rate-backfill-job-types';
 
+export const RATE_BACKFILL_DURABLE_CHUNK_SIZE = 2;
+export const RATE_BACKFILL_GENERATION_STATUS_KEY_PREFIX = 'rate_backfill_best_rates.generation.';
+export const RATE_BACKFILL_CADENCE_GENERATION_STATUS_KEY =
+  'rate_backfill_best_rates.cadence_generation';
+
+type BackfillExecutionContext = {
+  signal?: AbortSignal;
+  cursor?: RateBackfillCursor | null;
+  selectionLimit?: number;
+  targetOffset?: number;
+  durableChunk?: boolean;
+};
+
+export type BackfillChunkOutcome = {
+  hasMore: boolean;
+  nextCursor: RateBackfillCursor | null;
+  advanced: number;
+};
+
+export type DurableRateBackfillGenerationState = {
+  version: 1;
+  generationId: string;
+  requestedBy: RateBackfillRequestSource;
+  status: 'active' | 'complete';
+  currentChunkIndex: number;
+  currentJobId: string;
+  nextPayload: DurableRateBackfillJobPayload | null;
+  lastError: string | null;
+  updatedAt: string;
+};
+
+function assertBackfillCanContinue(
+  jobId: string,
+  signal: AbortSignal | undefined,
+  label: string,
+): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error(`${label} aborted`);
+  }
+  const job = jobs.get(jobId);
+  if (!job || activeJobId !== jobId || job.status !== 'running') {
+    throw new Error(`rate backfill generation ${jobId} is no longer current before ${label}`);
+  }
+}
+
 async function runBackfillDbWrites<T>(
   items: readonly T[],
   write: (item: T) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let index = 0;
   const concurrency = resolveRateBackfillDbWriteConcurrency(env.DB_POOL_MAX);
@@ -83,8 +157,10 @@ async function runBackfillDbWrites<T>(
     { length: Math.min(concurrency, items.length) },
     async () => {
       while (index < items.length) {
+        signal?.throwIfAborted();
         const item = items[index++];
         if (item !== undefined) await write(item);
+        signal?.throwIfAborted();
       }
     },
   );
@@ -156,11 +232,16 @@ export type BackfillJob = {
   skipSamples: string[];
   failureSamples: string[];
   preExpiryRefresh: PreExpiryRefreshProof | null;
+  signatureCache: RateSignatureCacheMetrics;
   startedAt: number;
   finishedAt: number | null;
 };
 
 export type BackfillJobMode = 'manual_force_live' | 'cache_friendly';
+
+function signatureCacheSummary(metrics: RateSignatureCacheMetrics): string {
+  return `signature cache ${metrics.fullHits}/${metrics.lookups} full hits (${metrics.hitRatePct}%), ${metrics.providerFetches} provider fetches`;
+}
 
 export type BackfillOptions = RateBackfillOptions & {
   mode?: 'cache_first' | 'full_live_audit' | 'preexpiry_refresh';
@@ -194,6 +275,7 @@ export type BackfillJobSnapshot = {
   skipSamples: string[];
   failureSamples: string[];
   preExpiryRefresh: PreExpiryRefreshProof | null;
+  signatureCache: RateSignatureCacheMetrics;
   options: BackfillOptions;
   startedAt: string;
   finishedAt: string | null;
@@ -215,7 +297,8 @@ const LIVE_BACKFILL_CONCURRENCY = 2;
 const PENDING_STAMP_HEARTBEAT_MS = 2 * 60 * 1000; // 2 minutes (< 6min reader window)
 
 const jobs = new Map<string, BackfillJob>();
-const backfillExecutionPromises = new Map<string, Promise<void>>();
+const backfillExecutionPromises = new Map<string, Promise<BackfillChunkOutcome>>();
+const backfillChunkOutcomes = new Map<string, BackfillChunkOutcome>();
 let activeJobId: string | null = null;
 let latestJobId: string | null = null;
 const MAX_COMPLETED_JOBS_IN_MEMORY = 25;
@@ -265,6 +348,7 @@ function toBackfillSnapshot(
           reasons: { ...job.preExpiryRefresh.reasons },
         }
       : null,
+    signatureCache: { ...job.signatureCache },
     options: {
       clientId: opts.clientId,
       limit: opts.limit,
@@ -281,6 +365,61 @@ function backfillJobStatusKey(jobId: string): string {
   return `${RATE_BACKFILL_JOB_STATUS_KEY_PREFIX}${jobId}`;
 }
 
+function backfillGenerationStatusKey(generationId: string): string {
+  return `${RATE_BACKFILL_GENERATION_STATUS_KEY_PREFIX}${generationId}`;
+}
+
+export function deterministicRateBackfillChunkJobId(
+  generationId: string,
+  chunkIndex: number,
+): string {
+  const hex = createHash('sha256')
+    .update(`${generationId}:chunk:${chunkIndex}`)
+    .digest('hex')
+    .slice(0, 32)
+    .split('');
+  hex[12] = '4';
+  hex[16] = ((Number.parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
+  const value = hex.join('');
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
+export function shouldCoalesceCadenceGeneration(
+  state: DurableRateBackfillGenerationState | null,
+  payload: DurableRateBackfillJobPayload,
+): boolean {
+  if (payload.requestedBy !== 'cadence' || (payload.chunkIndex ?? 0) !== 0) return false;
+  const generationId = payload.generationId ?? payload.jobId;
+  if (state?.status !== 'active') return false;
+  if (state.generationId !== generationId) return true;
+  // The exact persisted current chunk is a crash/retry resume, not a duplicate.
+  // Only a stale first-chunk wake that the generation already advanced past
+  // should join/re-admit the newer persisted continuation.
+  return state.nextPayload !== null
+    && state.nextPayload.jobId !== payload.jobId;
+}
+
+export function buildRateBackfillContinuation(
+  payload: DurableRateBackfillJobPayload,
+  outcome: BackfillChunkOutcome,
+): DurableRateBackfillJobPayload | null {
+  const generationId = payload.generationId ?? payload.jobId;
+  const chunkIndex = Math.max(0, Math.trunc(payload.chunkIndex ?? 0));
+  const totalLimit = Math.max(1, Math.min(payload.options.limit ?? 5_000, 10_000));
+  const remainingLimit = Math.max(0, Math.min(payload.remainingLimit ?? totalLimit, totalLimit));
+  const nextRemaining = Math.max(0, remainingLimit - outcome.advanced);
+  if (!outcome.hasMore || nextRemaining <= 0) return null;
+  return {
+    ...payload,
+    jobId: deterministicRateBackfillChunkJobId(generationId, chunkIndex + 1),
+    generationId,
+    chunkIndex: chunkIndex + 1,
+    cursor: outcome.nextCursor,
+    remainingLimit: nextRemaining,
+    targetOffset: Math.max(0, Math.trunc(payload.targetOffset ?? 0)) + outcome.advanced,
+  };
+}
+
 async function persistBackfillSnapshotAtKey(key: string, value: string): Promise<void> {
   await db
     .insert(settings)
@@ -294,6 +433,112 @@ async function persistBackfillSnapshotAtKey(key: string, value: string): Promise
         value,
       },
     });
+}
+
+async function persistRateBackfillGenerationState(
+  state: DurableRateBackfillGenerationState,
+): Promise<void> {
+  const value = JSON.stringify(state);
+  const values = [
+    {
+      key: backfillGenerationStatusKey(state.generationId),
+      value,
+    },
+    ...(state.requestedBy === 'cadence'
+      ? [{
+          key: RATE_BACKFILL_CADENCE_GENERATION_STATUS_KEY,
+          value,
+        }]
+      : []),
+  ];
+  // The per-generation record and cadence pointer are one durable truth. A
+  // single upsert prevents a crash between two writes from resuming an older
+  // chunk after the generation already advanced.
+  await db
+    .insert(settings)
+    .values(values)
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: {
+        value: sql`excluded.value`,
+      },
+    });
+}
+
+async function readRateBackfillGenerationState(
+  key: string,
+): Promise<DurableRateBackfillGenerationState | null> {
+  try {
+    const [row] = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, key))
+      .limit(1);
+    if (!row?.value) return null;
+    const state = JSON.parse(row.value) as Partial<DurableRateBackfillGenerationState>;
+    if (
+      state.version !== 1
+      || typeof state.generationId !== 'string'
+      || (state.status !== 'active' && state.status !== 'complete')
+    ) {
+      return null;
+    }
+    return state as DurableRateBackfillGenerationState;
+  } catch (error) {
+    console.warn(
+      '[rates-backfill] failed to read durable generation state:',
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+}
+
+export async function getCadenceRateBackfillGenerationState(): Promise<DurableRateBackfillGenerationState | null> {
+  return readRateBackfillGenerationState(RATE_BACKFILL_CADENCE_GENERATION_STATUS_KEY);
+}
+
+export async function getRateBackfillGenerationState(
+  generationId: string,
+): Promise<DurableRateBackfillGenerationState | null> {
+  const trimmed = String(generationId ?? '').trim();
+  if (!trimmed) return null;
+  return readRateBackfillGenerationState(backfillGenerationStatusKey(trimmed));
+}
+
+export function backfillGenerationIsActive(
+  jobId: string,
+  generation: DurableRateBackfillGenerationState | null,
+): boolean {
+  return generation?.generationId === jobId && generation.status === 'active';
+}
+
+export function reconcileBackfillJobWithGeneration(
+  job: BackfillJob,
+  generation: DurableRateBackfillGenerationState | null,
+): BackfillJob {
+  if (!generation || !backfillGenerationIsActive(job.jobId, generation)) return job;
+  return {
+    ...job,
+    status: 'running',
+    message: `Durable rate generation continuing at chunk ${generation.currentChunkIndex + 1}`,
+    error: null,
+    finishedAt: null,
+  };
+}
+
+export function reconcileBackfillSnapshotWithGeneration(
+  snapshot: BackfillJobSnapshot,
+  generation: DurableRateBackfillGenerationState | null,
+): BackfillJobSnapshot {
+  if (!generation || !backfillGenerationIsActive(snapshot.jobId, generation)) return snapshot;
+  return {
+    ...snapshot,
+    status: 'running',
+    active: true,
+    message: `Durable rate generation continuing at chunk ${generation.currentChunkIndex + 1}`,
+    error: null,
+    finishedAt: null,
+  };
 }
 
 async function persistBackfillJobSnapshot(
@@ -319,11 +564,13 @@ function parseBackfillJobSnapshot(value: string): BackfillJobSnapshot | null {
     mode?: BackfillJobMode;
     skipSamples?: unknown;
     failureSamples?: unknown;
+    signatureCache?: RateSignatureCacheMetrics;
   };
   return {
     ...parsed,
     ...normalizeRateBackfillDiagnosticSamples(parsed),
     mode: parsed.mode === 'manual_force_live' ? 'manual_force_live' : 'cache_friendly',
+    signatureCache: parsed.signatureCache ?? createRateSignatureCacheMetrics(),
   };
 }
 
@@ -346,13 +593,22 @@ async function readBackfillJobSnapshot(key: string): Promise<BackfillJobSnapshot
 }
 
 export async function getLatestBackfillJobSnapshot(): Promise<BackfillJobSnapshot | null> {
-  return readBackfillJobSnapshot(RATE_BACKFILL_STATUS_KEY);
+  const snapshot = await readBackfillJobSnapshot(RATE_BACKFILL_STATUS_KEY);
+  if (!snapshot) return null;
+  const generation = await getRateBackfillGenerationState(snapshot.jobId);
+  return reconcileBackfillSnapshotWithGeneration(snapshot, generation);
 }
 
 export async function getBackfillJobSnapshot(jobId: string): Promise<BackfillJobSnapshot | null> {
   const trimmed = String(jobId ?? '').trim();
   if (!trimmed) return null;
-  return readBackfillJobSnapshot(backfillJobStatusKey(trimmed));
+  const [snapshot, generation] = await Promise.all([
+    readBackfillJobSnapshot(backfillJobStatusKey(trimmed)),
+    getRateBackfillGenerationState(trimmed),
+  ]);
+  return snapshot
+    ? reconcileBackfillSnapshotWithGeneration(snapshot, generation)
+    : null;
 }
 
 function createBackfillJob(
@@ -375,6 +631,7 @@ function createBackfillJob(
     error: null,
     ...createRateBackfillDiagnosticBuffers(),
     preExpiryRefresh: opts.mode === 'preexpiry_refresh' ? createPreExpiryRefreshProof() : null,
+    signatureCache: createRateSignatureCacheMetrics(),
     startedAt: Date.now(),
     finishedAt: null,
   };
@@ -390,7 +647,10 @@ function pruneCompletedBackfillJobs(): void {
     .filter((job) => job.status === 'done' || job.status === 'error')
     .sort((left, right) => right.startedAt - left.startedAt);
   for (const job of completed.slice(MAX_COMPLETED_JOBS_IN_MEMORY)) {
-    if (job.jobId !== latestJobId) jobs.delete(job.jobId);
+    if (job.jobId !== latestJobId) {
+      jobs.delete(job.jobId);
+      backfillChunkOutcomes.delete(job.jobId);
+    }
   }
 }
 
@@ -398,16 +658,25 @@ function isActiveJob(job: BackfillJob | null | undefined): job is BackfillJob {
   return !!job && (job.status === 'pending' || job.status === 'running');
 }
 
-function launchBackfillExecution(jobId: string, opts: BackfillOptions): Promise<void> {
+function launchBackfillExecution(
+  jobId: string,
+  opts: BackfillOptions,
+  context: BackfillExecutionContext = {},
+): Promise<BackfillChunkOutcome> {
   // Per user override unlock shipped data on 2026-07-14: expose the actual
   // backend rate execution lifetime so the durable worker lane cannot finish
   // while its database/provider work is still running in the background.
-  let execution: Promise<void>;
-  execution = runBackfill(jobId, opts).finally(() => {
-    if (backfillExecutionPromises.get(jobId) === execution) {
-      backfillExecutionPromises.delete(jobId);
-    }
-  });
+  let execution: Promise<BackfillChunkOutcome>;
+  execution = runBackfill(jobId, opts, context)
+    .then((outcome) => {
+      backfillChunkOutcomes.set(jobId, outcome);
+      return outcome;
+    })
+    .finally(() => {
+      if (backfillExecutionPromises.get(jobId) === execution) {
+        backfillExecutionPromises.delete(jobId);
+      }
+    });
   backfillExecutionPromises.set(jobId, execution);
   return execution;
 }
@@ -419,7 +688,11 @@ export async function waitForBackfillJob(jobId: string): Promise<BackfillJob | n
 }
 
 /** Worker-only execution entrypoint. External callers must use durable admission below. */
-export function startBackfillBestRates(opts: BackfillOptions, jobId: string = randomUUID()): BackfillJob {
+export function startBackfillBestRates(
+  opts: BackfillOptions,
+  jobId: string = randomUUID(),
+  context: BackfillExecutionContext = {},
+): BackfillJob {
   const requestedMode = backfillJobModeForOptions(opts);
   const active = activeJobId ? jobs.get(activeJobId) : null;
   if (isActiveJob(active)) return active;
@@ -427,7 +700,7 @@ export function startBackfillBestRates(opts: BackfillOptions, jobId: string = ra
   const job = createBackfillJob(opts, requestedMode, 'Starting…', jobId);
   activeJobId = job.jobId;
   void persistBackfillJobSnapshot(job, opts);
-  void launchBackfillExecution(job.jobId, opts);
+  void launchBackfillExecution(job.jobId, opts, context);
   return job;
 }
 
@@ -446,12 +719,17 @@ export async function enqueueBackfillBestRates(
   const payload: DurableRateBackfillJobPayload = {
     version: 1,
     jobId: job.jobId,
+    generationId: job.jobId,
+    chunkIndex: 0,
+    cursor: null,
+    remainingLimit: Math.max(1, Math.min(opts.limit ?? 5_000, 10_000)),
+    targetOffset: 0,
     requestedAt: new Date().toISOString(),
     requestedBy,
     options: opts,
   };
   const admission = await enqueueDurableRateBackfillJob(payload);
-  if (!admission.queued) {
+  if (!admission.queued && !admission.deduplicated) {
     job.status = 'error';
     job.error = admission.error ?? 'durable rate-backfill admission failed';
     job.message = `Queue error: ${job.error}`;
@@ -463,12 +741,116 @@ export async function enqueueBackfillBestRates(
 
 export async function runDurableRateBackfillJob(
   payload: DurableRateBackfillJobPayload,
+  signal?: AbortSignal,
 ): Promise<BackfillJob | null> {
+  signal?.throwIfAborted();
+  const generationId = payload.generationId ?? payload.jobId;
+  const chunkIndex = Math.max(0, Math.trunc(payload.chunkIndex ?? 0));
+
+  // PS-436 cadence coalescing: a new cron/defer wake-up joins the one durable
+  // active generation and re-admits its persisted next chunk instead of
+  // starting another broad scan.
+  if (payload.requestedBy === 'cadence' && chunkIndex === 0) {
+    const cadence = await awaitSettledWork(
+      readRateBackfillGenerationState(RATE_BACKFILL_CADENCE_GENERATION_STATUS_KEY),
+      signal,
+      'read cadence generation',
+    );
+    if (shouldCoalesceCadenceGeneration(cadence, payload)) {
+      const nextPayload = cadence?.nextPayload ?? null;
+      if (nextPayload) {
+        const admission = await enqueueDurableRateBackfillJob(nextPayload);
+        if (!admission.queued && !admission.deduplicated) {
+          throw new Error(admission.error ?? 'failed to resume durable cadence generation');
+        }
+      }
+      return null;
+    }
+  }
+
   const active = getActiveBackfillJob();
-  if (active) await waitForBackfillJob(active.jobId);
-  const job = startBackfillBestRates(payload.options, payload.jobId);
+  if (active) {
+    await awaitSettledWork(
+      waitForBackfillJob(active.jobId),
+      signal,
+      `wait for active rate generation ${active.jobId}`,
+    );
+  }
+
+  const totalLimit = Math.max(1, Math.min(payload.options.limit ?? 5_000, 10_000));
+  const remainingLimit = Math.max(
+    0,
+    Math.min(payload.remainingLimit ?? totalLimit, totalLimit),
+  );
+  const targetOffset = Math.max(0, Math.trunc(payload.targetOffset ?? 0));
+  const targetRemaining = payload.options.orderIds?.length
+    ? Math.max(0, payload.options.orderIds.length - targetOffset)
+    : remainingLimit;
+  const selectionLimit = Math.min(
+    RATE_BACKFILL_DURABLE_CHUNK_SIZE,
+    remainingLimit,
+    targetRemaining,
+  );
+  if (selectionLimit <= 0) return null;
+
+  const runningState: DurableRateBackfillGenerationState = {
+    version: 1,
+    generationId,
+    requestedBy: payload.requestedBy,
+    status: 'active',
+    currentChunkIndex: chunkIndex,
+    currentJobId: payload.jobId,
+    // Keep the current chunk resumable until its successor is durably written.
+    // A worker crash between this write and completion can therefore re-admit
+    // the same deterministic job instead of stranding an active generation.
+    nextPayload: payload,
+    lastError: null,
+    updatedAt: new Date().toISOString(),
+  };
+  await persistRateBackfillGenerationState(runningState);
+  signal?.throwIfAborted();
+
+  const job = startBackfillBestRates(payload.options, generationId, {
+    signal,
+    cursor: payload.cursor ?? null,
+    selectionLimit,
+    targetOffset,
+    durableChunk: true,
+  });
   await waitForBackfillJob(job.jobId);
-  return getBackfillJob(job.jobId);
+  const completed = getBackfillJob(job.jobId);
+  if (!completed || completed.status === 'error') {
+    await persistRateBackfillGenerationState({
+      ...runningState,
+      nextPayload: payload,
+      lastError: completed?.error ?? 'rate backfill chunk did not complete',
+      updatedAt: new Date().toISOString(),
+    });
+    throw new Error(completed?.error ?? 'rate backfill chunk did not complete');
+  }
+
+  const outcome = backfillChunkOutcomes.get(generationId) ?? {
+    hasMore: false,
+    nextCursor: null,
+    advanced: completed.processed,
+  };
+  const nextPayload = buildRateBackfillContinuation(payload, outcome);
+
+  await persistRateBackfillGenerationState({
+    ...runningState,
+    status: nextPayload ? 'active' : 'complete',
+    nextPayload,
+    lastError: null,
+    updatedAt: new Date().toISOString(),
+  });
+  signal?.throwIfAborted();
+  if (nextPayload) {
+    const admission = await enqueueDurableRateBackfillJob(nextPayload);
+    if (!admission.queued && !admission.deduplicated) {
+      throw new Error(admission.error ?? 'failed to enqueue next durable rate chunk');
+    }
+  }
+  return completed;
 }
 
 /**
@@ -482,7 +864,7 @@ export async function runDurableRateBackfillJob(
 export async function enqueueBackfillBestRatesForOrderIds(
   orderIds: readonly number[],
   opts?: { maxAgeHours?: number },
-  requestedBy: Exclude<RateBackfillRequestSource, 'manual'> = 'targeted-order-change',
+  requestedBy: Exclude<RateBackfillRequestSource, 'manual' | 'cadence'> = 'targeted-order-change',
 ): Promise<BackfillJob | null> {
   const ids = Array.from(new Set((orderIds ?? []).filter((n) => Number.isFinite(n) && n > 0)));
   if (!ids.length) return null;
@@ -494,8 +876,9 @@ export async function enqueueBackfillBestRatesForOrderIds(
 
 async function runBackfill(
   jobId: string,
-  opts: BackfillOptions
-) {
+  opts: BackfillOptions,
+  context: BackfillExecutionContext = {},
+): Promise<BackfillChunkOutcome> {
   const job = jobs.get(jobId)!;
   job.status = 'running';
   job.message = 'Querying orders...';
@@ -509,8 +892,14 @@ async function runBackfill(
   let stampedIds: number[] = [];
   // RC4: keeps the queued 'pending' tail's updated_at fresh while the workers drain a large burst.
   let pendingHeartbeat: ReturnType<typeof setInterval> | null = null;
+  let chunkOutcome: BackfillChunkOutcome = {
+    hasMore: false,
+    nextCursor: null,
+    advanced: 0,
+  };
 
   try {
+    assertBackfillCanContinue(jobId, context.signal, 'order selection');
     const effectiveMaxAgeHours = opts.maxAgeHours ?? CACHE_TTL_MS / (60 * 60 * 1000);
     const staleCutoff = new Date(Date.now() - effectiveMaxAgeHours * 60 * 60 * 1000);
     // Recalculate All (maxAgeHours: 0) is an OPERATOR demand for current prices:
@@ -525,10 +914,18 @@ async function runBackfill(
     // audit is the explicit slow full-live path that bypasses cache.
     const liveRecalculate = opts.mode === 'full_live_audit' || opts.maxAgeHours === 0;
     // PS-121: when targeting a specific id set, bound the limit to that set.
-    const targetedIds = opts.orderIds?.length ? opts.orderIds : null;
+    const allTargetedIds = opts.orderIds?.length ? opts.orderIds : null;
+    const targetOffset = Math.max(0, Math.trunc(context.targetOffset ?? 0));
+    const targetedIds = allTargetedIds
+      ? allTargetedIds.slice(
+          targetOffset,
+          targetOffset + Math.max(1, context.selectionLimit ?? allTargetedIds.length),
+        )
+      : null;
     const hardLimit = targetedIds
-      ? Math.max(1, Math.min(targetedIds.length, 10000))
-      : Math.max(1, Math.min(opts.limit ?? 5000, 10000));
+      ? Math.max(1, Math.min(context.selectionLimit ?? targetedIds.length, 10_000))
+      : Math.max(1, Math.min(context.selectionLimit ?? opts.limit ?? 5_000, 10_000));
+    const queryLimit = context.durableChunk && !targetedIds ? hardLimit + 1 : hardLimit;
     const preExpiryCutoffIso = new Date(Date.now() + RATE_PREEXPIRY_REFRESH_LEAD_MS).toISOString();
     const preExpiryRefreshPredicate = sql`(
       ${orderOverrides.bestRateJson} is not null
@@ -545,6 +942,7 @@ async function runBackfill(
         or nullif(${orderOverrides.bestRateJson}->>'cacheKey', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'rateQuoteId', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'selectedRateKey', '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'selectionRef', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'cShippingRateAmount', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'selectedRateCost', '') is null
       )
@@ -562,12 +960,20 @@ async function runBackfill(
       )`,
     );
 
-    const rows = await db
+    // Per user override unlock shipped data on 2026-07-17 (PS-436): selection
+    // remains awaiting-only. Await the actual DB promise so cancellation cannot
+    // release the shared lane while a detached query still owns a pool socket.
+    const selectedRows = await awaitSettledWork(db
       .select({
         id: orders.id,
+        orderDate: orders.orderDate,
         orderNumber: orders.orderNumber,
         clientId: orders.clientId,
         storeId: orders.storeId,
+        sourceProvider: orders.sourceProvider,
+        sourceAccountId: orders.sourceAccountId,
+        sourceOrderId: orders.sourceOrderId,
+        customerEmail: orders.customerEmail,
         weightOz: orders.weightOz,
         rateWeightOz: orderOverrides.rateWeightOz,
         shipToPostalCode: orders.shipToPostalCode,
@@ -593,6 +999,15 @@ async function runBackfill(
           eq(orders.orderStatus, 'awaiting_shipment'),
           // PS-121: targeted recalc — never widens past awaiting_shipment (lockdown safe).
           targetedIds ? inArray(orders.id, targetedIds) : undefined,
+          !targetedIds && context.cursor
+            ? sql`(
+                coalesce(${orders.orderDate}, 'epoch'::timestamptz),
+                ${orders.id}
+              ) < (
+                ${context.cursor.beforeOrderDate}::timestamptz,
+                ${context.cursor.beforeOrderId}
+              )`
+            : undefined,
           opts.clientId !== undefined
             ? eq(orders.clientId, opts.clientId)
             : undefined,
@@ -609,8 +1024,28 @@ async function runBackfill(
           sql`not exists (select 1 from clients c where c.id = ${orders.clientId} and c.is_test = true)`
         )
       )
-      .orderBy(desc(orders.orderDate))
-      .limit(hardLimit);
+      .orderBy(desc(sql`coalesce(${orders.orderDate}, 'epoch'::timestamptz)`), desc(orders.id))
+      .limit(queryLimit), context.signal, 'rate backfill order query');
+
+    assertBackfillCanContinue(jobId, context.signal, 'post-selection');
+    const rows = context.durableChunk ? selectedRows.slice(0, hardLimit) : selectedRows;
+    const lastRow = rows.at(-1);
+    const lastOrderDate = lastRow?.orderDate instanceof Date
+      ? lastRow.orderDate.toISOString()
+      : lastRow?.orderDate
+        ? new Date(lastRow.orderDate).toISOString()
+        : new Date(0).toISOString();
+    chunkOutcome = {
+      hasMore: allTargetedIds
+        ? targetOffset + hardLimit < allTargetedIds.length
+        : Boolean(context.durableChunk && selectedRows.length > hardLimit),
+      nextCursor: !allTargetedIds && lastRow
+        ? { beforeOrderDate: lastOrderDate, beforeOrderId: lastRow.id }
+        : null,
+      advanced: allTargetedIds
+        ? Math.min(hardLimit, Math.max(0, allTargetedIds.length - targetOffset))
+        : rows.length,
+    };
 
     job.total = rows.length;
     job.message = `Found ${rows.length} orders; fetching rates…`;
@@ -648,6 +1083,7 @@ async function runBackfill(
           );
         }
       },
+      context.signal,
     );
     stampedIds = rows.map((row) => row.id);
 
@@ -680,7 +1116,7 @@ async function runBackfill(
     // #750/PS-348: live paths need a larger per-order budget because this wraps the limiter queue wait.
     const perOrderTimeoutMs = liveRateBudget ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
     const processOne = async (row: (typeof rows)[number]) => {
-      if (jobs.get(jobId)?.status !== 'running') return;
+      assertBackfillCanContinue(jobId, context.signal, `rate order ${row.id}`);
       const preExpiryRefreshReason = shouldPreExpiryRefreshRate(row.bestRateJson, {
         refreshLeadMs: RATE_PREEXPIRY_REFRESH_LEAD_MS,
       })
@@ -761,7 +1197,7 @@ async function runBackfill(
         );
         job.processed++;
         if (job.processed % 10 === 0 || job.processed === job.total) {
-          job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
+          job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed; ${signatureCacheSummary(job.signatureCache)}`;
         }
         if (job.processed % 50 === 0 || job.processed === job.total) {
           void persistBackfillJobSnapshot(job, opts);
@@ -777,13 +1213,14 @@ async function runBackfill(
         // ADDRESS_RESOLVER (OFF -> {} -> unchanged). SAME resolver /rates/browse uses, so the persisted
         // best rate and the live browse fingerprint stay identical on residential by construction.
         const backfillRawShipTo = (raw.shipTo ?? {}) as Record<string, unknown>;
-        const backfillResolved = await resolveAddressClassification({
+        const backfillResolved = await awaitSettledWork(resolveAddressClassification({
           street1: typeof backfillRawShipTo.street1 === 'string' ? backfillRawShipTo.street1 : null,
           city: row.shipToCity ?? null,
           state: row.shipToState ?? null,
           postalCode: row.shipToPostalCode ?? null,
           country: toCountry,
-        });
+        }), context.signal, `address classification for order ${row.id}`);
+        assertBackfillCanContinue(jobId, context.signal, `post-address order ${row.id}`);
         const residentialEvidence = buildResidentialEvidenceFromOrder({
           rawShipTo: raw.shipTo,
           manualOverrideResidential: row.residentialOverride,
@@ -791,6 +1228,7 @@ async function runBackfill(
           resolved: backfillResolved,
         });
         const rateInput = {
+          signal: context.signal,
           weightOz: Number(effectiveWeightOz),
           toZip: row.shipToPostalCode!,
           toState: row.shipToState ?? undefined,
@@ -804,45 +1242,84 @@ async function runBackfill(
           dimsH: dims.height,
           storeId: row.storeId,
           clientId: row.clientId,
+          orderId: row.id,
+          orderNumber: row.orderNumber ?? null,
+          sourceProvider: row.sourceProvider,
+          sourceAccountId: row.sourceAccountId,
+          rawOrder: row.raw,
         };
         const rateFetchDecision = buildBackfillRateFetchDecision({
           liveRecalculate,
           mode: opts.mode,
           preExpiryRefreshReason,
         });
+        const resolvedRateInput = await resolveRateInput(rateInput, {
+          priority: rateFetchDecision.priority,
+        });
         // #750: retry a TIMED-OUT live fetch once — by the retry the initial burst has drained, so the
         // order that was stuck waiting for a limiter permit now gets its rate. Non-timeout errors throw
         // immediately (a real rate error is recorded honestly). Passive sweeps get no retry.
-        const result = await runWithTimeoutAndRetry(
-          // PS-350: this background backfill is lower-priority bulk work; manual Rate Browser
-          // and Print Queue preflight attach to the backend job owner ahead of this lane.
-          // PS-perf: the best-rate backfill is bulk BACKGROUND work — it yields ShipStation
-          // budget + fan-out permits to interactive Browse Rates clicks (the limiter priority lane).
-          () => getRates(rateInput, toGetRatesOptions(rateFetchDecision)),
-          {
-            timeoutMs: perOrderTimeoutMs,
-            maxRetries: rateFetchDecision.forceRefresh ? LIVE_MAX_RETRIES : 0,
-            label: `getRates(order=${row.id})`,
-          },
+        // Durable chunks rely on cancellable provider deadlines plus the queue's
+        // fail-closed handler deadline. Do not use a promise-race timeout that
+        // can detach live rate/cache work before the shared lane is released.
+        const shipStationWork = context.durableChunk
+          ? getRates(resolvedRateInput, toGetRatesOptions(rateFetchDecision))
+          : runWithTimeoutAndRetry(
+              // PS-447: this batch backfill is lower-priority bulk work; manual Rate Browser
+              // and Print Queue preflight attach to the backend job owner ahead of this lane.
+              // stays interactive, while sync/polling remains in the background lane.
+              (_attempt, signal) => getRates(
+                { ...resolvedRateInput, signal },
+                toGetRatesOptions(rateFetchDecision),
+              ),
+              {
+                timeoutMs: perOrderTimeoutMs,
+                maxRetries: rateFetchDecision.forceRefresh ? LIVE_MAX_RETRIES : 0,
+                label: `getRates(order=${row.id})`,
+                signal: context.signal,
+              },
+            );
+        const result = await awaitSettledWork(
+          shipStationWork,
+          context.signal,
+          `ShipStation rates for order ${row.id}`,
         );
+        assertBackfillCanContinue(jobId, context.signal, `post-ShipStation rates order ${row.id}`);
         // PS-203 (stage 4): the persisted best rate is the COMBINED winner —
         // visible direct carriers (Shipp / Walmart Shipping / direct UPS) join
         // the comparison through the same canonical owner /browse delegates to.
         // A wholesale direct-fetch failure marks the universe incomplete (a
         // synthetic failed diagnostic) instead of self-certifying SS-only.
-        const directResult = await withTimeout(
-          getDirectCarrierRatesForRateInput({
-            ...rateInput,
+        // PS-350/PS-459: background backfill remains lower priority than manual Rate Browser and
+        // Print Queue preflight, and cache-first exact-signature hits bypass provider work entirely.
+        const directCarrierWork = getDirectCarrierRatesForRateInput({
+            ...resolvedRateInput,
             includeVisibleDirectCarriers: true,
             orderId: row.id,
             orderNumber: row.orderNumber ?? undefined,
-          }, { priority: 'background' }),
-          perOrderTimeoutMs,
-          `getDirectCarrierRates(order=${row.id})`
+          }, {
+            cacheFirst: !rateFetchDecision.forceRefresh,
+            priority: 'batch',
+          });
+        const directResult = await (
+          context.durableChunk
+            ? awaitSettledWork(
+                directCarrierWork,
+                context.signal,
+                `direct carrier rates for order ${row.id}`,
+              )
+            : withTimeout(
+                directCarrierWork,
+                perOrderTimeoutMs,
+                `getDirectCarrierRates(order=${row.id})`,
+              )
         ).catch((err) => ({
           rates: [],
           errors: [],
           metas: [],
+          authorizationAccounts: [],
+          providerFetches: 1,
+          usedCachedRates: false,
           diagnostics: [{
             carrierId: 'se-direct-fetch',
             carrierCode: 'direct',
@@ -852,6 +1329,12 @@ async function runBackfill(
             error: err instanceof Error ? err.message.slice(0, 200) : 'direct rate fetch failed',
           }],
         }));
+        assertBackfillCanContinue(jobId, context.signal, `post-direct rates order ${row.id}`);
+        job.signatureCache = recordRateSignatureCacheLookup(job.signatureCache, {
+          shipStationCached: result.cached,
+          directCarrierCacheUsed: directResult.usedCachedRates,
+          providerFetches: (result.cached ? 0 : 1) + directResult.providerFetches,
+        });
         const combined = combineCarrierUniverses({
           ssRates: result.rates as unknown as Array<Record<string, unknown>>,
           ssCacheKey: result.cacheKey,
@@ -890,6 +1373,91 @@ async function runBackfill(
             delete rawAmountSecondBest.original_amount;
             delete rawAmountSecondBest.markup;
           }
+          const packageSelection = await resolveOutboundPackageSelection({
+            orderId: row.id,
+            selectedPackageId: null,
+            dimensions: dims,
+          });
+          const packageId = packageSelection.status === 'matched'
+            ? packageSelection.packageId
+            : null;
+          const [packageRow] = packageId == null
+            ? []
+            : await db
+                .select({ id: packages.id, type: packages.type, packageCode: packages.packageCode })
+                .from(packages)
+                .where(eq(packages.id, packageId))
+                .limit(1);
+          const rawShipTo = raw.shipTo && typeof raw.shipTo === 'object'
+            ? raw.shipTo as Record<string, unknown>
+            : {};
+          const recipient = resolveCarrierRecipientName({
+            name: typeof rawShipTo.name === 'string' ? rawShipTo.name : row.shipToName,
+            company: typeof rawShipTo.company === 'string' ? rawShipTo.company : null,
+            customerEmail: row.customerEmail,
+          });
+          const defaultLocation = await getDefaultLocation().catch(() => null);
+          const shipFrom = resolvedRateInput.shipFrom ?? await getDefaultShipFrom();
+          const options = normalizeShippingOptions(resolvedRateInput);
+          const authorizationContext: ShippingQuoteAuthorizationContext = {
+            version: 1,
+            order: {
+              orderId: row.id,
+              clientId: row.clientId,
+              storeId: row.storeId,
+              sourceProvider: row.sourceProvider,
+              sourceAccountId: row.sourceAccountId,
+              sourceOrderId: row.sourceOrderId,
+            },
+            shipment: {
+              shipFromLocationId: defaultLocation?.id ?? null,
+              shipFrom: normalizeShippingQuoteAddress(shipFrom),
+              shipTo: normalizeShippingQuoteAddress({
+                ...rawShipTo,
+                name: recipient.name,
+                company: recipient.company,
+                city: rawShipTo.city ?? row.shipToCity,
+                state: rawShipTo.state ?? row.shipToState,
+                postalCode: rawShipTo.postalCode ?? rawShipTo.postal_code ?? row.shipToPostalCode,
+                country: rawShipTo.country ?? toCountry,
+              }),
+              package: {
+                id: packageRow?.id ?? packageId,
+                type: packageRow?.type ?? null,
+                code: packageRow?.packageCode ?? null,
+              },
+              weightOz: Number(resolvedRateInput.weightOz),
+              dimensions: dims,
+              residential: resolvedRateInput.residential === true,
+              confirmation: options.confirmation,
+              insuranceProvider: options.insuranceProvider,
+              insuredValue: Number(options.insuredValue ?? 0) || 0,
+            },
+          };
+          const presentProviderIds = new Set(
+            combined.combinedRates
+              .map((rate) => shippingProviderIdFromAuthorizedRate(rate as Record<string, unknown>))
+              .filter((id): id is number => id != null),
+          );
+          const authorizationAccounts = [
+            ...shipStationQuoteAccountAuthorizations({
+              rates: combined.combinedRates as Array<Record<string, unknown>>,
+              clientId: resolvedRateInput.clientId ?? null,
+              sourceClientId: resolvedRateInput.sourceClientId ?? null,
+              apiKeyV2: resolvedRateInput.apiKeyV2 ?? null,
+            }),
+            ...(directResult.authorizationAccounts ?? []),
+          ].filter((account, index, list) =>
+            presentProviderIds.has(account.shippingProviderId)
+            && list.findIndex((candidate) =>
+              candidate.shippingProviderId === account.shippingProviderId
+              && candidate.providerFamily === account.providerFamily,
+            ) === index,
+          );
+          const quoteAuthorization = {
+            context: authorizationContext,
+            accounts: authorizationAccounts,
+          };
           // PS-174 (Phase 2): stamp the backend quote snapshot ref + proof marker —
           // the SAME finalization /rates/browse performs — so the persisted best
           // rate is snapshot-purchasable on reload without a re-browse. Best-effort
@@ -909,13 +1477,20 @@ async function runBackfill(
           // Re-rate this order". The PS-203 raw-amount rule still holds — the
           // raw restore is applied to the PERSISTED COPY below, after the key
           // was minted from the marked object.
+          assertBackfillCanContinue(jobId, context.signal, `quote snapshot order ${row.id}`);
           const { bestRate: finalizedBest } = await finalizeBestRateWithQuote({
             bestRate: best as unknown as Record<string, unknown>,
             rates: combined.combinedRates as Array<Record<string, unknown>>,
             cacheKey: combined.combinedRequestKey,
             bestRateComplete: combined.bestRateComplete,
             fetchedAt: result.fetchedAt,
+            purchaseProofEligible: rateSourcesArePurchaseProofEligible({
+              shipStationCached: result.cached,
+              directCarrierCacheUsed: directResult.usedCachedRates,
+            }),
+            authorization: quoteAuthorization,
           });
+          assertBackfillCanContinue(jobId, context.signal, `post-quote snapshot order ${row.id}`);
           // PS-203 (stage 4): persist the RAW carrier amount, never the marked-up
           // charge. The display markup is applied at read time by the PS-177 row
           // money tuple — persisting marked amounts double-marked the display.
@@ -974,12 +1549,14 @@ async function runBackfill(
           // SAME shipment inputs (same requestFingerprint) instead of overwriting it with a thin Shipp
           // re-quote that dropped UPS/USPS; a different fingerprint (inputs changed) or a cheaper-or-
           // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
+          assertBackfillCanContinue(jobId, context.signal, `best-rate persistence order ${row.id}`);
           const persisted = await persistBestRateWithRatchet(row.id, {
             bestRateJson: stampedBest,
             bestRateDims: dimsLabel,
             bestRateAt: now,
             updatedAt: now,
           });
+          assertBackfillCanContinue(jobId, context.signal, `post-persistence order ${row.id}`);
           if (persisted.blocked) {
             job.skipped++;
             recordPreExpiryOutcome(stampedBest, false, {
@@ -1000,6 +1577,13 @@ async function runBackfill(
           }
         }
       } catch (err) {
+        if (
+          context.signal?.aborted
+          || activeJobId !== jobId
+          || jobs.get(jobId)?.status !== 'running'
+        ) {
+          throw err;
+        }
         job.failed++;
         recordPreExpiryOutcome(null, false);
         const msg = (err as Error).message ?? 'unknown';
@@ -1018,7 +1602,7 @@ async function runBackfill(
 
       job.processed++;
       if (job.processed % 10 === 0 || job.processed === job.total) {
-        job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
+        job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed; ${signatureCacheSummary(job.signatureCache)}`;
       }
       if (job.processed % 50 === 0 || job.processed === job.total) {
         void persistBackfillJobSnapshot(job, opts);
@@ -1037,7 +1621,8 @@ async function runBackfill(
 
     job.status = 'done';
     job.finishedAt = Date.now();
-    job.message = `Done — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed (of ${job.total})`;
+    job.message = `Done — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed (of ${job.total}); ${signatureCacheSummary(job.signatureCache)}`;
+    console.info('[rates-backfill]', job.message);
     await persistBackfillJobSnapshot(job, opts);
   } catch (err) {
     job.status = 'error';
@@ -1070,4 +1655,5 @@ async function runBackfill(
     }
     pruneCompletedBackfillJobs();
   }
+  return chunkOutcome;
 }

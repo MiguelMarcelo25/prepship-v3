@@ -201,9 +201,10 @@ check('realized capture writes sidecar only, not locked shipments',
 check('billing generator reads customer_rate by shipment id and persists it as the shipping line',
   /cShippingRateByShipmentId/.test(billingSrc) &&
     /cShippingRateAmount,/.test(billingSrc) &&
-    /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
-    /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc) &&
-    /totalCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc));
+    /resolveCustomerShippingMoney\(\{/.test(billingSrc) &&
+    /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
+    /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc) &&
+    /totalCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc));
 check('invoice renderers consume generated shipping_amt instead of provider cost',
   // Repointed (guard rot): PS-373/377 routed the sums through detailAmount
   // (cancelledNoChargeBillingAmountSql) so cancelled orders bill $0.

@@ -20,11 +20,9 @@ import { buildManifestCsv, manifestRowsFromResponse } from '../../components/Vie
 // remained only under `raw`), so every FE save persisted best_rate_json without the tuple and the
 // Awaiting/Rate-Browser UI had nothing to render. Pass them through via the single FE owner.
 import { houseTuplePassThrough } from '../rate-browser-house-tuple';
-// PS-324: the out/low/in stock-status THRESHOLD is owned in one place
-// (src/lib/inventory-stock-status.ts classifyStockStatus) — the same definition the
-// Dashboard (PS-325) and storage billing use. The normalizer's status fallback delegates
-// to it so the inventory DTO can never carry a different threshold than the rest of the app.
-import { classifyStockStatus } from '../../../../src/lib/inventory-stock-status';
+// PS-439: the backend inventory read model owns stock-status classification. This
+// transport normalizer requires its canonical stockStatus DTO and only maps `in`
+// to the legacy display alias `ok`; it never recomputes threshold truth.
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const accessToken = await getCachedAuthToken();
@@ -253,16 +251,13 @@ export function normalizeProductDefaultsPayload(data: Record<string, unknown>): 
   return next;
 }
 
-export function inventoryStatus(stockQty: number, reorderLevel: number): 'ok' | 'low' | 'out' {
-  // Delegate the threshold to the single backend owner; translate 'in' → this DTO's 'ok'.
-  // Identical thresholds to the previous inline rule, so the normalized status is unchanged.
-  const status = classifyStockStatus(stockQty, reorderLevel);
-  return status === 'in' ? 'ok' : status;
-}
-
 export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>): any {
   if (!row || typeof row !== 'object') return row;
-  const currentStock = parseFiniteNumber(row.currentStock ?? row.stockQty) ?? 0;
+  const inventoryQuantity = parseFiniteNumber(row.inventoryQuantity);
+  if (inventoryQuantity == null) throw new Error('Inventory response is missing inventoryQuantity');
+  if (!['in', 'low', 'out'].includes(row.stockStatus)) {
+    throw new Error('Inventory response is missing canonical stockStatus');
+  }
   const minStock = parseFiniteNumber(row.minStock ?? row.reorderLevel) ?? 0;
   const unitsPerPack = parseFiniteNumber(row.units_per_pack ?? row.unitsPerPack) ?? 1;
   const length = parseFiniteNumber(row.packageLength ?? row.length) ?? 0;
@@ -274,8 +269,6 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
   // (e.g. older deploy) doesn't return them.
   const totalReceived = parseFiniteNumber(row.totalReceived)
   const totalSoldAllTime = parseFiniteNumber(row.totalSoldAllTime)
-  const effectiveStock = parseFiniteNumber(row.effectiveStock)
-  const displayStock = effectiveStock ?? currentStock
   const clientId = parseFiniteNumber(row.clientId ?? row.client_id) ?? 0;
   const clientName =
     row.clientName ??
@@ -288,11 +281,9 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     clientId,
     clientName,
     minStock,
-    currentStock: displayStock,
-    stockQty: displayStock,
-    cachedStockQty: currentStock,
+    inventoryQuantity,
     reorderLevel: minStock,
-    status: row.status ?? inventoryStatus(displayStock, minStock),
+    status: row.stockStatus === 'in' ? 'ok' : row.stockStatus,
     units_per_pack: unitsPerPack,
     unitsPerPack,
     packageLength: length,
@@ -302,7 +293,7 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     productWidth: parseFiniteNumber(row.productWidth ?? row.width) ?? width,
     productHeight: parseFiniteNumber(row.productHeight ?? row.height) ?? height,
     baseUnitQty: parseFiniteNumber(row.baseUnitQty) ?? 1,
-    baseUnits: displayStock * (parseFiniteNumber(row.baseUnitQty) ?? 1),
+    baseUnits: inventoryQuantity * (parseFiniteNumber(row.baseUnitQty) ?? 1),
     cuFtOverride: parseFiniteNumber(row.cuFtOverride),
     // PS-324: backend-owned per-unit cubic feet (storage-fee input). undefined when an older
     // deploy's /inventory route doesn't stamp it yet — the FE getInventoryCuFt then falls back
@@ -315,7 +306,6 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     soldLast30Days,
     totalReceived,
     totalSoldAllTime,
-    effectiveStock,
   };
 }
 
@@ -462,113 +452,6 @@ export function warnThrottled(key: string, ...args: unknown[]): void {
   console.warn(...args);
 }
 
-export type CachedRead<T> = {
-  hasValue: boolean;
-  value?: T;
-  expiresAt: number;
-  staleUntil: number;
-  inFlight?: Promise<T>;
-};
-
-export const cachedReads = new Map<string, CachedRead<unknown>>();
-
-export type CachedSafeOptions = {
-  warn?: boolean;
-  fallbackTtlMs?: number;
-  fallbackStaleMs?: number;
-  throwOnError?: boolean;
-  forceRefresh?: boolean;
-};
-
-export function clearCachedReads(...keysOrPrefixes: string[]): void {
-  if (keysOrPrefixes.length === 0) return;
-  for (const key of Array.from(cachedReads.keys())) {
-    if (
-      keysOrPrefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}:`))
-    ) {
-      cachedReads.delete(key);
-    }
-  }
-}
-
-export async function cachedSafe<T>(
-  methodName: string,
-  cacheKey: string,
-  ttlMs: number,
-  staleMs: number,
-  fn: () => Promise<T>,
-  fallback: T,
-  options: CachedSafeOptions = {}
-): Promise<T> {
-  const now = Date.now();
-  const existing = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
-  if (!options.forceRefresh && existing?.hasValue && existing.expiresAt > now) {
-    return existing.value as T;
-  }
-  if (existing?.inFlight) return existing.inFlight;
-
-  const entry: CachedRead<T> = existing ?? {
-    hasValue: false,
-    expiresAt: 0,
-    staleUntil: 0,
-  };
-
-  const inFlight = fn()
-    .then((value) => {
-      const settledAt = Date.now();
-      cachedReads.set(cacheKey, {
-        hasValue: true,
-        value,
-        expiresAt: settledAt + ttlMs,
-        staleUntil: settledAt + staleMs,
-      });
-      return value;
-    })
-    .catch((err) => {
-      // PS-433: fail-closed reads (billing/money and explicit refreshes) must
-      // reject before the generic stale-cache policy can return old truth.
-      if (options.throwOnError) throw err;
-      const current = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
-      if (current?.hasValue && current.staleUntil > Date.now()) {
-        if (options.warn !== false) {
-          warnThrottled(
-            `cached-stale:${methodName}`,
-            `[v2-apiClient] ${methodName} failed; using cached value:`,
-            err instanceof Error ? err.message : err
-          );
-        }
-        return current.value as T;
-      }
-      if (options.warn !== false) {
-        warnThrottled(
-          `cached:${methodName}`,
-          `[v2-apiClient] ${methodName} failed:`,
-          err instanceof Error ? err.message : err
-        );
-      }
-      const failedAt = Date.now();
-      cachedReads.set(cacheKey, {
-        hasValue: true,
-        value: fallback,
-        expiresAt: failedAt + (options.fallbackTtlMs ?? 60_000),
-        staleUntil: failedAt + (options.fallbackStaleMs ?? 5 * 60_000),
-      });
-      return fallback;
-    })
-    .finally(() => {
-      const current = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
-      if (current?.inFlight) {
-        delete current.inFlight;
-      }
-    });
-
-  cachedReads.set(cacheKey, {
-    ...entry,
-    inFlight,
-  });
-  return inFlight;
-}
-
 export function notImpl<T>(methodName: string, fallback: T): Promise<T> {
   console.warn(`[v2-apiClient] ${methodName}: no v4 equivalent; returning default`);
   return Promise.resolve(fallback);
@@ -653,9 +536,21 @@ export function translateRatePayloadToV4(
     : typeof input.clientId === 'string'
       ? Number.parseInt(input.clientId, 10)
       : NaN;
+  const numericShipFromLocationId = typeof input.shipFromLocationId === 'number'
+    ? input.shipFromLocationId
+    : typeof input.shipFromLocationId === 'string'
+      ? Number.parseInt(input.shipFromLocationId, 10)
+      : NaN;
+  const numericCustomPackageId = typeof input.customPackageId === 'number'
+    ? input.customPackageId
+    : typeof input.customPackageId === 'string'
+      ? Number.parseInt(input.customPackageId, 10)
+      : NaN;
   if (Number.isFinite(numericOrderId)) out.orderId = numericOrderId;
   if (Number.isFinite(numericStoreId)) out.storeId = numericStoreId;
   if (Number.isFinite(numericClientId)) out.clientId = numericClientId;
+  if (Number.isFinite(numericShipFromLocationId)) out.shipFromLocationId = numericShipFromLocationId;
+  if (Number.isFinite(numericCustomPackageId)) out.customPackageId = numericCustomPackageId;
   if (input.shipFrom && typeof input.shipFrom === 'object') out.shipFrom = input.shipFrom;
 
   // dims: v4 uses flat dimsL/W/H; v2 wraps them under `dimensions`.
@@ -793,6 +688,7 @@ export function translateRateToLegacyDisplayShape(r: unknown): Record<string, un
       // legacy cache), which keeps those rates structurally non-purchasable.
       rateQuoteId: obj.rateQuoteId ?? null,
       selectedRateKey: obj.selectedRateKey ?? null,
+      selectionRef: obj.selectionRef ?? null,
       secondBestRate: obj.secondBestRate ? translateRateToLegacyDisplayShape(obj.secondBestRate) : null,
       isComplete: obj.isComplete ?? null,
       rateCount: obj.rateCount ?? null,

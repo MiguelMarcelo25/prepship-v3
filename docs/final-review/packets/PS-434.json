@@ -1,0 +1,306 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-434",
+  "title": "Forward-only California weekend billing roll-forward",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "530b9ee9f87b011914505cf10f52ef6b58e6adcd"
+  },
+  "riskDomains": [
+    "billing_inventory_lifecycle",
+    "timing_live"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "One backend calendar-policy owner maps California activity days forward only: Monday through Friday remain on the same day, Saturday and Sunday map to the following Monday, and the actual activity day remains separately persisted.",
+      "evidenceIds": [
+        "ps434-policy-guard",
+        "ps434-migrated-db-integration"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "The policy is effective-date gated and default-off; historical rows remain on legacy calendar semantics and no migration or runtime path rebuckets finalized or pre-effective history.",
+      "evidenceIds": [
+        "ps434-migrated-db-integration",
+        "production-readonly-readiness"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Billing generation, range reads, finalization, invoice HTML/XLSX/CSV, reporting, PrepShip UI, and Client Portal invoice/export consumers delegate to the persisted effective billing day rather than independently calculating weekends.",
+      "evidenceIds": [
+        "ps434-policy-guard",
+        "invoice-and-finalization-regression",
+        "client-portal-parity"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "The migrated database preserves historical bytes and cents, returns Saturday, Sunday, and Monday lines in one Monday effective-day range without changing cardinality or totals, and rejects a late Sunday line after that Monday period is finalized.",
+      "evidenceIds": [
+        "ps434-migrated-db-integration",
+        "ps434-finalization-adversarial"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "A production READ ONLY readiness probe confirms migration 0071 is present, policy activation is unset, legacy and effective historical aggregates match exactly, no historical rows were rebucketed, and no v2 lines are active.",
+      "evidenceIds": [
+        "production-readonly-readiness"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "Focused billing guards, migrated-database tests, all 45 mandatory source-of-truth guards, strict TypeScript checks, and both PrepShip and Client Portal production builds pass at the reviewed application state.",
+      "evidenceIds": [
+        "full-sot-guard-pack",
+        "strict-typecheck-and-build",
+        "client-portal-parity"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "met",
+      "description": "No production regeneration, backfill, provider call, label or postage action, inventory movement, or order/shipment mutation occurred; shipped/cancelled protections were not weakened.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "production-readonly-readiness"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/billing-calendar-policy.ts owns activity-day normalization, effective-date selection, weekend roll-forward, persisted effective-day reads, and backend weekday-operation enforcement",
+      "src/services/billing.ts owns billing-line generation and persists actual activity day, effective billing day, and policy version",
+      "src/services/billing-finalization-policy.ts and drizzle/0071_billing_weekend_rollforward.sql own finalized-period enforcement against the persisted effective billing day",
+      "src/routes/billing.ts and src/routes/billing-invoice-csv.ts expose backend-owned invoice and export DTOs; React and Client Portal remain display-only consumers"
+    ],
+    "oldOwners": [
+      {
+        "path": "Billing range, finalization, reporting, box-cost, and invoice readers that previously filtered directly on ship_date",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/billing-calendar-policy.ts persisted effective-day SQL owner"
+      },
+      {
+        "path": "PrepShip and Client Portal presentation paths that could otherwise infer a weekend bucket from a date",
+        "disposition": "delegated",
+        "delegatesTo": "backend-persisted billingEffectiveDate and rolledFromWeekend DTO facts"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/billing.ts and src/routes/billing-invoice-csv.ts",
+        "action": "modified",
+        "delegatesTo": "the persisted effective-day owner and shared invoice date-formatting helpers"
+      },
+      {
+        "path": "web/src/components/Views/BillingDetailTable.tsx, BillingView.tsx, and web/src/pages/Invoice.tsx",
+        "action": "modified",
+        "delegatesTo": "backend billingEffectiveDate and rolledFromWeekend fields; no weekend policy is calculated in React"
+      },
+      {
+        "path": "Client Portal billing summaries, invoice read model, HTML/XLSX export, and billing table",
+        "action": "modified",
+        "delegatesTo": "PrepShip-persisted billing_effective_date through the Client Portal shadow read model"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The backend policy and persisted effective-day column are authoritative. Routes, invoice serializers, PrepShip React, and Client Portal only transport, format, sort, or display those facts and do not own weekend mapping, activation, finalization, or historical rebucketing."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps434-migrated-db-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-434-weekend-billing:integration",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0071_billing_weekend_rollforward.sql",
+        "src/services/billing-calendar-policy.ts",
+        "scripts/ps-434-weekend-billing-rollforward-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "A PostgreSQL-compatible migrated fixture preserves old row dates and cents with null policy columns, maps provider instants through California time, returns distinct Saturday, Sunday, and Monday orders exactly once in the Monday bucket with the same $33 total, repeats the canonical range read with the same result, and preserves a legacy Saturday total."
+    },
+    {
+      "id": "ps434-finalization-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-434-weekend-billing:integration",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0071_billing_weekend_rollforward.sql",
+        "src/services/billing-finalization-policy.ts",
+        "scripts/ps-434-weekend-billing-rollforward-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "The migrated finalized-period trigger rejects a late Sunday line whose persisted effective day belongs to an already-finalized Monday period, while legacy history, existing rows, row cardinality, and totals remain unchanged."
+    },
+    {
+      "id": "production-readonly-readiness",
+      "classification": "live",
+      "command": "Render production shell: confirm BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE is unset, then run npx tsx scripts/ps-434-billing-rollforward-readiness.ts --read-only-production --effective-date=2026-07-27",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-434-billing-rollforward-readiness.ts",
+        "drizzle/0071_billing_weekend_rollforward.sql"
+      ],
+      "assertions": [
+        "staging_or_live_artifact"
+      ],
+      "proves": "The production probe used default_transaction_read_only=on and BEGIN READ ONLY. It reported policy env UNSET, 73,491 legacy and 73,491 effective historical lines, matching $274,563.75 totals, pre_cutoff_rebucketed_lines=0, existing_post_cutoff_legacy_weekend_lines=0, active_v2_lines=0, and historical_unchanged=true. The 2026-07-27 date was a preview candidate only and was not activated."
+    },
+    {
+      "id": "ps434-policy-guard",
+      "classification": "static",
+      "command": "npm run test:ps-434-weekend-billing && npm run test:ps-434-billing-readiness",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/billing-calendar-policy.ts",
+        "scripts/ps-434-weekend-billing-rollforward-guard.ts",
+        "scripts/ps-434-billing-rollforward-readiness.ts"
+      ],
+      "assertions": [],
+      "proves": "The policy matrix covers pre-effective legacy behavior, weekdays, Saturday/Sunday, UTC-to-California boundaries, spring and fall DST, month/year rollover, invalid dates, default-off behavior, weekend operation blocking after activation, additive migration constraints, thin UI consumption, and a read-only readiness implementation."
+    },
+    {
+      "id": "invoice-and-finalization-regression",
+      "classification": "static",
+      "command": "npm run test:ps-412-finalized-billing && npm run test:ps-425-multi-shipment-cardinality && npm run test:ps-323-billing-sot-parity && npm run test:ps-208-billing-calendar-day-invoice-xlsx && npm run test:billing-invoice-xlsx-layout && npm run test:billing-html-invoice-layout",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/billing-finalization-policy.ts",
+        "src/routes/billing.ts",
+        "src/routes/billing-invoice-csv.ts",
+        "scripts/ps-412-finalized-billing-guard.ts",
+        "scripts/ps-425-multi-shipment-cardinality-integration.ts",
+        "scripts/ps-208-billing-calendar-day-invoice-xlsx-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "Finalized-period immutability, shipment cardinality, backend Billing totals, California calendar-day formatting, HTML invoices, XLSX invoices, and CSV serialization remain aligned with the backend effective-day truth."
+    },
+    {
+      "id": "client-portal-parity",
+      "classification": "static",
+      "command": "At Client Portal main 34c74bb31dbad9c6a3774bc07435ec295de0b10e: npm run test:ps-434-weekend-billing-parity && npm run guard:client-portal-architecture && npm run test:client-portal-analytics-parity && npm run test:client-portal-shadow-renderer && npm run typecheck && npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/billing-calendar-policy.ts",
+        "scripts/ps-434-weekend-billing-rollforward-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "Client Portal commit cdc647e44b1c47f5b594a09cab6b2629b90dec8e is already in main. Its billing summaries, invoices, exports, contracts, and UI mirror PrepShip's persisted effective date; the shadow-renderer, architecture, analytics, strict-type, and production-build checks pass."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 45 mandatory source-of-truth, rate/label, billing, lifecycle, worker, migration-readiness, and shipped/cancelled safety guards pass at reviewed SHA 530b9ee9f87b011914505cf10f52ef6b58e6adcd."
+    },
+    {
+      "id": "strict-typecheck-and-build",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass and the PrepShip production web bundle builds successfully with 2,977 modules transformed."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= 6927678bf9269143a4b0aa8a59c1032c84d93f2c 86f2103aeda884b3fad345546ad868be8286efb0 4c3defaaf6cc9ca3d4a52d48953b5cbd80ccea31 adfb8bf5d191e816a664500ce0212bc7ddf98da2",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0071_billing_weekend_rollforward.sql",
+        "src/services/billing-calendar-policy.ts",
+        "src/services/billing.ts",
+        "src/services/billing-finalization-policy.ts",
+        "scripts/apply-ps-434-weekend-billing-migration.ts"
+      ],
+      "assertions": [],
+      "proves": "The implementation adds a forward-only billing policy, additive nullable schema, migration-first rollout support, backend delegation, tests, and display-only consumers. Override-governed shipped-data-reading Billing paths include the required nearby user-override comments. No orders/shipments schema change, production UPDATE/DELETE, provider operation, label/postage action, inventory movement, or weakening of shipped/cancelled locks is present."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0071_billing_weekend_rollforward.sql"
+    ],
+    "verification": {
+      "command": "npm run test:ps-434-weekend-billing:integration and production READ ONLY readiness probe",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0071_billing_weekend_rollforward.sql",
+        "scripts/ps-434-weekend-billing-rollforward-integration.ts",
+        "scripts/ps-434-billing-rollforward-readiness.ts",
+        "src/services/runtime-schema-readiness.ts"
+      ]
+    },
+    "rollbackPlan": "Leave the additive nullable columns, index, and finalized-period protection in place. Keep the activation environment variable unset, or remove it in a reviewed forward deploy if later enabled, and forward-revert only the PS-434 runtime consumers. Never drop the columns, backfill legacy rows, rewrite finalized Billing history, or alter orders/shipments."
+  },
+  "rollback": {
+    "strategy": "Current production rollback is the tested default-off state: BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE is unset and active_v2_lines is zero. If a runtime regression is found, use a reviewed forward revert of PS-434 application behavior while preserving migration 0071 and all persisted Billing history. The migrated fixture proves the additive migration leaves pre-existing rows and cents unchanged.",
+    "tested": true,
+    "evidenceIds": [
+      "ps434-migrated-db-integration",
+      "production-readonly-readiness"
+    ]
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Render production executed the PS-434 readiness tool inside a read-only transaction with the activation environment variable unset. Migration 0071 is present; all 73,491 historical lines and the $274,563.75 total match under legacy and effective reads; zero rows were rebucketed and zero v2 lines are active. No regeneration, backfill, provider call, label/postage action, inventory movement, or order/shipment mutation occurred.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "scripts/ps-434-billing-rollforward-readiness.ts",
+      "drizzle/0071_billing_weekend_rollforward.sql"
+    ]
+  },
+  "caveats": [
+    {
+      "id": "activation-requires-dj-approval",
+      "severity": "low",
+      "status": "closed",
+      "description": "Activation is intentionally outside this implementation closeout. Production remains default-off and no effective date was configured; a separate DJ-approved rollout decision is required before setting BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE.",
+      "followUpOwner": "DJ",
+      "followUpTask": null
+    }
+  ]
+}

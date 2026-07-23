@@ -73,6 +73,8 @@ function baseRow(over: Partial<InvoiceCsvDetailRow>): InvoiceCsvDetailRow {
 // ── 1) Behavioral: the per-order Total is the backend row_total verbatim when it is > 0 ──
 const billed = renderInvoiceCsvRow(baseRow({ row_total: '10.66' })).split(',');
 check('CSV Total reads the backend row_total verbatim when present (no FE recompute)', billed[TOTAL_COL] === '10.66');
+const credited = renderInvoiceCsvRow(baseRow({ row_total: '-2.50' })).split(',');
+check('CSV Total preserves a backend signed credit instead of replacing it with component fees', credited[TOTAL_COL] === "'-2.5");
 
 // ── 2) Behavioral: the documented fallback fires ONLY when row_total is 0 (sums the same backend
 //        per-line amounts: pickPackFee + package + shipping + storage) — clean integers to avoid float noise ──
@@ -101,8 +103,8 @@ check('Qty = base + addl when addl present (1 + 2 = 3)', withAddl[QTY_COL] === '
 const csvSrc = read('src/routes/billing-invoice-csv.ts');
 const billingRoute = read('src/routes/billing.ts');
 const rowTotalOwner = read('src/services/billing-invoice-row-total.ts');
-check('backend Total owner preserves positive row_total and includes package cost in the zero fallback',
-  /if \(rowTotal > 0\) return rowTotal/.test(rowTotalOwner) &&
+check('backend Total owner preserves signed non-zero row_total and includes package cost in the zero fallback',
+  /Number\.isFinite\(rowTotal\) && rowTotal !== 0/.test(rowTotalOwner) &&
   /Number\(input\.pickPackFee\)[\s\S]{0,80}Number\(input\.packageCost\)[\s\S]{0,80}Number\(input\.shipping\)[\s\S]{0,80}Number\(input\.storage\)/.test(rowTotalOwner));
 check('CSV serializer delegates to the canonical backend Total owner',
   (csvSrc.match(/resolveBillingInvoiceRowTotal\s*\(\{/g) ?? []).length === 1);

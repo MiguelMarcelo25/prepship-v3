@@ -7,6 +7,10 @@ import {
 } from '../lib/auth/verify-supabase-jwt';
 import { env } from '../lib/env';
 import { elapsedMs, nowMs } from '../lib/http/timing';
+import {
+  BUSINESS_ROUTE_POLICIES,
+  type BusinessRoutePolicyId,
+} from '../lib/business-route-policy';
 
 export type AuthVars = {
   userId: string;
@@ -41,6 +45,9 @@ export const APP_PERMISSIONS = [
   // PS-246 (Card 1): a distinct WRITE permission for billing/financial mutations.
   // Read != write — Card 4 gates every billing mutation on this.
   'financials:write',
+  // PS-421: named warehouse mutation and scoped rate-quote capabilities.
+  'inventory:write',
+  'rates:quote',
   'print_queue:write',
   'scope:global',
 ] as const;
@@ -60,10 +67,18 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
     'billing:generate',
     // PS-246 (Card 1): operators run billing, so they get write; warehouse/client/support stay read-only.
     'financials:write',
+    'inventory:write',
+    'rates:quote',
     'print_queue:write',
   ],
-  warehouse: ['settings:read', 'credentials:read', 'print_queue:write'],
-  client_user: ['settings:read', 'billing:generate'],
+  warehouse: [
+    'settings:read',
+    'credentials:read',
+    'inventory:write',
+    'rates:quote',
+    'print_queue:write',
+  ],
+  client_user: ['settings:read', 'billing:generate', 'rates:quote'],
   read_only_support: ['settings:read', 'credentials:read'],
 };
 
@@ -173,6 +188,43 @@ export function isPortalSession(auth: Pick<AuthVars, 'role'>): boolean {
   return getAuthDomain(auth) === 'portal';
 }
 
+export function isReadOnlySupportMethodAllowed(
+  role: string | undefined,
+  method: string,
+): boolean {
+  if (role !== 'read_only_support') return true;
+  return ['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
+}
+
+export function hasInternalAppPermission(
+  auth: Pick<AuthVars, 'email' | 'role' | 'permissions'>,
+  permission: AppPermission,
+): boolean {
+  return getAuthDomain(auth) === 'internal' && hasAppPermission(auth, permission);
+}
+
+export type BusinessRoutePolicyDecision =
+  | { allowed: true }
+  | { allowed: false; reason: 'read_only_method' | 'internal_only' | 'permission' };
+
+export function evaluateBusinessRoutePolicy(
+  policyId: BusinessRoutePolicyId,
+  auth: Pick<AuthVars, 'email' | 'role' | 'permissions'>,
+  method: string = BUSINESS_ROUTE_POLICIES[policyId].method,
+): BusinessRoutePolicyDecision {
+  const policy = BUSINESS_ROUTE_POLICIES[policyId];
+  if (!isReadOnlySupportMethodAllowed(auth.role, method)) {
+    return { allowed: false, reason: 'read_only_method' };
+  }
+  if (policy.audience === 'internal' && getAuthDomain(auth) === 'portal') {
+    return { allowed: false, reason: 'internal_only' };
+  }
+  if (!hasAppPermission(auth, policy.permission)) {
+    return { allowed: false, reason: 'permission' };
+  }
+  return { allowed: true };
+}
+
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
   async (c, next) => {
     const authStartedAt = nowMs();
@@ -226,6 +278,43 @@ export const requireAdmin = createMiddleware<{ Variables: AuthVars }>(
     await next();
   }
 );
+
+// PS-421: read_only_support stays GET/HEAD-only even if a token carries an
+// accidentally broad custom permission. Mounted immediately after requireAuth,
+// so denial happens before route validation, DB reads, providers, or caches.
+export const enforceReadOnlySupportMethods = createMiddleware<{
+  Variables: AuthVars;
+}>(async (c, next) => {
+  if (!isReadOnlySupportMethodAllowed(c.get('role'), c.req.method)) {
+    return c.json({ error: 'Read-only support sessions cannot modify data' }, 403);
+  }
+  await next();
+});
+
+export function requireBusinessRoutePolicy(policyId: BusinessRoutePolicyId) {
+  return createMiddleware<{ Variables: AuthVars }>(async (c, next) => {
+    const decision = evaluateBusinessRoutePolicy(
+      policyId,
+      {
+        email: c.get('email'),
+        role: c.get('role'),
+        permissions: c.get('permissions'),
+      },
+      c.req.method,
+    );
+    if (decision.allowed) {
+      await next();
+      return;
+    }
+    if (decision.reason === 'read_only_method') {
+      return c.json({ error: 'Read-only support sessions cannot modify data' }, 403);
+    }
+    if (decision.reason === 'internal_only') {
+      return c.json({ error: 'Internal access required' }, 403);
+    }
+    return c.json({ error: 'Permission required' }, 403);
+  });
+}
 
 export function requirePermission(permission: AppPermission) {
   return createMiddleware<{ Variables: AuthVars }>(async (c, next) => {

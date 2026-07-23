@@ -14,6 +14,7 @@ const packageJson = read('package.json');
 const main = read('src/main.ts');
 const route = read('src/routes/observability.ts');
 const metrics = read('src/lib/http/api-metrics.ts');
+const home = read('web/src/Home.tsx');
 const settingsView = read('web/src/components/Views/SettingsView.tsx');
 // PS-155: the System Status panel presentation was extracted VERBATIM from
 // SettingsView into SystemStatusPanel.tsx. The parent still owns the
@@ -82,6 +83,16 @@ expect(
     metrics.includes('recentSamples') &&
     metrics.includes('MAX_RECENT_DURATIONS') &&
     metrics.includes('MAX_BUCKETS')
+);
+
+expect(
+  'api timing toolbar separates latest route status from historical 5xx samples',
+  home.includes('apiTimingCurrent5xxRouteCount') &&
+    home.includes('apiTimingHistorical5xxCount') &&
+    home.includes('Latest route status') &&
+    home.includes('past 5xx') &&
+    home.includes('since API restart') &&
+    !home.includes('>Errors<')
 );
 
 expect(

@@ -16,10 +16,11 @@ import { getCachedAuthToken } from './auth-session-cache';
 import {
   activeClientRowsQueryOptions,
   clientDtosFromRows,
-  clientQueryKeys,
   includeInactiveClientRowsQueryOptions,
 } from './client-query';
+import { invalidateClientDependentQueries } from './client-cache-invalidation';
 import { queryClient } from './query-client';
+import { endpointQueryKeys } from './endpoint-query-keys';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
 import {
   requiredReportingNumber,
@@ -50,7 +51,6 @@ import {
   normalizePackageLedgerEntry,
   normalizePackageMovementResponse,
   normalizeProductDefaultsPayload,
-  inventoryStatus,
   normalizeInventoryDto,
   filterRowsToActiveClients,
   normalizeClientDtoRows,
@@ -62,11 +62,6 @@ import {
   WARN_THROTTLE_MS,
   warnLastSeen,
   warnThrottled,
-  CachedRead,
-  cachedReads,
-  CachedSafeOptions,
-  clearCachedReads,
-  cachedSafe,
   notImpl,
   translateRatePayloadToV4,
   toProviderAccountId,
@@ -125,9 +120,31 @@ function stableRateBrowseKey(body: Record<string, unknown>): string {
   return JSON.stringify(keyed);
 }
 
-function invalidateClientReads(): void {
-  void queryClient.invalidateQueries({ queryKey: clientQueryKeys.root });
-  clearCachedReads('fetchStores', 'fetchCounts');
+function invalidatePackageReads(includeUsage = true): void {
+  void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.packagesRoot });
+  if (includeUsage) {
+    void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.packagesUsageRoot });
+  }
+}
+
+function invalidateBillingReads(options: {
+  configs?: boolean;
+  summary?: boolean;
+  shippingMargin?: boolean;
+  packagePrices?: boolean;
+}): void {
+  if (options.configs) {
+    void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingConfigs });
+  }
+  if (options.summary) {
+    void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot });
+  }
+  if (options.shippingMargin) {
+    void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.shippingMarginRoot });
+  }
+  if (options.packagePrices) {
+    void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingPackagePricesRoot });
+  }
 }
 
 function parseDailyStatsSummary(value: unknown): DailyStatsSummary {
@@ -252,12 +269,7 @@ export const apiClient = {
     const hasDate = Boolean(filter?.dateStart || filter?.dateEnd);
     const dateFrom = toIsoDayStart(filter?.dateStart);
     const dateTo = toIsoDayEnd(filter?.dateEnd);
-    return cachedSafe(
-      'fetchCounts',
-      `fetchCounts:${dateFrom ?? ''}:${dateTo ?? ''}`,
-      120_000,
-      15 * 60_000,
-      async () => {
+    return (async () => {
         if (hasDate) {
           const legacyCounts = await api.get<any>(`/init/counts${qs({ dateFrom, dateTo })}`, {
             timeoutMs: 25_000,
@@ -390,21 +402,13 @@ export const apiClient = {
         ];
 
         return { byStatus, byStatusStore };
-      },
-      { byStatus: [], byStatusStore: [] },
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 15 * 60_000, throwOnError: true }
-    );
+      })();
   },
 
   fetchStores(): Promise<any[]> {
     // v2 sidebar parity: return one row per ShipStation storeId, named from
     // the owning client.
-    return cachedSafe(
-      'fetchStores',
-      'fetchStores',
-      60_000,
-      10 * 60_000,
-      async () => {
+    return (async () => {
         const [storesRes, clientRowsRes] = await Promise.all([
           api.get<any>('/init/stores', { timeoutMs: 25_000 }).catch(() => ({ data: [] })),
           queryClient.fetchQuery(includeInactiveClientRowsQueryOptions()).catch(() => []),
@@ -452,9 +456,7 @@ export const apiClient = {
             active: true,
             isTest: c?.isTest === true,
           }));
-      },
-      []
-    );
+      })();
   },
 
 
@@ -476,7 +478,7 @@ export const apiClient = {
 
   createClient(data: Record<string, unknown>): Promise<any> {
     return api.post<any>('/clients', normalizeClientMutationPayload(data)).then((res) => {
-      invalidateClientReads();
+      invalidateClientDependentQueries(queryClient);
       return res;
     });
   },
@@ -487,7 +489,7 @@ export const apiClient = {
 
   updateClient(clientId: number, data: Record<string, unknown>): Promise<any> {
     return api.patch<any>(`/clients/${clientId}`, normalizeClientMutationPayload(data)).then((res) => {
-      invalidateClientReads();
+      invalidateClientDependentQueries(queryClient);
       return res;
     });
   },
@@ -498,7 +500,7 @@ export const apiClient = {
 
   deleteClientRecord(clientId: number): Promise<any> {
     return api.delete<any>(`/clients/${clientId}`).then((res) => {
-      invalidateClientReads();
+      invalidateClientDependentQueries(queryClient);
       return res;
     });
   },
@@ -508,7 +510,7 @@ export const apiClient = {
       'syncClientsFromStores',
       async () => {
         const res = await api.post<any>('/clients/sync-stores', {});
-        invalidateClientReads();
+        invalidateClientDependentQueries(queryClient);
         return {
           ...res,
           clients: normalizeClientDtoRows(Array.isArray(res?.clients) ? res.clients : []),
@@ -520,19 +522,11 @@ export const apiClient = {
 
   // ─── Carrier accounts ───────────────────────────────────────────────────────
   fetchCarrierAccounts(): Promise<any[]> {
-    return cachedSafe(
-      'fetchCarrierAccounts',
-      'fetchCarrierAccounts',
-      60_000,
-      10 * 60_000,
-      async () => {
-        const res = await api.get<any>('/init/carrier-accounts', { timeoutMs: 25_000 });
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.carriers)) return res.carriers;
-        return [];
-      },
-      []
-    );
+    return api.get<any>('/init/carrier-accounts', { timeoutMs: 25_000 }).then((res) => {
+      if (Array.isArray(res)) return res;
+      if (Array.isArray(res?.carriers)) return res.carriers;
+      return [];
+    });
   },
 
   // v2 signature: GET /carriers-for-store?storeId=X — returned store-scoped
@@ -570,22 +564,13 @@ export const apiClient = {
 
   // ─── Column preferences (settings kv store) ─────────────────────────────────
   fetchColumnPrefs(): Promise<any> {
-    return cachedSafe(
-      'fetchColumnPrefs',
-      'fetchColumnPrefs',
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
-        const row = await api.get<SettingsRow>('/settings/orders.columnPrefs', { timeoutMs: 25_000 });
-        try {
-          return JSON.parse(row.value);
-        } catch {
-          return null;
-        }
-      },
-      null,
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
-    );
+    return api.get<SettingsRow>('/settings/orders.columnPrefs', { timeoutMs: 25_000 }).then((row) => {
+      try {
+        return JSON.parse(row.value);
+      } catch {
+        return null;
+      }
+    });
   },
 
   saveColumnPrefs(prefs: unknown): Promise<any> {
@@ -595,7 +580,7 @@ export const apiClient = {
         const res = await api.put<any>('/settings/orders.columnPrefs', {
           value: JSON.stringify(prefs ?? null),
         });
-        clearCachedReads('fetchColumnPrefs');
+        void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.columnPrefs });
         return res;
       },
       {}
@@ -668,34 +653,12 @@ export const apiClient = {
   },
 
   // ─── Sync status ────────────────────────────────────────────────────────────
-  fetchLegacySyncStatus(options: { forceRefresh?: boolean } = {}): Promise<any> {
-    return cachedSafe(
-      'fetchLegacySyncStatus',
-      'fetchLegacySyncStatus',
-      90_000,
-      10 * 60_000,
-      () => api.get<any>('/sync/status', { timeoutMs: 25_000 }),
-      {},
-      {
-        warn: false,
-        fallbackTtlMs: 2 * 60_000,
-        fallbackStaleMs: 10 * 60_000,
-        throwOnError: true,
-        forceRefresh: options.forceRefresh,
-      }
-    );
+  fetchLegacySyncStatus(_options: { forceRefresh?: boolean } = {}): Promise<any> {
+    return api.get<any>('/sync/status', { timeoutMs: 25_000 });
   },
 
   fetchSyncWorkerStatus(): Promise<any> {
-    return cachedSafe(
-      'fetchSyncWorkerStatus',
-      'fetchSyncWorkerStatus',
-      90_000,
-      10 * 60_000,
-      () => api.get<any>('/worker/status', { timeoutMs: 25_000 }),
-      { enabled: false },
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
-    );
+    return api.get<any>('/worker/status', { timeoutMs: 25_000 });
   },
 
   triggerLegacySync(mode?: 'incremental' | 'full'): Promise<any> {
@@ -893,19 +856,9 @@ export const apiClient = {
     if (filters.dateTo) q.dateTo = filters.dateTo
     if (filters.includeInactiveClients) q.includeInactiveClients = 'true'
     const queryString = qs(q)
-    return cachedSafe(
-      'fetchDistinctSkus',
-      `fetchDistinctSkus:${queryString}`,
-      5 * 60_000,
-      15 * 60_000,
-      async () => {
-        const res = await api.get<{ skus: string[] }>(`/orders/distinct-skus${queryString}`, {
-          timeoutMs: 25_000,
-        })
-        return Array.isArray(res?.skus) ? res.skus : []
-      },
-      []
-    )
+    return api.get<{ skus: string[] }>(`/orders/distinct-skus${queryString}`, {
+      timeoutMs: 25_000,
+    }).then((res) => Array.isArray(res?.skus) ? res.skus : [])
   },
 
   // Resolve a marketplace-facing orderNumber (text) → local PK (number).
@@ -1086,57 +1039,10 @@ export const apiClient = {
       dateFrom: toIsoDayStart(query?.dateFrom),
       dateTo: toIsoDayEnd(query?.dateTo),
     });
-    const cacheKey = `fetchDailyStats:${queryString}`;
-    const now = Date.now();
-    const existing = cachedReads.get(cacheKey) as CachedRead<DailyStatsSummary> | undefined;
-    if (existing?.hasValue && existing.expiresAt > now) {
-      return Promise.resolve(existing.value as DailyStatsSummary);
-    }
-    if (existing?.inFlight) return existing.inFlight;
-
-    const inFlight = (async () => {
-      try {
-        // V2 parity: the daily stats endpoint applies only the configured
-        // excluded store IDs server-side.
-        const res = await api.get<unknown>(`/orders/daily-stats${queryString}`, { timeoutMs: 25_000 });
-        const parsed = parseDailyStatsSummary(res);
-        const settledAt = Date.now();
-        cachedReads.set(cacheKey, {
-          hasValue: true,
-          value: parsed,
-          expiresAt: settledAt + 5 * 60_000,
-          staleUntil: settledAt + 30 * 60_000,
-        });
-        return parsed;
-      } catch (err) {
-        const current = cachedReads.get(cacheKey) as CachedRead<DailyStatsSummary> | undefined;
-        if (current?.hasValue && current.staleUntil > Date.now()) {
-          warnThrottled(
-            'cached-stale:fetchDailyStats',
-            '[v2-apiClient] fetchDailyStats failed; using cached value:',
-            err instanceof Error ? err.message : err
-          );
-          return current.value as DailyStatsSummary;
-        }
-        warnThrottled(
-          'cached:fetchDailyStats',
-          '[v2-apiClient] fetchDailyStats failed:',
-          err instanceof Error ? err.message : err
-        );
-        throw err;
-      } finally {
-        const current = cachedReads.get(cacheKey) as CachedRead<DailyStatsSummary> | undefined;
-        if (current?.inFlight) {
-          delete current.inFlight;
-        }
-      }
-    })();
-
-    cachedReads.set(cacheKey, {
-      ...(existing ?? { hasValue: false, expiresAt: 0, staleUntil: 0 }),
-      inFlight,
-    });
-    return inFlight;
+    // V2 parity: the daily stats endpoint applies only the configured
+    // excluded store IDs server-side. TanStack owns request dedupe/staleness.
+    return api.get<unknown>(`/orders/daily-stats${queryString}`, { timeoutMs: 25_000 })
+      .then(parseDailyStatsSummary);
   },
 
   fetchPicklist(query: {
@@ -1470,6 +1376,10 @@ export const apiClient = {
     return api.get<any>(`/print-queue/batch-send/status/${encodeURIComponent(jobId)}`);
   },
 
+  resumeQueueSendJob(jobId: string): Promise<any> {
+    return api.post<any>(`/print-queue/batch-send/${encodeURIComponent(jobId)}/resume`, {});
+  },
+
   // PS-195: clears require EXPLICIT entry targeting — the backend rejects
   // blanket clears without ids and refuses entries inside a running merge.
   clearQueue(clientId: number, entryIds: string[]): Promise<any> {
@@ -1728,12 +1638,7 @@ export const apiClient = {
     const page = Math.max(1, Number(query?.page) || 1);
     const pageSize = Math.max(1, Math.min(2000, Number(query?.pageSize) || 50));
     const requestQuery = { ...(query ?? {}), page, pageSize };
-    return cachedSafe(
-      'fetchInventoryPage',
-      `fetchInventoryPage:${JSON.stringify(requestQuery)}`,
-      30_000,
-      5 * 60_000,
-      async () => {
+    return (async () => {
         const [res, clientRows]: [any, any[]] = await Promise.all([
           api.get<any>(`/inventory${qs(requestQuery as any)}`),
           apiClient.fetchClients().catch(() => []),
@@ -1769,16 +1674,7 @@ export const apiClient = {
           page: responsePage,
           pageSize: responsePageSize,
         };
-      },
-      {
-        items: [],
-        total: 0,
-        totalPages: 1,
-        page: Number(query?.page) || 1,
-        pageSize: Number(query?.pageSize) || 50,
-      },
-      { warn: false, fallbackTtlMs: 60_000, fallbackStaleMs: 5 * 60_000, throwOnError: true }
-    );
+      })();
   },
 
   // Auto-paginates through all pages so the Inventory main view shows EVERY
@@ -1873,7 +1769,7 @@ export const apiClient = {
     //   productHeight    → (dropped)
     //
     // Pass-through (v4 already matches): baseUnitQty, length, width, height,
-    //   weightOz, cuFtOverride, packageId, sku, name, imageUrl, stockQty,
+    //   weightOz, cuFtOverride, packageId, sku, name, imageUrl,
     //   reorderLevel, unitsPerPack, active, clientId.
     const PASS_THROUGH = new Set([
       'baseUnitQty',
@@ -1886,7 +1782,6 @@ export const apiClient = {
       'sku',
       'name',
       'imageUrl',
-      'stockQty',
       'reorderLevel',
       'unitsPerPack',
       'active',
@@ -1922,8 +1817,7 @@ export const apiClient = {
     // the lowStock flag on the list endpoint. Server caps pageSize at 200
     // (see src/lib/pagination.ts) — exceed it and the zod validator 400s.
     //
-    // v2 UI expects enriched rows with clientName + currentStock (the v4
-    // row only has stockQty + clientId). Join /clients here so the alerts
+    // The UI expects enriched rows with clientName. Join /clients here so the alerts
     // banner doesn't render "undefined" for the client label.
     return safe(
       'fetchInventoryAlerts',
@@ -2130,6 +2024,7 @@ export const apiClient = {
     if (Array.isArray((data as any)?.items)) {
       return api.post<any>('/inventory/receive', {
         clientId: (data as any).clientId ?? null,
+        idempotencyKey: (data as any).idempotencyKey,
         note: (data as any).note,
         receivedAt: (data as any).receivedAt,
         items: ((data as any).items as any[]).map((item) => ({
@@ -2151,6 +2046,7 @@ export const apiClient = {
     }
     return api.post<any>(`/inventory/${invId}/receive`, {
       qty: (data as any).qty,
+      idempotencyKey: (data as any).idempotencyKey,
       note: (data as any).note,
       orderId: (data as any).orderId,
       receivedAt: (data as any).receivedAt,
@@ -2177,7 +2073,7 @@ export const apiClient = {
         sku: e?.inventory?.sku ?? e?.sku ?? '',
         name: e?.inventory?.name ?? e?.name ?? '',
         qty: e?.ledger?.qty ?? e?.qty ?? (data as any)?.qty ?? 0,
-        newStock: e?.inventory?.stockQty ?? e?.newStock ?? e?.stockQty ?? 0,
+        inventoryQuantity: e?.inventoryQuantity ?? e?.inventory?.inventoryQuantity ?? 0,
         ledgerId: e?.ledger?.id ?? e?.ledgerId ?? null,
       }));
       const error = failedRows
@@ -2202,22 +2098,23 @@ export const apiClient = {
       note: (data as any).note,
       orderId: (data as any).orderId,
       type: (data as any).type,
+      idempotencyKey: (data as any).idempotencyKey,
       adjustedAt: (data as any).adjustedAt,
     });
   },
 
   submitInventoryAdjustment(data: Record<string, unknown>): Promise<any> {
     // v4's POST /inventory/:id/adjust returns {inventory, ledger}. Toast was
-    // reading result.stockQty (undefined on current backend, would be defined
+    // reading a canonical backend quantity.
     // if backend flattened). Check the nested path first, fall back to flat
     // in case the server contract changes.
     return apiClient.adjustInventory(data).then((result) => ({
       ok: true,
-      newStock:
-        (result as any)?.inventory?.stockQty ??
-        (result as any)?.stockQty ??
+      inventoryQuantity:
+        (result as any)?.inventoryQuantity ??
+        (result as any)?.inventory?.inventoryQuantity ??
         0,
-    } as { ok: boolean; newStock: number }));
+    } as { ok: boolean; inventoryQuantity: number }));
   },
 
   populateInventory(): Promise<any> {
@@ -2279,22 +2176,14 @@ export const apiClient = {
   fetchLocations(): Promise<any[]> {
     // v4 returns rows with `id`; v2 consumers (LocationsView, useLocations)
     // read `locationId`. Normalize here so every caller gets the v2 shape.
-    return cachedSafe(
-      'fetchLocations',
-      'fetchLocations',
-      60_000,
-      10 * 60_000,
-      async () => {
-        const res = await api.get<any>('/locations', { timeoutMs: 25_000 });
-        const rows = Array.isArray(res)
-          ? res
-          : Array.isArray(res?.data)
-            ? res.data
-            : [];
-        return rows.map((r: any) => ({ ...r, locationId: r?.locationId ?? r?.id }));
-      },
-      []
-    );
+    return api.get<any>('/locations', { timeoutMs: 25_000 }).then((res) => {
+      const rows = Array.isArray(res)
+        ? res
+        : Array.isArray(res?.data)
+          ? res.data
+          : [];
+      return rows.map((r: any) => ({ ...r, locationId: r?.locationId ?? r?.id }));
+    });
   },
 
 
@@ -2339,20 +2228,11 @@ export const apiClient = {
 
   // ─── Packages ──────────────────────────────────────────────────────────────
   fetchPackages(source?: string): Promise<any[]> {
-    return cachedSafe(
-      'fetchPackages',
-      `fetchPackages:${source ?? ''}`,
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
-        const res = await api.get<any>(`/packages${qs({ source })}`, { timeoutMs: 25_000 });
-        if (Array.isArray(res)) return res.map(normalizePackageDto);
-        if (Array.isArray(res?.data)) return res.data.map(normalizePackageDto);
-        return [];
-      },
-      [],
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
-    );
+    return api.get<any>(`/packages${qs({ source })}`, { timeoutMs: 25_000 }).then((res) => {
+      if (Array.isArray(res)) return res.map(normalizePackageDto);
+      if (Array.isArray(res?.data)) return res.data.map(normalizePackageDto);
+      return [];
+    });
   },
 
 
@@ -2366,7 +2246,7 @@ export const apiClient = {
           ),
           ok: true,
         };
-        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        invalidatePackageReads();
         return response;
       },
       {}
@@ -2378,7 +2258,7 @@ export const apiClient = {
       'autoCreatePackageByDimensions',
       async () => {
         const response = normalizePackageResponse(await api.post<any>('/packages/auto-create', data));
-        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        invalidatePackageReads();
         return response;
       },
       {}
@@ -2401,7 +2281,7 @@ export const apiClient = {
           ),
           ok: true,
         };
-        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        invalidatePackageReads();
         return response;
       },
       {}
@@ -2410,7 +2290,7 @@ export const apiClient = {
 
   deletePackageMutation(packageId: number): Promise<any> {
     return api.delete<any>(`/packages/${packageId}`).then((result) => {
-      clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+      invalidatePackageReads();
       return result;
     });
   },
@@ -2422,7 +2302,7 @@ export const apiClient = {
       'setPackageReorderLevel',
       async () => {
         const response = await api.patch<any>(`/packages/${packageId}`, { reorderLevel });
-        clearCachedReads('fetchPackages');
+        invalidatePackageReads(false);
         return response;
       },
       { ok: false }
@@ -2439,7 +2319,7 @@ export const apiClient = {
             normalizePackageReceivePayload(data)
           )
         );
-        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        invalidatePackageReads();
         return response;
       },
       {}
@@ -2456,7 +2336,7 @@ export const apiClient = {
             normalizePackageAdjustPayload(data)
           )
         );
-        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        invalidatePackageReads();
         return response;
       },
       {}
@@ -2482,30 +2362,25 @@ export const apiClient = {
   // window. Packages with zero usage are omitted from the response and
   // should be treated as 0 by callers — this keeps the payload tiny.
   fetchPackagesUsageSummary(days = 30): Promise<{ packageId: number; used: number }[]> {
-    return cachedSafe(
-      'fetchPackagesUsageSummary',
-      `fetchPackagesUsageSummary:${days}`,
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
-        const res = await api.get<any>(`/packages/usage-summary?days=${days}`);
-        if (Array.isArray(res?.data)) {
-          return res.data.map((r: any) => ({
-            packageId: Number(r?.packageId ?? r?.package_id ?? 0),
-            used: Number(r?.used ?? 0) || 0,
-          }));
-        }
-        return [];
-      },
-      [],
-      { fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
-    );
+    return api.get<any>(`/packages/usage-summary?days=${days}`).then((res) => {
+      if (Array.isArray(res?.data)) {
+        return res.data.map((r: any) => ({
+          packageId: Number(r?.packageId ?? r?.package_id ?? 0),
+          used: Number(r?.used ?? 0) || 0,
+        }));
+      }
+      return [];
+    });
   },
 
   syncCarrierPackages(): Promise<any> {
     return safe(
       'syncCarrierPackages',
-      () => api.post<any>('/packages/sync', {}),
+      async () => {
+        const response = await api.post<any>('/packages/sync', {});
+        invalidatePackageReads(false);
+        return response;
+      },
       { inserted: 0, skipped: 0, message: '' }
     );
   },
@@ -2514,7 +2389,11 @@ export const apiClient = {
   backfillPackageStartDate(): Promise<any> {
     return safe(
       'backfillPackageStartDate',
-      () => api.post<any>('/packages/backfill-start-date', {}),
+      async () => {
+        const response = await api.post<any>('/packages/backfill-start-date', {});
+        invalidatePackageReads(false);
+        return response;
+      },
       {
         updated: 0,
         startDate: '2026-04-01T00:00:00.000Z',
@@ -2526,7 +2405,11 @@ export const apiClient = {
   importStandardPackageDimensions(): Promise<any> {
     return safe(
       'importStandardPackageDimensions',
-      () => api.post<any>('/packages/import-standard-dimensions', {}),
+      async () => {
+        const response = await api.post<any>('/packages/import-standard-dimensions', {});
+        invalidatePackageReads(false);
+        return response;
+      },
       {
         inserted: 0,
         skippedExisting: 0,
@@ -2540,20 +2423,11 @@ export const apiClient = {
   },
 
   fetchBillingConfigs(): Promise<any[]> {
-    return cachedSafe(
-      'fetchBillingConfigs',
-      'fetchBillingConfigs',
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
-        const res = await api.get<any>('/billing/config');
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
-      },
-      [],
-      { fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
-    );
+    return api.get<any>('/billing/config').then((res) => {
+      if (Array.isArray(res)) return res;
+      if (Array.isArray(res?.data)) return res.data;
+      return [];
+    });
   },
 
   updateBillingConfig(clientId: number, data: Record<string, unknown>): Promise<any> {
@@ -2599,7 +2473,7 @@ export const apiClient = {
       'updateBillingConfig',
       async () => {
         const res = await api.put<any>(`/billing/config/${clientId}`, payload);
-        clearCachedReads('fetchBillingConfigs', 'fetchBillingSummary');
+        invalidateBillingReads({ configs: true, summary: true });
         return res;
       },
       {}
@@ -2613,7 +2487,7 @@ export const apiClient = {
       'setClientHouseAccount',
       async () => {
         const res = await api.patch<any>(`/admin/clients/${clientId}/house-account`, { enabled });
-        clearCachedReads('fetchBillingConfigs');
+        invalidateBillingReads({ configs: true });
         return res;
       },
       {}
@@ -2629,7 +2503,7 @@ export const apiClient = {
         to,
         ...(clientId != null ? { clientId } : {}),
       });
-      clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
+      invalidateBillingReads({ summary: true, shippingMargin: true });
       return res;
     })();
   },
@@ -2657,12 +2531,7 @@ export const apiClient = {
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
     const clientParams = billingClientFilterParams(clientFilter);
-    return cachedSafe(
-      'fetchBillingSummary',
-      `fetchBillingSummary:${dateFrom ?? ''}:${dateTo ?? ''}:${clientParams.clientId ?? clientParams.clientIds ?? ''}`,
-      60_000,
-      10 * 60_000,
-      async () => {
+    return (async () => {
         const [res, clientsRes] = await Promise.all([
           api.get<any>(`/billing/summary${qs({ dateFrom, dateTo, ...clientParams })}`),
           apiClient.fetchClients().catch(() => []),
@@ -2701,44 +2570,15 @@ export const apiClient = {
             grandTotal: total,
           };
         });
-      },
-      [],
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
-    );
+      })();
   },
 
   fetchShippingMarginAnalytics(from: string, to: string, clientFilter?: number | number[]): Promise<any> {
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
     const clientParams = billingClientFilterParams(clientFilter);
-    return cachedSafe(
-      'fetchShippingMarginAnalytics',
-      `fetchShippingMarginAnalytics:${dateFrom ?? ''}:${dateTo ?? ''}:${clientParams.clientId ?? clientParams.clientIds ?? ''}`,
-      60_000,
-      10 * 60_000,
-      async () => {
-        const res = await api.get<any>(`/billing/shipping-margin${qs({ dateFrom, dateTo, ...clientParams })}`);
-        return res?.data ?? res;
-      },
-      {
-        summary: {
-          rowCount: 0,
-          marginRowCount: 0,
-          frozenCount: 0,
-          projectedCount: 0,
-          missingBillableCount: 0,
-          missingActualCostCount: 0,
-          missingAnyProofCount: 0,
-          actualShippingTotal: 0,
-          billableShippingTotal: 0,
-          marginTotal: 0,
-          marginPct: null,
-        },
-        clients: [],
-        rows: [],
-      },
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
-    );
+    return api.get<any>(`/billing/shipping-margin${qs({ dateFrom, dateTo, ...clientParams })}`)
+      .then((res) => res?.data ?? res);
   },
 
   fetchBillingDetails(from: string, to: string, clientId: number): Promise<any[]> {
@@ -2777,7 +2617,7 @@ export const apiClient = {
       clientId,
       ...data,
     }).then((res) => {
-      clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
+      invalidateBillingReads({ summary: true, shippingMargin: true });
       return res;
     });
   },
@@ -2794,29 +2634,18 @@ export const apiClient = {
   }): Promise<any> {
     return api.post<any>('/billing/hugrab-shipping-floor', data).then((res) => {
       if (data.apply) {
-        clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
+        invalidateBillingReads({ summary: true, shippingMargin: true });
       }
       return res?.data ?? res;
     });
   },
 
   fetchBillingPackagePrices(clientId: number): Promise<any[]> {
-    return cachedSafe(
-      'fetchBillingPackagePrices',
-      `fetchBillingPackagePrices:${clientId}`,
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
-        const res = await api.get<any>(
-          `/billing/package-prices${qs({ clientId })}`
-        );
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
-      },
-      [],
-      { fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
-    );
+    return api.get<any>(`/billing/package-prices${qs({ clientId })}`).then((res) => {
+      if (Array.isArray(res)) return res;
+      if (Array.isArray(res?.data)) return res.data;
+      return [];
+    });
   },
 
   saveBillingPackagePrices(data: Record<string, unknown>): Promise<any> {
@@ -2824,7 +2653,7 @@ export const apiClient = {
       'saveBillingPackagePrices',
       async () => {
         const res = await api.put<any>('/billing/package-prices', data);
-        clearCachedReads('fetchBillingPackagePrices', 'fetchBillingSummary');
+        invalidateBillingReads({ packagePrices: true, summary: true });
         return res;
       },
       {}
@@ -2836,7 +2665,7 @@ export const apiClient = {
       'setDefaultPackagePrice',
       async () => {
         const res = await api.post<any>('/billing/package-prices/set-default', { packageId, price });
-        clearCachedReads('fetchBillingPackagePrices', 'fetchBillingSummary');
+        invalidateBillingReads({ packagePrices: true, summary: true });
         return res;
       },
       {}

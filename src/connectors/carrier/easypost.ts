@@ -155,6 +155,7 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
+  const signal = input.signal as AbortSignal | undefined;
   const apiKey = firstString(creds.apiKey);
   if (!apiKey) throw new Error('EasyPost apiKey required');
   const basic = Buffer.from(`${apiKey}:`).toString('base64');
@@ -194,6 +195,7 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
     method: 'POST',
     headers,
     body: JSON.stringify(shipBody),
+    signal,
   });
   if (!createRes.ok) {
     const t = await createRes.text().then((s) => s.slice(0, 600)).catch(() => '');
@@ -218,6 +220,7 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
     method: 'POST',
     headers,
     body: JSON.stringify({ rate: { id: rate.id } }),
+    signal,
   });
   if (!buyRes.ok) {
     const t = await buyRes.text().then((s) => s.slice(0, 600)).catch(() => '');

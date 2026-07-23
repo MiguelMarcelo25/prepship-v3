@@ -2,6 +2,8 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { packages } from '../db/schema/packages';
+import { locations } from '../db/schema/locations';
 import { isEbayMarketplaceOrder } from './ebay-order-detection';
 import {
   CACHE_TTL_MS,
@@ -52,6 +54,7 @@ import {
   selectedRateOpaqueKey,
   withSelectedRateKeys,
 } from './shipping-workflow/rate-quote-snapshot-store';
+import { rateSourcesArePurchaseProofEligible } from './shipping-workflow/rate-signature-cache-policy';
 import {
   readText,
   stampHugrabCoverageDisplayFields,
@@ -62,6 +65,20 @@ import {
   stampRateSourceDisplay,
   stampRateSourceDisplayList,
 } from './rate-source-display';
+import { resolveRecipientForShipping } from './order-recipient-override';
+import { getDefaultLocation } from './locations';
+import { getDefaultShipFrom } from '../lib/ship-from';
+import { resolveOutboundPackageSelection } from './package-consumption';
+import { normalizeShippingOptions } from '../lib/shipping-options';
+import { resolveCarrierRecipientName } from './carrier-recipient-name';
+import {
+  createShippingQuoteSelectionRef,
+  normalizeShippingQuoteAddress,
+  shippingProviderIdFromAuthorizedRate,
+  type ShippingQuoteAccountAuthorization,
+  type ShippingQuoteAuthorizationContext,
+} from './shipping-workflow/shipping-quote-authorization';
+import { shipStationQuoteAccountAuthorizations } from './shipping-workflow/quote-account-authorization';
 
 type RateBrowseBody = Record<string, any>;
 
@@ -69,6 +86,7 @@ export type ProduceRateBrowsePayloadInput = {
   body: RateBrowseBody;
   canViewFinancials: boolean;
   browseStartedAt?: number;
+  signal?: AbortSignal;
 };
 
 function browseSotWritebackEnabled(): boolean {
@@ -85,11 +103,58 @@ function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?
   return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
 }
 
+type AuthorizedQuoteOrigin = {
+  locationId: number | null;
+  address: Record<string, unknown>;
+};
+
+function locationRateAddress(row: typeof locations.$inferSelect): Record<string, unknown> {
+  return {
+    name: row.name,
+    company_name: row.company ?? undefined,
+    address_line1: row.street1 ?? undefined,
+    address_line2: row.street2 ?? undefined,
+    city_locality: row.city ?? undefined,
+    state_province: row.state ?? undefined,
+    postal_code: row.postalCode ?? undefined,
+    country_code: row.country,
+    phone: row.phone ?? undefined,
+  };
+}
+
+async function resolveAuthorizedQuoteOrigin(locationId: unknown): Promise<AuthorizedQuoteOrigin> {
+  const requestedId = Number(locationId);
+  if (Number.isInteger(requestedId) && requestedId > 0) {
+    const [row] = await db
+      .select()
+      .from(locations)
+      .where(eq(locations.id, requestedId))
+      .limit(1);
+    if (!row || row.active === false) {
+      throw new Error('Selected ship-from location is missing or inactive');
+    }
+    return { locationId: row.id, address: locationRateAddress(row) };
+  }
+  const defaultLocation = await getDefaultLocation().catch(() => null);
+  if (defaultLocation) {
+    return {
+      locationId: defaultLocation.id,
+      address: locationRateAddress(defaultLocation),
+    };
+  }
+  return {
+    locationId: null,
+    address: await getDefaultShipFrom() as unknown as Record<string, unknown>,
+  };
+}
+
 export async function produceRateBrowsePayload({
   body,
   canViewFinancials,
   browseStartedAt = Date.now(),
+  signal,
 }: ProduceRateBrowsePayloadInput): Promise<Record<string, unknown>> {
+  signal?.throwIfAborted();
   const {
     forceRefresh,
     forceLive,
@@ -107,56 +172,86 @@ export async function produceRateBrowsePayload({
   let orderForBrowse: {
     sourceProvider: string | null;
     sourceAccountId: string | null;
+    sourceOrderId: string | null;
     raw: unknown;
+    shipToName: string | null;
+    customerEmail: string | null;
     shipToPostalCode: string | null;
     shipToState: string | null;
     shipToCity: string | null;
+    weightOz: number | null;
     clientId: number | null;
     storeId: number | null;
     orderNumber: string | null;
     clientName: string | null;
     externalOrderId: string | null;
+    residentialOverride: boolean | null;
+    recipientOverride: unknown | null;
+    rateWeightOz: number | null;
+    rateDimsL: number | null;
+    rateDimsW: number | null;
+    rateDimsH: number | null;
+    selectedPackageId: string | null;
   } | null = null;
   let residentialEvidence: ResidentialEvidence | null = null;
+  let canonicalShipTo: Record<string, unknown> | null = null;
+  let authorizedOrigin: AuthorizedQuoteOrigin | null = null;
   if (body.orderId) {
     try {
       const [ord] = await db
         .select({
           sourceProvider: orders.sourceProvider,
           sourceAccountId: orders.sourceAccountId,
+          sourceOrderId: orders.sourceOrderId,
           raw: orders.raw,
           shipToPostalCode: orders.shipToPostalCode,
           shipToState: orders.shipToState,
           shipToCity: orders.shipToCity,
           shipToName: orders.shipToName,
+          customerEmail: orders.customerEmail,
+          weightOz: orders.weightOz,
           clientId: orders.clientId,
           storeId: orders.storeId,
           orderNumber: orders.orderNumber,
           clientName: clients.name,
           externalOrderId: orders.externalOrderId,
+          residentialOverride: orderOverrides.residential,
+          recipientOverride: orderOverrides.recipientOverride,
+          rateWeightOz: orderOverrides.rateWeightOz,
+          rateDimsL: orderOverrides.rateDimsL,
+          rateDimsW: orderOverrides.rateDimsW,
+          rateDimsH: orderOverrides.rateDimsH,
+          selectedPackageId: orderOverrides.selectedPackageId,
         })
         .from(orders)
         .leftJoin(clients, eq(clients.id, orders.clientId))
+        .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
         .where(eq(orders.id, body.orderId))
         .limit(1);
       if (ord) {
         orderForBrowse = ord;
-        const [ovr] = await db
-          .select({ residential: orderOverrides.residential })
-          .from(orderOverrides)
-          .where(eq(orderOverrides.orderId, body.orderId))
-          .limit(1);
         const browseRawShipTo = ((ord.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+        canonicalShipTo = resolveRecipientForShipping({
+          override: ord.recipientOverride,
+          rawShipTo: browseRawShipTo,
+          fallback: {
+            name: ord.shipToName,
+            city: ord.shipToCity,
+            state: ord.shipToState,
+            postalCode: ord.shipToPostalCode,
+          },
+        }).address;
+        authorizedOrigin = await resolveAuthorizedQuoteOrigin(body.shipFromLocationId);
         const browseResolved = await resolveAddressClassification({
-          street1: typeof browseRawShipTo.street1 === 'string' ? browseRawShipTo.street1 : null,
-          city: typeof browseRawShipTo.city === 'string' ? browseRawShipTo.city : null,
-          state: typeof browseRawShipTo.state === 'string' ? browseRawShipTo.state : null,
-          postalCode: typeof browseRawShipTo.postalCode === 'string' ? browseRawShipTo.postalCode : null,
-          country: typeof browseRawShipTo.country === 'string' ? browseRawShipTo.country : null,
+          street1: typeof canonicalShipTo.street1 === 'string' ? canonicalShipTo.street1 : null,
+          city: typeof canonicalShipTo.city === 'string' ? canonicalShipTo.city : null,
+          state: typeof canonicalShipTo.state === 'string' ? canonicalShipTo.state : null,
+          postalCode: typeof canonicalShipTo.postalCode === 'string' ? canonicalShipTo.postalCode : null,
+          country: typeof canonicalShipTo.country === 'string' ? canonicalShipTo.country : null,
         });
         residentialEvidence = buildResidentialEvidenceFromOrder({
-          rawShipTo: (ord.raw as { shipTo?: unknown } | null)?.shipTo,
-          manualOverrideResidential: ovr?.residential,
+          rawShipTo: canonicalShipTo,
+          manualOverrideResidential: ord.residentialOverride,
           shipToName: ord.shipToName,
           resolved: browseResolved,
         });
@@ -165,18 +260,35 @@ export async function produceRateBrowsePayload({
       console.warn('[rates/browse] order residential-evidence load skipped:', err instanceof Error ? err.message : err);
     }
   }
-  const orderRawShipTo = ((orderForBrowse?.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+  const orderRawShipTo = canonicalShipTo
+    ?? ((orderForBrowse?.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo)
+    ?? {};
   const browseRateInput = {
     ...rest,
-    toZip: rest.toZip ?? orderForBrowse?.shipToPostalCode ?? readText(orderRawShipTo.postalCode) ?? rest.toZip,
+    weightOz: orderForBrowse
+      ? orderForBrowse.rateWeightOz ?? orderForBrowse.weightOz ?? rest.weightOz
+      : rest.weightOz,
+    dimsL: orderForBrowse ? orderForBrowse.rateDimsL ?? rest.dimsL : rest.dimsL,
+    dimsW: orderForBrowse ? orderForBrowse.rateDimsW ?? rest.dimsW : rest.dimsW,
+    dimsH: orderForBrowse ? orderForBrowse.rateDimsH ?? rest.dimsH : rest.dimsH,
+    toZip: orderForBrowse
+      ? readText(orderRawShipTo.postalCode) ?? orderForBrowse.shipToPostalCode ?? rest.toZip
+      : rest.toZip,
     toCountry: resolveRateBrowseDestinationCountry({
-      requestedCountry: rest.toCountry,
-      canonicalCountry: readText(orderRawShipTo.country),
+      requestedCountry: orderForBrowse ? undefined : rest.toCountry,
+      canonicalCountry: orderForBrowse ? readText(orderRawShipTo.country) : null,
     }),
-    toState: rest.toState ?? orderForBrowse?.shipToState ?? readText(orderRawShipTo.state) ?? rest.toState,
-    toCity: rest.toCity ?? orderForBrowse?.shipToCity ?? readText(orderRawShipTo.city) ?? rest.toCity,
-    toAddress: rest.toAddress ?? readText(orderRawShipTo.street1) ?? undefined,
-    toAddress2: rest.toAddress2 ?? readText(orderRawShipTo.street2) ?? undefined,
+    toState: orderForBrowse
+      ? readText(orderRawShipTo.state) ?? orderForBrowse.shipToState ?? rest.toState
+      : rest.toState,
+    toCity: orderForBrowse
+      ? readText(orderRawShipTo.city) ?? orderForBrowse.shipToCity ?? rest.toCity
+      : rest.toCity,
+    toAddress: orderForBrowse ? readText(orderRawShipTo.street1) ?? undefined : rest.toAddress,
+    toAddress2: orderForBrowse ? readText(orderRawShipTo.street2) ?? undefined : rest.toAddress2,
+    shipFrom: authorizedOrigin?.address ?? rest.shipFrom,
+    clientId: orderForBrowse?.clientId ?? rest.clientId ?? null,
+    storeId: orderForBrowse?.storeId ?? rest.storeId ?? null,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: orderedIds,
     sourceProvider: orderForBrowse?.sourceProvider ?? null,
@@ -190,8 +302,10 @@ export async function produceRateBrowsePayload({
     }),
     externalOrderId: orderForBrowse?.externalOrderId ?? (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
     orderNumber: orderForBrowse?.orderNumber ?? (rest as { orderNumber?: string | null }).orderNumber ?? null,
+    signal,
     ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),
   } as RateInput & Record<string, any>;
+  signal?.throwIfAborted();
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const resolvedForBrowse = await resolveRateInput(browseRateInput);
   let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
@@ -298,6 +412,7 @@ export async function produceRateBrowsePayload({
       return { result, directRates, shipStationDurationMs, directCarrierDurationMs };
     },
   );
+  signal?.throwIfAborted();
   const limiterAfter = getRateEngineLimiterSnapshot();
   const requestedSet = requestedCarrierIds?.length ? new Set(requestedCarrierIds) : null;
   const filtered = shipStationBlocked
@@ -358,6 +473,106 @@ export async function produceRateBrowsePayload({
   const browseCacheExpiresAt = new Date(
     new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
   ).toISOString();
+  let quoteAuthorization: {
+    context: ShippingQuoteAuthorizationContext;
+    accounts: ShippingQuoteAccountAuthorization[];
+  } | null = null;
+  if (body.orderId && orderForBrowse && canonicalShipTo && authorizedOrigin) {
+    const packageSelection = await resolveOutboundPackageSelection({
+      orderId: body.orderId,
+      selectedPackageId: body.customPackageId ?? null,
+      dimensions: {
+        length: resolvedForBrowse.dimsL ?? null,
+        width: resolvedForBrowse.dimsW ?? null,
+        height: resolvedForBrowse.dimsH ?? null,
+      },
+    });
+    const packageId = packageSelection.status === 'matched' ? packageSelection.packageId : null;
+    const [packageRow] = packageId == null
+      ? []
+      : await db
+          .select({
+            id: packages.id,
+            type: packages.type,
+            packageCode: packages.packageCode,
+          })
+          .from(packages)
+          .where(eq(packages.id, packageId))
+          .limit(1);
+    const effectiveOptions = normalizeShippingOptions({
+      confirmation: resolvedForBrowse.confirmation,
+      insuranceProvider:
+        result.effectiveInsuranceProvider
+        ?? resolvedForBrowse.effectiveInsuranceProvider
+        ?? resolvedForBrowse.insuranceProvider,
+      insuredValue:
+        result.effectiveInsuredValue
+        ?? resolvedForBrowse.effectiveInsuredValue
+        ?? resolvedForBrowse.insuredValue,
+    });
+    const carrierRecipient = resolveCarrierRecipientName({
+      name: readText(canonicalShipTo.name),
+      company: readText(canonicalShipTo.company),
+      customerEmail: orderForBrowse.customerEmail,
+    });
+    const authorizedShipTo = {
+      ...canonicalShipTo,
+      name: carrierRecipient.name,
+      company: carrierRecipient.company,
+    };
+    const context: ShippingQuoteAuthorizationContext = {
+      version: 1,
+      order: {
+        orderId: body.orderId,
+        clientId: orderForBrowse.clientId,
+        storeId: orderForBrowse.storeId,
+        sourceProvider: orderForBrowse.sourceProvider,
+        sourceAccountId: orderForBrowse.sourceAccountId,
+        sourceOrderId: orderForBrowse.sourceOrderId,
+      },
+      shipment: {
+        shipFromLocationId: authorizedOrigin.locationId,
+        shipFrom: normalizeShippingQuoteAddress(authorizedOrigin.address),
+        shipTo: normalizeShippingQuoteAddress(authorizedShipTo),
+        package: {
+          id: packageRow?.id ?? packageId,
+          type: packageRow?.type ?? null,
+          code: packageRow?.packageCode ?? null,
+        },
+        weightOz: Number(resolvedForBrowse.weightOz),
+        dimensions: {
+          length: resolvedForBrowse.dimsL ?? null,
+          width: resolvedForBrowse.dimsW ?? null,
+          height: resolvedForBrowse.dimsH ?? null,
+        },
+        residential: result.residential === true,
+        confirmation: effectiveOptions.confirmation,
+        insuranceProvider: effectiveOptions.insuranceProvider,
+        insuredValue: Number(effectiveOptions.insuredValue ?? 0) || 0,
+      },
+    };
+    const presentProviderIds = new Set(
+      combinedRates
+        .map(shippingProviderIdFromAuthorizedRate)
+        .filter((id): id is number => id != null),
+    );
+    const accounts = [
+      ...shipStationQuoteAccountAuthorizations({
+        rates: combinedRates as Array<Record<string, unknown>>,
+        clientId: resolvedForBrowse.clientId ?? null,
+        sourceClientId: resolvedForBrowse.sourceClientId ?? null,
+        apiKeyV2: resolvedForBrowse.apiKeyV2 ?? null,
+      }),
+      ...directRates.authorizationAccounts,
+    ].filter((account, index, list) =>
+      presentProviderIds.has(account.shippingProviderId)
+      && list.findIndex((candidate) =>
+        candidate.shippingProviderId === account.shippingProviderId
+        && candidate.providerFamily === account.providerFamily,
+      ) === index,
+    );
+    quoteAuthorization = { context, accounts };
+  }
   let responseRates: Array<Record<string, unknown>> = withSelectedRateKeys(combinedRates);
   let rateQuoteId: string | undefined;
   let bestRateOut = cheapest;
@@ -369,6 +584,11 @@ export async function produceRateBrowsePayload({
       cacheKey: combinedRequestKey,
       bestRateComplete,
       fetchedAt: result.fetchedAt,
+      purchaseProofEligible: rateSourcesArePurchaseProofEligible({
+        shipStationCached: result.cached,
+        directCarrierCacheUsed: directRates.usedCachedRates,
+      }),
+      authorization: quoteAuthorization,
     });
     rateQuoteId = finalized.rateQuoteId;
     responseRates = finalized.rates;
@@ -377,6 +597,18 @@ export async function produceRateBrowsePayload({
           ...(secondCheapest as Record<string, unknown>),
           selectedRateKey: selectedRateOpaqueKey(secondCheapest),
           ...(rateQuoteId ? { rateQuoteId } : {}),
+          ...(rateQuoteId
+            && quoteAuthorization
+            && quoteAuthorization.accounts.some(
+              (account) => account.shippingProviderId === shippingProviderIdFromAuthorizedRate(secondCheapest),
+            )
+            ? {
+                selectionRef: createShippingQuoteSelectionRef(
+                  rateQuoteId,
+                  selectedRateOpaqueKey(secondCheapest),
+                ),
+              }
+            : {}),
           proofSource: BACKEND_RATE_PROOF_SOURCE,
         }
       : null;

@@ -17,6 +17,7 @@
 // The already-extracted <OrdersSearchBar> is composed here as the first child,
 // reading the same search props OrdersView threads through.
 import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
 import {
   Calendar,
   CheckSquare,
@@ -33,12 +34,36 @@ import type { OrdersDateFilter } from './orders-view-filters'
 import type { ColumnPrefs, ResolvedColumnPrefs } from './orders-parity'
 import type { TableColumnKey } from './orders-table-columns'
 import type { BatchRecalculateScope } from './orders-parity'
+import {
+  buildRecalculateAllProgressView,
+  type RecalculateAllProgressState,
+} from './orders-recalculate-all-progress'
+import { OrdersRecalculationProgress } from './OrdersRecalculationProgress'
 
 type QueueToolbarProgress = {
   label: string
   detail: string
   pct: number
   tone: string
+}
+
+const QUEUE_PROGRESS_HEADER_QUERY = '(min-width: 1440px)'
+
+function useQueueProgressHeaderSlot(): boolean {
+  const [useHeaderSlot, setUseHeaderSlot] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(QUEUE_PROGRESS_HEADER_QUERY).matches,
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const query = window.matchMedia(QUEUE_PROGRESS_HEADER_QUERY)
+    const update = () => setUseHeaderSlot(query.matches)
+    update()
+    query.addEventListener?.('change', update)
+    return () => query.removeEventListener?.('change', update)
+  }, [])
+
+  return useHeaderSlot
 }
 
 type AllMatchingSelectionLike = {
@@ -230,8 +255,8 @@ export type OrdersFilterToolbarBatchControlsProps = {
   selectedOrderIds: number[]
   onRecalculateAll: () => void
   onFullLiveRecalculateAll: () => void
-  recalcAllJobId: string | null
-  recalcAllSummary: string | null
+  recalcAllProgress: RecalculateAllProgressState | null
+  recalcAllBusy: boolean
   batchRecalculateProgress: BatchRecalculateProgressLike
   onToggleSkuSort: () => void
   skuSortActive: boolean
@@ -257,13 +282,24 @@ export function OrdersFilterToolbarBatchControls({
   selectedOrderIds,
   onRecalculateAll,
   onFullLiveRecalculateAll,
-  recalcAllJobId,
-  recalcAllSummary,
+  recalcAllProgress,
+  recalcAllBusy,
   batchRecalculateProgress,
   onToggleSkuSort,
   skuSortActive,
   onPrintPicklist,
 }: OrdersFilterToolbarBatchControlsProps) {
+  const recalcAllProgressView = recalcAllProgress
+    ? buildRecalculateAllProgressView(recalcAllProgress)
+    : null
+  const recalcAllDetail = recalcAllProgressView
+    ? [
+        `Updated ${recalcAllProgressView.updated.toLocaleString()}`,
+        recalcAllProgressView.failed > 0 ? `Failed ${recalcAllProgressView.failed.toLocaleString()}` : '',
+        recalcAllProgressView.skipped > 0 ? `Skipped ${recalcAllProgressView.skipped.toLocaleString()}` : '',
+      ].filter(Boolean).join(' · ')
+    : ''
+
   return (
     <>
       {/* Lockdown — Select All hidden in Shipped/Cancelled views.
@@ -338,7 +374,7 @@ export function OrdersFilterToolbarBatchControls({
       )}
 
       {currentStatus === 'awaiting_shipment' ? (
-        <div className="inline-flex items-center gap-1.5" aria-label="Strict live best-rate recalculation">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5" aria-label="Strict live best-rate recalculation">
           <button
             type="button"
             onClick={() => void onStartBatchRecalculateBestRates('selected')}
@@ -360,35 +396,32 @@ export function OrdersFilterToolbarBatchControls({
           <button
             type="button"
             onClick={() => void onRecalculateAll()}
-            // Busy state keys off recalcAllSummary (set ONLY for a manual click), not recalcAllJobId.
-            // Backend/sync-started rate backfill can be observed by OrdersView for row refresh without
-            // turning this operator button into a hidden background-job spinner.
-            disabled={recalcAllSummary != null || total === 0}
+            disabled={recalcAllBusy || total === 0}
             title="Fast cache-first refresh: reuse exact current rate tuples, live-rate only misses or stale rows"
             className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1
               text-[12px] font-medium
               transition-all duration-150
-              ${recalcAllSummary != null || total === 0
+              ${recalcAllBusy || total === 0
                 ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                 : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
             `}
           >
-            {recalcAllSummary != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
+            {recalcAllBusy ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
             Recalculate All
           </button>
           <button
             type="button"
             onClick={() => void onFullLiveRecalculateAll()}
-            disabled={recalcAllSummary != null || total === 0}
+            disabled={recalcAllBusy || total === 0}
             title="Full Live Recalculate audit: slow force-live check across all eligible awaiting rows"
             className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1
               text-[12px] font-medium
               transition-all duration-150
-              ${recalcAllSummary != null || total === 0
+              ${recalcAllBusy || total === 0
                 ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                 : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
             `}
@@ -396,35 +429,30 @@ export function OrdersFilterToolbarBatchControls({
             <RefreshCcw size={12.5} strokeWidth={2.25} />
             Full Live Audit
           </button>
-          {recalcAllSummary ? (
-            <span
-              data-recalculate-all-progress
-              className="inline-flex items-center h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] font-mono tabular-nums text-ink-2"
-              title="Backend best-rate backfill over all awaiting orders"
-            >
-              {recalcAllSummary}
-            </span>
+          {recalcAllProgressView ? (
+            <OrdersRecalculationProgress
+              kind="all"
+              label={recalcAllProgressView.label}
+              percent={recalcAllProgressView.percent}
+              completed={recalcAllProgressView.completed}
+              remaining={recalcAllProgressView.remaining}
+              total={recalcAllProgressView.total}
+              detail={recalcAllDetail}
+              statusMessage={recalcAllProgressView.statusMessage}
+              tone={recalcAllProgressView.tone}
+            />
           ) : null}
           {batchRecalculateProgress.total > 0 ? (
-            <div
-              data-batch-recalculate-progress
-              className="inline-flex items-center gap-2 h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] text-ink-2"
-              title="Strict live only: no cached or stale fallback rates are accepted"
-            >
-              <span className="font-mono font-semibold tabular-nums">{batchRecalculateProgress.percent}%</span>
-              <span className="relative w-20 h-1.5 rounded-full bg-line overflow-hidden" aria-hidden>
-                <span
-                  className="absolute inset-y-0 left-0 rounded-full bg-brand transition-all duration-200"
-                  style={{ width: `${batchRecalculateProgress.percent}%` }}
-                />
-              </span>
-              <span className="font-mono tabular-nums">
-                {batchRecalculateProgress.completed}/{batchRecalculateProgress.total}
-              </span>
-              <span className="text-ink-3">
-                Updated {batchRecalculateProgress.updated} · Retry {batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}
-              </span>
-            </div>
+            <OrdersRecalculationProgress
+              kind="selected"
+              label="Recalculating selected"
+              percent={batchRecalculateProgress.percent}
+              completed={batchRecalculateProgress.completed}
+              remaining={Math.max(batchRecalculateProgress.total - batchRecalculateProgress.completed, 0)}
+              total={batchRecalculateProgress.total}
+              detail={`Updated ${batchRecalculateProgress.updated} · Retry ${batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}`}
+              statusMessage="Strict live only: no cached or stale fallback rates are accepted"
+            />
           ) : null}
         </div>
       ) : null}
@@ -494,6 +522,8 @@ export function OrdersFilterToolbarExport({
   csvExporting,
   onExportCsv,
 }: OrdersFilterToolbarExportProps) {
+  const useHeaderSlot = useQueueProgressHeaderSlot()
+
   return (
     <>
       {/* Density toggle — segmented control */}
@@ -526,64 +556,55 @@ export function OrdersFilterToolbarExport({
       </div>
       {(() => {
         if (currentStatus !== 'awaiting_shipment' || !queueToolbarProgress) return null
+        const statusLabel = `${queueToolbarProgress.label}. ${queueToolbarProgress.pct}% complete. ${queueToolbarProgress.detail}`
         const widget = (
           <div
             id="queue-progress-indicator"
             role="status"
             aria-live="polite"
-            style={{
-              marginLeft: 8,
-              width: 240,
-              maxWidth: '34vw',
-              minWidth: 170,
-              padding: '5px 8px',
-              border: '1px solid var(--border2)',
-              borderRadius: 6,
-              background: 'var(--surface)',
-              boxShadow: '0 1px 2px rgba(15,23,42,.06)',
-              flexShrink: 1,
-              // Print Queue panel overlays at z-index 1200; lift this above
-              // it so the in-progress label stays visible while a Print All
-              // job is running with the panel still open.
-              position: 'relative',
-              zIndex: 1300,
-            }}
+            aria-atomic="true"
+            aria-label={statusLabel}
+            title={statusLabel}
+            className={`relative ${useHeaderSlot ? 'z-[1300]' : 'z-10'} ml-2 w-[clamp(280px,21.5vw,340px)] max-w-[calc(100vw-2rem)] shrink rounded-md border border-line-2 bg-surface px-2.5 py-1.5 shadow-sm`}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
-              <span
-                style={{
-                  fontWeight: 800,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
+            <div className="flex min-w-0 items-start gap-3 text-[11px] leading-tight text-ink-2">
+              <span className="min-w-0 whitespace-normal break-words font-extrabold">
                 {queueToolbarProgress.label}
               </span>
-              <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-              <div
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={queueToolbarProgress.pct}
-                style={{ height: 5, flex: 1, minWidth: 0, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}
-              >
-                <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`, background: queueToolbarProgress.tone, borderRadius: 999, transition: 'width .25s ease' }} />
-              </div>
-              <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 112 }}>
-                {queueToolbarProgress.detail}
+              <span className="ml-auto shrink-0 whitespace-nowrap font-mono font-bold tabular-nums" style={{ color: queueToolbarProgress.tone }}>
+                {queueToolbarProgress.pct}%
               </span>
             </div>
+            <div
+              role="progressbar"
+              aria-label={`${queueToolbarProgress.label}: ${queueToolbarProgress.pct}% complete`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={queueToolbarProgress.pct}
+              className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-3"
+            >
+              <div
+                className="h-full rounded-full transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                style={{
+                  width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`,
+                  background: queueToolbarProgress.tone,
+                }}
+              />
+            </div>
+            <span
+              data-queue-progress-detail
+              className="mt-1 block w-full whitespace-normal break-words text-[11px] font-semibold leading-tight"
+              style={{ color: queueToolbarProgress.tone }}
+            >
+              {queueToolbarProgress.detail}
+            </span>
           </div>
         )
         // DJ request (2026-06-11): show the progress immediately LEFT of the header Queue
         // button. Home.tsx renders the #queue-progress-slot anchor there; portal into it
         // when present (desktop), else keep the original toolbar position as the fallback.
         const slot = typeof document !== 'undefined' ? document.getElementById('queue-progress-slot') : null
-        return slot ? createPortal(widget, slot) : widget
+        return slot && useHeaderSlot ? createPortal(widget, slot) : widget
       })()}
       {/* Export CSV — stays on the toolbar row, pushed to the far
           right end via ml-auto, per UX request. */}

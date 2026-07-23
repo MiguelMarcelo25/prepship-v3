@@ -16,9 +16,20 @@ import {
 } from '../db/schema/billing';
 import { billingInvoiceHeaderTotals } from './billing-invoice-totals.js';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
+import { env } from '../lib/env.js';
+import {
+  assertBillingWeekdayOperationAllowed,
+  billingLosAngelesDayForInstant,
+  billingLineEffectiveDaySql,
+  resolveBillingCalendarDay,
+} from './billing-calendar-policy.js';
 
 export const BILLING_FINALIZED_LOCK_CODE = 'BILLING_FINALIZED_LOCKED';
 export const BILLING_PERIOD_FINALIZED_CODE = 'BILLING_PERIOD_FINALIZED';
+const billingFinalizationEffectiveDay = billingLineEffectiveDaySql(
+  billingLineItems.billingEffectiveDate,
+  billingLineItems.shipDate,
+);
 
 export class BillingCloseWorkflowError extends Error {
   constructor(
@@ -81,11 +92,15 @@ export type BillingFinalizationDto = {
   orderCount: number;
   subtotal: string;
   creditedAmount: string;
+  debitedAmount: string;
+  signedAdjustmentAmount: string;
   balance: string;
   finalizedBy: string;
   finalizedByEmail: string | null;
   finalizedAt: string;
 };
+
+export type BillingAdjustmentKind = 'credit' | 'debit';
 
 export type BillingCreditNoteDto = {
   id: string;
@@ -93,6 +108,14 @@ export type BillingCreditNoteDto = {
   clientId: number;
   amount: string;
   signedAmount: string;
+  adjustmentKind: BillingAdjustmentKind;
+  adjustmentSource: 'manual' | 'regeneration';
+  sourceOrderId: number | null;
+  postingVersion: 'legacy_credit_v1' | 'current_period_v2';
+  effectiveDate: string | null;
+  billingPolicyVersion: string | null;
+  billingLineItemId: number | null;
+  sourceFinalizationId: string;
   reason: string;
   idempotencyKey: string;
   createdBy: string;
@@ -153,7 +176,19 @@ function normalizeCreditAmount(value: string): string {
 }
 
 function moneyCents(value: string): bigint {
-  return decimalCents(value);
+  const trimmed = value.trim();
+  const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(trimmed);
+  if (!match) throw new Error(`Invalid money value: ${value}`);
+  const whole = match[2]!.replace(/^0+(?=\d)/, '');
+  const fraction = (match[3] ?? '').padEnd(2, '0');
+  const cents = BigInt(whole || '0') * 100n + BigInt(fraction || '0');
+  return match[1] === '-' ? -cents : cents;
+}
+
+function centsMoney(cents: bigint): string {
+  const sign = cents < 0n ? '-' : '';
+  const magnitude = cents < 0n ? -cents : cents;
+  return `${sign}${magnitude / 100n}.${String(magnitude % 100n).padStart(2, '0')}`;
 }
 
 type FinalizationSummaryRow = {
@@ -165,6 +200,8 @@ type FinalizationSummaryRow = {
   orderCount: number;
   subtotal: string;
   creditedAmount: string;
+  debitedAmount: string;
+  signedAdjustmentAmount: string;
   balance: string;
   finalizedBy: string;
   finalizedByEmail: string | null;
@@ -181,6 +218,8 @@ function finalizationDto(row: FinalizationSummaryRow): BillingFinalizationDto {
     orderCount: Number(row.orderCount),
     subtotal: Number(row.subtotal).toFixed(2),
     creditedAmount: Number(row.creditedAmount).toFixed(2),
+    debitedAmount: Number(row.debitedAmount).toFixed(2),
+    signedAdjustmentAmount: Number(row.signedAdjustmentAmount).toFixed(2),
     balance: Number(row.balance).toFixed(2),
     finalizedBy: row.finalizedBy,
     finalizedByEmail: row.finalizedByEmail,
@@ -202,8 +241,20 @@ async function billingFinalizationSummary(
       ${billingFinalizations.lineCount} as "lineCount",
       ${billingFinalizations.orderCount} as "orderCount",
       ${billingFinalizations.subtotal}::text as "subtotal",
-      coalesce(sum(${billingCreditNotes.amount}), 0)::text as "creditedAmount",
-      (${billingFinalizations.subtotal} - coalesce(sum(${billingCreditNotes.amount}), 0))::text as "balance",
+      coalesce(sum(${billingCreditNotes.amount}) filter (
+        where ${billingCreditNotes.adjustmentKind} = 'credit'
+      ), 0)::text as "creditedAmount",
+      coalesce(sum(${billingCreditNotes.amount}) filter (
+        where ${billingCreditNotes.adjustmentKind} = 'debit'
+      ), 0)::text as "debitedAmount",
+      coalesce(sum(case
+        when ${billingCreditNotes.adjustmentKind} = 'credit' then -${billingCreditNotes.amount}
+        else ${billingCreditNotes.amount}
+      end), 0)::text as "signedAdjustmentAmount",
+      (${billingFinalizations.subtotal} + coalesce(sum(case
+        when ${billingCreditNotes.adjustmentKind} = 'credit' then -${billingCreditNotes.amount}
+        else ${billingCreditNotes.amount}
+      end), 0))::text as "balance",
       ${billingFinalizations.finalizedBy} as "finalizedBy",
       ${billingFinalizations.finalizedByEmail} as "finalizedByEmail",
       ${billingFinalizations.finalizedAt}::text as "finalizedAt"
@@ -268,8 +319,20 @@ export async function listBillingFinalizations(input: {
       ${billingFinalizations.lineCount} as "lineCount",
       ${billingFinalizations.orderCount} as "orderCount",
       ${billingFinalizations.subtotal}::text as "subtotal",
-      coalesce(sum(${billingCreditNotes.amount}), 0)::text as "creditedAmount",
-      (${billingFinalizations.subtotal} - coalesce(sum(${billingCreditNotes.amount}), 0))::text as "balance",
+      coalesce(sum(${billingCreditNotes.amount}) filter (
+        where ${billingCreditNotes.adjustmentKind} = 'credit'
+      ), 0)::text as "creditedAmount",
+      coalesce(sum(${billingCreditNotes.amount}) filter (
+        where ${billingCreditNotes.adjustmentKind} = 'debit'
+      ), 0)::text as "debitedAmount",
+      coalesce(sum(case
+        when ${billingCreditNotes.adjustmentKind} = 'credit' then -${billingCreditNotes.amount}
+        else ${billingCreditNotes.amount}
+      end), 0)::text as "signedAdjustmentAmount",
+      (${billingFinalizations.subtotal} + coalesce(sum(case
+        when ${billingCreditNotes.adjustmentKind} = 'credit' then -${billingCreditNotes.amount}
+        else ${billingCreditNotes.amount}
+      end), 0))::text as "balance",
       ${billingFinalizations.finalizedBy} as "finalizedBy",
       ${billingFinalizations.finalizedByEmail} as "finalizedByEmail",
       ${billingFinalizations.finalizedAt}::text as "finalizedAt"
@@ -300,6 +363,12 @@ export async function finalizeBillingPeriod(input: {
   alreadyFinalized: boolean;
 }> {
   assertPeriod(input.dateFrom, input.dateTo);
+  // Per user override unlock shipped data on 2026-07-16: PS-434 keeps the
+  // shipped-derived billing close boundary weekday-only after the approved
+  // cutoff. This changes no order or shipment source data.
+  assertBillingWeekdayOperationAllowed({
+    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+  });
   await ensureBillingFinalizationPolicySchema();
   try {
     return await conn.transaction(async (tx) => {
@@ -334,8 +403,8 @@ export async function finalizeBillingPeriod(input: {
           ${billingLineItems.orderId} as "orderId"
         from ${billingLineItems}
         where ${billingLineItems.clientId} = ${input.clientId}
-          and ${billingLineItems.shipDate} >= ${input.dateFrom}::timestamptz
-          and ${billingLineItems.shipDate} < ${input.dateTo}::timestamptz
+          and ${billingFinalizationEffectiveDay} >= ${input.dateFrom}::timestamptz
+          and ${billingFinalizationEffectiveDay} < ${input.dateTo}::timestamptz
         order by ${billingLineItems.id}
         for update
       `));
@@ -357,8 +426,8 @@ export async function finalizeBillingPeriod(input: {
           where ${billingLineItems.clientId} = ${input.clientId}
             and ${billingLineItems.orderId} in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
             and not (
-              ${billingLineItems.shipDate} >= ${input.dateFrom}::timestamptz
-              and ${billingLineItems.shipDate} < ${input.dateTo}::timestamptz
+              ${billingFinalizationEffectiveDay} >= ${input.dateFrom}::timestamptz
+              and ${billingFinalizationEffectiveDay} < ${input.dateTo}::timestamptz
             )
         `));
         if (outside.length > 0) {
@@ -380,7 +449,7 @@ export async function finalizeBillingPeriod(input: {
       const lineIds = lines.map((line) => Number(line.id));
       await tx.execute(sql`
         update ${billingLineItems}
-        set ${billingLineItems.invoiced} = true
+        set invoiced = true
         where ${billingLineItems.id} in (${sql.join(lineIds.map((id) => sql`${id}`), sql`, `)})
           and ${billingLineItems.invoiced} = false
       `);
@@ -388,15 +457,15 @@ export async function finalizeBillingPeriod(input: {
       const finalizationId = randomUUID();
       await tx.execute(sql`
         insert into ${billingFinalizations} (
-          ${billingFinalizations.id},
-          ${billingFinalizations.clientId},
-          ${billingFinalizations.periodStart},
-          ${billingFinalizations.periodEnd},
-          ${billingFinalizations.lineCount},
-          ${billingFinalizations.orderCount},
-          ${billingFinalizations.subtotal},
-          ${billingFinalizations.finalizedBy},
-          ${billingFinalizations.finalizedByEmail}
+          id,
+          client_id,
+          period_start,
+          period_end,
+          line_count,
+          order_count,
+          subtotal,
+          finalized_by,
+          finalized_by_email
         ) values (
           ${finalizationId},
           ${input.clientId},
@@ -421,6 +490,106 @@ export async function finalizeBillingPeriod(input: {
   }
 }
 
+type BillingAdjustmentPosting = {
+  id: string;
+  clientId: number;
+  finalizationId: string;
+  adjustmentKind: BillingAdjustmentKind;
+  adjustmentSource: 'manual' | 'regeneration';
+  sourceOrderId: number | null;
+  amount: string;
+  reason: string;
+  idempotencyKey: string;
+  actorId: string;
+  actorEmail: string | null;
+  activityDate: Date;
+  effectiveDate: Date;
+  billingPolicyVersion: string;
+};
+
+async function appendBillingAdjustmentProjection(
+  input: BillingAdjustmentPosting,
+  conn: BillingPolicyExecutor,
+): Promise<void> {
+  const signedAmount = input.adjustmentKind === 'credit' ? `-${input.amount}` : input.amount;
+  await conn.execute(sql`
+    insert into ${billingCreditNotes} (
+      id,
+      finalization_id,
+      client_id,
+      amount,
+      adjustment_kind,
+      adjustment_source,
+      source_order_id,
+      posting_version,
+      effective_date,
+      billing_policy_version,
+      reason,
+      idempotency_key,
+      created_by,
+      created_by_email
+    ) values (
+      ${input.id},
+      ${input.finalizationId},
+      ${input.clientId},
+      ${input.amount},
+      ${input.adjustmentKind},
+      ${input.adjustmentSource},
+      ${input.sourceOrderId},
+      ${'current_period_v2'},
+      ${input.effectiveDate.toISOString()}::timestamptz,
+      ${input.billingPolicyVersion},
+      ${input.reason},
+      ${input.idempotencyKey},
+      ${input.actorId},
+      ${input.actorEmail}
+    )
+  `);
+  await conn.execute(sql`
+    insert into ${billingLineItems} (
+      client_id,
+      order_id,
+      order_number,
+      shipment_id,
+      ship_date,
+      billing_effective_date,
+      billing_policy_version,
+      line_type,
+      description,
+      qty,
+      unit_cost,
+      total_cost,
+      package_id,
+      source_finalization_id,
+      billing_adjustment_id,
+      invoiced
+    ) values (
+      ${input.clientId},
+      null,
+      null,
+      null,
+      ${input.activityDate.toISOString()}::timestamptz,
+      ${input.effectiveDate.toISOString()}::timestamptz,
+      ${input.billingPolicyVersion},
+      ${'billing_adjustment'},
+      ${`${input.adjustmentKind === 'credit' ? 'Credit' : 'Debit'} adjustment ${input.id} for finalized invoice ${input.finalizationId}${input.sourceOrderId == null ? '' : `, order ${input.sourceOrderId}`}: ${input.reason}`},
+      ${'1.00'},
+      ${signedAmount},
+      ${signedAmount},
+      null,
+      ${input.finalizationId},
+      ${input.id},
+      false
+    )
+  `);
+  await conn.execute(sql`
+    delete from billing_summary_metrics
+    where client_id = ${input.clientId}
+      and period_from <= ${input.effectiveDate.toISOString()}::date
+      and period_to > ${input.effectiveDate.toISOString()}::date
+  `);
+}
+
 export async function listBillingCreditNotes(input: {
   clientId: number;
   finalizationId: string;
@@ -430,6 +599,14 @@ export async function listBillingCreditNotes(input: {
     finalizationId: string;
     clientId: number;
     amount: string;
+    adjustmentKind: BillingAdjustmentKind;
+    adjustmentSource: 'manual' | 'regeneration';
+    sourceOrderId: number | null;
+    postingVersion: 'legacy_credit_v1' | 'current_period_v2';
+    effectiveDate: string | null;
+    billingPolicyVersion: string | null;
+    billingLineItemId: number | null;
+    sourceFinalizationId: string;
     reason: string;
     idempotencyKey: string;
     createdBy: string;
@@ -441,12 +618,22 @@ export async function listBillingCreditNotes(input: {
       ${billingCreditNotes.finalizationId} as "finalizationId",
       ${billingCreditNotes.clientId} as "clientId",
       ${billingCreditNotes.amount}::text as "amount",
+      ${billingCreditNotes.adjustmentKind} as "adjustmentKind",
+      ${billingCreditNotes.adjustmentSource} as "adjustmentSource",
+      ${billingCreditNotes.sourceOrderId} as "sourceOrderId",
+      ${billingCreditNotes.postingVersion} as "postingVersion",
+      ${billingCreditNotes.effectiveDate}::text as "effectiveDate",
+      ${billingCreditNotes.billingPolicyVersion} as "billingPolicyVersion",
+      ${billingLineItems.id} as "billingLineItemId",
+      ${billingCreditNotes.finalizationId} as "sourceFinalizationId",
       ${billingCreditNotes.reason} as "reason",
       ${billingCreditNotes.idempotencyKey} as "idempotencyKey",
       ${billingCreditNotes.createdBy} as "createdBy",
       ${billingCreditNotes.createdByEmail} as "createdByEmail",
       ${billingCreditNotes.createdAt}::text as "createdAt"
     from ${billingCreditNotes}
+    left join ${billingLineItems}
+      on ${billingLineItems.billingAdjustmentId} = ${billingCreditNotes.id}
     where ${billingCreditNotes.clientId} = ${input.clientId}
       and ${billingCreditNotes.finalizationId} = ${input.finalizationId}
     order by ${billingCreditNotes.createdAt}, ${billingCreditNotes.id}
@@ -455,7 +642,12 @@ export async function listBillingCreditNotes(input: {
     ...row,
     clientId: Number(row.clientId),
     amount: Number(row.amount).toFixed(2),
-    signedAmount: (-Number(row.amount)).toFixed(2),
+    signedAmount: (
+      row.adjustmentKind === 'credit' ? -Number(row.amount) : Number(row.amount)
+    ).toFixed(2),
+    billingLineItemId: row.billingLineItemId == null ? null : Number(row.billingLineItemId),
+    sourceOrderId: row.sourceOrderId == null ? null : Number(row.sourceOrderId),
+    effectiveDate: row.effectiveDate == null ? null : new Date(row.effectiveDate).toISOString(),
     createdAt: new Date(row.createdAt).toISOString(),
   }));
 }
@@ -463,19 +655,43 @@ export async function listBillingCreditNotes(input: {
 export async function createBillingCreditNote(input: {
   clientId: number;
   finalizationId: string;
+  adjustmentKind?: BillingAdjustmentKind;
   amount: string;
   reason: string;
   idempotencyKey: string;
   actorId: string;
   actorEmail?: string | null;
+  now?: Date;
 }, conn: BillingPolicyDatabase = db): Promise<{
   creditNote: BillingCreditNoteDto;
   finalization: BillingFinalizationDto;
   alreadyCreated: boolean;
 }> {
   const amount = normalizeCreditAmount(input.amount);
+  const adjustmentKind = input.adjustmentKind ?? 'credit';
+  if (adjustmentKind !== 'credit' && adjustmentKind !== 'debit') {
+    throw new BillingCloseWorkflowError(
+      'BILLING_ADJUSTMENT_KIND_INVALID',
+      'Adjustment kind must be credit or debit.',
+      400,
+    );
+  }
   const reason = input.reason.trim();
   const idempotencyKey = input.idempotencyKey.trim();
+  const postingInstant = input.now ?? new Date();
+  if (!Number.isFinite(postingInstant.getTime())) {
+    throw new BillingCloseWorkflowError(
+      'BILLING_ADJUSTMENT_POSTING_TIME_INVALID',
+      'A valid backend posting time is required.',
+      400,
+    );
+  }
+  const calendar = resolveBillingCalendarDay({
+    actualActivityDay: billingLosAngelesDayForInstant(postingInstant),
+    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+  });
+  const activityDate = new Date(`${calendar.actualActivityDay}T00:00:00.000Z`);
+  const effectiveDate = new Date(`${calendar.billingEffectiveDay}T00:00:00.000Z`);
   if (reason.length < 3 || reason.length > 500) {
     throw new BillingCloseWorkflowError(
       'BILLING_CREDIT_REASON_INVALID',
@@ -505,6 +721,7 @@ export async function createBillingCreditNote(input: {
         finalizationId: string;
         clientId: number;
         amount: string;
+        adjustmentKind: BillingAdjustmentKind;
         reason: string;
       }>(await tx.execute(sql`
         select
@@ -512,6 +729,7 @@ export async function createBillingCreditNote(input: {
           ${billingCreditNotes.finalizationId} as "finalizationId",
           ${billingCreditNotes.clientId} as "clientId",
           ${billingCreditNotes.amount}::text as "amount",
+          ${billingCreditNotes.adjustmentKind} as "adjustmentKind",
           ${billingCreditNotes.reason} as "reason"
         from ${billingCreditNotes}
         where ${billingCreditNotes.idempotencyKey} = ${idempotencyKey}
@@ -522,11 +740,12 @@ export async function createBillingCreditNote(input: {
           existing.finalizationId !== input.finalizationId ||
           Number(existing.clientId) !== input.clientId ||
           Number(existing.amount).toFixed(2) !== amount ||
+          existing.adjustmentKind !== adjustmentKind ||
           existing.reason !== reason
         ) {
           throw new BillingCloseWorkflowError(
             'BILLING_CREDIT_IDEMPOTENCY_CONFLICT',
-            'Credit idempotencyKey was already used for a different request.',
+            'Adjustment idempotencyKey was already used for a different request.',
             409,
           );
         }
@@ -539,6 +758,11 @@ export async function createBillingCreditNote(input: {
         if (!summary || !creditNote) throw new Error('Existing credit note could not be read');
         return { creditNote, finalization: summary, alreadyCreated: true };
       }
+
+      // PS-449 lock order: global idempotency key, current client period, then
+      // the original finalization row. This serializes posting against close
+      // and regeneration without creating a second money authority.
+      await tx.execute(sql`select pg_advisory_xact_lock(36421, ${input.clientId})`);
 
       const locked = resultRows<{ id: string }>(await tx.execute(sql`
         select ${billingFinalizations.id} as "id"
@@ -557,37 +781,35 @@ export async function createBillingCreditNote(input: {
 
       const summaryBefore = await billingFinalizationSummary(input.finalizationId, input.clientId, tx);
       if (!summaryBefore) throw new Error('Billing finalization could not be read');
-      if (moneyCents(amount) > moneyCents(summaryBefore.balance)) {
+      if (
+        adjustmentKind === 'credit' &&
+        moneyCents(amount) > moneyCents(summaryBefore.balance)
+      ) {
         throw new BillingCloseWorkflowError(
           'BILLING_CREDIT_EXCEEDS_BALANCE',
-          'Credit amount exceeds the remaining finalized balance.',
+          'Credit amount exceeds the adjusted finalized balance.',
           409,
           { balance: summaryBefore.balance },
         );
       }
 
       const creditId = randomUUID();
-      await tx.execute(sql`
-        insert into ${billingCreditNotes} (
-          ${billingCreditNotes.id},
-          ${billingCreditNotes.finalizationId},
-          ${billingCreditNotes.clientId},
-          ${billingCreditNotes.amount},
-          ${billingCreditNotes.reason},
-          ${billingCreditNotes.idempotencyKey},
-          ${billingCreditNotes.createdBy},
-          ${billingCreditNotes.createdByEmail}
-        ) values (
-          ${creditId},
-          ${input.finalizationId},
-          ${input.clientId},
-          ${amount},
-          ${reason},
-          ${idempotencyKey},
-          ${input.actorId},
-          ${input.actorEmail ?? null}
-        )
-      `);
+      await appendBillingAdjustmentProjection({
+        id: creditId,
+        clientId: input.clientId,
+        finalizationId: input.finalizationId,
+        adjustmentKind,
+        adjustmentSource: 'manual',
+        sourceOrderId: null,
+        amount,
+        reason,
+        idempotencyKey,
+        actorId: input.actorId,
+        actorEmail: input.actorEmail ?? null,
+        activityDate,
+        effectiveDate,
+        billingPolicyVersion: calendar.policyVersion,
+      }, tx);
       const notes = await listBillingCreditNotes(
         { clientId: input.clientId, finalizationId: input.finalizationId },
         tx,
@@ -604,9 +826,211 @@ export async function createBillingCreditNote(input: {
   }
 }
 
+export type BillingRegenerationCandidate = {
+  orderId: number;
+  currentTotal: string;
+};
+
+export type BillingRegenerationAdjustmentResult = {
+  finalizedOrderCount: number;
+  adjustedOrderCount: number;
+  untouchedOrderCount: number;
+  creditCount: number;
+  debitCount: number;
+};
+
+export function resolveBillingRegenerationAdjustment(input: {
+  currentTotal: string;
+  frozenTotal: string;
+  existingSignedTotal: string;
+}): { adjustmentKind: BillingAdjustmentKind; amount: string; signedAmount: string } | null {
+  const deltaCents = moneyCents(input.currentTotal)
+    - moneyCents(input.frozenTotal)
+    - moneyCents(input.existingSignedTotal);
+  if (deltaCents === 0n) return null;
+  const adjustmentKind: BillingAdjustmentKind = deltaCents < 0n ? 'credit' : 'debit';
+  const amount = centsMoney(deltaCents < 0n ? -deltaCents : deltaCents);
+  return {
+    adjustmentKind,
+    amount,
+    signedAmount: centsMoney(deltaCents),
+  };
+}
+
+/**
+ * PS-449 canonical reconciliation boundary. The generator supplies freshly
+ * computed per-order totals; this owner locks the client, compares them with
+ * immutable finalized lines and prior signed corrections, then appends only
+ * the remaining delta in the backend-selected current period.
+ */
+export async function reconcileFinalizedBillingOrderAdjustments(input: {
+  clientId: number;
+  dateFrom: string;
+  dateTo: string;
+  candidates: BillingRegenerationCandidate[];
+  actorId?: string | null;
+  actorEmail?: string | null;
+  now?: Date;
+}, conn: BillingPolicyDatabase = db, ensureSchema: () => Promise<void> = ensureBillingFinalizationPolicySchema): Promise<BillingRegenerationAdjustmentResult> {
+  assertPeriod(input.dateFrom, input.dateTo);
+  const candidateTotals = new Map<number, string>();
+  for (const candidate of input.candidates) {
+    if (!Number.isInteger(candidate.orderId) || candidate.orderId <= 0) continue;
+    candidateTotals.set(candidate.orderId, centsMoney(moneyCents(candidate.currentTotal)));
+  }
+  if (candidateTotals.size === 0) {
+    return {
+      finalizedOrderCount: 0,
+      adjustedOrderCount: 0,
+      untouchedOrderCount: 0,
+      creditCount: 0,
+      debitCount: 0,
+    };
+  }
+  const postingInstant = input.now ?? new Date();
+  if (!Number.isFinite(postingInstant.getTime())) {
+    throw new BillingCloseWorkflowError(
+      'BILLING_ADJUSTMENT_POSTING_TIME_INVALID',
+      'A valid backend posting time is required.',
+      400,
+    );
+  }
+  const calendar = resolveBillingCalendarDay({
+    actualActivityDay: billingLosAngelesDayForInstant(postingInstant),
+    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+  });
+  const activityDate = new Date(`${calendar.actualActivityDay}T00:00:00.000Z`);
+  const effectiveDate = new Date(`${calendar.billingEffectiveDay}T00:00:00.000Z`);
+  const orderIds = [...candidateTotals.keys()].sort((a, b) => a - b);
+  await ensureSchema();
+
+  try {
+    return await conn.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(36421, ${input.clientId})`);
+      const lockedFinalizations = resultRows<{ id: string }>(await tx.execute(sql`
+        select ${billingFinalizations.id} as "id"
+        from ${billingFinalizations}
+        where ${billingFinalizations.clientId} = ${input.clientId}
+          and ${billingFinalizations.periodStart} < ${input.dateTo}::timestamptz
+          and ${billingFinalizations.periodEnd} > ${input.dateFrom}::timestamptz
+        order by ${billingFinalizations.periodStart}
+        for update
+      `));
+      if (lockedFinalizations.length === 0) {
+        return {
+          finalizedOrderCount: 0,
+          adjustedOrderCount: 0,
+          untouchedOrderCount: 0,
+          creditCount: 0,
+          debitCount: 0,
+        };
+      }
+
+      const frozenRows = resultRows<{
+        finalizationId: string;
+        orderId: number;
+        frozenTotal: string;
+        existingSignedTotal: string;
+      }>(await tx.execute(sql`
+        select
+          closed.id as "finalizationId",
+          line.order_id as "orderId",
+          sum(line.total_cost)::text as "frozenTotal",
+          coalesce((
+            select sum(case
+              when note.adjustment_kind = 'credit' then -note.amount
+              else note.amount
+            end)
+            from billing_credit_notes note
+            where note.finalization_id = closed.id
+              and note.client_id = closed.client_id
+              and note.adjustment_source = 'regeneration'
+              and note.source_order_id = line.order_id
+          ), 0)::text as "existingSignedTotal"
+        from billing_line_items line
+        join billing_finalizations closed
+          on closed.client_id = line.client_id
+          and coalesce(line.billing_effective_date, line.ship_date) >= closed.period_start
+          and coalesce(line.billing_effective_date, line.ship_date) < closed.period_end
+        where line.client_id = ${input.clientId}
+          and line.invoiced = true
+          and line.order_id in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})
+          and closed.period_start < ${input.dateTo}::timestamptz
+          and closed.period_end > ${input.dateFrom}::timestamptz
+        group by closed.id, closed.client_id, line.order_id
+        order by line.order_id
+      `));
+
+      let adjustedOrderCount = 0;
+      let creditCount = 0;
+      let debitCount = 0;
+      for (const frozen of frozenRows) {
+        const currentTotal = candidateTotals.get(Number(frozen.orderId));
+        if (currentTotal == null) continue;
+        const decision = resolveBillingRegenerationAdjustment({
+          currentTotal,
+          frozenTotal: frozen.frozenTotal,
+          existingSignedTotal: frozen.existingSignedTotal,
+        });
+        if (!decision) continue;
+
+        if (decision.adjustmentKind === 'credit') {
+          const summary = await billingFinalizationSummary(
+            frozen.finalizationId,
+            input.clientId,
+            tx,
+          );
+          if (!summary || moneyCents(decision.amount) > moneyCents(summary.balance)) {
+            throw new BillingCloseWorkflowError(
+              'BILLING_CREDIT_EXCEEDS_BALANCE',
+              'Regeneration credit exceeds the adjusted finalized balance.',
+              409,
+              { finalizationId: frozen.finalizationId, orderId: Number(frozen.orderId) },
+            );
+          }
+        }
+
+        const adjustmentId = randomUUID();
+        await appendBillingAdjustmentProjection({
+          id: adjustmentId,
+          clientId: input.clientId,
+          finalizationId: frozen.finalizationId,
+          adjustmentKind: decision.adjustmentKind,
+          adjustmentSource: 'regeneration',
+          sourceOrderId: Number(frozen.orderId),
+          amount: decision.amount,
+          reason: `Regeneration correction for order ${frozen.orderId}: canonical ${Number(currentTotal).toFixed(2)}, frozen ${Number(frozen.frozenTotal).toFixed(2)}`,
+          idempotencyKey: `billing-regen:${adjustmentId}`,
+          actorId: input.actorId?.trim() || 'system:billing-regeneration',
+          actorEmail: input.actorEmail ?? null,
+          activityDate,
+          effectiveDate,
+          billingPolicyVersion: calendar.policyVersion,
+        }, tx);
+        adjustedOrderCount += 1;
+        if (decision.adjustmentKind === 'credit') creditCount += 1;
+        else debitCount += 1;
+      }
+
+      return {
+        finalizedOrderCount: frozenRows.length,
+        adjustedOrderCount,
+        untouchedOrderCount: frozenRows.length - adjustedOrderCount,
+        creditCount,
+        debitCount,
+      };
+    });
+  } catch (error) {
+    const closeError = asBillingCloseWorkflowError(error);
+    if (closeError) throw closeError;
+    throw error;
+  }
+}
+
 export function billingLineItemIsEditablePredicate(): SQL {
   return and(
     eq(billingLineItems.invoiced, false),
+    sql`${billingLineItems.billingAdjustmentId} is null`,
     sql`not exists (
       select 1
       from billing_line_items finalized
@@ -664,8 +1088,8 @@ export async function finalizedBillingOrderIdsForRange(input: {
       ${candidateOrderIds !== undefined
         ? sql`and ${billingLineItems.orderId} in (${sql.join(candidateOrderIds.map((id) => sql`${id}`), sql`, `)})`
         : sql`
-            and ${billingLineItems.shipDate} >= ${input.dateFrom}::timestamptz
-            and ${billingLineItems.shipDate} < ${input.dateTo}::timestamptz
+            and ${billingFinalizationEffectiveDay} >= ${input.dateFrom}::timestamptz
+            and ${billingFinalizationEffectiveDay} < ${input.dateTo}::timestamptz
           `}
       ${input.clientId !== undefined ? sql`and ${billingLineItems.clientId} = ${input.clientId}` : sql``}
       and ${input.scopePredicate ?? sql`true`}

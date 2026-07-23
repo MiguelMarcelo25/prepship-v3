@@ -20,7 +20,62 @@
 // Continues on failure and prints a per-checkpoint summary; exits 1 if any
 // suite fails so it can gate CI.
 
-import { execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { delimiter, resolve } from 'node:path';
+
+const packageScripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts ?? {};
+const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+const commandEnv = {
+  ...process.env,
+  [pathKey]: [resolve('node_modules/.bin'), process.env[pathKey]].filter(Boolean).join(delimiter),
+};
+const leafNodeOptions = process.env.PREPSHIP_CERTIFICATION_LEAF_NODE_OPTIONS;
+// PGlite-backed inventory integrations need more heap than static guards, while
+// the lightweight workflow controller can remain small on Render Starter.
+const elevatedLeafNodeOptions =
+  process.env.PREPSHIP_CERTIFICATION_ELEVATED_LEAF_NODE_OPTIONS ?? process.env.NODE_OPTIONS;
+const elevatedLeafScripts = new Set([
+  'test:inventory-source-of-truth',
+  'test:ps-414-inventory-ledger',
+]);
+const shellCommand = process.platform === 'win32'
+  ? (process.env.ComSpec ?? 'cmd.exe')
+  : '/bin/sh';
+const shellPrefix = process.platform === 'win32' ? ['/d', '/s', '/c'] : ['-c'];
+
+function directPackageCommand(script, ancestors = []) {
+  if (ancestors.includes(script)) {
+    throw new Error(`recursive package script: ${[...ancestors, script].join(' -> ')}`);
+  }
+  const command = packageScripts[script];
+  if (!command) throw new Error(`missing package script: ${script}`);
+  return command.replace(/\bnpm run ([A-Za-z0-9:_-]+)/g, (_match, nestedScript) => (
+    `(${directPackageCommand(nestedScript, [...ancestors, script])})`
+  ));
+}
+
+function runCommand(command, env) {
+  return new Promise((resolveRun) => {
+    const child = spawn(shellCommand, [...shellPrefix, command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    let tail = '';
+    let error = null;
+    const captureTail = (chunk) => {
+      tail = `${tail}${chunk.toString()}`.slice(-32_768);
+    };
+    child.stdout.on('data', captureTail);
+    child.stderr.on('data', captureTail);
+    child.on('error', (spawnError) => {
+      error = spawnError;
+    });
+    child.on('close', (status) => {
+      resolveRun({ error, status: status ?? 1, tail });
+    });
+  });
+}
 
 // Each script appears once; the first group it is listed under owns it.
 const GROUPS = [
@@ -197,7 +252,23 @@ for (const group of GROUPS) {
     seen.add(script);
     const started = process.hrtime.bigint();
     try {
-      execSync(`npm run ${script}`, { stdio: 'pipe', encoding: 'utf8' });
+      const command = directPackageCommand(script);
+      const nodeOptions = elevatedLeafScripts.has(script)
+        ? elevatedLeafNodeOptions
+        : leafNodeOptions;
+      const result = await runCommand(
+        command,
+        nodeOptions
+          ? { ...commandEnv, NODE_OPTIONS: nodeOptions }
+          : commandEnv,
+      );
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        const failure = new Error(`${script} exited with status ${result.status ?? 1}`);
+        failure.stdout = result.tail;
+        failure.stderr = '';
+        throw failure;
+      }
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       console.log(`  PASS  ${script}  (${ms.toFixed(0)}ms)`);
       results.push({ script, ok: true });

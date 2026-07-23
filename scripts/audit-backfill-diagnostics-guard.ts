@@ -11,19 +11,54 @@ function read(path: string): string {
 }
 
 const diagnostics = createRateBackfillDiagnosticBuffers();
-for (let index = 1; index <= 7; index += 1) {
-  recordRateBackfillDiagnostic(diagnostics, 'skip', `skip ${index}`);
-  recordRateBackfillDiagnostic(diagnostics, 'failure', `failure ${index}`);
+for (let index = 1; index <= 6; index += 1) {
+  recordRateBackfillDiagnostic(diagnostics, 'skip', `dimension skip ${index}`);
 }
+recordRateBackfillDiagnostic(diagnostics, 'failure', 'thrown rate error');
 assert.deepEqual(
   diagnostics.skipSamples,
-  ['skip 1', 'skip 2', 'skip 3', 'skip 4', 'skip 5'],
-  'skip samples have their own five-entry capacity',
+  [
+    'dimension skip 1',
+    'dimension skip 2',
+    'dimension skip 3',
+    'dimension skip 4',
+    'dimension skip 5',
+  ],
+  'six dimension skips retain the first five skip samples',
 );
 assert.deepEqual(
   diagnostics.failureSamples,
+  ['thrown rate error'],
+  'skip capacity cannot hide a later real failure',
+);
+
+const failureCapacityDiagnostics = createRateBackfillDiagnosticBuffers();
+for (let index = 1; index <= 6; index += 1) {
+  recordRateBackfillDiagnostic(failureCapacityDiagnostics, 'failure', `failure ${index}`);
+}
+assert.deepEqual(
+  failureCapacityDiagnostics.failureSamples,
   ['failure 1', 'failure 2', 'failure 3', 'failure 4', 'failure 5'],
-  'failure samples have their own five-entry capacity',
+  'failure samples retain their own five-entry capacity',
+);
+
+const durableSettingsValue = JSON.stringify({
+  skipSamples: diagnostics.skipSamples,
+  failureSamples: diagnostics.failureSamples,
+});
+assert.deepEqual(
+  normalizeRateBackfillDiagnosticSamples(JSON.parse(durableSettingsValue)),
+  {
+    skipSamples: [
+      'dimension skip 1',
+      'dimension skip 2',
+      'dimension skip 3',
+      'dimension skip 4',
+      'dimension skip 5',
+    ],
+    failureSamples: ['thrown rate error'],
+  },
+  'a durable JSON settings value reads back with both diagnostic arrays',
 );
 
 assert.deepEqual(
@@ -40,7 +75,9 @@ const audit = read('AUDIT-2026-07-13.md');
 
 assert.match(service, /skipSamples: string\[\]/);
 assert.match(service, /skipSamples: \[\.\.\.job\.skipSamples\]/);
+assert.match(service, /JSON\.stringify\(toBackfillSnapshot\(job, opts\)\)/);
 assert.match(service, /normalizeRateBackfillDiagnosticSamples\(parsed\)/);
+assert.match(service, /return parseBackfillJobSnapshot\(row\.value\)/);
 assert.equal(
   (service.match(/recordRateBackfillDiagnostic\(\s*job,\s*'skip'/g) ?? []).length,
   3,

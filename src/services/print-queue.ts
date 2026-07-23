@@ -17,13 +17,17 @@ import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } fro
 import {
   createLabelV2,
   createShopifyShippingLabelForOrder,
+  resumeLabelV2FromDurableReceipt,
+  resumeShopifyShippingLabelFromDurableReceipt,
+  LabelArtifactMissingAfterPurchaseError,
   type CreateLabelInputDto,
   type CreateShopifyShippingLabelInputDto,
   type LabelCreateTimingBreakdown,
 } from './labels';
 import { SHOPIFY_SHIPPING_PROVIDER } from './shopify-shipping-labels';
 import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
-import { GLOBAL_SCOPE } from '../lib/client-store-scope';
+import { isLabelPurchaseReconcileRequiredError } from '../lib/label-purchase-intent';
+import type { ClientStoreScope } from '../lib/client-store-scope';
 // Per user override unlock shipped data on 2026-07-07: batch-print pipeline — the merge job's
 // label fetches now go through a bounded prefetch pool (default concurrency 1 = serial, byte-
 // identical on the wire). Fetch mechanics only; ordering/grouping/error branches stay below.
@@ -31,6 +35,7 @@ import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 import { startLabelPrefetch, type PrefetchResult } from './print-queue-label-prefetch';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
+import { FulfillmentOperationHeldError } from './fulfillment-operation-ledger';
 import { decideShippingSafety } from './fulfillment/shipping-safety';
 import {
   collapseIdentityLines,
@@ -50,12 +55,16 @@ import {
   cleanupOldMergedPdfs,
   type MergedPdfChunkMetadata,
 } from './print-queue-pdf-store';
-import { type QueueSendStatusName } from './print-queue/queue-send-status';
+import {
+  deriveQueueSendProgressCounters,
+  type QueueSendStatusName,
+} from './print-queue/queue-send-status';
 import { setJsonSettings } from './settings-json';
 import {
   getLatestQueueSendJobRecord,
   getQueueSendJobItemRecords,
   getQueueSendJobRecord,
+  claimQueueSendJobItemAttempt,
   persistQueueSendJobCounters,
   persistQueueSendJobItems,
   persistQueueSendJobRecord,
@@ -83,12 +92,15 @@ import {
   type QueueSendItemSnapshot,
 } from './print-queue/queue-send-snapshot';
 import { preflightQueueSendOrders } from './print-queue/queue-send-preflight';
+import { planQueueSendRecovery } from './print-queue/queue-send-recovery';
 import {
   enqueuePrintMergeWorkerJob,
   enqueueQueueSendWorkerJob,
 } from './print-queue-worker';
 import {
   QueueSendJobInterruptedError,
+  QUEUE_SEND_MAX_ITEM_ATTEMPTS,
+  queueSendLocalTailFailureState,
   runQueueSendPool,
   runQueueSendSingleFlight,
 } from './print-queue/queue-send-execution';
@@ -253,6 +265,10 @@ export type QueueSendPreflightSkipInput = {
 
 export type QueueSendJob = {
   jobId: string;
+  // Per user override unlock shipped data on 2026-07-21: PS-452 fences the
+  // worker execution only; these fields never authorize an order mutation.
+  generation: number;
+  chunkSequence: number;
   status: QueueSendStatusName;
   clientIds: number[];
   progress: number;
@@ -319,6 +335,18 @@ export type PrintQueueListScope = {
   scopeStoreIds?: number[];
   scopeRestricted?: boolean;
 };
+
+function queueWorkerClientStoreScope(scope: PrintQueueListScope): ClientStoreScope {
+  const clientIds = normalizeScopeIds(scope.scopeClientIds);
+  const storeIds = normalizeScopeIds(scope.scopeStoreIds);
+  const isGlobal = scope.scopeRestricted === false;
+  return {
+    clientIds,
+    storeIds,
+    isGlobal,
+    isRestricted: !isGlobal,
+  };
+}
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
@@ -423,6 +451,20 @@ class QueueSendStaleLabelAttemptError extends Error {
     );
     this.name = 'QueueSendStaleLabelAttemptError';
   }
+}
+
+class QueueSendReceiptPendingError extends Error {
+  readonly code = 'QUEUE_SEND_RECEIPT_PENDING' as const;
+
+  constructor(orderId: number) {
+    super(`The existing provider receipt for order ${orderId} is still pending a terminal label result.`);
+    this.name = 'QueueSendReceiptPendingError';
+  }
+}
+
+function isQueueSendReceiptPendingError(err: unknown): err is QueueSendReceiptPendingError {
+  return err instanceof QueueSendReceiptPendingError
+    || (err as { code?: unknown } | null)?.code === 'QUEUE_SEND_RECEIPT_PENDING';
 }
 
 function isQueueSendStaleLabelAttemptError(err: unknown): err is QueueSendStaleLabelAttemptError {
@@ -560,8 +602,9 @@ export async function persistQueueSendJobSnapshot(
       // counters — the full jsonb snapshot (workerOrders + all results) was
       // being rewritten after EVERY order, an O(n^2) write stream on big
       // batches and exactly the load that hurts during degraded-DB windows.
-      await persistQueueSendJobCounters({
+      const countersPersisted = await persistQueueSendJobCounters({
         jobId: snapshot.jobId,
+        generation: snapshot.generation,
         status: snapshot.status,
         active: snapshot.active,
         progress: snapshot.progress,
@@ -572,9 +615,19 @@ export async function persistQueueSendJobSnapshot(
         message: snapshot.message ?? null,
         updatedAt: snapshot.updatedAt,
       });
+      if (!countersPersisted) {
+        throw new PrintQueueDurableStatusError(
+          'Print Queue execution generation changed while progress was being saved.',
+        );
+      }
       return;
     }
-    await persistQueueSendJobRecord(snapshot);
+    const persisted = await persistQueueSendJobRecord(snapshot);
+    if (!persisted) {
+      throw new PrintQueueDurableStatusError(
+        'Print Queue execution generation changed while status was being saved.',
+      );
+    }
     if (options.persistItems !== false) {
       await persistQueueSendJobItems(snapshot.jobId, snapshot.itemStates);
     }
@@ -583,6 +636,7 @@ export async function persistQueueSendJobSnapshot(
       '[print-queue] failed to persist durable batch-send job:',
       err instanceof Error ? err.message : err
     );
+    if (err instanceof PrintQueueDurableStatusError) throw err;
     if (options.required) {
       throw new PrintQueueDurableStatusError();
     }
@@ -836,6 +890,8 @@ function timestampFromSnapshot(value: string): number {
 function queueSendJobFromSnapshot(snapshot: QueueSendJobSnapshot): QueueSendJob {
   return {
     jobId: snapshot.jobId,
+    generation: snapshot.generation,
+    chunkSequence: snapshot.chunkSequence,
     status: snapshot.status,
     clientIds: [...snapshot.clientIds],
     progress: snapshot.progress,
@@ -1057,6 +1113,8 @@ function toQueueSendItemSnapshot(input: QueueSendJobItemInput): QueueSendItemSna
   return {
     orderId: input.orderId,
     clientId: input.clientId ?? null,
+    attemptCount: Math.max(0, Math.floor(Number(input.attemptCount ?? 0) || 0)),
+    generation: Math.max(0, Math.floor(Number(input.generation ?? 0) || 0)),
     state: input.state,
     blockedReason: input.blockedReason ?? null,
     errorMessage: input.errorMessage ?? null,
@@ -1114,6 +1172,8 @@ async function setQueueSendItemState(
   const item: QueueSendJobItemInput = {
     orderId: order.orderId,
     clientId: order.clientId,
+    attemptCount: job.itemStates.find((candidate) => candidate.orderId === order.orderId)?.attemptCount ?? 0,
+    generation: job.generation,
     state: patch.state,
     blockedReason: patch.blockedReason ?? null,
     errorMessage: patch.errorMessage ?? null,
@@ -1125,7 +1185,12 @@ async function setQueueSendItemState(
   if (existingIndex >= 0) job.itemStates[existingIndex] = snapshot;
   else job.itemStates.push(snapshot);
   job.updatedAt = Date.now();
-  await updateQueueSendJobItemState(job.jobId, order.orderId, item);
+  const persisted = await updateQueueSendJobItemState(job.jobId, order.orderId, item);
+  if (!persisted) {
+    throw new QueueSendJobInterruptedError(
+      `Queue send item ${order.orderId} lost its durable generation fence`,
+    );
+  }
 }
 
 async function timeQueueStep<T>(
@@ -1259,8 +1324,10 @@ async function processQueueSendOrder(
   order: QueueSendOrderInput,
   scope: PrintQueueListScope = {},
   lifecycle?: QueueSendOrderLifecycle,
+  recoveryState?: 'receipt_resume' | 'shipment_persisted' | null,
 ): Promise<QueueSendJobResult> {
   const startedAt = Date.now();
+  const labelPurchaseScope = queueWorkerClientStoreScope(scope);
   const timings: QueueSendTimingBreakdown = { totalMs: 0 };
   let labelUrl: unknown = order.labelUrl ?? null;
   let trackingNumber: string | null = null;
@@ -1280,6 +1347,11 @@ async function processQueueSendOrder(
       timings.labelSource = 'existing';
     } else if (!order.label) {
       throw new Error('Missing label payload');
+    } else if (recoveryState === 'shipment_persisted') {
+      // Per user override unlock shipped data on 2026-07-21: a durable local
+      // shipment must never fall back to provider purchase when its queue
+      // artifact cannot be read. Preserve the bounded local-tail recovery.
+      throw new LabelArtifactMissingAfterPurchaseError('Persisted shipment');
     } else {
       const labelInput = order.label;
       try {
@@ -1293,17 +1365,17 @@ async function processQueueSendOrder(
               'the job is recoverable and must not be retried until existing labels/locks are checked.',
           });
         }, QUEUE_SEND_PROVIDER_PENDING_AFTER_MS);
-        // PS-233: the print-queue worker is a TRUSTED internal caller â€” the
-        // operator's scope was already enforced when the entry was queued, and
-        // the queue routes are gated by print_queue:write (portal roles can't
-        // reach them). GLOBAL_SCOPE = no per-resource restriction here.
+        // Per user override unlock shipped data on 2026-05-23: PS-422 preserves
+        // the initiating route's client/store scope through
+        // the durable worker. Possessing print_queue:write alone never widens
+        // label purchase to unrelated tenants.
         const created = await timeQueueStep(
           timings,
           'labelPurchaseMs',
           async () => {
             try {
               if (isShopifyQueueLabelInput(labelInput)) {
-                return await createShopifyShippingLabelForOrder({
+                const input = {
                   orderId: order.orderId,
                   weightOz: labelInput.weightOz,
                   length: labelInput.length,
@@ -1313,13 +1385,19 @@ async function processQueueSendOrder(
                   customPackageId: labelInput.customPackageId,
                   notifyCustomer: labelInput.notifyCustomer ?? false,
                   testLabel: labelInput.testLabel,
-                }, GLOBAL_SCOPE);
+                };
+                return recoveryState === 'receipt_resume'
+                  ? await resumeShopifyShippingLabelFromDurableReceipt(input, labelPurchaseScope)
+                  : await createShopifyShippingLabelForOrder(input, labelPurchaseScope);
               }
-              return await createLabelV2({
+              const input = {
                 ...labelInput,
                 orderId: order.orderId,
                 orderNumber: order.orderNumber ?? labelInput.orderNumber,
-              }, GLOBAL_SCOPE);
+              };
+              return recoveryState === 'receipt_resume'
+                ? await resumeLabelV2FromDurableReceipt(input, labelPurchaseScope)
+                : await createLabelV2(input, labelPurchaseScope);
             } finally {
               if (providerPendingTimer) {
                 clearTimeout(providerPendingTimer);
@@ -1328,6 +1406,9 @@ async function processQueueSendOrder(
             }
           },
         );
+        if ('pending' in created && created.pending === true) {
+          throw new QueueSendReceiptPendingError(order.orderId);
+        }
         labelUrl = created.labelUrl;
         trackingNumber = created.trackingNumber;
         if (created.timings) timings.labelCreateTimings = created.timings;
@@ -1587,7 +1668,7 @@ export async function startQueueSendJob(input: {
 
   cleanOldJobs();
   const preflight = orders.length > 0
-    ? await preflightQueueSendOrders(orders)
+    ? await preflightQueueSendOrders(orders, input.scope)
     : { readyOrders: [], blockedResults: [], itemStates: [] };
   const frontendSkippedResults = frontendPreflightSkips.map(toQueueSendPreflightSkipResult);
   const frontendSkippedItems = frontendPreflightSkips.map(toQueueSendPreflightSkipItem);
@@ -1604,6 +1685,8 @@ export async function startQueueSendJob(input: {
   const workerConcurrency = normalizeQueueSendWorkerConcurrency(input.concurrency, preflight.readyOrders.length || 1);
   const job: QueueSendJob = {
     jobId,
+    generation: 0,
+    chunkSequence: 1,
     status: preflight.readyOrders.length > 0 ? 'pending' : 'done',
     clientIds,
     progress: 0,
@@ -1670,6 +1753,8 @@ export async function runQueueSendJobFromWorker(payload: {
   orders: QueueSendOrderInput[];
   concurrency?: number;
   scope?: PrintQueueListScope;
+  chunkSequence?: number;
+  recoveryAttempt?: number;
 }, options: { signal?: AbortSignal } = {}): Promise<QueueSendWorkerRunResult> {
   // Per user override unlock shipped data on 2026-07-14: a pg-boss retry may
   // arrive while the timed-out promise is still settling. Join that one run;
@@ -1690,12 +1775,35 @@ export async function runQueueSendJobFromWorker(payload: {
     }
 
     const job = queueSendJobs.get(payload.jobId) ?? queueSendJobFromSnapshot(durableJob);
+    job.generation = Math.max(0, Math.floor(payload.recoveryAttempt ?? durableJob.generation));
+    job.chunkSequence = Math.max(1, Math.floor(payload.chunkSequence ?? durableJob.chunkSequence));
+    job.recoveryAttempts = job.generation;
     queueSendJobs.set(payload.jobId, job);
 
-    const completedOrderIds = new Set(job.results.map((result) => result.orderId));
-    const remainingOrders = payload.orders.filter((order) => !completedOrderIds.has(order.orderId));
+    const durableItemStates = await getQueueSendJobItemRecords(payload.jobId);
+    job.itemStates = durableItemStates.map(toQueueSendItemSnapshot);
+    const durableCounters = deriveQueueSendProgressCounters({
+      ...job,
+      itemStates: job.itemStates,
+    });
+    job.current = durableCounters.current;
+    job.queued = durableCounters.queued;
+    job.skipped = durableCounters.skipped;
+    job.failed = durableCounters.failed;
+    const recoveryPlan = planQueueSendRecovery({
+      workerOrders: payload.orders,
+      itemStates: durableItemStates,
+      results: job.results,
+    });
+    const remainingOrders = recoveryPlan.safeOrders;
     if (remainingOrders.length === 0) {
-      if (job.current >= job.total) {
+      if (recoveryPlan.providerPendingOrderIds.length > 0) {
+        job.status = 'interrupted';
+        job.errorMessage =
+          `${recoveryPlan.providerPendingOrderIds.length} provider outcome(s) require reconciliation; protected orders were not resent.`;
+        job.message = job.errorMessage;
+        await persistQueueSendJobSnapshot(job, { required: true });
+      } else if (job.current >= job.total) {
         job.status = 'done';
         updateQueueSendProgress(job);
         await persistQueueSendJobSnapshot(job, { required: true });
@@ -1732,30 +1840,101 @@ async function runQueueSendJob(
   const concurrency = normalizeQueueSendWorkerConcurrency(requestedConcurrency, orders.length || 1);
   job.status = 'running';
   updateQueueSendProgress(job);
-  void persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
 
   try {
+    await persistQueueSendJobSnapshot(job, {
+      ...QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS,
+      required: true,
+    });
     await runQueueSendPool(
       orders,
       async (order) => {
         const orderStartedAt = Date.now();
+        let attemptCompleted = true;
+        let admittedAttemptCount = 0;
+        let admittedLocalTailState: 'receipt_resume' | 'shipment_persisted' | null = null;
         try {
-          const result = await processQueueSendOrder(order, order.scope ?? scope, {
-            setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
+          // Per user override unlock shipped data on 2026-07-21: PS-452
+          // atomically fences each safe item before it can reach the canonical
+          // preflight/provider boundary. A stale generation fails closed.
+          const attemptCount = await claimQueueSendJobItemAttempt({
+            jobId: job.jobId,
+            orderId: order.orderId,
+            generation: job.generation,
+            chunkSequence: job.chunkSequence,
+            maxAttempts: QUEUE_SEND_MAX_ITEM_ATTEMPTS,
           });
+          if (attemptCount == null) {
+            throw new QueueSendJobInterruptedError(
+              `Queue send item ${order.orderId} was not admitted by generation ${job.generation}`,
+            );
+          }
+          const claimedItem = job.itemStates.find((item) => item.orderId === order.orderId);
+          admittedAttemptCount = attemptCount;
+          admittedLocalTailState = claimedItem?.state === 'receipt_resume'
+            || claimedItem?.state === 'shipment_persisted'
+            ? claimedItem.state
+            : null;
+          if (claimedItem) {
+            claimedItem.attemptCount = attemptCount;
+            claimedItem.generation = job.generation;
+          }
+
+          // Re-check the backend source of truth at execution time. An order
+          // cancelled after the API preflight is terminally skipped before any
+          // label URL, postage, provider, or Print Queue mutation is attempted.
+          const executionPreflight = await preflightQueueSendOrders(
+            [order],
+            order.scope ?? scope,
+            admittedLocalTailState
+              ? { ignoreActivePurchaseLockOrderIds: new Set([order.orderId]) }
+              : undefined,
+          );
+          const blockedResult = executionPreflight.blockedResults[0];
+          const blockedItem = executionPreflight.itemStates[0];
+          if (blockedResult && blockedItem?.state !== 'ready') {
+            job.skipped += 1;
+            job.results = job.results.filter((existing) => existing.orderId !== order.orderId);
+            job.results.push(blockedResult);
+            recordQueueSendResultLogs(job, [blockedResult]);
+            await setQueueSendItemState(job, order, {
+              state: 'skipped_preflight',
+              blockedReason: blockedItem?.blockedReason ?? blockedResult.retryReason ?? null,
+              errorMessage: blockedItem?.errorMessage ?? blockedResult.error ?? null,
+            });
+            return;
+          }
+
+          const result = await processQueueSendOrder(order, order.scope ?? scope, {
+            setState: (state, patch) => {
+              if (
+                admittedLocalTailState
+                && ['validating_rate', 'acquiring_lock', 'provider_pending', 'provider_pending_recovery'].includes(state)
+              ) {
+                // Per user override unlock shipped data on 2026-07-21: keep the
+                // durable-receipt phase visible while the canonical label owner
+                // consumes/polls it. A crash therefore spends the bounded local
+                // tail budget instead of looking like a new unknown purchase.
+                return Promise.resolve();
+              }
+              return setQueueSendItemState(job, order, { state, ...patch });
+            },
+          }, admittedLocalTailState);
           const loggedResult = withTotalTiming(result, orderStartedAt);
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);
+          job.results = job.results.filter((existing) => existing.orderId !== order.orderId);
           job.results.push(loggedResult);
           recordQueueSendResultLogs(job, [loggedResult]);
-          await setQueueSendItemState(job, order, {
-            state: 'queued',
-            queueEntryId: result.queueEntryId ?? null,
-            trackingNumber: result.trackingNumber ?? null,
-          });
         } catch (err) {
-          job.failed += 1;
+          if (
+            err instanceof QueueSendJobInterruptedError
+            || err instanceof PrintQueueDurableStatusError
+          ) {
+            attemptCompleted = false;
+            throw err;
+          }
           // PS-191: classify retry eligibility STRUCTURALLY (proof-error code
           // + details.reason) â€” never by parsing the message. The FE surfaces
           // a "refresh the rate and click again" prompt for eligible failures
@@ -1763,11 +1942,44 @@ async function runQueueSendJob(
           const retry = classifyLabelPurchaseRetry(err);
           const staleLabelAttempt = isQueueSendStaleLabelAttemptError(err);
           const labelPurchaseInProgress = isLabelPurchaseInProgressError(err);
-          const retryEligible = staleLabelAttempt || labelPurchaseInProgress || retry.retryEligible;
-          const retryReason = staleLabelAttempt
-            ? err.retryReason
-            : labelPurchaseInProgress
-              ? 'label_purchase_in_progress'
+          const providerReconciliationRequired = err instanceof FulfillmentOperationHeldError;
+          const labelArtifactMissing = err instanceof LabelArtifactMissingAfterPurchaseError;
+          const legacyReconciliationRequired = isLabelPurchaseReconcileRequiredError(err);
+          const receiptPending = isQueueSendReceiptPendingError(err);
+          const localTailFailureState = queueSendLocalTailFailureState(
+            admittedLocalTailState,
+            admittedAttemptCount,
+          );
+          const providerPending = labelPurchaseInProgress
+            || providerReconciliationRequired
+            || labelArtifactMissing
+            || legacyReconciliationRequired
+            || receiptPending;
+          if (localTailFailureState) {
+            if (localTailFailureState === 'failed_terminal') job.failed += 1;
+            else attemptCompleted = false;
+          } else if (providerPending) attemptCompleted = false;
+          else job.failed += 1;
+          // Per user override unlock shipped data on 2026-07-21: PS-444 never
+          // presents an active/unknown label purchase as a retryable buy. It is
+          // held for reconciliation so a user retry cannot double-purchase.
+          const retryEligible = !localTailFailureState
+            && !labelPurchaseInProgress
+            && !providerReconciliationRequired
+            && !labelArtifactMissing
+            && !legacyReconciliationRequired
+            && !receiptPending
+            && (staleLabelAttempt || retry.retryEligible);
+          const retryReason = localTailFailureState
+            ? 'queue_tail_recovery_required'
+            : staleLabelAttempt
+              ? err.retryReason
+              : labelPurchaseInProgress
+              || providerReconciliationRequired
+              || labelArtifactMissing
+              || legacyReconciliationRequired
+              || receiptPending
+              ? 'label_purchase_reconciliation_required'
               : retry.retryReason;
           const message = err instanceof Error ? err.message : 'Unknown error';
           const failedResult: QueueSendJobResult = {
@@ -1779,15 +1991,23 @@ async function runQueueSendJob(
             retryReason,
             timings: { totalMs: elapsedSince(orderStartedAt), labelSource: 'failed' },
           };
+          job.results = job.results.filter((existing) => existing.orderId !== order.orderId);
           job.results.push(failedResult);
           recordQueueSendResultLogs(job, [failedResult]);
           await setQueueSendItemState(job, order, {
-            state: retryEligible ? 'failed_retryable' : 'failed_terminal',
+            state: localTailFailureState
+              ?? (receiptPending
+              ? 'receipt_resume'
+              : providerPending
+                ? 'provider_pending_recovery'
+              : retryEligible
+                ? 'failed_retryable'
+                : 'failed_terminal'),
             blockedReason: retryReason ?? null,
             errorMessage: message,
           });
         } finally {
-          job.current += 1;
+          if (attemptCompleted) job.current += 1;
           updateQueueSendProgress(job);
           await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
         }
@@ -1813,11 +2033,24 @@ async function runQueueSendJob(
       await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
     }
     if (job.current > job.total) job.current = job.total;
-    job.status = job.current >= job.total ? 'done' : 'pending';
+    const providerPendingCount = job.itemStates.filter(
+      (item) => item.state === 'provider_pending' || item.state === 'provider_pending_recovery',
+    ).length;
+    job.status = providerPendingCount > 0
+      ? 'interrupted'
+      : job.current >= job.total
+        ? 'done'
+        : 'pending';
     updateQueueSendProgress(job);
+    if (providerPendingCount > 0) {
+      job.errorMessage =
+        `${providerPendingCount} provider outcome(s) require reconciliation; protected orders were not resent.`;
+      job.message = job.errorMessage;
+    }
     await persistQueueSendJobSnapshot(job, { required: true });
   } catch (err) {
-    const interrupted = err instanceof QueueSendJobInterruptedError;
+    const interrupted = err instanceof QueueSendJobInterruptedError
+      || err instanceof PrintQueueDurableStatusError;
     job.status = interrupted ? 'interrupted' : 'error';
     job.errorMessage = err instanceof Error ? err.message : 'Queue send failed';
     job.message = job.errorMessage;

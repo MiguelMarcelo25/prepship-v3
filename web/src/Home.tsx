@@ -18,6 +18,8 @@ import {
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
 import { api } from './lib/api'
+import { endpointQueryKeys } from './lib/endpoint-query-keys'
+import { queryClient } from './lib/query-client'
 // TODO PS-257: SyncWorkerStatusDto is not exported by ./types/api (the worker
 // status DTO was never added there). Until v4 grows a real worker contract it's
 // aliased to `any` locally — matching the per-file DTO alias precedent used
@@ -527,7 +529,11 @@ export default function Home() {
       }
       let nextDelayMs = 120_000
       try {
-        const next = await apiClient.fetchLegacySyncStatus({ forceRefresh: true })
+        const next = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.legacySyncStatus,
+          queryFn: () => apiClient.fetchLegacySyncStatus({ forceRefresh: true }),
+          staleTime: 0,
+        })
         if (!active) return
         setSyncStatus(next)
         nextDelayMs = next.status === 'syncing' ? 10_000 : 120_000
@@ -595,7 +601,11 @@ export default function Home() {
     const poll = async () => {
       if (document.visibilityState !== 'visible') return
       try {
-        const next = await apiClient.fetchSyncWorkerStatus()
+        const next = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.syncWorkerStatus,
+          queryFn: () => apiClient.fetchSyncWorkerStatus(),
+          staleTime: 90_000,
+        })
         if (!active) return
         setWorkerStatus(next)
       } catch {
@@ -622,8 +632,12 @@ export default function Home() {
   const slowestApiRoute = apiTimingRoutes[0] ?? null
   const ordersApiRoute =
     apiTimingRoutes.find((route) => route.method === 'GET' && route.path === '/orders') ?? null
-  const apiTimingErrorCount = apiTimingRoutes.reduce(
+  const apiTimingHistorical5xxCount = apiTimingRoutes.reduce(
     (sum, route) => sum + Number(route.errorCount ?? 0),
+    0,
+  )
+  const apiTimingCurrent5xxRouteCount = apiTimingRoutes.reduce(
+    (sum, route) => sum + (route.lastStatus >= 500 ? 1 : 0),
     0,
   )
 
@@ -945,7 +959,7 @@ export default function Home() {
                   Right edge anchored 128px left of center so the wider Close Queue state cannot overlap. */}
               <div
                 id="queue-progress-slot"
-                className="absolute left-1/2 top-1/2 z-10 hidden md:block"
+                className="absolute left-1/2 top-1/2 z-10 hidden min-[1440px]:block"
                 style={{ transform: 'translate(calc(-100% - 128px), -50%)' }}
               />
             <button
@@ -1485,12 +1499,16 @@ export default function Home() {
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Errors
+                        Latest route status
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${apiTimingErrorCount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                        {apiTimingErrorCount}
+                      <div className={`mt-1 text-2xl font-extrabold ${apiTimingCurrent5xxRouteCount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {apiTimingCurrent5xxRouteCount > 0
+                          ? `${apiTimingCurrent5xxRouteCount} ${apiTimingCurrent5xxRouteCount === 1 ? 'route' : 'routes'} need review`
+                          : 'All clear'}
                       </div>
-                      <div className="mt-1 text-[11.5px] text-ink-3">5xx samples</div>
+                      <div className="mt-1 text-[11.5px] text-ink-3">
+                        {apiTimingHistorical5xxCount} past 5xx {apiTimingHistorical5xxCount === 1 ? 'sample' : 'samples'} since API restart
+                      </div>
                     </div>
                   </div>
 

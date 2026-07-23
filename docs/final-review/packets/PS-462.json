@@ -1,0 +1,261 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-462",
+  "title": "Canonical inventory ledger quantity and immutable monthly storage billing",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "3d5d9dd9fbc8557a62ab02ec96cbc8166ffaaac6"
+  },
+  "riskDomains": [
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 74,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Signed immutable inventory movements and the backend inventory read model own quantity; callers no longer own or repair a parallel stock balance.",
+      "evidenceIds": [
+        "inventory-rollout-integration",
+        "sot-regression-pack"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Storage billing has one stable UTC calendar-month identity, frozen proof, and admin-only audited edits while finalized billing remains immutable.",
+      "evidenceIds": [
+        "billing-boundary-adversarial",
+        "sot-regression-pack"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "high",
+      "status": "met",
+      "description": "Client Portal renders canonical PrepShip inventory and billing DTOs, production fails closed to portal-only routes, and no independent invoice mutation or client-specific money override remains.",
+      "evidenceIds": [
+        "client-portal-shadow-integration"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Additive preparation, append-only correction, destructive cutover, and both rollback phases are guarded, repeatable, and verified against migrated offline database fixtures.",
+      "evidenceIds": [
+        "inventory-rollout-integration"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "blocked",
+      "description": "A fresh exact-SHA read-only packet confirms 49 correction rows totaling +1,000 units with zero ambiguous rows, but production remains unmodified until DJ separately approves the maintenance window, production migrations, correction movements, push, and deployment.",
+      "evidenceIds": [
+        "production-readonly-preflight",
+        "rollout-runbook-static"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/inventory-movement.ts owns append-only movement writes and direction validation",
+      "src/services/inventory-stock-math.ts owns ledger-derived inventory quantity",
+      "src/services/inventory-reconciliation.ts and src/services/inventory-correction-plan.ts own read-only reconciliation and deterministic correction plans",
+      "src/services/billing-storage.ts owns calendar-month storage periods and proof math",
+      "src/services/billing.ts owns generated billing lines and monthly storage persistence",
+      "drizzle/0075_inventory_quantity_sot.sql, drizzle/0076_inventory_quantity_cutover.sql, and drizzle/0077_ps462_billing_storage_month.sql own schema enforcement"
+    ],
+    "oldOwners": [
+      {
+        "path": "inventory.stock_qty mutable balance cache",
+        "disposition": "deleted",
+        "delegatesTo": "signed inventory_ledger movements after the separately approved 0076 cutover"
+      },
+      {
+        "path": "frontend inventory quantity and stock-status fallbacks",
+        "disposition": "delegated",
+        "delegatesTo": "backend inventoryQuantity and stockStatus DTO fields"
+      },
+      {
+        "path": "Client Portal Heritage prep-fee override",
+        "disposition": "deleted",
+        "delegatesTo": "canonical PrepShip billing summary"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/inventory.ts",
+        "action": "modified",
+        "delegatesTo": "inventory movement, read-model, and reconciliation owners"
+      },
+      {
+        "path": "web/src/lib/v2-apiClient.ts and Client Portal inventory DTOs",
+        "action": "modified",
+        "delegatesTo": "backend inventoryQuantity and stockStatus"
+      },
+      {
+        "path": "scripts/ps-462-inventory-*-operator.ts",
+        "action": "added",
+        "delegatesTo": "reviewed migrations and canonical append-only movement owner under exact approval gates"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Routes and UIs are thin consumers; quantity, billing month identity, billing money, and correction policy remain in backend or database canonical owners."
+    }
+  },
+  "evidence": [
+    {
+      "id": "inventory-rollout-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-462-inventory-sot",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-concurrency-integration.ts",
+        "scripts/ps-462-inventory-preparation-rollout-integration.ts",
+        "scripts/ps-462-inventory-forward-rollback-integration.ts",
+        "scripts/ps-462-inventory-correction-cutover-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Offline migrated-database fixtures enforce movement identity and immutability, compose concurrent writes, reject invalid phase order or parity, and exercise preparation, correction, cutover, and rollback repeatedly."
+    },
+    {
+      "id": "billing-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-462-billing-sot && npm run test:ps-373-prorated-storage-billing && npm run test:ps-373-storage-proof && npm run test:ps-249-billing-write-permission && npm run test:ps-249-billing-details-transaction",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-462-billing-boundary-guard.ts",
+        "scripts/ps-373-prorated-storage-billing-guard.ts",
+        "scripts/ps-373-storage-proof-guard.ts",
+        "scripts/ps-249-billing-write-permission-guard.ts",
+        "scripts/ps-249-billing-details-transaction-guard.ts"
+      ],
+      "assertions": [
+        "monthly_identity_stable",
+        "negative_inventory_not_charged",
+        "zero_volume_not_charged",
+        "unauthorized_edit_rejected",
+        "audit_failure_rolls_back_edit"
+      ],
+      "proves": "Calendar-month storage identity, exact proof reconciliation, negative/zero handling, admin and permission gates, and atomic audit-backed edits all fail closed."
+    },
+    {
+      "id": "client-portal-shadow-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-462-source-of-truth && npm run legacy:guard:admin-api && npm run test:billing-line-item-sort-pagination && npm run test:client-portal-returns-label && npm run typecheck && npm --prefix portal-client run build",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-inventory-source-of-truth-guard.ts",
+        "scripts/client-portal-shadow-renderer-guard.mjs",
+        "scripts/client-portal-billing-totals-guard.mjs",
+        "scripts/legacy-admin-api-guard.mjs"
+      ],
+      "assertions": [
+        "canonical_inventory_dto_only",
+        "canonical_billing_totals_only",
+        "production_routes_fail_closed",
+        "return_label_inventory_neutral"
+      ],
+      "proves": "Client Portal commit 49eae24ff380ec0602d76489230779c176de6d8b is a shadow renderer and production exposes no generic operational invoice mutation route."
+    },
+    {
+      "id": "sot-regression-pack",
+      "classification": "adversarial",
+      "command": "offline placeholders; npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/runtime-ddl-guard.mjs"
+      ],
+      "assertions": [
+        "all_53_guards_pass",
+        "no_provider_side_effect",
+        "shipped_lock_preserved",
+        "inventory_kill_switch_preserved"
+      ],
+      "proves": "All 53 repository source-of-truth, lifecycle, billing, worker, RBAC, migration-readiness, and shipped-order safety gates passed with offline non-routable environment placeholders."
+    },
+    {
+      "id": "production-readonly-preflight",
+      "classification": "live",
+      "command": "npm run migrate:ps-462-inventory-preparation; npm run inventory:correction-packet:prepare -- --output-dir=reports/ps-462-correction-packet-current-20260722",
+      "result": "pass",
+      "artifactPaths": [
+        "reports/ps-462-correction-packet-current-20260722/manifest.json",
+        "reports/ps-462-correction-packet-current-20260722/movements.csv"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "production_mutation_false",
+        "exact_reviewed_sha",
+        "zero_ambiguous_rows"
+      ],
+      "proves": "At implementation SHA 3d5d9dd9fbc8557a62ab02ec96cbc8166ffaaac6, a read-only production scan covered 1,010 inventory rows and found 49 deterministic corrections totaling +1,000 units, zero ambiguous rows, zero case-variant collisions, and missing additive 0075 identity enforcement. Plan hash 899c6104401c60391755d3f9ed01a1b0f0ede0ae2107f45d1aa1eb5eaf5b6feb; movements SHA-256 7448aa1541df9c208b117eb7fdd1ca8e961c492de3e112b50723dc2cbbc232ff; productionMutation=false."
+    },
+    {
+      "id": "rollout-runbook-static",
+      "classification": "static",
+      "command": "npm run test:ps-462-inventory-preparation-rollout && npm run test:ps-462-inventory-correction-cutover",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/runbooks/ps-462-inventory-preparation.md",
+        "docs/runbooks/ps-462-inventory-correction-cutover.md",
+        "docs/ps-tickets/ps-462-inventory-quantity-rollout.md"
+      ],
+      "assertions": [],
+      "proves": "The runbooks require a fresh exact-SHA read-only packet, separate production approvals, controlled Render and Vercel deployment, PrepShip-only schema migration, and explicit rollback evidence."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0075_inventory_quantity_sot.sql",
+      "drizzle/0076_inventory_quantity_cutover.sql",
+      "drizzle/0077_ps462_billing_storage_month.sql"
+    ],
+    "verification": {
+      "command": "npm run test:ps-462-inventory-sot && npm run test:runtime-ddl",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-462-inventory-preparation-rollout-integration.ts",
+        "scripts/ps-462-inventory-correction-cutover-integration.ts",
+        "scripts/runtime-ddl-guard.mjs"
+      ]
+    },
+    "rollbackPlan": "Before cutover, remove only the new insert-identity guard and restore the prior runtime. After cutover, recreate the compatibility cache from the immutable ledger. Never rewrite ledger history; reverse an approved correction only with separately approved append-only inverse movements."
+  },
+  "rollback": {
+    "strategy": "Use the tested phase-1 compatibility rollback before 0076 or the tested forward rollback after 0076, with writers stopped and INVENTORY_AUTO_DEDUCT=false.",
+    "tested": true,
+    "evidenceIds": [
+      "inventory-rollout-integration"
+    ]
+  },
+  "liveVerification": {
+    "status": "unverified",
+    "reason": "The aggregate production preflight was read-only and verified, but no production migration, correction, push, deployment, live provider call, or production inventory/order/shipment mutation has been authorized or performed for this candidate.",
+    "followUpOwner": "DJ and the Lawrence release operator",
+    "artifactPaths": []
+  },
+  "caveats": [
+    {
+      "id": "production-approval-and-cutover",
+      "severity": "critical",
+      "status": "open",
+      "description": "The fresh read-only packet is prepared and hash-pinned. Obtain separate DJ approvals for the maintenance window, additive 0075 and 0077, append-only corrections, destructive 0076, push, coordinated Render/Vercel deployment, and reopening traffic.",
+      "followUpOwner": "DJ and the Lawrence release operator",
+      "followUpTask": "Execute docs/runbooks/ps-462-inventory-preparation.md and docs/runbooks/ps-462-inventory-correction-cutover.md only after the explicit approval gates."
+    }
+  ]
+}

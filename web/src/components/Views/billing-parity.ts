@@ -167,7 +167,7 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
   { id: 'billingStatus', label: 'Status', align: 'left', always: false },
-  { id: 'shipDate', label: 'Ship Date', align: 'left', always: false },
+  { id: 'shipDate', label: 'Billing Date', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
   { id: 'itemSkus', label: 'SKU', align: 'left', always: false },
@@ -189,7 +189,7 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
 // row actions so operators can audit/edit a full invoice line at once.
 // Bumping the storage key resets returning users to the new default
 // order; if they had custom toggles, they re-pick them once.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v6'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v7'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
@@ -249,7 +249,6 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
   // Accept either the v4 camelCase (`billingMode`, `pickPackMaxUnits`) or
   // legacy snake_case (`billing_mode`) shapes on the incoming DTO.
   const c = config as any
-  const isHugrabClient = String(c.clientName ?? '').trim().toUpperCase() === 'HUGRAB'
   return {
     pickPackFee: Number(c.pickPackFee ?? 0).toFixed(2),
     pickPackMaxUnits: String(c.pickPackMaxUnits ?? 1),
@@ -257,10 +256,7 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
     packageCostMarkup: Number(c.packageCostMarkup ?? 0).toFixed(1),
     shippingMarkupPct: Number(c.shippingMarkupPct ?? 0).toFixed(1),
     shippingMarkupFlat: Number(c.shippingMarkupFlat ?? 0).toFixed(2),
-    hugrabShippingRateOverrideEnabled:
-      c.hugrabShippingRateOverrideEnabled == null
-        ? isHugrabClient
-        : c.hugrabShippingRateOverrideEnabled !== false,
+    hugrabShippingRateOverrideEnabled: c.hugrabShippingRateOverrideEnabled === true,
     hugrabShippingRateOverrideThreshold: Number(c.hugrabShippingRateOverrideThreshold ?? 6).toFixed(2),
     hugrabShippingRateOverrideAmount: Number(c.hugrabShippingRateOverrideAmount ?? 7.73).toFixed(2),
     storageFeePerCuFt: Number(c.storageFeePerCuFt ?? 0).toFixed(2),
@@ -311,7 +307,7 @@ export function buildBillingSummaryTotals(rows: BillingSummaryDto[]): BillingSum
       storage: totals.storage + storage,
       shipping: totals.shipping + shipping,
       fulfillmentFee: totals.fulfillmentFee + fulfillmentFee,
-      grand: totals.grand + (row.grandTotal || fulfillmentFee),
+      grand: totals.grand + Number(row.grandTotal ?? row.total ?? fulfillmentFee),
     }
   }, {
     orders: 0,
@@ -450,7 +446,8 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   // fee totals; the FE no longer recomputes them (snake key kept as deploy-skew fallback).
   const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? 0) || 0
   const fulfillmentFee = Number(detail.fulfillmentFeeTotal ?? detail.fulfillment_fee_total ?? 0) || 0
-  const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || fulfillmentFee
+  const totalValue = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? fulfillmentFee)
+  const total = Number.isFinite(totalValue) ? totalValue : fulfillmentFee
   const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost
   const ourCost = Number(selectedRateCost ?? 0) || 0
   const margin = shipping - ourCost

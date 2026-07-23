@@ -15,7 +15,6 @@ const hooksSharedPath = path.join(root, 'web/src/hooks/v2Hooks-shared.ts');
 const homePath = path.join(root, 'web/src/Home.tsx');
 const ordersParityPath = path.join(root, 'web/src/components/Views/orders-parity.ts');
 const v2ApiClientPath = path.join(root, 'web/src/lib/v2-apiClient.ts');
-const v2ApiClientSharedPath = path.join(root, 'web/src/lib/v2-apiClient/shared.ts');
 const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
 const markupsContextPath = path.join(root, 'web/src/contexts/MarkupsContext.tsx');
 const packagePath = path.join(root, 'package.json');
@@ -31,7 +30,6 @@ const [
   home,
   ordersParity,
   v2ApiClient,
-  v2ApiClientShared,
   sidebarOrders,
   markupsContext,
   packageJsonRaw,
@@ -45,7 +43,6 @@ const [
   readFile(homePath, 'utf8'),
   readFile(ordersParityPath, 'utf8'),
   readFile(v2ApiClientPath, 'utf8'),
-  readFile(v2ApiClientSharedPath, 'utf8'),
   readFile(sidebarOrdersPath, 'utf8'),
   readFile(markupsContextPath, 'utf8'),
   readFile(packagePath, 'utf8'),
@@ -100,7 +97,7 @@ const checks = [
     name: 'Global SKU list stays lazy until the SKU dropdown requests it',
     pass: ordersView.includes('const [skuOptionsRequested, setSkuOptionsRequested] = useState(false)') &&
       ordersView.includes('if (!skuOptionsRequested) return') &&
-      ordersView.includes('.fetchDistinctSkus({'),
+      ordersView.includes('queryFn: () => apiClient.fetchDistinctSkus(filters)'),
   },
   {
     name: 'Daily stats initial load remains scheduled as noncritical work',
@@ -162,11 +159,11 @@ const checks = [
       !legacySyncHome.includes('window.setInterval(() => {\n      if (document.visibilityState !== \'visible\') return\n      void poll()\n    }, 120_000)'),
   },
   {
-    name: 'Orders sync status bypasses a fresh cache entry without discarding stale fallback',
-    pass: v2ApiClient.includes('fetchLegacySyncStatus(options: { forceRefresh?: boolean } = {})') &&
-      v2ApiClient.includes('forceRefresh: options.forceRefresh') &&
-      v2ApiClientShared.includes('forceRefresh?: boolean') &&
-      v2ApiClientShared.includes('if (!options.forceRefresh && existing?.hasValue'),
+    name: 'Orders sync status uses the unified query cache with a forced network refresh',
+    pass: v2ApiClient.includes('fetchLegacySyncStatus(_options: { forceRefresh?: boolean } = {})') &&
+      v2ApiClient.includes("return api.get<any>('/sync/status', { timeoutMs: 25_000 })") &&
+      home.includes('queryKey: endpointQueryKeys.legacySyncStatus') &&
+      home.includes('staleTime: 0'),
   },
   {
     name: 'Unknown sync progress is not displayed as a zero page',

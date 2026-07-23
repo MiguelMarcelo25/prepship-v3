@@ -1,0 +1,306 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-463",
+  "title": "Pin ShipStation consumer leadership and make fulfillment-outbox health age-based",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "ec3eba5ed366758fb2cccb8fd8787aa75c5ba3ea"
+  },
+  "riskDomains": [
+    "provider_durable_job"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "ShipStation consumer leadership remains on one reserved session while its URL owner converts the legacy Supabase transaction-pooler fallback to session mode, accepts an explicit direct/session URL, and rejects an explicitly configured transaction-mode leadership URL.",
+      "evidenceIds": [
+        "ps463-adversarial-boundary",
+        "leadership-integration"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "high",
+      "status": "met",
+      "description": "Fulfillment-outbox skip health delegates its threshold to the canonical one-minute cadence and remains healthy for three rapid lane-blocked skips instead of failing on raw count.",
+      "evidenceIds": [
+        "ps463-adversarial-boundary",
+        "starvation-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "A persistent skip, stale prior success, or never-fetched outbox job fails backend deep health after the three-cadence age budget, while the route only renders the canonical verdict and sanitized timing facts.",
+      "evidenceIds": [
+        "ps463-adversarial-boundary",
+        "ps439-regression-guard",
+        "health-readiness-guard"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Provider execution and durable fulfillment behavior remain unchanged and provider-safe under lost response, restart, concurrency, fencing, and starvation failure scenarios.",
+      "evidenceIds": [
+        "provider-retry-integration",
+        "leadership-integration",
+        "starvation-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "Strict TypeScript, production web build, the full source-of-truth pack, and shipped/cancelled lockdown guards pass at the exact reviewed implementation SHA with no protected file change.",
+      "evidenceIds": [
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build",
+        "lockdown-proof",
+        "implementation-scope-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/sync-job-queue.ts ShipStationConsumerLeadershipController for leader acquisition, handoff, connection health, and release",
+      "src/services/worker-job-skip-health.ts for fulfillment-outbox readiness verdicts",
+      "src/lib/sync-cadence.ts for the fulfillment-outbox cadence used to derive the liveness budget"
+    ],
+    "oldOwners": [
+      {
+        "path": "src/services/worker-job-skip-health.ts raw consecutiveSkips >= 3 verdict",
+        "disposition": "delegated",
+        "delegatesTo": "elapsed skip age derived from src/lib/sync-cadence.ts"
+      },
+      {
+        "path": "src/routes/health.ts implicit assumption that a non-skipped prior result is healthy forever",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/worker-job-skip-health.ts latest-run and worker-start grace verdict"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/health.ts checkFulfillmentOutboxWorker",
+        "action": "modified",
+        "delegatesTo": "evaluateWorkerJobSkipHealth and only renders its reason/timing fields"
+      },
+      {
+        "path": "src/services/sync-job-queue.ts resolveShipStationConsumerLeaderDatabaseUrl",
+        "action": "modified",
+        "delegatesTo": "isSupabaseTransactionPoolerUrl for connection-mode classification before the reserved leader client is created"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The readiness rule stays in the backend health owner, cadence remains canonical, and the route is a thin renderer. No frontend, connector, or provider adapter chooses leadership, liveness, fulfillment, or marketplace-confirmation truth."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps463-adversarial-boundary",
+      "classification": "adversarial",
+      "command": "npm run test:ps-463-leader-skip-health",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-463-leader-skip-health-guard.ts",
+        "src/services/worker-job-skip-health.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "three rapid lane-blocked skips remain healthy",
+        "persistent skip age, stale success, and never-fetched state fail after the cadence budget",
+        "direct/session leadership URLs are accepted and explicit transaction-pooler URLs fail closed"
+      ],
+      "proves": "The two reported health false-negative/false-positive boundaries and connection-mode drift are exercised without a database or provider call."
+    },
+    {
+      "id": "ps439-regression-guard",
+      "classification": "unit",
+      "command": "npm run test:ps-439-session-advisory-locks && npm run test:sync-advisory-lock",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-439-session-advisory-locks-guard.ts",
+        "scripts/sync-advisory-lock-guard.mjs"
+      ],
+      "assertions": [
+        "the single allowed leadership session stays reserved on a direct/session-mode connection",
+        "scheduler, rate-browse, and carrier-snapshot paths retain transaction-scoped or durable ownership",
+        "age-based readiness fields remain wired into deep health"
+      ],
+      "proves": "PS-463 extends the existing PS-439 lock boundary instead of creating a competing ownership primitive."
+    },
+    {
+      "id": "leadership-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-426-awaiting-cursor-manual-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-426-consumer-leadership-integration.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "only one fake worker owns and registers consumers",
+        "connection loss unregisters before reacquisition",
+        "handoff and shutdown release ownership without overlap"
+      ],
+      "proves": "The production leadership controller still has deterministic acquisition, loss, handoff, and shutdown behavior after the URL policy change."
+    },
+    {
+      "id": "starvation-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-436-sync-starvation",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "non-cooperative cancellation cannot lose durable work",
+        "outbox priority remains bounded under synthetic contention",
+        "the fixture makes zero live provider calls and zero production mutations"
+      ],
+      "proves": "The age-based probe change does not weaken the durable starvation/recovery boundary around marketplace-confirmation work."
+    },
+    {
+      "id": "provider-retry-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-432-sync-fulfillment-resilience",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-432-sync-fulfillment-resilience-integration.ts",
+        "src/services/fulfillment-outbox.ts"
+      ],
+      "assertions": [
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "mocked provider retry and recovery reconverge without duplicate notification",
+        "durable outbox state remains the provider-operation owner"
+      ],
+      "proves": "No provider execution, idempotency, retry, or fulfillment-confirmation policy was moved into the new health logic."
+    },
+    {
+      "id": "health-readiness-guard",
+      "classification": "unit",
+      "command": "npm run test:health-deep-readiness && npm run test:ps-431-production-self-healing && npm run test:audit-sync-watchdog-lifecycle",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/health-deep-readiness-guard.mjs",
+        "scripts/ps-431-production-self-healing-guard.ts",
+        "scripts/audit-sync-watchdog-lifecycle-guard.ts",
+        "src/routes/health.ts"
+      ],
+      "assertions": [
+        "deep readiness remains fail-closed",
+        "production watchdog and sync watchdog lifecycle guards remain green"
+      ],
+      "proves": "The new fulfillment-outbox reason fields preserve the surrounding readiness and watchdog contracts."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [
+        "all 53 canonical source-of-truth commands pass"
+      ],
+      "proves": "Repository-wide backend ownership, durability, lifecycle, and safety guards remain green."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [
+        "backend and frontend strict TypeScript compilation pass"
+      ],
+      "proves": "The extended worker snapshot and health verdict contracts compile across all callers."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "web/src",
+        "vite.config.ts"
+      ],
+      "assertions": [
+        "the production web bundle completes"
+      ],
+      "proves": "The backend-only change introduces no frontend build regression."
+    },
+    {
+      "id": "lockdown-proof",
+      "classification": "static",
+      "command": "npm run test:ps-245-lockdown-fence && npm run test:order-editable-lockdown",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-245-lockdown-fence-guard.ts",
+        "scripts/order-editable-lockdown-guard.mjs"
+      ],
+      "assertions": [
+        "shipped/cancelled edit guards remain unchanged and passing",
+        "the implementation diff contains no protected locked file"
+      ],
+      "proves": "PS-463 changes queue control-plane health only and does not weaken or modify shipped/cancelled mutation protection."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= ec3eba5ed366758fb2cccb8fd8787aa75c5ba3ea",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/ps-463-leader-election-skip-health.md",
+        "src/services/worker-job-skip-health.ts",
+        "src/services/sync-job-queue.ts",
+        "src/routes/health.ts"
+      ],
+      "assertions": [
+        "only connection policy, queue-control telemetry, readiness rendering, documentation, and offline guards changed",
+        "no connector, provider payload, order, shipment, label, postage, inventory, billing, or frontend workflow file changed"
+      ],
+      "proves": "The exact implementation commit is surgical and provider-side-effect free."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git diff --name-only 34ff801092737fe7b3e0a50bbeef278dce15844a..ec3eba5ed366758fb2cccb8fd8787aa75c5ba3ea -- drizzle",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No migration or production data change exists. Forward-revert ec3eba5ed366758fb2cccb8fd8787aa75c5ba3ea and redeploy the prior stable tip 34ff801092737fe7b3e0a50bbeef278dce15844a; do not delete queue rows, replay provider operations, or mutate order/shipment history."
+  },
+  "rollback": {
+    "strategy": "Forward-revert ec3eba5ed366758fb2cccb8fd8787aa75c5ba3ea and redeploy the prior stable tip. No SQL rollback, queue cleanup, provider replay, or shipped/cancelled mutation is required.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "PS-463 changes a pure connection-mode selector and backend health verdict. Deterministic injected leadership, contention, stale-state, and mocked-provider evidence is safer and sufficient; no real marketplace notification or production mutation is required for certification. Read-only post-deploy readiness checks remain a release gate, not a provider canary.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}

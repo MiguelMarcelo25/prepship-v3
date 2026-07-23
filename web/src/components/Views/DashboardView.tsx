@@ -5,14 +5,10 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } 
 // operator Refresh button's invalidate.
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-// PS-150: reorder policy (velocity model) is owned by the backend layer (src/lib); the Dashboard
-// delegates so the restock/days-supply math can't drift from the dashboard /inventory-risk route.
-import { computeReorderPolicy } from '../../../../src/lib/inventory-reorder-policy'
 // PS-325: In/Low/Out-of-Stock thresholds + the inventory snapshot are backend-owned. The Dashboard
 // renders the snapshot from /dashboard/inventory-risk; these shared imports give the per-row badge
-// and the deploy-skew fallback the SAME canonical definition (no FE-owned thresholds), exactly like
-// computeReorderPolicy above (PS-150).
-import { classifyStockStatus, summarizeInventorySnapshot, type InventorySnapshot } from '../../../../src/lib/inventory-stock-status'
+// and the deploy-skew fallback the SAME canonical definition (no FE-owned thresholds).
+import type { InventorySnapshot } from '../../../../src/lib/inventory-stock-status'
 // PS-325 (slice 2): the "vs prior period" relative-change rule is backend-owned too — the Dashboard
 // imports the one definition instead of defining it locally.
 import { relativePct } from '../../../../src/lib/kpi-delta'
@@ -48,6 +44,8 @@ import {
 } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { api, qs } from '../../lib/api'
+import { activeClientRowsQueryOptions, clientQueryKeys } from '../../lib/client-query'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import {
   SortableHeader,
   nextSortState,
@@ -100,11 +98,13 @@ type InventoryItem = {
   imageUrl?: string | null
   clientId?: number | null
   clientName?: string | null
-  currentStock?: number
-  stockQty?: number
+  inventoryQuantity?: number
+  stockStatus?: 'in' | 'low' | 'out'
   minStock?: number
   reorderLevel?: number
   soldLast30Days?: number
+  daysSupply?: number | null
+  restockQty?: number
 }
 
 type AnalysisSku = {
@@ -639,12 +639,6 @@ function normalizeDashboardOrderAgg(value: unknown): DashboardOrderAgg {
   }
 }
 
-// PS-325: per-row status delegates to the canonical backend-owned classifier (src/lib/
-// inventory-stock-status) so the threshold definition lives in exactly one place.
-function stockStatus(stock: number, minStock: number): DashboardSkuRow['status'] {
-  return classifyStockStatus(stock, minStock)
-}
-
 // PS-154: statusLabel moved into web/src/components/StatusBadge.tsx
 // (co-located with its only caller, StatusBadge).
 
@@ -969,11 +963,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // having to refresh the whole page. React Query pauses the interval while
   // the tab is backgrounded — the same effect as the old
   // document.visibilityState gate on the setInterval it replaces.
-  const syncStatusQuery = useQuery({
-    queryKey: ['dashboard', 'sync-status'],
-    queryFn: async (): Promise<SyncStatusChipData> => {
-      const status: any = await apiClient.fetchLegacySyncStatus()
-      return {
+  const syncStatusQuery = useQuery<any, Error, SyncStatusChipData>({
+    queryKey: endpointQueryKeys.legacySyncStatus,
+    queryFn: () => apiClient.fetchLegacySyncStatus(),
+    select: (status: any): SyncStatusChipData => ({
         lastSync: typeof status?.lastSync === 'number' ? status.lastSync : null,
         cadenceMinutes: status?.cadenceMinutes ?? undefined,
         status: (status?.status as SyncStatusChipData['status']) ?? 'idle',
@@ -985,8 +978,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         queuedJobs: Array.isArray(status?.queue?.queues)
           ? status.queue.queues.reduce((sum: number, queue: { size?: number | null }) => sum + Number(queue.size ?? 0), 0)
           : null,
-      }
-    },
+      }),
     refetchInterval: 60_000,
   })
   // Fetch failures are non-fatal: React Query keeps the last successful data,
@@ -995,18 +987,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   // Reporting client scope for the canonical dashboard client filter —
   // transform mirrors the old loadDashboard clients handler verbatim.
-  const reportingClientsQuery = useQuery<Client[]>({
-    queryKey: ['dashboard', 'reporting-clients'],
-    queryFn: async () => {
-      const clientsRes: any[] = await apiClient.listReportingClients()
-      return safeArray<any>(clientsRes)
+  const reportingClientsQuery = useQuery({
+    ...activeClientRowsQueryOptions(),
+    select: (clientsRes): Client[] =>
+      safeArray<any>(clientsRes)
         .map((client) => ({
-          clientId: num(client?.clientId ?? client?.id),
+          clientId: num(client?.id),
           name: String(client?.name ?? '').trim(),
         }))
         .filter((client) => client.clientId > 0 && client.name)
-        .sort((left, right) => left.name.localeCompare(right.name))
-    },
+        .sort((left, right) => left.name.localeCompare(right.name)),
   })
   const clients = reportingClientsQuery.data ?? EMPTY_CLIENTS
   // If the freshly-loaded client list no longer contains the active filter
@@ -1252,7 +1242,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const refreshDashboard = async () => {
     setRefreshing(true)
     try {
-      await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: clientQueryKeys.active }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.legacySyncStatus }),
+      ])
     } finally {
       setRefreshing(false)
     }
@@ -2055,11 +2049,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         const units7 = unitsBySku7.get(sku) ?? orderAgg?.units7 ?? 0
         const priorUnits30 = priorUnitsBySku30.get(sku) ?? priorOrderAgg?.units30 ?? 0
         const revenue = orderAgg?.revenue ?? 0
-        const stock = num(inventory?.currentStock ?? inventory?.stockQty)
+        const stock = num(inventory?.inventoryQuantity)
         const minStock = num(inventory?.minStock ?? inventory?.reorderLevel)
-        // PS-150: delegate to the canonical reorder policy owner (same formula + inputs as before).
-        const { daysSupply, restockQty } = computeReorderPolicy({ units30, stock, minStock })
-        const status = stockStatus(stock, minStock)
+        // PS-439: reporting quantities and reorder outputs render the backend DTO verbatim.
+        const daysSupply = inventory?.daysSupply ?? null
+        const restockQty = num(inventory?.restockQty)
+        const status = inventory?.stockStatus ?? 'out'
         const totalShipping = num(analysis?.totalShipping)
         const avgShipping =
           num(analysis?.blendedAvgShipping) ||
@@ -2238,11 +2233,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const priorOrdersRange = sumDailyOrders(priorDailyCounts)
     const currentOrders7 = sumDailyOrders(currentDailyCounts, sevenFrom)
     const priorOrders7 = sumDailyOrders(priorDailyCounts, priorSevenFrom)
-    // PS-325: In/Low/Out-of-Stock counts are a backend-owned read model. Prefer the snapshot the
-    // /dashboard/inventory-risk endpoint returns; during backend deploy skew (snapshot absent) fall
-    // back to the SAME canonical owner over the fetched rows, so the thresholds are never re-defined
-    // here. The component holds no stock-status rules.
-    const snapshot = inventorySnapshot ?? summarizeInventorySnapshot(inventoryRows)
+    // Inventory counts are a backend-owned read model. Missing data stays explicitly empty;
+    // the frontend never reconstructs the status thresholds.
+    const snapshot = inventorySnapshot ?? {
+      inStock: 0,
+      lowStock: 0,
+      outOfStock: 0,
+      totalSkus: 0,
+    }
     const inStock = snapshot.inStock
     const lowStock = snapshot.lowStock
     const outStock = snapshot.outOfStock
@@ -2269,7 +2267,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     currentDailyCounts,
     dashboardWindowQuery.data,
     inventorySnapshot,
-    inventoryRows,
     priorAgg,
     priorDailyCounts,
     rangeDays,

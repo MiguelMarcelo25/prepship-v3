@@ -153,7 +153,11 @@ function check(name: string, got: unknown, want: unknown) {
 
   const reconcile = readFileSync('src/services/fulfillment/upstream-reconcile.ts', 'utf8');
   check('reconcile is forward-only (awaiting only)', /order_status = 'awaiting_shipment'/.test(reconcile), true);
-  check('reconcile cancel sets canonical_status, not a hard order_status flip', /canonical_status = 'cancelled'/.test(reconcile) && !/SET order_status = 'cancelled'/.test(reconcile), true);
+  check('reconcile terminal facts delegate to the atomic lifecycle owner',
+    /applyOrderLifecycleCommand\(\{/.test(reconcile) &&
+      /transition: 'cancelled'/.test(reconcile) &&
+      /canonicalStatus: 'cancelled'/.test(reconcile) &&
+      !/SET order_status = 'cancelled'/.test(reconcile), true);
 
   const ledger = readFileSync('src/services/fulfillment/webhook-ledger.ts', 'utf8');
   const ledgerMigration = readFileSync('drizzle/0040_webhook_events.sql', 'utf8');

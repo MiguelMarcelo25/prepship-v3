@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from "../api/client";
+import { endpointQueryKeys } from '../lib/endpoint-query-keys';
 
 // TODO PS-257: restore real InitStoreDto type (not exported by ../types/api)
 type InitStoreDto = any;
@@ -12,29 +14,11 @@ export interface UseInitStoresResult {
 }
 
 export function useInitStores(): UseInitStoresResult {
-  const [stores, setStores] = useState<InitStoreDto[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  const fetchStores = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const data = await apiClient.fetchStores();
-      setStores(data);
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error("Failed to fetch init stores");
-      setError(error);
-      console.error("[useInitStores]", error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchStores();
-  }, [fetchStores]);
+  const queryClient = useQueryClient();
+  const query = useQuery<InitStoreDto[]>({
+    queryKey: endpointQueryKeys.stores,
+    queryFn: () => apiClient.fetchStores(),
+  });
 
   // Real-time refresh on client active-toggle: when the user toggles a
   // client's `active` flag in Inventory > Clients, the store list must
@@ -45,18 +29,20 @@ export function useInitStores(): UseInitStoresResult {
   // page reload (or on the next interval-driven refresh elsewhere).
   useEffect(() => {
     const handler = () => {
-      void fetchStores();
+      void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.storesRoot });
     };
     window.addEventListener('prepship:client-active-changed', handler);
     return () => {
       window.removeEventListener('prepship:client-active-changed', handler);
     };
-  }, [fetchStores]);
+  }, [queryClient]);
 
   return {
-    stores,
-    loading,
-    error,
-    refetch: fetchStores,
+    stores: query.data ?? [],
+    loading: query.isPending,
+    error: (query.error as Error | null) ?? null,
+    refetch: async () => {
+      await query.refetch();
+    },
   };
 }

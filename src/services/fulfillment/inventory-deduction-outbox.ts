@@ -3,7 +3,10 @@
 // kill-switch behavior, and ledger idempotency to fulfillment-deductions.ts.
 import { db, sql as pg } from '../../db/client.js';
 import { fulfillmentOutbox } from '../../db/schema/fulfillment-outbox.js';
-import { deductInventoryForOrder } from '../fulfillment-deductions.js';
+import {
+  applyInventoryClaimsForLifecycleEvent,
+  deductInventoryForOrder,
+} from '../fulfillment-deductions.js';
 
 export const INVENTORY_DEDUCTION_OUTBOX_EVENT = 'inventory_deduction_requested';
 const INVENTORY_DEDUCTION_PROVIDER = 'inventory';
@@ -24,6 +27,38 @@ export type InventoryDeductionOutboxInput = {
   shipmentId?: number | null;
   source: string;
 };
+
+export async function enqueueInventoryClaimDeduction(
+  input: {
+    lifecycleEventId: number;
+    orderId: number;
+    shipmentId?: number | null;
+    source: string;
+  },
+  executor: InventoryDeductionOutboxExecutor = db,
+): Promise<void> {
+  const dedupeKey = `${INVENTORY_DEDUCTION_OUTBOX_EVENT}:lifecycle:${input.lifecycleEventId}`;
+  await executor
+    .insert(fulfillmentOutbox)
+    .values({
+      orderId: input.orderId,
+      shipmentId: input.shipmentId ?? null,
+      eventType: INVENTORY_DEDUCTION_OUTBOX_EVENT,
+      provider: INVENTORY_DEDUCTION_PROVIDER,
+      dedupeKey,
+      payload: {
+        lifecycleEventId: input.lifecycleEventId,
+        orderId: input.orderId,
+        shipmentId: input.shipmentId ?? null,
+        source: input.source,
+      },
+      status: 'pending',
+      attempts: 0,
+      nextRunAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing({ target: fulfillmentOutbox.dedupeKey });
+}
 
 export async function enqueueInventoryDeduction(
   order: InventoryDeductionOrderRef,
@@ -68,7 +103,48 @@ export async function enqueueInventoryDeduction(
 export async function enqueueMissingInventoryDeductions(
   limit = 100,
 ): Promise<number> {
-  const rows = await pg<Array<{ id: number }>>`
+  const boundedLimit = Math.max(1, Math.min(limit, 500));
+  const lifecycleRows = await pg<Array<{ id: number }>>`
+    INSERT INTO fulfillment_outbox (
+      order_id, shipment_id, event_type, provider, dedupe_key, payload,
+      status, attempts, next_run_at, updated_at
+    )
+    SELECT
+      event.order_id,
+      event.shipment_id,
+      ${INVENTORY_DEDUCTION_OUTBOX_EVENT},
+      ${INVENTORY_DEDUCTION_PROVIDER},
+      ${INVENTORY_DEDUCTION_OUTBOX_EVENT} || ':lifecycle:' || event.id::text,
+      jsonb_strip_nulls(jsonb_build_object(
+        'lifecycleEventId', event.id,
+        'orderId', event.order_id,
+        'shipmentId', event.shipment_id,
+        'source', 'inventory_claim_outbox_recovery'
+      )),
+      'pending',
+      0,
+      NOW(),
+      NOW()
+    FROM order_lifecycle_events event
+    WHERE EXISTS (
+      SELECT 1
+      FROM fulfillment_line_claims claim
+      WHERE claim.lifecycle_event_id = event.id
+        AND claim.status = 'pending'
+    )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM fulfillment_outbox existing
+        WHERE existing.dedupe_key =
+          ${INVENTORY_DEDUCTION_OUTBOX_EVENT} || ':lifecycle:' || event.id::text
+      )
+    ORDER BY event.id ASC
+    LIMIT ${boundedLimit}
+    ON CONFLICT (dedupe_key) DO NOTHING
+    RETURNING id
+  `;
+
+  const legacyRows = await pg<Array<{ id: number }>>`
     INSERT INTO fulfillment_outbox (
       order_id, shipment_id, event_type, provider, dedupe_key, payload,
       status, attempts, next_run_at, updated_at
@@ -101,21 +177,40 @@ export async function enqueueMissingInventoryDeductions(
       AND o.updated_at >= NOW() - (${RECOVERY_LOOKBACK_HOURS} || ' hours')::interval
       AND NOT EXISTS (
         SELECT 1
+        FROM order_lifecycle_events lifecycle
+        WHERE lifecycle.order_id = o.id
+          AND lifecycle.transition IN ('shipped', 'external_shipped')
+      )
+      AND NOT EXISTS (
+        SELECT 1
         FROM fulfillment_outbox existing
         WHERE existing.dedupe_key = ${INVENTORY_DEDUCTION_OUTBOX_EVENT} || ':' || o.id::text
       )
     ORDER BY o.updated_at ASC, o.id ASC
-    LIMIT ${Math.max(1, Math.min(limit, 500))}
+    LIMIT ${boundedLimit}
     ON CONFLICT (dedupe_key) DO NOTHING
     RETURNING id
   `;
-  return rows.length;
+  return lifecycleRows.length + legacyRows.length;
 }
 
 export async function processInventoryDeductionOutboxEvent(row: {
   orderId: number;
   payload: Record<string, unknown>;
 }): Promise<void> {
+  const lifecycleEventId = Number(row.payload.lifecycleEventId ?? 0);
+  if (Number.isInteger(lifecycleEventId) && lifecycleEventId > 0) {
+    const result = await applyInventoryClaimsForLifecycleEvent(lifecycleEventId);
+    if (result.lockedDown) {
+      // Keep the durable event retryable. Settling it while claims remain
+      // pending would lose the work when the emergency switch is re-enabled.
+      throw new Error('INVENTORY_AUTO_DEDUCT is disabled; fulfillment claims remain pending');
+    }
+    return;
+  }
+
+  // Compatibility only for events created before PS-424. New lifecycle
+  // writers must enqueue lifecycleEventId and never re-read mutable order JSON.
   const [order] = await pg<Array<{
     id: number;
     clientId: number | null;

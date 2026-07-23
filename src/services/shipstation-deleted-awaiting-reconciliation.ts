@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { selectShipStationDeletedAwaitingCandidates } from './shipstation-deleted-awaiting-policy';
+import { applyOrderLifecycleCommand } from './order-lifecycle-command';
 
 const MAX_VERIFIED_DELETIONS_PER_TARGET = 1;
 const MAX_LOCAL_CANDIDATES_PER_TARGET = 10;
@@ -103,25 +104,23 @@ export async function reconcileDeletedShipStationAwaiting(
       // Per user override unlock shipped data on 2026-07-14: this final guard
       // permits only a verified deleted awaiting row to move forward to
       // cancelled; existing shipped/cancelled rows and active labels are untouched.
-      const updated = await db
-        .update(orders)
-        .set({
-          orderStatus: 'cancelled',
-          canonicalStatus: 'cancelled',
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(orders.id, candidate.id),
-          eq(orders.storeId, input.storeId),
-          eq(orders.externalOrderId, externalOrderId),
-          eq(orders.sourceProvider, 'shipstation'),
-          eq(orders.orderStatus, 'awaiting_shipment'),
-          eq(orders.externallyShipped, false),
-          sql`coalesce(${orders.canonicalStatus}, '') <> 'cancelled'`,
-          noActiveShipment,
-        ))
-        .returning({ id: orders.id });
-      cancelled += updated.length;
+      // Per user override unlock shipped data on 2026-07-16 (PS-424): the
+      // lifecycle owner repeats the no-active-shipment check while holding the
+      // order lock, then atomically records cancellation provenance.
+      const command = await applyOrderLifecycleCommand({
+        orderId: candidate.id,
+        commandKey:
+          `lifecycle:shipstation-deleted:${input.accountLabel}:${input.storeId}:` +
+          `${externalOrderId}:order:${candidate.id}:cancelled`,
+        transition: 'cancelled',
+        source: `shipstation_deleted:${input.accountLabel}`,
+        canonicalStatus: 'cancelled',
+        requireAwaitingOrderStatus: true,
+        requireNoActiveOutboundShipment: true,
+        fulfillmentFacts: { kind: 'none' },
+        provenance: { storeId: input.storeId, externalOrderId },
+      });
+      if (command.statusChanged) cancelled += 1;
     } catch (error) {
       throwIfAborted(input.signal);
       errors += 1;

@@ -97,6 +97,19 @@ check(
 );
 
 check(
+  'an expired active row is reaped when a newer job holds the same lane',
+  selectStuckActiveJobs(
+    [{ id: 'sh-expired-held', name: 'prepship.sync.shipments', state: 'active', started_on: TWENTY_MIN_AGO }],
+    {
+      ...OPTS,
+      activeLanesHeld: new Set(['shipstation-sync']),
+      orphanActiveGraceMs: REAPER_ORPHAN_ACTIVE_GRACE_MS,
+    },
+  ),
+  [{ id: 'sh-expired-held', name: 'prepship.sync.shipments' }],
+);
+
+check(
   'a 20-min-old active shipments job is selected (past the 15-min threshold)',
   selectStuckActiveJobs(
     [{ id: 'sh-3', name: 'prepship.sync.shipments', state: 'active', started_on: TWENTY_MIN_AGO }],

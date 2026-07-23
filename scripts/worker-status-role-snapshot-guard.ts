@@ -36,13 +36,13 @@ check(
 );
 check(
   'persists every mode to its role-specific key',
-  /await setSetting\(workerStatusSnapshotKey\(snapshot\.mode\), serialized\)/.test(
+  /await writeWorkerStatusSetting\([\s\S]*workerStatusSnapshotKey\(snapshot\.mode\),[\s\S]*serialized/.test(
     workerStatus,
   ),
 );
 check(
   'keeps the legacy snapshot reserved for scheduler-enabled workers',
-  /if \(snapshot\.schedulerEnabled\) \{[\s\S]*await setSetting\(WORKER_STATUS_KEY, serialized\)/.test(
+  /if \(snapshot\.schedulerEnabled\) \{[\s\S]*await writeWorkerStatusSetting\(persistenceSql, WORKER_STATUS_KEY, serialized\)/.test(
     workerStatus,
   ),
 );
@@ -66,7 +66,7 @@ check(
 );
 check(
   'returns role snapshots for diagnostics',
-  /snapshots: Record<[\s\S]*return \{ \.\.\.selected, snapshots \}/.test(
+  /snapshots: Record<[\s\S]*return \{[\s\S]*\.\.\.selected,[\s\S]*activeLane:[\s\S]*snapshots,/.test(
     workerStatus,
   ),
 );

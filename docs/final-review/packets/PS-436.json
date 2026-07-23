@@ -1,0 +1,321 @@
+{
+  "$schema": "docs/final-review/evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-436",
+  "title": "Bound durable rate backfill so order and shipment sync cannot starve",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "cc8520c064ee767e8437429e736f1329bd0be3bd"
+  },
+  "riskDomains": [
+    "provider_durable_job"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Order and shipment cadence work has priority over every rate-backfill source, while rate backfill retains the one canonical ShipStation advisory lane and runs in bounded two-order durable chunks.",
+      "evidenceIds": [
+        "ps436-starvation-integration",
+        "ps436-adversarial-fencing"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Queue handler cancellation reaches rate-backfill DB/provider work, and non-cooperative work cannot falsely acknowledge cancellation or release the lane before fail-closed worker recovery.",
+      "evidenceIds": [
+        "ps436-cancellation-failure-injection",
+        "sync-deadline-regression"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "No successor generation overlaps live work from an old generation; deterministic chunk IDs, durable cursor state, and generation reconciliation make retry and restart idempotent.",
+      "evidenceIds": [
+        "ps436-adversarial-fencing",
+        "ps436-cancellation-failure-injection"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "Repeated cadence and deferral wake-ups coalesce into one persisted active rate-backfill generation, and completed chunks resume from a durable keyset cursor without rerating the completed prefix.",
+      "evidenceIds": [
+        "ps436-starvation-integration",
+        "ps436-adversarial-fencing"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "Under continuous worst-priority rate pressure, every simulated three-minute order and shipment cadence job completes within the documented thirteen-minute freshness budget.",
+      "evidenceIds": [
+        "ps436-starvation-integration"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "Persisted worker status and backend health expose active lane job, generation, start, age, timeout/deadline, and order/shipment completion watermarks; stale watermarks or an over-age lane are non-green while healthy cadence remains green.",
+      "evidenceIds": [
+        "ps436-starvation-integration",
+        "health-and-worker-regression"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "high",
+      "status": "met",
+      "description": "The focused PS-436 proof, adjacent sync/rate/health suites, all 53 mandatory source-of-truth guards, strict TypeScript checks, and the production frontend build pass at the exact current stable SHA.",
+      "evidenceIds": [
+        "focused-and-adjacent-regression",
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build"
+      ]
+    },
+    {
+      "id": "AC-8",
+      "severity": "critical",
+      "status": "met",
+      "description": "Verification made zero database connections, live provider calls, label/postage purchases, marketplace notifications, inventory movements, or production order/shipment mutations; awaiting-only selection and shipped/cancelled protections remain intact.",
+      "evidenceIds": [
+        "ps436-cancellation-failure-injection",
+        "implementation-scope-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/sync-job-lanes.ts and src/services/sync-job-queue.ts own shared ShipStation lane admission, priority, deadline, cancellation acknowledgement, and fail-closed worker recovery",
+      "src/services/rates-backfill.ts plus its persisted settings rows own durable rate generation, bounded chunks, deterministic continuation, cursor progress, coalescing, and status reconciliation",
+      "src/lib/sync-job-cancellation.ts owns the distinction between AbortSignal delivery and real operation settlement",
+      "src/services/worker-status.ts, src/services/shipment-sync-watchdog.ts, and src/routes/health.ts own persisted lane/watermark truth and backend readiness decisions"
+    ],
+    "oldOwners": [
+      {
+        "path": "unbounded rate-backfill handler lifetime in the shared shipstation-sync lane",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/rates-backfill.ts bounded durable generation/chunk owner"
+      },
+      {
+        "path": "deadline path that waited indefinitely for the original handler promise",
+        "disposition": "delegated",
+        "delegatesTo": "src/lib/sync-job-cancellation.ts bounded acknowledgement plus sync-job-queue fail-closed recovery"
+      },
+      {
+        "path": "API/DB-only readiness that could remain green while sync watermarks or the shared lane were stale",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/shipment-sync-watchdog.ts and src/routes/health.ts syncFreshness component"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/rates.ts",
+        "action": "modified",
+        "delegatesTo": "the durable rate-generation owner for active/latest/status DTO reconciliation"
+      },
+      {
+        "path": "src/services/sync-scheduler.ts",
+        "action": "modified",
+        "delegatesTo": "the persisted cadence generation and bounded worker execution owner"
+      },
+      {
+        "path": "Client Portal polling and React freshness logic",
+        "action": "forbidden",
+        "delegatesTo": "backend persisted order/shipment and worker-watermark truth"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The existing pg-boss/advisory lane remains authoritative. Routes and schedulers only admit or read durable work, provider/DB waits receive the queue signal, and no frontend timer, second scheduler, route-local queue, resolver, or fallback timestamp became authoritative."
+    }
+  },
+  "evidence": [
+    {
+      "id": "ps436-starvation-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-436-sync-starvation",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/services/rate-backfill-job-types.ts",
+        "src/services/rates-backfill.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "restart_idempotency",
+        "concurrency_single_effect"
+      ],
+      "proves": "The offline executable proof uses real admission priorities and continuation/coalescing owners. It coalesces 101 cadence wakes, resumes deterministic two-order chunks, and completes all 40 simulated operational cadence jobs under continuous worst-case rate pressure with a maximum age of 60 seconds against a 780-second freshness budget."
+    },
+    {
+      "id": "ps436-adversarial-fencing",
+      "classification": "adversarial",
+      "command": "npm run test:ps-436-sync-starvation",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/lib/sync-job-cancellation.ts",
+        "src/services/rates-backfill.ts",
+        "src/services/sync-job-lanes.ts"
+      ],
+      "assertions": [
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected",
+        "restart_idempotency"
+      ],
+      "proves": "An aborted but unsettled DB/provider promise remains unsettled, the shared lane continues to block order and shipment successors until the fail-closed decision, stale first-chunk wakes join the persisted continuation, and the same completed chunk deterministically derives one continuation ID."
+    },
+    {
+      "id": "ps436-cancellation-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:ps-436-sync-starvation",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "src/lib/sync-job-cancellation.ts",
+        "src/lib/sync-job-deadline.ts",
+        "src/services/rates-combined.ts",
+        "src/services/sync-job-queue.ts"
+      ],
+      "assertions": [
+        "crash_recovery",
+        "lost_response_reconciliation",
+        "restart_idempotency",
+        "concurrency_single_effect",
+        "fencing_stale_worker_rejected"
+      ],
+      "proves": "Two injected non-cooperative cancellation scenarios remain fenced through bounded acknowledgement grace. Cooperative provider work observes parent abort; an ignoring provider cannot fabricate settlement, its late response is rejected, and the canonical queue path requests status closeout then worker termination while the advisory lane is still held so durable pg-boss recovery cannot overlap old writes."
+    },
+    {
+      "id": "sync-deadline-regression",
+      "classification": "static",
+      "command": "npm run test:ps-265-job-handler-deadline && npm run test:ps-265-sync-staleness-watchdog && npm run test:ps-265-sync-run-budget && npm run test:ps-272-pgboss-reaper && npm run test:ps-272-pgboss-onpath && npm run test:ps-272-pgboss-bounded && npm run test:ps-272-pgboss-closeout",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-265-job-handler-deadline-guard.ts",
+        "scripts/ps-265-sync-staleness-watchdog-guard.ts",
+        "scripts/ps-265-sync-run-budget-guard.ts",
+        "src/services/sync-stuck-job-reaper.ts"
+      ],
+      "assertions": [],
+      "proves": "The existing deadline, cancellation, run-budget, stale-lane, pg-boss reaper, on-path scheduling, bounded retry, and terminal closeout invariants remain green."
+    },
+    {
+      "id": "health-and-worker-regression",
+      "classification": "static",
+      "command": "npm run test:health-deep-readiness && npm run test:worker-status-role-snapshot && npm run test:ps-417-sync-freshness && npm run test:ps-431-production-self-healing",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/health-deep-readiness-guard.mjs",
+        "scripts/worker-status-role-snapshot-guard.ts",
+        "src/routes/health.ts",
+        "src/services/shipment-sync-watchdog.ts",
+        "src/services/worker-status.ts"
+      ],
+      "assertions": [],
+      "proves": "Deep readiness, persisted worker role/status, prior sync-freshness ownership, and production self-healing guards accept the new lane metadata and preserve fail-closed health behavior."
+    },
+    {
+      "id": "focused-and-adjacent-regression",
+      "classification": "static",
+      "command": "npm run test:ps-436-sync-starvation plus 25 adjacent sync, reaper, rate, health, durable-worker, and coordination commands",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-436-sync-starvation-guard.ts",
+        "scripts/ps-428-durable-worker-execution-guard.ts",
+        "scripts/recalculate-all-job-coordination-guard.ts",
+        "scripts/rate-backfill-db-pool-concurrency-guard.ts",
+        "scripts/rate-backfill-durable-guard.mjs"
+      ],
+      "assertions": [],
+      "proves": "The focused PS-436 command and 25 adjacent commands all pass, including PS-265, PS-272, PS-359, PS-360, PS-361, PS-365, PS-397, PS-400, PS-403, PS-417, PS-426, PS-428, PS-431, rate source-of-truth, rate DB-pool concurrency, durable rate backfill, Recalculate All coordination, deep health, and worker status."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/ps-436-sync-starvation-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 53 mandatory source-of-truth, rate, worker, lifecycle, health, migration-readiness, and shipped/cancelled safety command groups pass at the exact current stable SHA."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass at the exact current stable SHA."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully with 2,977 modules transformed. No Client Portal polling or frontend source-of-truth change was made."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-status --format= 8d2c5e416f8728554f6b82b3108874776a55945c 26ac3d86f4fd1c5bc8030ebb3cc7d4a1d1b247a8 && git diff --name-status 26ac3d86f4fd1c5bc8030ebb3cc7d4a1d1b247a8..cc8520c064ee767e8437429e736f1329bd0be3bd -- src/lib/sync-job-cancellation.ts src/services/sync-job-queue.ts src/services/rates-backfill.ts src/services/shipment-sync-watchdog.ts src/services/worker-status.ts src/routes/health.ts scripts/ps-436-sync-starvation-guard.ts",
+      "result": "pass",
+      "artifactPaths": [
+        "src/lib/sync-job-cancellation.ts",
+        "src/services/sync-job-queue.ts",
+        "src/services/rates-backfill.ts",
+        "src/services/shipment-sync-watchdog.ts",
+        "src/services/worker-status.ts",
+        "scripts/ps-436-sync-starvation-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The stable-equivalent PS-436 implementation commits change backend lane/rate lifecycle, status/readiness, and offline guards only. No enumerated lockdown file, database migration, Client Portal repository, or frontend polling path changed. Later stable changes to canonical owners are covered by exact-current starvation, admission, deadline, health, rate, durability, and source-of-truth guards. The executable proof reports zero database connections, live provider calls, production mutations, label/postage actions, or marketplace notifications."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "PS-436 adds no migration; durable generation state uses the existing settings owner and existing pg-boss job metadata.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema rollback is required. Use a reviewed forward revert of the stable-equivalent PS-436 runtime commits 26ac3d86f4fd1c5bc8030ebb3cc7d4a1d1b247a8 and 8d2c5e416f8728554f6b82b3108874776a55945c, then redeploy a reviewed compatible stable artifact. Preserve existing settings and pg-boss rows; do not delete durable history or mutate orders/shipments."
+  },
+  "rollback": {
+    "strategy": "If post-deploy syncFreshness becomes non-green, stop new rate cadence admission, allow or restart the worker through the existing bounded recovery path, verify no active old generation remains, and deploy a reviewed forward revert of 26ac3d86f4fd1c5bc8030ebb3cc7d4a1d1b247a8 and 8d2c5e416f8728554f6b82b3108874776a55945c. Preserve durable generation/settings and pg-boss evidence, and never rewrite order/shipment history.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "Durable failure, priority, coalescing, cursor, fencing, and health behavior is executable offline at the exact stable artifact without production provider or order/shipment effects. Read-only production observation of /health/deep syncFreshness, active lane age/deadline, and advancing order/shipment watermarks remains an operational rollout check and is not pre-claimed by this packet.",
+    "followUpOwner": "Lawrence",
+    "artifactPaths": []
+  },
+  "caveats": []
+}

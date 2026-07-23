@@ -248,24 +248,62 @@ export function withAbortableCarrierQuoteTimeout<T>(
   run: (signal: AbortSignal) => Promise<T>,
   label: string,
   timeoutMs: number = DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
+  const parentAbortReason = () =>
+    parentSignal?.reason instanceof Error
+      ? parentSignal.reason
+      : new Error(`${label} rate request aborted`);
+  if (parentSignal?.aborted) return Promise.reject(parentAbortReason());
+
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    run(controller.signal),
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const timeoutError = new Error(`${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`);
-        // Settle the public result with the stable timeout diagnostic first,
-        // then propagate that same reason into the provider work. Aborting
-        // first lets a synchronous abort listener win Promise.race with a
-        // generic AbortError, which hides which carrier actually timed out.
+  let onParentAbort: (() => void) | undefined;
+  let timeoutError: Error | undefined;
+  if (parentSignal) {
+    // Per user override unlock shipped data on 2026-07-17 (PS-436):
+    // Abort the real provider operation, but do not fabricate settlement. A
+    // background provider that ignores cancellation must keep the queue lane
+    // fenced so the canonical worker recovery path can terminate it safely.
+    onParentAbort = () => controller.abort(parentAbortReason());
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  let providerWork: Promise<T>;
+  try {
+    // Start synchronously so the provider can attach its abort listener before
+    // a caller aborts immediately after this helper returns.
+    providerWork = run(controller.signal);
+  } catch (error) {
+    providerWork = Promise.reject(error);
+  }
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = new Error(
+        `${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`,
+      );
+      // Interactive callers have no worker recovery owner, so preserve their
+      // existing bounded response. Background callers must await real provider
+      // settlement after abort to avoid a false cancellation acknowledgement.
+      if (!parentSignal) {
         reject(timeoutError);
         controller.abort(timeoutError);
-      }, timeoutMs);
-    }),
-  ]).finally(() => {
+        return;
+      }
+      controller.abort(timeoutError);
+    }, timeoutMs);
+  });
+  return Promise.race([
+    providerWork,
+    timeout,
+  ]).then((result) => {
+    if (parentSignal?.aborted) throw parentAbortReason();
+    if (timeoutError) throw timeoutError;
+    return result;
+  }).finally(() => {
     if (timer) clearTimeout(timer);
+    if (parentSignal && onParentAbort) {
+      parentSignal.removeEventListener('abort', onParentAbort);
+    }
   }) as Promise<T>;
 }
 

@@ -3,10 +3,12 @@
 // shipments, labels, postage, marketplace notifications, or customer data.
 import postgres from 'postgres';
 import { env } from '../lib/env';
-import type { SyncJobLane } from './sync-job-lanes';
+import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline';
+import { SYNC_JOB_LANE_VALUES, type SyncJobLane } from './sync-job-lanes';
 
 const SYNC_LANE_LOCK_PREFIX = 'prepship.sync.lane';
-const SYNC_LANE_LOCK_POOL_MAX = 3; // one reserved transaction per sync lane
+export const SYNC_LANE_LOCK_POOL_MAX = SYNC_JOB_LANE_VALUES.length;
+export const SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS = SYNC_JOB_RUNNING_LEASE_MS + 5_000;
 
 // Per user override unlock shipped data on 2026-07-02: keep lane-lock
 // transactions off the shared app DB pool. Render production can run
@@ -17,7 +19,14 @@ const laneLockSql = postgres(env.DATABASE_URL, {
   max: SYNC_LANE_LOCK_POOL_MAX,
   idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
   connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
-  connection: { statement_timeout: env.DB_STATEMENT_TIMEOUT_MS },
+  connection: {
+    statement_timeout: env.DB_STATEMENT_TIMEOUT_MS,
+    // Per user override unlock shipped data on 2026-07-18: Supavisor can
+    // retain an advisory-lock transaction after an abrupt worker exit. The
+    // database now releases that queue-control transaction shortly after the
+    // bounded worker lease, even if the dead client never rolls it back.
+    idle_in_transaction_session_timeout: SYNC_LANE_IDLE_TRANSACTION_TIMEOUT_MS,
+  },
 });
 
 export type SyncLaneLockResult<T> =

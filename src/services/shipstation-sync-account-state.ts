@@ -15,7 +15,7 @@ export type ShipStationSyncAccountIdentity = {
 export type ShipStationSyncAccountRunState = {
   accountId: string;
   storeIds: number[];
-  status: 'running' | 'succeeded' | 'failed';
+  status: 'running' | 'succeeded' | 'failed' | 'deferred';
   activeJobId: string | null;
   activeAttemptId?: string | null;
   lastStartedAt: string | null;
@@ -163,7 +163,7 @@ export function finishShipStationSyncAccountRun(
   previous: ShipStationSyncAccountRunState | undefined,
   identity: ShipStationSyncRunIdentity,
   input: {
-    status: 'succeeded' | 'failed';
+    status: 'succeeded' | 'failed' | 'deferred';
     completedAt: string;
     error?: unknown;
   },
@@ -178,13 +178,14 @@ export function finishShipStationSyncAccountRun(
   }
 
   const failed = input.status === 'failed';
+  const succeeded = input.status === 'succeeded';
   return {
     ...previous,
     status: input.status,
     activeJobId: null,
     activeAttemptId: null,
     lastCompletedAt: input.completedAt,
-    lastSuccessAt: failed ? previous.lastSuccessAt : input.completedAt,
+    lastSuccessAt: succeeded ? input.completedAt : previous.lastSuccessAt,
     lastFailureAt: failed ? input.completedAt : previous.lastFailureAt,
     lastError: failed ? sanitizeShipStationSyncError(input.error ?? 'sync failed') : null,
   };
@@ -237,6 +238,20 @@ export async function markShipStationSyncAccountFailed(
       status: 'failed',
       completedAt,
       error,
+    }),
+  );
+}
+
+export async function markShipStationSyncAccountDeferred(
+  account: ShipStationSyncAccountIdentity,
+  identity: ShipStationSyncRunIdentity,
+  completedAtMs: number,
+): Promise<void> {
+  const completedAt = new Date(completedAtMs).toISOString();
+  await updateAccountState(account, (previous) =>
+    finishShipStationSyncAccountRun(previous, identity, {
+      status: 'deferred',
+      completedAt,
     }),
   );
 }

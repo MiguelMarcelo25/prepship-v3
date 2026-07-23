@@ -35,6 +35,11 @@ import {
   type QueueSendJobSnapshot,
 } from '../services/print-queue';
 import { deriveQueueSendSnapshotStatus } from '../services/print-queue/queue-send-status';
+import { projectQueueSendOrderOutcomes } from '../services/print-queue/queue-send-outcomes';
+import {
+  PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS,
+  resumeQueueSendWorkerJob,
+} from '../services/print-queue-worker';
 import { deriveMergeJobSnapshotStatus } from '../services/print-queue/merge-job-status';
 import { readDurableStatusWithTimeout } from '../services/print-queue/durable-status-read';
 import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
@@ -547,13 +552,8 @@ const queueSendLabelBody = z.object({
   insuredValue: z.number().nullable().optional(),
   notifyCustomer: z.boolean().optional(),
   testLabel: z.boolean().optional(),
-  // The backend-issued selected-rate proof the frontend captured for this order.
-  // Without this field zValidator strips it from the body, the durable queue
-  // worker calls createLabelV2 with selectedRateProof: undefined, and
-  // assertSelectedRateProofForLabelPurchase rejects with
-  // missing_current_fingerprint -> the user's recurring "Rate changed or
-  // expired" loop on real orders. .passthrough() preserves the full selectedRate
-  // object so the backend can recompute its fingerprint at the purchase boundary.
+  // Legacy transport compatibility only. PS-422 never treats this carried
+  // object as purchase authority; real purchases require selectionRef.
   selectedRateProof: z
     .object({
       requestFingerprint: z.string().nullable().optional(),
@@ -562,8 +562,9 @@ const queueSendLabelBody = z.object({
     })
     .passthrough()
     .optional(),
-  // PS-105: backend-owned rate quote snapshot id + chosen rate authority key.
-  // Preferred over selectedRateProof when a missing label must be created to queue.
+  selectionRef: z.string().min(1).nullable().optional(),
+  // Legacy transport compatibility only; the worker does not authorize from
+  // this reconstructable pair.
   rateQuoteId: z.string().min(1).nullable().optional(),
   selectedRateKey: z.string().min(1).nullable().optional(),
 });
@@ -659,13 +660,9 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
               insuredValue: order.label.insuredValue ?? undefined,
               notifyCustomer: order.label.notifyCustomer,
               testLabel: order.label.testLabel,
-              // Forward the selected-rate proof so the durable queue worker can
-              // satisfy assertSelectedRateProofForLabelPurchase. Omitting it here
-              // is what dropped the proof and produced missing_current_fingerprint.
+              // Legacy fields are forwarded for response compatibility only.
               selectedRateProof: order.label.selectedRateProof,
-              // PS-105: forward the backend-owned snapshot id + rate key too, so the
-              // worker's createLabelV2 can prefer it (selectedRateProof stays as
-              // the compatibility fallback). Dropping these would force legacy-only.
+              selectionRef: order.label.selectionRef,
               rateQuoteId: order.label.rateQuoteId,
               selectedRateKey: order.label.selectedRateKey,
             }
@@ -730,6 +727,11 @@ app.get('/batch-send/status/:jobId', async (c) => {
       // returns full per-order batch results; resultSamples remains a compact
       // legacy preview for older UI/debug consumers.
       const durableResults = queueSendSnapshotResults(durableJob);
+      const outcomes = projectQueueSendOrderOutcomes({
+        workerOrders: durableJob.workerOrders,
+        itemStates: durableJob.itemStates,
+        results: durableResults,
+      });
       return c.json({
         job_id: durableJob.jobId,
         status: durableStatus.status,
@@ -753,6 +755,12 @@ app.get('/batch-send/status/:jobId', async (c) => {
         results: durableResults,
         result_samples: durableJob.resultSamples,
         item_states: durableJob.itemStates ?? [],
+        outcomes,
+        // Per user override unlock shipped data on 2026-07-21: PS-452 exposes
+        // resume only while the backend parent-generation cap permits it.
+        can_resume: durableStatus.status === 'interrupted'
+          && durableJob.generation < PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS
+          && outcomes.some((outcome) => outcome.outcome === 'ready' || outcome.outcome === 'in_progress'),
         error: durableStatus.errorMessage,
         stale: durableStatus.staleReason != null,
         stale_reason: durableStatus.staleReason,
@@ -766,6 +774,11 @@ app.get('/batch-send/status/:jobId', async (c) => {
   }
   const jobStatus = deriveQueueSendSnapshotStatus(job, {
     inMemoryJobPresent: true,
+  });
+  const outcomes = projectQueueSendOrderOutcomes({
+    workerOrders: job.workerOrders ?? [],
+    itemStates: job.itemStates,
+    results: job.results,
   });
   return c.json({
     job_id: job.jobId,
@@ -789,10 +802,44 @@ app.get('/batch-send/status/:jobId', async (c) => {
     queued_entry_ids: job.queuedEntryIds,
     results: job.results,
     item_states: job.itemStates,
+    outcomes,
+    // Per user override unlock shipped data on 2026-07-21: the in-memory
+    // compatibility response delegates to the same backend cap.
+    can_resume: jobStatus.status === 'interrupted'
+      && (job.generation ?? 0) < PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS
+      && outcomes.some((outcome) => outcome.outcome === 'ready' || outcome.outcome === 'in_progress'),
     error: jobStatus.errorMessage,
     stale: false,
     stale_reason: null,
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
+  });
+});
+
+app.post('/batch-send/:jobId/resume', async (c) => {
+  const jobId = c.req.param('jobId');
+  const scope = printQueueScopeFromContext(c);
+  const snapshot = await getQueueSendJobSnapshot(jobId);
+  if (!snapshot || !(await canViewQueueSendSnapshot(snapshot, scope))) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
+  const result = await resumeQueueSendWorkerJob(jobId);
+  if (!result.queued) {
+    return c.json({
+      error: result.providerPendingCount > 0
+        ? 'Only provider-pending orders remain. Reconcile those outcomes before retrying.'
+        : 'This job has no safe interrupted orders available to resume.',
+      code: result.providerPendingCount > 0
+        ? 'PRINT_QUEUE_PROVIDER_RECONCILIATION_REQUIRED'
+        : 'PRINT_QUEUE_RESUME_NOT_AVAILABLE',
+      provider_pending: result.providerPendingCount,
+      safe_orders: result.safeOrderCount,
+    }, 409);
+  }
+  return c.json({
+    job_id: jobId,
+    resumed: true,
+    safe_orders: result.safeOrderCount,
+    provider_pending: result.providerPendingCount,
   });
 });
 

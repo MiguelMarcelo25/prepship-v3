@@ -116,14 +116,23 @@ export type NormalizedStoreOrderStatusSyncResult = {
 export type CarrierRateInput = Record<string, unknown> & {
   shippingOptions?: NormalizedShippingOptions;
   signal?: AbortSignal;
-  priority?: 'interactive' | 'background';
+  priority?: 'interactive' | 'batch' | 'background';
 };
-export type CarrierLabelInput = Record<string, unknown> & { shippingOptions?: NormalizedShippingOptions };
+export type CarrierLabelInput = Record<string, unknown> & {
+  shippingOptions?: NormalizedShippingOptions;
+  signal?: AbortSignal;
+  idempotencyKey?: string;
+};
 export type CarrierAccountListInput = Record<string, unknown>;
 export type NormalizedCarrierAccountListResult = Record<string, unknown>;
 export type NormalizedRate = Record<string, unknown>;
 export type NormalizedLabel = Record<string, unknown>;
-export type CarrierVoidInput = { labelId: string; trackingNumber?: string | null };
+export type CarrierVoidInput = {
+  labelId: string;
+  trackingNumber?: string | null;
+  signal?: AbortSignal;
+  idempotencyKey?: string;
+};
 export type CarrierTrackingInput = { trackingNumber: string; carrierCode?: string | null };
 export type NormalizedCarrierRateQuoteResult = {
   provider: ConnectorProvider;
@@ -177,6 +186,8 @@ export type MarketplaceShipmentConfirmationInput = {
   notifyMarketplace?: boolean;
   credentials?: Record<string, string | null | undefined>;
   payload?: Record<string, unknown>;
+  signal?: AbortSignal;
+  idempotencyKey?: string;
 };
 
 export type MarketplaceShipmentConfirmationResult = {

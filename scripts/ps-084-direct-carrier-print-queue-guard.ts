@@ -42,7 +42,7 @@ check(
 
 check(
   'v4 label owner creates a separate carrierShipTo payload',
-  /const carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/.test(labelsSvc),
+  /(?:const|let) carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/.test(labelsSvc),
 );
 
 check(
@@ -65,13 +65,13 @@ check(
     /if \(mode === 'queue'\)[\s\S]*?await sendOrdersToQueueBackend\(batchOrders/.test(ordersView),
 );
 
-// PS-317 A4 (re-pointed to the INTENT payload): the canonical account-binding + rate proof
-// the deleted FE buy used to carry is now SENT to the backend in the queue-send intent
+// PS-317 A4 / PS-422 (re-pointed to the INTENT payload): the canonical account binding and
+// opaque backend selectionRef are SENT to the backend in the queue-send intent
 // (buildQueueSendOrderPayload), not used to buy a label on the client. The backend owner
 // (createLabelV2) derives the carrier-safe shipTo and runs the proof/eligibility gate.
 check(
   'queue-send intent payload carries provider-account binding + selected-rate proof to the backend',
-  /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildQueuePayloadFn) &&
+  !buildQueuePayloadFn.includes('selectedRateProof:') &&
     /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildQueuePayloadFn) &&
     /shippingProviderId: shippingProviderId \?\? undefined/.test(buildQueuePayloadFn),
 );
@@ -85,8 +85,11 @@ check(
   // ROTTED-PIN repoint (b1ae3352 "Add print queue timing proof"): order.label was
   // hoisted to `const labelInput = order.label` and spread as ...labelInput into
   // createLabelV2 — still the same backend-owned buy of the order's label payload.
+    // PS-452 now materializes the scoped input before choosing fresh purchase
+    // versus durable-receipt resume; only the fresh branch calls createLabelV2.
     /const labelInput = order\.label\b/.test(printQueueSvc) &&
-    /createLabelV2\(\{[\s\S]*?\.\.\.labelInput\b/.test(printQueueSvc) &&
+    /const input = \{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId/.test(printQueueSvc) &&
+    /createLabelV2\(input, labelPurchaseScope\)/.test(printQueueSvc) &&
     /import\s*\{[\s\S]*?\bcreateLabelV2\b[\s\S]*?\}\s*from '\.\/labels';/.test(printQueueSvc) &&
     /if \(directRef\)[\s\S]*?createDirectCarrierLabelForOrder\(\{[\s\S]*?shipTo: carrierShipTo/.test(labelsSvc),
 );

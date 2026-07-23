@@ -193,7 +193,10 @@ assert.match(deletedReconciliation, /MAX_VERIFIED_DELETIONS_PER_TARGET = 1/);
 assert.match(deletedReconciliation, /getShipStationOrderExistence/);
 assert.match(deletedReconciliation, /eq\(orders\.orderStatus, 'awaiting_shipment'\)/);
 assert.match(deletedReconciliation, /noActiveShipment/);
-assert.match(deletedReconciliation, /orderStatus: 'cancelled'/);
+assert.match(deletedReconciliation, /applyOrderLifecycleCommand/);
+assert.match(deletedReconciliation, /transition: 'cancelled'/);
+assert.match(deletedReconciliation, /requireNoActiveOutboundShipment: true/);
+assert.doesNotMatch(deletedReconciliation, /\.update\(orders\)/);
 assert.match(
   deletedReconciliation,
   /Per user override unlock shipped data on 2026-07-14/,
@@ -222,13 +225,13 @@ assert.doesNotMatch(initRoute, /real_marketplace_order/s);
 const shipmentSync = readFileSync('src/services/shipment-sync.ts', 'utf8');
 assert.match(
   shipmentSync,
-  /values\.voided === false[\s\S]+values\.isReturn === false[\s\S]+shippedOrderIds\.push/,
+  /if \(row\.orderId && !row\.voided && !row\.isReturn\) \{[\s\S]+applyOrderLifecycleCommandInTransaction/,
   'shipment sync must not mark orders shipped from voided or return shipments',
 );
 assert.match(shipmentSync, /Per user override `unlock shipped data`/);
 assert.match(
   shipmentSync,
-  /prepshipOrderIds\.has\(ord\.id\)[\s\S]+Boolean\(s\.voided\) === false[\s\S]+Boolean\(s\.isReturnLabel\) === false[\s\S]+shippedOrderIds\.push\(ord\.id\)[\s\S]+continue;/,
+  /prepshipOrderIds\.has\(ord\.id\)[\s\S]+Boolean\(s\.voided\) === false[\s\S]+Boolean\(s\.isReturnLabel\) === false[\s\S]+prepshipTransitions\.set\(ord\.id, existingShipmentId\)[\s\S]+continue;/,
   'PrepShip-duplicate shipment rows must promote only active outbound awaiting labels before skipping insertion',
 );
 

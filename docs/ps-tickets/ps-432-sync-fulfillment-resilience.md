@@ -8,9 +8,11 @@ automatic retry or production metadata mutation was performed.
 
 ## Architecture placement
 
-- **Business rules:** every shipped transition must durably request inventory
-  deduction; fulfillment outbox settlement must converge atomically; provider
-  label/confirmation retries must not duplicate external side effects.
+- **Business rules:** terminal transitions with exact fulfillment facts must
+  durably request inventory deduction; explicitly unavailable facts must create
+  review-only evidence and no inventory movement; fulfillment outbox settlement
+  must converge atomically; provider label/confirmation retries must not
+  duplicate external side effects.
 - **Canonical owners:**
   - `src/services/fulfillment/inventory-deduction-outbox.ts` owns durable
     inventory-deduction intent.
@@ -18,9 +20,23 @@ automatic retry or production metadata mutation was performed.
     settlement and reconvergence.
   - `src/lib/label-purchase-intent.ts` owns fail-closed label purchase intent and
     operator resolution.
+  - `src/services/order-lifecycle-command.ts` owns the locked terminal-state,
+    competing-shipment, exact-claim/review-only, package, and inventory-intent
+    transaction boundary.
+  - `src/services/fulfillment-operation-ledger.ts` plus
+    `src/services/shipstation-forward-label-operation.ts` own one-effect
+    provider receipts and versioned canonical recovery facts.
+  - `src/lib/shipstation/label-request-body.ts` owns the shared, pure
+    money-affecting ShipStation POST shape used by both dispatch and immutable
+    operation hashing.
+  - `src/services/shipping-client-identity.ts` owns legacy order/store client
+    resolution for both label purchase and recovery.
+  - `src/services/verified-forward-label-recovery.ts` consumes only those
+    sealed receipt facts and delegates local writes to the lifecycle owner.
   - `src/services/fulfillment-deductions.ts` remains the unchanged inventory
     movement owner and retains `INVENTORY_AUTO_DEDUCT`.
-- **Imperfect-data entry points:** a process exit between shipped status and
+- **Imperfect-data entry points:** a mutable Print Queue payload surviving a
+  provider ACK; a process exit between shipped status and
   outbox insert; a process exit between outbox success and shipment/order
   projection; a provider purchase before durable intent; a provider ACK before
   local confirmation settlement; transient schema-readiness failure.
@@ -34,6 +50,31 @@ automatic retry or production metadata mutation was performed.
   decrement outside the ledger owner.
 
 ## Implemented findings
+
+- **2026-07-22 closure drift hardening:** ShipStation now seals the
+  post-authorization order/client, weight, dimensions, resolved package, and
+  normalized insurance facts into its durable provider receipt. Receipt replay
+  never accepts those facts from the mutable queue sidecar, and exact-ID
+  reconciliation must match the original operation request hash plus the
+  current canonical quote/account/order intent before it can seal equivalent
+  facts. Legacy or generic operator-supplied receipt JSON remains held.
+- **Provider-proof and tenant hardening:** the operation hash now mirrors the
+  shared provider request body (including residential, normalized addresses,
+  package, confirmation, and insurance); a reserved exact-GET provenance can
+  only be written through the dedicated ShipStation reconciliation transition;
+  and legacy store-only orders seal the same resolved client ID at purchase and
+  recovery, including marketplace-confirmation enqueue.
+- **Transactional recovery fencing:** forward-label persistence revalidates
+  awaiting status and competing active shipments under the lifecycle order
+  lock. Its own just-inserted shipment is excluded from the competing-shipment
+  query; any other active shipment or terminal status throws and rolls the
+  shipment plus receipt consumption back together.
+  A second recovery worker now accepts the ledger's already-consumed result
+  instead of failing on the first worker's committed shipment.
+- **All replay consumers fail closed:** ordinary ShipStation, direct-carrier,
+  Shopify, and return-label retry paths reject generic operator-recorded
+  receipts. ShipStation additionally requires sealed facts to equal the current
+  authorized persistence facts before its normal retry path can consume them.
 
 - **R1:** shipped transitions and `inventory_deduction_requested` insertion now
   commit in the same database transaction. The bounded recovery sweep remains
@@ -104,7 +145,20 @@ canonical owners. The integration suite proves:
   stores the scoped linked-shipment outcome plus operator note;
 - a ShipStation `markasshipped` ACK followed by simulated local-settlement death
   causes the retry to re-read upstream `shipped` and keeps the marketplace
-  notification spy at exactly one call.
+  notification spy at exactly one call;
+- ShipStation receipt facts survive a simulated queue-weight/package mismatch,
+  malformed/cross-order/legacy facts fail closed, generic operator JSON cannot
+  auto-consume, and two concurrent receipt consumers produce one local effect;
+- the actual verified-recovery service is exercised with two workers, returns
+  the committed result to both, rolls its shipment back on lifecycle rejection,
+  leaves the provider receipt unconsumed after that rollback, and passes the
+  resolved client identity for a legacy store-only order to confirmation;
+- the exact-reconciliation workflow performs one read-only provider lookup only
+  when quote/account/intent and the shared provider-request hash match, while a
+  hash mismatch is held before provider I/O;
+- the lifecycle transaction accepts its own recovery shipment, rejects a
+  competing active shipment, rejects a terminal status that changed after the
+  outer read, and emits no inventory intent for explicit unavailable facts.
 
 The test uses inert environment values and an in-memory PGlite database. No
 configured database, carrier, marketplace, label, postage, customer, inventory,
@@ -123,7 +177,7 @@ an operator action and must not repurchase a label.
 
 ## Safety statement
 
-Per user override `unlock shipped data` on 2026-07-15, the change touches shipped
+Per user overrides `unlock shipped data` on 2026-07-15 and 2026-07-22, the change touches shipped
 workflow code only to strengthen durability and idempotency. It does not remove
 or weaken `LOCKED_STATUSES`, `assertOrderEditable`, `isReadOnly`, the inventory
 kill switch, shipment history, schema columns, or terminal-row preservation.

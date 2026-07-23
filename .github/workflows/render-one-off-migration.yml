@@ -1,0 +1,83 @@
+name: Render One-Off Migration (PS-434)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type apply-ps-434-weekend-billing-0071'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-one-off-migration-ps-434
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate explicit migration confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          test "$CONFIRM" = 'apply-ps-434-weekend-billing-0071' || {
+            echo '::error::Exact migration confirmation was not supplied.'
+            exit 1
+          }
+
+      - name: Run migration as a Render one-off job
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo '::error::RENDER_API_KEY and RENDER_SERVICE_ID are required.'
+            exit 1
+          fi
+
+          start_command='npx tsx scripts/apply-ps-434-weekend-billing-migration.ts --apply --confirm=apply-ps-434-weekend-billing-0071'
+          payload=$(START_COMMAND="$start_command" node -e \
+            'process.stdout.write(JSON.stringify({startCommand: process.env.START_COMMAND}))')
+          response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+          http_code=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+          if [ "$http_code" != '201' ]; then
+            echo "::error::Render one-off job creation failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+          job_id=$(BODY="$body" node -e \
+            'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.id||""))')
+          test -n "$job_id" || { echo '::error::Render returned no job id.'; exit 1; }
+          echo "Render migration job created: ${job_id}"
+
+          for attempt in $(seq 1 90); do
+            sleep 10
+            job=$(curl -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs/${job_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H 'Accept: application/json')
+            status=$(BODY="$job" node -e \
+              'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.status||""))')
+            echo "migration status=${status} (poll ${attempt})"
+            case "$status" in
+              succeeded) echo 'PS-434 migration verified successfully.'; exit 0 ;;
+              failed|canceled) echo "::error::Migration job ended in ${status}."; exit 1 ;;
+            esac
+          done
+
+          echo '::error::Migration job did not finish within the polling window.'
+          exit 1

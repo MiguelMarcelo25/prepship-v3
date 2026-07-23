@@ -89,10 +89,18 @@ export type ShopifyLabelPurchasePendingSnapshot = {
   // Per user override unlock shipped data on 2026-07-15: carry the durable
   // fail-closed intent through asynchronous Shopify purchase polling.
   labelPurchaseIntentId?: number | null;
+  // PS-423 canonical provider-operation receipt. Legacy cached snapshots may
+  // still carry labelPurchaseIntentId during the rollout window.
+  externalOperationId?: number | null;
   shopifyRateQuoteId?: string | null;
   selectedRateKey?: string | null;
   purchaseResultId: string;
   fulfillmentOrderId: string;
+  /**
+   * Per user override unlock shipped data on 2026-07-16: immutable exact
+   * quantities selected before the asynchronous provider call.
+   */
+  fulfillmentLines?: unknown[];
   selectedRate?: ShopifyNormalizedRate | null;
   weightOz: number;
   dims: {

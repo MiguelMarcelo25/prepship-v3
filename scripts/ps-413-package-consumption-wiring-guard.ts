@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const owner = readFileSync('src/services/package-consumption.ts', 'utf8');
 const labels = readFileSync('src/services/labels.ts', 'utf8');
 const sync = readFileSync('src/services/shipment-sync.ts', 'utf8');
+const lifecycle = readFileSync('src/services/order-lifecycle-command.ts', 'utf8');
 const packageRoute = readFileSync('src/routes/packages.ts', 'utf8');
 const schemaReadiness = readFileSync('src/services/package-consumption-schema.ts', 'utf8');
 const resolver = readFileSync('src/services/package-resolution.ts', 'utf8');
@@ -19,11 +20,15 @@ assert(resolver.includes('const DIMS_TOLERANCE = 0.001') && resolver.includes('.
   'auto-provision lookup must never use fuzzy first-match selection');
 assert(owner.includes('packageConsumptionReviews'), 'unresolved shipments must create durable review work');
 assert(owner.includes('reverseOutboundPackageConsumptionInTransaction'), 'voids must reverse package consumption');
-assert(labels.includes('consumeOutboundPackageInTransaction({'), 'label paths must call canonical owner');
-assert(labels.includes('reverseOutboundPackageConsumptionInTransaction(row.id, now, tx)'), 'label void must reverse in local void transaction');
-assert(labels.includes('created.labelId ?? (created.shipmentId || null)'), 'direct labels must retain provider-native identity');
+assert(labels.includes('packageConsumption: {') && lifecycle.includes('consumeOutboundPackageInTransaction(input.packageConsumption, tx)'),
+  'label paths must delegate package consumption through lifecycle to the canonical owner');
+assert(labels.includes('voidOrderShipmentLifecycleInTransaction') && lifecycle.includes('reverseOutboundPackageConsumptionInTransaction(input.shipmentId, now, tx)'),
+  'label void must delegate package reversal through lifecycle in the local void transaction');
+assert(labels.includes('durableCreated.labelId ?? (durableCreated.shipmentId || null)'),
+  'direct labels must retain provider-native identity from the durable provider receipt');
 assert(labels.includes("source: directProviderKey ?? 'prepship_v2'"), 'shared Shipp/Walmart/ShipStation label tail must preserve source');
-assert(sync.includes('consumeOutboundPackageInTransaction({'), 'ShipStation sync must call canonical owner');
+assert(sync.includes('packageConsumption,') && lifecycle.includes('consumeOutboundPackageInTransaction(input.packageConsumption, tx)'),
+  'ShipStation sync must delegate package consumption through lifecycle to the canonical owner');
 assert(sync.includes('acct.sourceAccountId'), 'ShipStation sync must use stable account identity');
 assert(sync.includes('isTest: sourceAccountIsTest'), 'unmatched test-account shipments must not consume stock');
 assert(sync.includes('only for NEW ShipStation shipment rows'), 'sync must remain forward-only');

@@ -126,22 +126,26 @@ const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-s
 // PS-244: /rates/browse emits the snapshot ref + selection keys via the SINGLE finalizer
 // (finalizeBestRateWithQuote). PS-346 moved that finalizer behind the shared backend
 // browse producer so both /rates/browse and /rates/browse/workflow use the same path.
-check('rates /browse emits rateQuoteId + selectedRateKeys via the single finalizer',
+check('rates /browse emits opaque authorized selections via the single finalizer',
   /import \{\s*produceRateBrowsePayload\s*\} from ['"]\.\.\/services\/rate-browse-response-producer['"]/.test(ratesRoute) &&
-    /app\.post\('\/browse', zValidator\('json', browseBody\), async \(c\) =>[\s\S]*?const payload = await produceRateBrowsePayload\(\{[\s\S]*?return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute) &&
+    /app\.post\('\/browse', zValidator\('json', browseBody\), async \(c\) =>/.test(ratesRoute) &&
+    /produceRateBrowsePayload\(\{/.test(ratesRoute) &&
+    /return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute) &&
     /finalizeBestRateWithQuote\(/.test(rateBrowseProducer) &&
     /responseRates = finalized\.rates/.test(rateBrowseProducer) &&
-    /rateQuoteId/.test(rateBrowseProducer));
+    /authorization: quoteAuthorization/.test(rateBrowseProducer) &&
+    /selectionRef/.test(rateBrowseProducer));
 check('rates /browse stamps snapshot completeness into the single finalizer',
   /finalizeBestRateWithQuote\(\{[\s\S]*?bestRateComplete,/.test(rateBrowseProducer));
 check('createLabelV2 boundary uses the unified rate-selection resolver',
   /await assertLabelPurchaseRateSelection\(/.test(labelsService));
-check('createLabelV2 input accepts rateQuoteId + selectedRateKey',
-  /rateQuoteId\?: string \| null;/.test(labelsService) && /selectedRateKey\?: string \| null;/.test(labelsService));
-check('labels route schema accepts rateQuoteId + selectedRateKey',
-  /rateQuoteId: z\.string\(\)/.test(labelsRoute) && /selectedRateKey: z\.string\(\)/.test(labelsRoute));
-check('purchase resolver REQUIRES snapshot id and never falls back to carried proof',
-  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(store) &&
+check('createLabelV2 input accepts opaque selectionRef',
+  /selectionRef\?: string \| null;/.test(labelsService));
+check('labels route schema accepts opaque selectionRef',
+  /selectionRef: z\.string\(\)/.test(labelsRoute));
+check('purchase resolver REQUIRES selectionRef and never falls back to carried proof',
+  /parseShippingQuoteSelectionRef\(body\.selectionRef\)/.test(store) &&
+    /if \(!ref\)/.test(store) &&
     /if \(!resolved\.ok\) throwStrictRateQuoteError\(resolved\.reason\)/.test(store) &&
     /snapshot_not_final/.test(store) &&
     !/assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(store) &&
@@ -165,9 +169,9 @@ const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/ra
 // PS-204 re-anchor: the wrapper's delegation gained an account-binding option
 // ({ forShippingProviderId }) so cross-account candidates are filtered out —
 // same ordered candidate list, STRICTER selection, never weaker.
-check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection',
+check('frontend has buildRateQuoteRefForOrder passing through backend selectionRef',
   /function buildRateQuoteRefForOrder[\s\S]{0,300}?return rateQuoteRefFromCandidates\(\[\s*toRecord\(candidate\),\s*toRecord\(order\.bestRate\),\s*toRecord\(order\.selectedRate\),\s*getSavedBestRateRecord\(order\),\s*\], \{ forShippingProviderId \}\)/.test(bestRateProof) &&
-    /export function rateQuoteRefFromCandidates[\s\S]*?toStr\(r\.rateQuoteId\) && toStr\(r\.selectedRateKey\)[\s\S]*?hasBackendIssuedRateProof\(r\) && rateProofFingerprint\(r\)/.test(rateProofLib));
+    /export function rateQuoteRefFromCandidates[\s\S]*?toStr\(list\.find\(\(rate\) => toStr\(rate\.selectionRef\)\)\?\.selectionRef\)/.test(rateProofLib));
 // PS-204 re-anchor (2026-06-12): both counts below were STALE at base (failing
 // silently outside the cert since the PS-178 decomposition consolidated payload
 // sites). Honest census: TWO ...buildRateQuoteRefForOrder( emission sites
@@ -175,7 +179,7 @@ check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection
 // property sites (+ the batch-create `let` form, pinned by the boundary/ps-095
 // guards). Both panel/batch forms are now ACCOUNT-BOUND per PS-204 — pinned
 // here so the binding can't silently disappear.
-check('frontend emits the rate quote ref on the primary create/queue/batch payloads (>= 2)',
+check('frontend emits selectionRef on the primary create/queue/batch payloads (>= 2)',
   // PS-317: emit call sites stayed in OrdersView; census summed across OrdersView + the moved
   // best-rate/rate-proof.ts so the count never undershoots if a call site later relocates.
   ((ordersView + bestRateProof).match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 2 &&
@@ -205,18 +209,12 @@ check('frontend does NOT pass a stale ref on any direct-carrier retry/override p
 // selectedRate, shippingProviderId`) to that intent payload: the SAME
 // selectedRateProof + account-bound rate-quote ref + shippingProviderId, all
 // keyed to the account this queue order charges.
-check('frontend ref is additive (proof still passed at every site)',
-  // PS-317: selectedRateProof: buildSelectedRateProofPayload(order, ...) call sites stayed in
-  // OrdersView; census summed across both files so the count never undershoots.
-  ((ordersView + bestRateProof).match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-  // RELOCATED: the proof+binding the FE direct-buy carried now lives on the
-  // queue INTENT payload (order.label), bound to the same shippingProviderId.
-  /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,900}?selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\),/.test(ordersView) &&
-  /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,600}?shippingProviderId: shippingProviderId \?\? undefined,/.test(ordersView) &&
-  // 2026-07-07 cleanup: the legacy batch loop's proof line is deleted; the chain's override
-  // payload carries the fresh-rate proof + rate-quote ref instead.
-  ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
-  ordersView.includes('...buildRateQuoteRefForOrder(order, rate, shippingProviderId),'));
+check('frontend sends only the opaque authorization instead of carried proof fields',
+  !/selectedRateProof: buildSelectedRateProofPayload/.test(ordersView) &&
+  ordersView.includes('...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId),') &&
+  ordersView.includes('shippingProviderId: shippingProviderId ?? undefined,') &&
+  ordersView.includes('const selection = buildRateQuoteRefForOrder(order, rate, shippingProviderId)') &&
+  ordersView.includes('...selection,'));
 // Backend now owns the (former-FE) direct-carrier buy: createLabelV2 detects the
 // direct carrier and runs the SAME strict purchase proof gate before spending.
 const labelsServiceForRelocation = readFileSync('src/services/labels.ts', 'utf8');
@@ -224,7 +222,7 @@ const printQueueService = readFileSync('src/services/print-queue.ts', 'utf8');
 check('backend createLabelV2 owns the direct-carrier buy behind the strict proof gate',
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsServiceForRelocation) &&
   /createDirectCarrierLabelForOrder\(/.test(labelsServiceForRelocation) &&
-  /await assertLabelPurchaseRateSelection\(\{[\s\S]{0,200}?selectedRateProof: body\.selectedRateProof,/.test(labelsServiceForRelocation));
+  /await assertLabelPurchaseRateSelection\(\{[\s\S]{0,120}?selectionRef: body\.selectionRef,/.test(labelsServiceForRelocation));
 check('print-queue routes the FE intent (order.label proof/binding) into createLabelV2',
   /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,/.test(printQueueService));
 

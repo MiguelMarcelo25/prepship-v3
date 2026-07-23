@@ -82,12 +82,14 @@ export function classifyRatePreExpiryRefresh(
   const cacheKey = rateString(rate, 'cacheKey');
   const rateQuoteId = rateString(rate, 'rateQuoteId');
   const selectedRateKey = rateString(rate, 'selectedRateKey');
+  const selectionRef = rateString(rate, 'selectionRef');
   if (
     proofSource !== 'backend_rate_response' ||
     !requestFingerprint ||
     !cacheKey ||
     !rateQuoteId ||
-    !selectedRateKey
+    !selectedRateKey ||
+    !selectionRef
   ) {
     return 'missing_proof';
   }

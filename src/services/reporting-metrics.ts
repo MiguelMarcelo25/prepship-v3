@@ -2,7 +2,9 @@ import { sql, type SQL } from 'drizzle-orm';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
+import { classifyStockStatus, type StockStatus } from '../lib/inventory-stock-status';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge';
+import { billingLineEffectiveDaySql } from './billing-calendar-policy';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 
 // PS-132: synthetic/system clients excluded from reporting metrics — single source.
@@ -62,8 +64,9 @@ export type InventoryRiskMetricRow = {
   sku: string;
   name: string | null;
   imageUrl: string | null;
-  stockQty: number;
+  inventoryQuantity: number;
   reorderLevel: number;
+  stockStatus: StockStatus;
   active: boolean;
   soldLast7Days: number;
   soldLast30Days: number;
@@ -72,7 +75,6 @@ export type InventoryRiskMetricRow = {
   restockQty: number;
   totalReceived: number;
   totalSoldAllTime: number;
-  effectiveStock: number;
   metricsUpdatedAt: string | null;
 };
 
@@ -85,6 +87,7 @@ export type BillingSummaryMetricRow = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  adjustmentTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -208,19 +211,43 @@ async function withRefreshRun<T>(
   }
 }
 
+export const REPORTING_REFRESH_RUN_STALE_AFTER_MINUTES = 30;
+
+/** Mark crash-abandoned diagnostic rows terminal before a new refresh begins. */
+export async function reapStaleReportingRefreshRuns(
+  staleAfterMinutes: number = REPORTING_REFRESH_RUN_STALE_AFTER_MINUTES,
+): Promise<number> {
+  const boundedMinutes = Math.max(5, Math.min(Math.trunc(staleAfterMinutes), 24 * 60));
+  const rows = await db.execute<{ id: number }>(sql`
+    update reporting_refresh_runs
+    set
+      status = 'failure',
+      finished_at = now(),
+      duration_ms = least(
+        2147483647,
+        greatest(0, extract(epoch from (now() - started_at)) * 1000)
+      )::integer,
+      error = 'Worker stopped before reporting refresh completed'
+    where status = 'running'
+      and started_at < now() - (${boundedMinutes}::text || ' minutes')::interval
+    returning id
+  `);
+  return rows.length;
+}
+
 async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
 
-  return withRefreshRun('daily-sales', async () => {
-    await db.execute(sql`
+  return withRefreshRun('daily-sales', () => db.transaction(async (tx) => {
+    await tx.execute(sql`
       delete from daily_sales_metrics
       where day between ${fromDay}::date and ${toDay}::date
         and client_id = 0
         and store_id = 0
     `);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into daily_sales_metrics (
         day,
         client_id,
@@ -273,7 +300,7 @@ async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count
       from daily_sales_metrics
       where day between ${fromDay}::date and ${toDay}::date
@@ -282,14 +309,14 @@ async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 async function refreshSkuVelocityMetrics(): Promise<number> {
-  return withRefreshRun('sku-velocity', async () => {
-    await db.execute(sql`delete from sku_velocity_metrics`);
+  return withRefreshRun('sku-velocity', () => db.transaction(async (tx) => {
+    await tx.execute(sql`delete from sku_velocity_metrics`);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into sku_velocity_metrics (
         sku,
         client_id,
@@ -328,25 +355,24 @@ async function refreshSkuVelocityMetrics(): Promise<number> {
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count from sku_velocity_metrics
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
   await ensureInventoryLedgerSchema();
-  return withRefreshRun('inventory-risk', async () => {
-    await db.execute(sql`delete from inventory_risk_metrics`);
+  return withRefreshRun('inventory-risk', () => db.transaction(async (tx) => {
+    await tx.execute(sql`delete from inventory_risk_metrics`);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into inventory_risk_metrics (
         inventory_id,
         sku,
         client_id,
-        stock_qty,
         reorder_level,
         sold_7d,
         sold_30d,
@@ -355,7 +381,6 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         restock_qty,
         total_received,
         total_sold_all_time,
-        effective_stock,
         updated_at
       )
       with inventory_scope as (
@@ -374,52 +399,28 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         where l.type = 'receive'
         group by l.inventory_id
       ),
-      -- PS-133: this ledger_balance CTE is the SQL form of the canonical effective-stock
-      -- owner in src/services/inventory-stock-math.ts (inventoryLedgerBalance /
-      -- computeEffectiveStockForIds). Kept inline here for the single-transaction bulk
-      -- upsert; the behavioral guard (test:ps-133-stock-math) pins the shared formula.
       ledger_balance as (
         select
-          stock_rows.inventory_id,
-          coalesce(sum(stock_rows.qty), 0)::int as effective_stock
-        from (
-          select l.inventory_id, l.qty
-          from inventory_ledger l
-          join inventory_scope i on i.id = l.inventory_id
-          where l.type <> 'ship' or l.order_id is null
-          union all
-          select l.inventory_id, min(l.qty)::int as qty
-          from inventory_ledger l
-          join inventory_scope i on i.id = l.inventory_id
-          where l.type = 'ship'
-            and l.order_id is not null
-          group by l.inventory_id, l.order_id
-        ) stock_rows
-        group by stock_rows.inventory_id
+          l.inventory_id,
+          coalesce(sum(l.qty), 0)::int as inventory_quantity
+        from inventory_ledger l
+        join inventory_scope i on i.id = l.inventory_id
+        group by l.inventory_id
       ),
       ledger_sold as (
         select
-          ship_rows.inventory_id,
-          abs(coalesce(sum(ship_rows.qty) filter (
-            where ship_rows.effective_at >= now() - interval '7 days'
+          l.inventory_id,
+          abs(coalesce(sum(l.qty) filter (
+            where coalesce(l.effective_at, l.created_at) >= now() - interval '7 days'
           ), 0))::int as sold_7d,
-          abs(coalesce(sum(ship_rows.qty) filter (
-            where ship_rows.effective_at >= now() - interval '30 days'
+          abs(coalesce(sum(l.qty) filter (
+            where coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
           ), 0))::int as sold_30d,
-          abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold_all_time
-        from (
-          select
-            l.inventory_id,
-            l.order_id,
-            min(l.qty)::int as qty,
-            min(coalesce(l.effective_at, l.created_at)) as effective_at
-          from inventory_ledger l
-          join inventory_scope i on i.id = l.inventory_id
-          where l.type = 'ship'
-            and l.order_id is not null
-          group by l.inventory_id, l.order_id
-        ) ship_rows
-        group by ship_rows.inventory_id
+          abs(coalesce(sum(l.qty), 0))::int as total_sold_all_time
+        from inventory_ledger l
+        join inventory_scope i on i.id = l.inventory_id
+        where l.type = 'ship'
+        group by l.inventory_id
       ),
       sold as (
         select
@@ -452,14 +453,13 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
           i.id as inventory_id,
           i.sku,
           i.client_id,
-          coalesce(i.stock_qty, 0)::int as stock_qty,
           coalesce(i.reorder_level, 0)::int as reorder_level,
           coalesce(ls.sold_7d, s.sold_7d, 0)::int as sold_7d,
           coalesce(ls.sold_30d, s.sold_30d, 0)::int as sold_30d,
           (coalesce(ls.sold_30d, s.sold_30d, 0) / 30.0)::numeric(12, 4) as velocity_per_day,
           coalesce(r.total_received, 0)::int as total_received,
           coalesce(ls.total_sold_all_time, s.total_sold_all_time, 0)::int as total_sold_all_time,
-          coalesce(lb.effective_stock, i.stock_qty, 0)::int as effective_stock
+          coalesce(lb.inventory_quantity, 0)::int as inventory_quantity
         from inventory_scope i
         left join receives r on r.inventory_id = i.id
         left join ledger_balance lb on lb.inventory_id = i.id
@@ -470,29 +470,26 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         inventory_id,
         sku,
         client_id,
-        stock_qty,
         reorder_level,
         sold_7d,
         sold_30d,
         velocity_per_day,
         case
-          when velocity_per_day > 0 then (effective_stock / velocity_per_day)::numeric(12, 2)
+          when velocity_per_day > 0 then (inventory_quantity / velocity_per_day)::numeric(12, 2)
           else null
         end as days_supply,
         greatest(
           0,
-          ceil(greatest(reorder_level::numeric, velocity_per_day * 14) - effective_stock)
+          ceil(greatest(reorder_level::numeric, velocity_per_day * 14) - inventory_quantity)
         )::int as restock_qty,
         total_received,
         total_sold_all_time,
-        effective_stock,
         now() as updated_at
       from computed
       on conflict (inventory_id)
       do update set
         sku = excluded.sku,
         client_id = excluded.client_id,
-        stock_qty = excluded.stock_qty,
         reorder_level = excluded.reorder_level,
         sold_7d = excluded.sold_7d,
         sold_30d = excluded.sold_30d,
@@ -501,16 +498,15 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         restock_qty = excluded.restock_qty,
         total_received = excluded.total_received,
         total_sold_all_time = excluded.total_sold_all_time,
-        effective_stock = excluded.effective_stock,
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count from inventory_risk_metrics
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 // PS-208 key contract: billingSummary passes UTC-midnight calendar-day bounds
@@ -529,15 +525,19 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
 
-  return withRefreshRun('billing-summary', async () => {
-    await db.execute(sql`
+  return withRefreshRun('billing-summary', () => db.transaction(async (tx) => {
+    await tx.execute(sql`
       delete from billing_summary_metrics
       where period_from = ${fromDay}::date
         and period_to = ${toDay}::date
     `);
 
-    await db.execute(sql`
+    await tx.execute(sql`
       insert into billing_summary_metrics (
         client_id,
         period_from,
@@ -548,6 +548,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         package_total,
         shipping_total,
         storage_total,
+        adjustment_total,
         grand_total,
         updated_at
       )
@@ -561,16 +562,17 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         coalesce(sum(case when b.line_type = 'package_cost' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as package_total,
         coalesce(sum(case when b.line_type = 'shipping' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as shipping_total,
         coalesce(sum(case when b.line_type = 'storage' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as storage_total,
+        coalesce(sum(case when b.line_type = 'billing_adjustment' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as adjustment_total,
         coalesce(sum(${billingSummaryAmount}), 0)::numeric(14, 2) as grand_total,
         now() as updated_at
       from clients c
       left join billing_line_items b
         on b.client_id = c.id
-        and b.ship_date >= ${from.toISOString()}::timestamptz
+        and ${effectiveDay} >= ${from.toISOString()}::timestamptz
         -- PS-208: STRICT upper bound ("to" is the exclusive day-after
         -- midnight); an inclusive bound would aggregate the next period's
         -- first day into this cache row.
-        and b.ship_date < ${to.toISOString()}::timestamptz
+        and ${effectiveDay} < ${to.toISOString()}::timestamptz
       left join orders o on o.id = b.order_id
       where c.active = true
         and c.name not in (${systemClientNamesSql})
@@ -583,11 +585,12 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         package_total = excluded.package_total,
         shipping_total = excluded.shipping_total,
         storage_total = excluded.storage_total,
+        adjustment_total = excluded.adjustment_total,
         grand_total = excluded.grand_total,
         updated_at = now()
     `);
 
-    const [row] = await db.execute<{ count: string | number }>(sql`
+    const [row] = await tx.execute<{ count: string | number }>(sql`
       select count(*) as count
       from billing_summary_metrics
       where period_from = ${fromDay}::date
@@ -595,7 +598,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
     `);
     const count = num(row?.count);
     return { result: count, rowsAffected: count };
-  });
+  }));
 }
 
 export type PruneBillingSummaryMetricsResult = {
@@ -673,6 +676,10 @@ export async function refreshReportingMetrics(
   } = {}
 ): Promise<ReportingMetricsRefreshResult> {
   await ensureReportingMetricsTables();
+  const reapedRuns = await reapStaleReportingRefreshRuns();
+  if (reapedRuns > 0) {
+    console.warn(`[reporting] closed ${reapedRuns} crash-abandoned refresh run(s)`);
+  }
   const days = options.days ?? DEFAULT_REFRESH_DAYS;
   const to = new Date();
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
@@ -806,7 +813,7 @@ export async function getFreshInventoryRiskMetrics(options: {
       sku: string;
       name: string | null;
       image_url: string | null;
-      stock_qty: number;
+      inventory_quantity: number;
       reorder_level: number;
       active: boolean;
       sold_last_7_days: number;
@@ -816,7 +823,6 @@ export async function getFreshInventoryRiskMetrics(options: {
       restock_qty: number;
       total_received: number;
       total_sold_all_time: number;
-      effective_stock: number;
       metrics_updated_at: string | Date | null;
     }>(sql`
       select
@@ -825,7 +831,7 @@ export async function getFreshInventoryRiskMetrics(options: {
         i.sku,
         i.name,
         i.image_url,
-        i.stock_qty,
+        coalesce((select sum(movement.qty) from inventory_ledger movement where movement.inventory_id = i.id), 0)::int as inventory_quantity,
         i.reorder_level,
         i.active,
         m.sold_7d as sold_last_7_days,
@@ -835,7 +841,6 @@ export async function getFreshInventoryRiskMetrics(options: {
         m.restock_qty,
         m.total_received,
         m.total_sold_all_time,
-        m.effective_stock,
         m.updated_at as metrics_updated_at
       from inventory_risk_metrics m
       join inventory i on i.id = m.inventory_id
@@ -849,30 +854,34 @@ export async function getFreshInventoryRiskMetrics(options: {
     if (rows.length === 0) return null;
 
     return {
-      items: rows.map((row) => ({
-        id: row.id,
-        clientId: row.client_id,
-        sku: row.sku,
-        name: row.name,
-        imageUrl: row.image_url,
-        stockQty: num(row.stock_qty),
-        reorderLevel: num(row.reorder_level),
-        active: row.active,
-        soldLast7Days: num(row.sold_last_7_days),
-        soldLast30Days: num(row.sold_last_30_days),
-        velocityPerDay: num(row.velocity_per_day),
-        daysSupply: row.days_supply == null ? null : num(row.days_supply),
-        restockQty: num(row.restock_qty),
-        totalReceived: num(row.total_received),
-        totalSoldAllTime: num(row.total_sold_all_time),
-        effectiveStock: num(row.effective_stock),
-        metricsUpdatedAt:
-          row.metrics_updated_at instanceof Date
-            ? row.metrics_updated_at.toISOString()
-            : row.metrics_updated_at == null
-              ? null
-              : String(row.metrics_updated_at),
-      })),
+      items: rows.map((row) => {
+        const inventoryQuantity = num(row.inventory_quantity);
+        const reorderLevel = num(row.reorder_level);
+        return {
+          id: row.id,
+          clientId: row.client_id,
+          sku: row.sku,
+          name: row.name,
+          imageUrl: row.image_url,
+          inventoryQuantity,
+          reorderLevel,
+          stockStatus: classifyStockStatus(inventoryQuantity, reorderLevel),
+          active: row.active,
+          soldLast7Days: num(row.sold_last_7_days),
+          soldLast30Days: num(row.sold_last_30_days),
+          velocityPerDay: num(row.velocity_per_day),
+          daysSupply: row.days_supply == null ? null : num(row.days_supply),
+          restockQty: num(row.restock_qty),
+          totalReceived: num(row.total_received),
+          totalSoldAllTime: num(row.total_sold_all_time),
+          metricsUpdatedAt:
+            row.metrics_updated_at instanceof Date
+              ? row.metrics_updated_at.toISOString()
+              : row.metrics_updated_at == null
+                ? null
+                : String(row.metrics_updated_at),
+        };
+      }),
       total: rows.length,
       source: 'reporting_metrics',
     };
@@ -893,7 +902,7 @@ export async function getFreshInventoryRiskMetricMap(
       sku: string;
       name: string | null;
       image_url: string | null;
-      stock_qty: number;
+      inventory_quantity: number;
       reorder_level: number;
       active: boolean;
       sold_last_7_days: number;
@@ -903,7 +912,6 @@ export async function getFreshInventoryRiskMetricMap(
       restock_qty: number;
       total_received: number;
       total_sold_all_time: number;
-      effective_stock: number;
       metrics_updated_at: string | Date | null;
     }>(sql`
       select
@@ -912,7 +920,7 @@ export async function getFreshInventoryRiskMetricMap(
         i.sku,
         i.name,
         i.image_url,
-        i.stock_qty,
+        coalesce((select sum(movement.qty) from inventory_ledger movement where movement.inventory_id = i.id), 0)::int as inventory_quantity,
         i.reorder_level,
         i.active,
         m.sold_7d as sold_last_7_days,
@@ -922,7 +930,6 @@ export async function getFreshInventoryRiskMetricMap(
         m.restock_qty,
         m.total_received,
         m.total_sold_all_time,
-        m.effective_stock,
         m.updated_at as metrics_updated_at
       from inventory_risk_metrics m
       join inventory i on i.id = m.inventory_id
@@ -931,33 +938,37 @@ export async function getFreshInventoryRiskMetricMap(
     `);
 
     return new Map(
-      rows.map((row) => [
-        row.id,
-        {
-          id: row.id,
-          clientId: row.client_id,
-          sku: row.sku,
-          name: row.name,
-          imageUrl: row.image_url,
-          stockQty: num(row.stock_qty),
-          reorderLevel: num(row.reorder_level),
-          active: row.active,
-          soldLast7Days: num(row.sold_last_7_days),
-          soldLast30Days: num(row.sold_last_30_days),
-          velocityPerDay: num(row.velocity_per_day),
-          daysSupply: row.days_supply == null ? null : num(row.days_supply),
-          restockQty: num(row.restock_qty),
-          totalReceived: num(row.total_received),
-          totalSoldAllTime: num(row.total_sold_all_time),
-          effectiveStock: num(row.effective_stock),
-          metricsUpdatedAt:
-            row.metrics_updated_at instanceof Date
-              ? row.metrics_updated_at.toISOString()
-              : row.metrics_updated_at == null
-                ? null
-                : String(row.metrics_updated_at),
-        },
-      ])
+      rows.map((row) => {
+        const inventoryQuantity = num(row.inventory_quantity);
+        const reorderLevel = num(row.reorder_level);
+        return [
+          row.id,
+          {
+            id: row.id,
+            clientId: row.client_id,
+            sku: row.sku,
+            name: row.name,
+            imageUrl: row.image_url,
+            inventoryQuantity,
+            reorderLevel,
+            stockStatus: classifyStockStatus(inventoryQuantity, reorderLevel),
+            active: row.active,
+            soldLast7Days: num(row.sold_last_7_days),
+            soldLast30Days: num(row.sold_last_30_days),
+            velocityPerDay: num(row.velocity_per_day),
+            daysSupply: row.days_supply == null ? null : num(row.days_supply),
+            restockQty: num(row.restock_qty),
+            totalReceived: num(row.total_received),
+            totalSoldAllTime: num(row.total_sold_all_time),
+            metricsUpdatedAt:
+              row.metrics_updated_at instanceof Date
+                ? row.metrics_updated_at.toISOString()
+                : row.metrics_updated_at == null
+                  ? null
+                  : String(row.metrics_updated_at),
+          },
+        ] as const;
+      })
     );
   });
 }
@@ -973,6 +984,10 @@ export async function getFreshBillingSummaryMetrics(options: {
   maxAgeMinutes?: number;
 }): Promise<{ clients: BillingSummaryMetricRow[]; grandTotal: number } | null> {
   const maxAgeMinutes = options.maxAgeMinutes ?? 45;
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
   const fromDay = isoDate(new Date(options.dateFrom));
   const toDay = isoDate(new Date(options.dateTo));
   const billingMetricsScopePredicate = (() => {
@@ -1003,6 +1018,7 @@ export async function getFreshBillingSummaryMetrics(options: {
       package_total: string | number;
       shipping_total: string | number;
       storage_total: string | number;
+      adjustment_total: string | number;
       order_count: number;
       grand_total: string | number;
       fresh_count: string | number;
@@ -1024,8 +1040,8 @@ export async function getFreshBillingSummaryMetrics(options: {
           max(b.created_at) as newest_line_item_created_at
         from billing_line_items b
         join scoped_clients sc on sc.id = b.client_id
-        where b.ship_date >= ${options.dateFrom}::timestamptz
-          and b.ship_date < ${options.dateTo}::timestamptz
+        where ${effectiveDay} >= ${options.dateFrom}::timestamptz
+          and ${effectiveDay} < ${options.dateTo}::timestamptz
         group by b.client_id
       ),
       candidate_metrics as (
@@ -1037,6 +1053,7 @@ export async function getFreshBillingSummaryMetrics(options: {
           m.package_total,
           m.shipping_total,
           m.storage_total,
+          m.adjustment_total,
           m.order_count,
           m.grand_total,
           m.updated_at as updated_at,
@@ -1067,6 +1084,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         fm.package_total,
         fm.shipping_total,
         fm.storage_total,
+        fm.adjustment_total,
         fm.order_count,
         fm.grand_total,
         coverage.fresh_count,
@@ -1087,6 +1105,7 @@ export async function getFreshBillingSummaryMetrics(options: {
       const packageTotal = num(row.package_total);
       const shippingTotal = num(row.shipping_total);
       const storageTotal = num(row.storage_total);
+      const adjustmentTotal = num(row.adjustment_total);
       const grandTotal = num(row.grand_total);
       const orderCount = num(row.order_count);
       const pickPackFeeTotal = pickPackTotal + additionalTotal;
@@ -1101,6 +1120,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         packageTotal,
         shippingTotal,
         storageTotal,
+        adjustmentTotal,
         fulfillmentFeeTotal,
         orderCount,
         grandTotal,
@@ -1112,6 +1132,7 @@ export async function getFreshBillingSummaryMetrics(options: {
           package_cost: packageTotal,
           shipping: shippingTotal,
           storage: storageTotal,
+          billing_adjustment: adjustmentTotal,
         },
       };
     });

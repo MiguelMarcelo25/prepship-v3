@@ -83,7 +83,11 @@ treat it as misplaced until proven the backend owner is already correct (Fast re
 - **Print Queue durability** and idempotency
 - **Marketplace confirmation / fulfillment outbox** truth
 - **Billing generated charges** / frozen invoice totals
-- **Inventory movements** / effective-stock ledger
+- **Customer shipping money snapshots** (`src/services/customer-shipping-money.ts`):
+  exact selected/purchased cost, customer amount, margin, HUGRAB override, and
+  provenance are resolved and frozen here; Client Portal may only consume the
+  policy-versioned shipment tuple or the customer-safe return alias.
+- **Inventory quantity** / immutable signed movement ledger
 - **Auth / RBAC / client / store scope**
 
 > **Frontend Boundary Law — enforcement (PS-305).** The list above is not advisory.
@@ -170,7 +174,7 @@ The frontend may *display* backend-provided state for these, but the backend mus
 - shipped / cancelled / source-shipped safety locks
 - marketplace / source confirmation truth; duplicate-shipment prevention
 - billing generated totals / invoice truth
-- inventory ledger / effective-stock truth
+- inventory ledger / signed `inventoryQuantity` truth
 - tenant / client / store scope or permissions
 - connector / provider capability truth
 
@@ -235,7 +239,7 @@ pure UI/display helpers in the frontend:
 | Label purchase / Print Queue | send operator intent, show progress | purchase orchestration, duplicate-label guard, queue durability, idempotency |
 | Marketplace / source sync | show source status and alerts | webhooks, polling/reconciliation, external shipped/cancelled truth |
 | Billing | edit drafts, show generated rows | generated line items, totals, margins, frozen invoice truth |
-| Inventory / packages | show stock / read-model state, draft adjustments | ledger movements, effective stock, package-stock truth |
+| Inventory / packages | show quantity / read-model state, draft adjustments | immutable ledger movements, signed inventory quantity, package-stock truth |
 | Dashboard / analytics | render charts and filters | aggregates, cancelled/shipped filtering semantics, read models |
 | Carrier / store integrations | render forms and capability UI | provider capability registry, credential validation, account scope |
 | Walmart purchaseOrderId (PS-199) | display the resolution source badge | `src/services/walmart-po-resolution.ts` — the LIVE Walmart Marketplace lookup OWNS customerOrderId→purchaseOrderId translation; `store_orders` is a cache in front of it (read-before, upsert-after). Quote and label paths consume the same resolver; real orders never borrow another order's PO. |
@@ -326,6 +330,38 @@ coding. Do not infer a backend-critical owner from the nearest UI symptom.
 - **Callers updated to delegate:** …
 - **Duplicate logic removed** (or explicitly left as follow-up debt): …
 - **Boundary tests added** at the owner: …
+
+## Executable dependency and route-debt boundary (PS-464)
+
+The executable owner for layer direction is
+`scripts/ps-464-architecture-boundary-guard.ts`; its reviewed debt policy is
+`scripts/ps-464-architecture-boundary-policy.ts`. The guard parses TypeScript syntax rather
+than matching helper names, runs first in the mandatory SOT guard pack, and rejects stale
+exceptions so each reviewed allowance must shrink when its debt disappears.
+
+Dependency direction is one-way:
+
+1. Frontend / UI may import public DTOs, contracts, and display-only utilities.
+2. Public shared contracts may describe transport shapes but may not own business decisions.
+3. Routes validate input, call a service/read model/policy, and return a DTO.
+4. Services, read models, and policies own cross-workflow business truth.
+5. Provider adapters/connectors translate external shapes and delegate policy decisions.
+6. Persistence/database modules implement storage behind those owners.
+
+`web/src` may not add imports into backend-private `src/**`; public cross-layer contracts belong
+under `src/contracts/**` or `src/shared/**`. Routes may not add direct `db`/`tx`
+`insert`/`update`/`delete` calls. Reviewed legacy imports, route-local persistence, and high-risk
+frontend semantic sites are exact-path allowances with a reason, PS owner, endpoint/site map,
+and count ratchet. The current inventory and ownership report is emitted on every guard run and
+is summarized in `docs/engineering/ps-464-architecture-boundary-report.md`.
+
+The semantic negative controls cover renamed frontend implementations of rate ranking and money,
+selected-rate proof minting, label/provider selection, inventory authority, billing finalization,
+auth/scope/status locks, and provider/store capability routing. Positive controls preserve valid
+display/DTO formatting, provider-shape translation, and thin route delegation.
+
+This is an enforcement-only boundary. It does not move runtime behavior or authorize changes to
+rates, labels, inventory, billing, auth, provider integrations, or shipped/cancelled data.
 
 ## Exact-SHA Final Review closure
 

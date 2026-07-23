@@ -131,13 +131,13 @@ assert.match(store, /catch \{\s*return null;\s*\}/, 'failed snapshot writes must
 
 assert.match(
   labels,
-  /assertLabelPurchaseRateSelection\(\{[\s\S]{0,240}rateQuoteId: body\.rateQuoteId[\s\S]{0,120}selectedRateKey: body\.selectedRateKey/,
-  'Create Label must pass backend snapshot references',
+  /assertLabelPurchaseRateSelection\(\{[\s\S]{0,120}selectionRef: body\.selectionRef/,
+  'Create Label must pass the opaque backend selection reference',
 );
 assert.match(
   preflight,
-  /assertLabelPurchaseRateSelection\(\{[\s\S]{0,180}rateQuoteId: carrierLabel\.rateQuoteId[\s\S]{0,100}selectedRateKey: carrierLabel\.selectedRateKey/,
-  'Print Queue preflight must pass backend snapshot references',
+  /assertLabelPurchaseRateSelection\(\{[\s\S]{0,120}selectionRef: carrierLabel\.selectionRef/,
+  'Print Queue preflight must pass the opaque backend selection reference',
 );
 assert.match(orders, /\.\.\.buildRateQuoteRefForOrder\(order/);
 assert.match(bestRateProof, /rateQuoteRefFromCandidates/);

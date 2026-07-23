@@ -8,7 +8,11 @@ import { isAllowedCorsOrigin } from './lib/http/cors';
 import { observeApiTiming } from './lib/http/api-metrics';
 import { appendServerTiming, elapsedMs, nowMs } from './lib/http/timing';
 import { logStructured, reportError, runWithLogContext } from './lib/structured-log';
-import { requireAdmin, requireAuth } from './middleware/auth';
+import {
+  enforceReadOnlySupportMethods,
+  requireAdmin,
+  requireAuth,
+} from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
 import shipmentsRoute from './routes/shipments';
@@ -164,7 +168,9 @@ const protectedPrefixes = [
 
 for (const prefix of protectedPrefixes) {
   app.use(prefix, requireAuth);
+  app.use(prefix, enforceReadOnlySupportMethods);
   app.use(`${prefix}/*`, requireAuth);
+  app.use(`${prefix}/*`, enforceReadOnlySupportMethods);
 }
 
 app.use('/admin', requireAdmin);

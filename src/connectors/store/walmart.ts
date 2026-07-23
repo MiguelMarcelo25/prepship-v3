@@ -34,7 +34,7 @@ async function readWalmartError(res: Response): Promise<string> {
   }
 }
 
-async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getWalmartAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const clientId = firstString(creds.clientId, creds.client_id, creds.consumerId, creds.consumer_id);
   const clientSecret = firstString(creds.clientSecret, creds.client_secret, creds.privateKey, creds.private_key);
   if (!clientId || !clientSecret) {
@@ -52,6 +52,7 @@ async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<st
       'WM_SVC.NAME': 'PrepShip',
     },
     body: new URLSearchParams({ grant_type: 'client_credentials' }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`Walmart token ${res.status}: ${await readWalmartError(res)}`);
@@ -235,7 +236,7 @@ export function createWalmartStoreConnector(): StoreConnector {
     capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import'],
     async importOrders(input: StoreOrderImportInput): Promise<NormalizedStoreOrderImportResult> {
       const creds = input.credentials ?? {};
-      const token = await getWalmartAccessToken(creds);
+      const token = await getWalmartAccessToken(creds, input.signal);
       const url = new URL('https://marketplace.walmartapis.com/v3/orders');
       url.searchParams.set('createdStartDate', input.createdStartDate ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
       url.searchParams.set('limit', String(Math.min(Math.max(Number(input.limit ?? 50), 1), 200)));
@@ -316,6 +317,7 @@ export function createWalmartStoreConnector(): StoreConnector {
           method: 'POST',
           headers: walmartHeaders(creds, token),
           body: JSON.stringify(shipmentBody),
+          signal: input.signal,
         },
         { purchaseOrderId },
       );

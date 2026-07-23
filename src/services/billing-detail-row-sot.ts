@@ -34,6 +34,7 @@ export interface BillingDetailRowDto {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  adjustmentTotal: number;
   pickPackFeeTotal: number;
   fulfillmentFeeTotal: number;
   grandTotal: number;
@@ -145,7 +146,7 @@ function duplicateOrderNumbers(rows: BillingDetailReadModelRow[]): Set<string> {
 // missing totals fall back to the lineType inference exactly as before.
 function billingLineMetrics(row: BillingDetailReadModelRow) {
   if (isCancelledNoChargeBillingRow(row)) {
-    return { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, total: 0 };
+    return { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, adjustment: 0, total: 0 };
   }
 
   const lineType = row.lineType;
@@ -167,10 +168,18 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   const storage = numberValue(
     row.storageTotal ?? (lineType === 'storage' ? lineTotal : 0),
   );
-  const total = numberValue(row.grandTotal ?? row.total) ||
-    pickPack + additional + packageCost + shipping + storage;
+  const adjustment = numberValue(
+    row.adjustmentTotal ?? (lineType === 'billing_adjustment' ? lineTotal : 0),
+  );
+  const explicitTotal = nonEmpty(row.grandTotal)
+    ? numberValue(row.grandTotal)
+    : nonEmpty(row.total)
+      ? numberValue(row.total)
+      : null;
+  const total = explicitTotal ??
+    pickPack + additional + packageCost + shipping + storage + adjustment;
 
-  return { pickPack, additional, packageCost, shipping, storage, total };
+  return { pickPack, additional, packageCost, shipping, storage, adjustment, total };
 }
 
 function rowKey(row: BillingDetailReadModelRow, orderNumberKey: Map<string, string>): string {
@@ -214,6 +223,9 @@ function carryBooleanOr(target: BillingDetailRowDto, source: BillingDetailReadMo
 // Carry tables — camelCase-only (PS-368 deleted the snake_case twins).
 const TEXT_CARRY_FIELDS = [
   'shipDate',
+  'actualActivityDate',
+  'billingEffectiveDate',
+  'billingPolicyVersion',
   'carrierCode',
   'carrierNickname',
   'providerAccountNickname',
@@ -239,6 +251,10 @@ const TEXT_CARRY_FIELDS = [
   'fulfillmentConflictCode',
   'fulfillmentConflictLabel',
   'fulfillmentConflictReason',
+  'sourceFinalizationId',
+  'billingAdjustmentId',
+  'adjustmentKind',
+  'adjustmentSource',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [
@@ -268,6 +284,7 @@ const BOOLEAN_OR_FIELDS = [
   'packageCostNeedsReview',
   'shippingZeroNeedsReview',
   'feeWaived',
+  'rolledFromWeekend',
 ] as const;
 
 function applyBoxCostAlert(row: BillingDetailRowDto): void {
@@ -306,6 +323,7 @@ function applyCancelledNoCharge(row: BillingDetailRowDto): void {
   row.packageTotal = 0;
   row.shippingTotal = 0;
   row.storageTotal = 0;
+  row.adjustmentTotal = 0;
   row.pickPackFeeTotal = 0;
   row.fulfillmentFeeTotal = 0;
   row.grandTotal = 0;
@@ -361,6 +379,7 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         packageTotal: metrics.packageCost,
         shippingTotal: metrics.shipping,
         storageTotal: metrics.storage,
+        adjustmentTotal: metrics.adjustment,
         pickPackFeeTotal: metrics.pickPack + metrics.additional,
         fulfillmentFeeTotal: metrics.pickPack + metrics.additional + metrics.packageCost + metrics.shipping + metrics.storage,
         grandTotal: metrics.total,
@@ -379,6 +398,7 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     existing.packageTotal = numberValue(existing.packageTotal) + metrics.packageCost;
     existing.shippingTotal = numberValue(existing.shippingTotal) + metrics.shipping;
     existing.storageTotal = numberValue(existing.storageTotal) + metrics.storage;
+    existing.adjustmentTotal = numberValue(existing.adjustmentTotal) + metrics.adjustment;
     existing.pickPackFeeTotal = existing.pickpackTotal + existing.additionalTotal;
     existing.fulfillmentFeeTotal =
       existing.pickpackTotal +

@@ -64,7 +64,7 @@ async function main() {
     /import \{ stampHouseTuple \}/.test(backfill) && /await stampHouseTuple\(/.test(backfill));
   check('rates-backfill PERSISTS the stamped best (bestRateJson: stampedBest), not the un-stamped one',
     /const stampedBest = await stampHouseTuple\(/.test(backfill) &&
-    /bestRateJson: stampedBest as unknown/.test(backfill) &&
+    /bestRateJson:\s*stampedBest(?:\s+as\s+unknown)?/.test(backfill) &&
     !/bestRateJson: bestWithMetadata as unknown/.test(backfill));
 
   if (failures > 0) {

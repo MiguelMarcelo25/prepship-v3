@@ -41,9 +41,9 @@ export function InventoryLedgerDeleteModal({
   return (
     <div className="inventory-overlay" onClick={() => !isDeleting && onClose()}>
       <div className="inventory-modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 460 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 6 }}>Delete history row?</h3>
+        <h3 style={{ marginTop: 0, marginBottom: 6 }}>Reverse inventory movement?</h3>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
-          This will remove the manual inventory movement and reverse its stock impact.
+          The original history row remains immutable. PrepShip will append an equal and opposite movement to reverse its stock impact.
         </div>
         <div style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface2)', padding: 12, marginBottom: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '96px 1fr', rowGap: 8, columnGap: 10, fontSize: 12 }}>
@@ -62,7 +62,7 @@ export function InventoryLedgerDeleteModal({
           </div>
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--red)', marginBottom: 16, fontWeight: 700 }}>
-          Ship/order-linked rows stay locked and cannot be deleted from History.
+          Ship/order-linked rows stay locked and cannot be reversed from History.
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button className="btn btn-outline btn-sm" type="button" disabled={isDeleting} onClick={onClose}>Cancel</button>
@@ -73,7 +73,7 @@ export function InventoryLedgerDeleteModal({
             onClick={() => void onConfirmDelete()}
             style={{ borderColor: 'var(--red)', color: 'var(--red)' }}
           >
-            {isDeleting ? 'Deleting...' : 'Delete row'}
+            {isDeleting ? 'Reversing...' : 'Append reversal'}
           </button>
         </div>
       </div>

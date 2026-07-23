@@ -90,3 +90,18 @@ export async function isLabelPurchaseLockActive(orderId: number): Promise<boolea
   `;
   return rows.length > 0;
 }
+
+export async function getActiveLabelPurchaseLockOrderIds(
+  orderIds: number[],
+): Promise<Set<number>> {
+  const unique = [...new Set(orderIds.filter((orderId) => Number.isInteger(orderId) && orderId > 0))];
+  if (unique.length === 0) return new Set();
+  await ensureLabelPurchaseLockSchema();
+  const rows = await sql<{ order_id: number }[]>`
+    SELECT order_id
+    FROM label_purchase_locks
+    WHERE order_id = any(${unique})
+      AND expires_at > now()
+  `;
+  return new Set(rows.map((row) => Number(row.order_id)));
+}

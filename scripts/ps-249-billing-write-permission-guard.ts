@@ -39,7 +39,8 @@ check('all billing mutation routes carry financials:write (>= 7)', writeGates >=
 const gate = "requirePermission('financials:write')";
 check('POST /generate uses narrow billing:generate gate',
   billing.includes("app.post('/generate', requirePermission('billing:generate')"));
-check('PATCH /details/:orderId gated', billing.includes(`app.patch('/details/:orderId{[0-9]+}', ${gate}`));
+check('PATCH /details/:orderId is admin-only and financially gated',
+  billing.includes(`app.patch('/details/:orderId{[0-9]+}', requireAdmin, ${gate}`));
 check('PUT /package-prices gated', billing.includes(`app.put('/package-prices', ${gate}`));
 check('POST /backfill-ref-rates gated', billing.includes(`app.post('/backfill-ref-rates', ${gate}`));
 

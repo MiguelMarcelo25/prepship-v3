@@ -105,6 +105,10 @@ const schema = z.object({
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.
   RUN_SYNC_SCHEDULER: booleanFlag(true),
+  // PS-463: optional direct/session-mode connection for the long-lived
+  // ShipStation consumer-leader session. Transaction-mode port 6543 is never
+  // accepted; when omitted, the scheduler derives Supabase session port 5432.
+  SHIPSTATION_CONSUMER_LEADER_DATABASE_URL: z.string().url().optional(),
   WORKER_PLACEHOLDER: booleanFlag(false),
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
   // PS-256 (durable worker-status events): when ON, worker heartbeat/job/staleness
@@ -113,14 +117,10 @@ const schema = z.object({
   // "worker was stuck 14:32-15:17"). Default OFF — a safe canary; the OFF path is a
   // true no-op (no DB, no schema ensure). DJ flips this on Render after a canary.
   WORKER_STATUS_EVENTS_DURABLE: booleanFlag(false),
-  // PS-256 (restart-safe print-queue merged PDF): when ON, the already-generated merged
-  // batch-label PDF is persisted to a durable print_queue_merged_pdfs table and rehydrated on
-  // an in-memory miss, so the view/download/signed-url routes can still serve the batch after a
-  // server restart (today the bytes live only in process memory and a restart 404s them).
-  // Default OFF — a safe canary; the OFF path is a true no-op (no DB, no schema ensure). DJ flips
-  // this on Render after a canary. Stores/reads the immutable PDF artifact only — never
-  // re-generates labels, buys postage, or mutates shipped/cancelled orders or shipments.
-  DURABLE_PRINT_QUEUE_PDF: booleanFlag(false),
+  // PS-453: the July 14 restart-safe PDF canary passed and PS-428 subsequently
+  // made generation-fenced durable chunks mandatory. The legacy key remains
+  // for deployment compatibility, defaults on, and cannot disable that owner.
+  DURABLE_PRINT_QUEUE_PDF: booleanFlag(true),
   ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY: booleanFlag(false),
   // Per user override unlock shipped data on 2026-06-27: the automatic
@@ -285,6 +285,13 @@ const schema = z.object({
   // orders/shipments (it only emits derived $0 billing_line_items). Keyed per ORDER (no shared-shipment
   // coupling). DJ canaries on Render. Per user override unlock shipped data on 2026-06-24.
   BUNDLE_BILL_ONCE: booleanFlag(false),
+  // PS-434: forward-only California weekend billing policy. Unset is the
+  // production-safe OFF state. DJ must approve and set an exact YYYY-MM-DD
+  // before any line can use weekday_weekend_rollforward_v2.
+  BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE: z.preprocess(
+    (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ),
   // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
   // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
   // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'

@@ -58,11 +58,13 @@ check('v2 durable bucket is isolated by API-key fingerprint',
 check('background v2 admission preserves interactive burst and per-minute reserves',
   /shipStationV2DurableBackgroundBucket[\s\S]*SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE[\s\S]*SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE/.test(v2));
 check('v2 limiter waits and retries honor caller cancellation',
-  /acquireShipStationV2Budget\(key, opts\.priority \?\? 'interactive', opts\.signal\)/.test(v2) &&
-    /abortableDelay\(backoffMs, opts\.signal\)/.test(v2));
+  /acquireShipStationV2Budget\(key, opts\.priority \?\? 'interactive', requestSignal\)/.test(v2) &&
+    /abortableDelay\(backoffMs, requestSignal\)/.test(v2));
 
 check('rate-limiter exports the shared RateBucket interface',
-  /export interface RateBucket \{[\s\S]*acquire\(\): Promise<void>/.test(readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8')));
+  /export interface RateBucket \{[\s\S]*acquire\(options\?: \{ signal\?: AbortSignal \}\): Promise<void>/.test(readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8')));
+check('v1 limiter waits honor worker cancellation',
+  /bucket\.acquire\(\{ signal: opts\.signal \}\)/.test(v1));
 
 check('package.json wires test:ps-256-durable-rate-limiter',
   /test:ps-256-durable-rate-limiter/.test(readFileSync('package.json', 'utf8')));

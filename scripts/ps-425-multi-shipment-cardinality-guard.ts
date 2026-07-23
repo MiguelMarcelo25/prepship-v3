@@ -9,6 +9,7 @@ import {
 const read = (path: string) => readFileSync(path, 'utf8');
 const billing = read('src/services/billing.ts');
 const labels = read('src/services/labels.ts');
+const lifecycle = read('src/services/order-lifecycle-command.ts');
 const schema = read('src/db/schema/billing.ts');
 const migration = read('drizzle/0068_billing_shipment_cardinality.sql');
 const route = read('src/routes/billing.ts');
@@ -52,9 +53,10 @@ assert.match(route, /header: 'Shipment #', key: 'shipmentId'/);
 assert.match(csv, /'Shipment #'/);
 assert.match(csv, /row\.shipment_id == null/);
 
-assert.match(labels, /activeOutboundShipmentPredicate\(\{[\s\S]{0,180}excludeShipmentId: row\.id/);
-assert.match(labels, /\.for\('update'\)/);
-assert.match(labels, /decideShipmentVoidLifecycle\(\{/);
+assert.match(labels, /voidOrderShipmentLifecycleInTransaction\(tx,/);
+assert.match(lifecycle, /activeOutboundShipmentPredicate\(\{[\s\S]{0,180}excludeShipmentId: input\.shipmentId/);
+assert.match(lifecycle, /\.for\('update'\)/);
+assert.match(lifecycle, /decideShipmentVoidLifecycle\(\{/);
 assert.match(labels, /lifecycleDecision\?\.kind === 'reopen'/);
 assert.doesNotMatch(
   labels.slice(labels.indexOf('export async function voidLabelV2'), labels.indexOf('export async function createReturnLabelV2')),

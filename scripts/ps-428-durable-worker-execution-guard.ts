@@ -42,6 +42,13 @@ assert.match(printStore, /WHERE print_queue_merge_jobs\.generation = \$\{snapsho
 assert.match(rateWorker, /runDurableWorkerAttempt/);
 assert.match(rateWorker, /produceRateBrowsePayload/);
 assert.match(rateWorker, /listRecoverableRateBrowseJobIds/);
+assert.match(rateWorker, /supervise: consumerRole/);
+assert.match(rateWorker, /maintenanceIntervalSeconds: 60/);
+assert.match(rateWorker, /execute:\s*async \(signal\)/);
+assert.match(
+  rateWorker,
+  /produceRateBrowsePayload\(\{[\s\S]*?signal,[\s\S]*?\}\)/,
+);
 assert.match(worker, /await startRateBrowseWorker\(\)/);
 
 const startPrint = printService.slice(
@@ -64,7 +71,10 @@ assert.match(pdfStore, /return true/);
 assert.doesNotMatch(pdfStore, /if \(!durablePrintQueuePdfEnabled\(\)\)/);
 
 assert.match(reaper, /REAPER_MIN_ACTIVE_AGE_MS = SYNC_JOB_RUNNING_LEASE_MS/);
-assert.match(reaper, /if \(laneIsHeld\) continue/);
-assert.match(syncQueue, /err instanceof DeadlineExceededError[\s\S]{0,500}await handlerPromise\.catch/);
+assert.match(reaper, /if \(laneIsHeld && !pastAgeThreshold\) continue/);
+assert.match(
+  syncQueue,
+  /err instanceof DeadlineExceededError[\s\S]{0,1400}requireCancellationAcknowledgement\(\{[\s\S]*work: handlerPromise[\s\S]*terminateWorkerForUnacknowledgedCancellation/,
+);
 
 console.log('PASS PS-428 durable worker execution static guard');

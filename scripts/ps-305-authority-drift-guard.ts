@@ -178,8 +178,16 @@ checkPatterns('backend label owner enforces proof before provider purchase', lab
 ]);
 check('label route delegates create requests to createLabelV2',
   read('src/routes/labels.ts').includes('createLabelV2(body, labelsScopeFromContext(c))'));
-check('print queue creates missing labels only through createLabelV2',
-  /const created = await timeQueueStep\([\s\S]*?createLabelV2\(\{/.test(read('src/services/print-queue.ts')));
+const printQueue = read('src/services/print-queue.ts');
+checkPatterns('print queue delegates purchase and receipt recovery only to backend label owners', printQueue, [
+  /createLabelV2\(input, labelPurchaseScope\)/,
+  /resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)/,
+  /resumeShopifyShippingLabelFromDurableReceipt\(input, labelPurchaseScope\)/,
+]);
+checkPatterns('receipt-only label owners cannot dispatch a provider purchase', labels, [
+  /resumeLabelV2FromDurableReceipt[\s\S]*?allowProviderDispatch: false/,
+  /resumeShopifyShippingLabelFromDurableReceipt[\s\S]*?allowProviderDispatch: false/,
+]);
 
 const moneyOwner = read('src/services/shipping-workflow/rate-money.ts');
 checkPatterns('backend money owner exports row money and marketplace display helpers', moneyOwner, [
@@ -216,8 +224,7 @@ check('orders route enriches rows through backend workflow DTO',
 const rateProof = read('web/src/lib/rate-proof.ts');
 check('frontend rate-proof helper reads backend proof and does not recompute fingerprint',
   rateProof.includes('NEVER recompute a fingerprint') &&
-  rateProof.includes('rateQuoteId') &&
-  rateProof.includes('selectedRateKey') &&
+  rateProof.includes('selectionRef') &&
   !rateProof.includes('createHash(') &&
   !rateProof.includes('buildShippingRateRequestFingerprint(') &&
   !rateProof.includes('selectedRateAuthorityKey('));
@@ -226,6 +233,7 @@ check('Rate Browser passes backend proof fields through instead of minting purch
   rateBrowser.includes('function rateBackendProof') &&
   rateBrowser.includes("'rateQuoteId'") &&
   rateBrowser.includes("'selectedRateKey'") &&
+  rateBrowser.includes("'selectionRef'") &&
   rateBrowser.includes("'proofSource'"));
 const useOrders = read('web/src/hooks/useOrders.ts');
 check('frontend row adapter prefers backend canonical shipping model before legacy fields',

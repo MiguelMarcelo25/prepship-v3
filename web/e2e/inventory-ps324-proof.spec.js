@@ -14,12 +14,11 @@ import { test, expect } from 'playwright/test'
 //   1. cuFt (a storage-fee BILLING input, slice 1): the mocked row carries
 //      cuFt = 88.500 while its dims (14×10×8) would compute 0.648. The cell shows
 //      88.500 → the FE renders the backend cuFt, not its own L×W×H/1728.
-//   2. Effective-stock status (slices 1+2): a row carries cached stockQty = 50 but
-//      backend effectiveStock = 0. The Stock cell shows 0 and the badge shows OUT —
-//      the FE classifies on the backend's EFFECTIVE stock via the single
-//      classifyStockStatus owner, NOT the raw cached qty (which would read OK).
-//   3. The canonical threshold: a row with effectiveStock == minStock renders LOW
-//      (stock <= minStock), exactly the shared owner's rule.
+//   2. Inventory status (slices 1+2): a row carries legacy stockQty = 50 but the
+//      backend inventoryQuantity = 0 and stockStatus = out. The Stock cell shows 0
+//      and the badge shows OUT — the FE renders the backend DTO without local math.
+//   3. The canonical threshold: the backend stamps stockStatus = low when
+//      inventoryQuantity == minStock, and the UI renders that status verbatim.
 //   4. Network allow-list: the page contacts NO real postage/marketplace host.
 //
 // Determinism / safety: no live calls. EVERY network response is mocked via
@@ -39,23 +38,23 @@ const inventoryRows = [
   {
     // (1) cuFt proof — backend cuFt 88.5; dims would compute 14*10*8/1728 = 0.648.
     id: 1, sku: 'PS324-CUFT', name: 'Backend cuFt Render Proof', clientId: 1,
-    stockQty: 12, effectiveStock: 12, reorderLevel: 5,
+    inventoryQuantity: 12, stockStatus: 'in', stockQty: 12, effectiveStock: 12, reorderLevel: 5,
     length: 14, width: 10, height: 8, weightOz: 10, unitsPerPack: 1,
     cuFt: 88.5, cuFtOverride: null,
     soldLast30Days: 0, totalReceived: 12, totalSoldAllTime: 0, active: true,
   },
   {
-    // (2) effective-stock status proof — cached qty 50 (would read OK), backend
-    // effectiveStock 0 must win → Stock 0 + badge OUT.
+    // (2) inventory status proof — legacy cached qty 50 would read OK, but the
+    // backend quantity/status tuple must win → Stock 0 + badge OUT.
     id: 2, sku: 'PS324-EFF-OUT', name: 'Effective Stock Status Proof', clientId: 1,
-    stockQty: 50, effectiveStock: 0, reorderLevel: 5,
+    inventoryQuantity: 0, stockStatus: 'out', stockQty: 50, effectiveStock: 0, reorderLevel: 5,
     length: 9, width: 6, height: 3, weightOz: 8, unitsPerPack: 1,
     soldLast30Days: 7, totalReceived: 7, totalSoldAllTime: 7, active: true,
   },
   {
-    // (3) canonical threshold — effectiveStock == minStock → LOW (stock <= minStock).
+    // (3) canonical threshold — backend stockStatus low renders LOW.
     id: 3, sku: 'PS324-LOW', name: 'Low Threshold Proof', clientId: 1,
-    stockQty: 5, effectiveStock: 5, reorderLevel: 5,
+    inventoryQuantity: 5, stockStatus: 'low', stockQty: 5, effectiveStock: 5, reorderLevel: 5,
     length: 8, width: 5, height: 2, weightOz: 6, unitsPerPack: 1,
     soldLast30Days: 1, totalReceived: 6, totalSoldAllTime: 1, active: true,
   },
@@ -143,15 +142,15 @@ test.describe('PS-324 Inventory read-model proof', () => {
     await expect(cuftCell).toContainText('88.500')
     await expect(cuftCell).not.toContainText('0.648')
 
-    // 2. Effective-stock status: cached qty 50, backend effectiveStock 0 → Stock 0, badge OUT.
+    // 2. Backend status tuple: legacy qty 50, backend inventoryQuantity 0/status out.
     const effRow = rowFor('PS324-EFF-OUT')
     await expect(effRow.locator('td[data-col-key="stock"]')).toHaveText('0')
     await expect(effRow.locator('.stock-badge')).toHaveText('OUT')
 
-    // 3. Canonical threshold: effectiveStock == minStock → LOW.
+    // 3. Canonical threshold: backend stockStatus low → LOW.
     await expect(rowFor('PS324-LOW').locator('.stock-badge')).toHaveText('LOW')
 
-    // Negative control: the cuFt row (effectiveStock 12 > min 5) is OK, proving the OUT/LOW
+    // Negative control: the cuFt row is backend status in → OK, proving the OUT/LOW
     // above are real classifications and not a blanket badge.
     await expect(rowFor('PS324-CUFT').locator('.stock-badge')).toHaveText('OK')
   })

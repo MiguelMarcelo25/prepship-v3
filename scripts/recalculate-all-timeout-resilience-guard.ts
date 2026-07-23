@@ -67,13 +67,20 @@ async function main() {
       thrown instanceof Error && !isTimeoutError(thrown) && calls === 1, `calls=${calls}`);
   }
   {
-    // A genuinely hung fetch trips the timeout (coded), then exhausts -> throws TimeoutError.
+    // A genuinely hung fetch is aborted before the timeout is surfaced. This pins the
+    // PS-447 no-zombie contract: no retry can overlap the losing provider request.
     let thrown: unknown = null;
+    let aborted = false;
     try {
-      await runWithTimeoutAndRetry(() => new Promise<string>(() => { /* never settles */ }),
+      await runWithTimeoutAndRetry((_attempt, signal) => new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+      }),
         { timeoutMs: 20, maxRetries: 0, label: 'hang' });
     } catch (err) { thrown = err; }
-    check('a hung fetch trips a coded timeout', isTimeoutError(thrown));
+    check('a hung fetch is aborted and trips a coded timeout', aborted && isTimeoutError(thrown));
   }
 
   // ── wiring pins: rates-backfill consumes the resilient path for the LIVE recalc ──
@@ -95,7 +102,7 @@ async function main() {
     /resolveRateBackfillConcurrency\(\{[\s\S]*dbPoolMax:\s*env\.DB_POOL_MAX/.test(backfill));
   // Preserve the PS-12x forceRefresh contract (the existing recalculate-all-live guard pins it too).
   check('live recalc still forces the full live carrier fan-out (no cache regression)',
-    /getRates\(rateInput, toGetRatesOptions\(rateFetchDecision\)\)/.test(backfill));
+    /getRates\([\s\S]*toGetRatesOptions\(rateFetchDecision\)/.test(backfill));
 
   if (failures > 0) {
     console.error(`\nFAIL recalculate-all timeout-resilience guard (${failures} failing)`);

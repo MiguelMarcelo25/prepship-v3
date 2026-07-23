@@ -41,11 +41,11 @@ check('CatchUpOrderStatus type includes on_hold/awaiting_payment/pending_fulfill
   /type CatchUpOrderStatus =[\s\S]*'on_hold'[\s\S]*'awaiting_payment'[\s\S]*'pending_fulfillment'/.test(src));
 
 // ── (4) ONLY 'shipped' deducts inventory in the catch-up (on_hold/pending must not) ──
-// The catch-up's deduction loop is gated on `orderStatus === 'shipped'`; the new hold statuses fall
-// outside that branch so they never deduct stock.
-check("catch-up inventory deduction stays gated to orderStatus === 'shipped'",
-  /if \(orderStatus === 'shipped'\) \{/.test(src) &&
-  /enqueueInventoryDeduction\(row, \{ source: 'order_sync_status' \}, tx\)/.test(src));
+// Terminal rows delegate to the lifecycle owner; hold/pending projections
+// cannot create inventory claims or lifecycle events.
+check('catch-up terminal transitions delegate to the canonical lifecycle owner',
+  /if \(orderStatus === 'shipped' \|\| orderStatus === 'cancelled'\) \{/.test(src) &&
+  /await applyOrderLifecycleCommand\(\{[\s\S]*transition: orderStatus,[\s\S]*source: 'order_sync_status'/.test(src));
 
 if (failures > 0) {
   console.error(`\nFAIL awaiting on-hold back-sync guard (${failures} failing)`);

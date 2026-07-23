@@ -17,6 +17,11 @@ import {
   isOrderRowInScope,
 } from '../src/lib/order-scope';
 
+process.env.VERCEL = '1';
+process.env.DATABASE_URL ??= 'postgres://u:p@localhost:5432/db';
+process.env.SUPABASE_URL ??= 'https://example.supabase.co';
+const { authorizeRateRequestScope } = await import('../src/services/rate-request-authorization');
+
 let failures = 0;
 function check(name: string, cond: boolean): void {
   if (!cond) { failures += 1; console.error(`FAIL ${name}`); }
@@ -52,18 +57,30 @@ const rates = readFileSync('src/routes/rates.ts', 'utf8');
 check('rates.ts imports the shared scope owner',
   /from '\.\.\/lib\/order-scope'/.test(rates) &&
     /scopeFromContext/.test(rates) && /orderScopePredicate/.test(rates));
-check('/browse scopes the orderId load + 404s out-of-scope',
-  /const browseScope = scopeFromContext\(c\);/.test(rates) &&
-    /orderScopePredicate\(browseScope\)/.test(rates) &&
-    /if \(!inScope\) return c\.json\(\{ error: 'Order not found' \}, 404\);/.test(rates));
+check('/browse delegates scope before provider/cache/persistence work',
+  rates.includes('const scopeError = await ensureRateScope(c, body);') &&
+    rates.includes('authorizeRateRequestScope(scopeFromContext(c), input)'));
+const rateScope = scopeFromContext(ctx({ role: 'client_user', clientIds: [11] }));
+check('rate owner allows an in-scope order',
+  (await authorizeRateRequestScope(
+    rateScope,
+    { orderId: 1 },
+    async () => ({ clientId: 11, storeId: null }),
+  )).allowed === true);
+check('rate owner denies another tenant order',
+  (await authorizeRateRequestScope(
+    rateScope,
+    { orderId: 2 },
+    async () => ({ clientId: 22, storeId: null }),
+  )).allowed === false);
 
 // ── 5. STATIC: the global/destructive endpoints are admin-gated (scope:global) ────────────────
 check("DELETE /cache requires scope:global",
-  /app\.delete\('\/cache', requireInternalPermission\('scope:global'\)/.test(rates));
+  rates.includes("requireBusinessRoutePolicy('rates.cache.delete')"));
 check("POST /cache-clear-and-refetch requires scope:global",
-  /app\.post\('\/cache-clear-and-refetch', requireInternalPermission\('scope:global'\)/.test(rates));
+  rates.includes("requireBusinessRoutePolicy('rates.cache.clear-refetch')"));
 check("POST /backfill-best requires scope:global",
-  /'\/backfill-best',\s*\n\s*\/\/[^\n]*\n\s*requireInternalPermission\('scope:global'\)/.test(rates));
+  rates.includes("requireBusinessRoutePolicy('rates.backfill.start')"));
 
 // ── 6. STATIC: orders.ts still enforces scope (its local copies are guard-frozen, left intact) ─
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');

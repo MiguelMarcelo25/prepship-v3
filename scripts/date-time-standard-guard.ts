@@ -167,10 +167,10 @@ assert(
   'billing detail UI must use billing-day helpers for ship_date display/sort',
 );
 assert(
-  billingParity.includes("label: 'Ship Date'") &&
+  billingParity.includes("label: 'Billing Date'") &&
     !billingParity.includes('12:00 AM PT') &&
-    billingDetailTable.includes('formatBillingShipDate(row.shipDate)') &&
-    billingDetailTable.includes('billingShipDateSortValue(row.shipDate)'),
+    billingDetailTable.includes('formatBillingShipDate(row.billingEffectiveDate ?? row.shipDate)') &&
+    billingDetailTable.includes('billingShipDateSortValue(row.billingEffectiveDate ?? row.shipDate)'),
   'billing detail ship date must render the billing date without a fake time while sorting by billing day',
 );
 assert(

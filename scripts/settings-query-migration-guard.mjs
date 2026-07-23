@@ -34,6 +34,7 @@ assert.doesNotMatch(carrierPolicy, /useEffect/);
 
 assert.match(carrierIntegrations, /queryFn: \(\) => api\.get<\{ data: RawIntegrationRow\[\] \}>\('\/carrier-accounts'\)/);
 assert.match(carrierIntegrations, /queryFn: \(\) => api\.get<\{ data: RawIntegrationRow\[\] \}>\('\/store-accounts\?source=admin'\)/);
+assert.match(carrierIntegrations, /queryKey: \['settings', 'shipstation-env-accounts'\]/);
 assert.match(carrierIntegrations, /queryFn: \(\) => api\.get<\{ data: EnvShipStationAccount\[\] \}>\('\/init\/shipstation-accounts'\)/);
 assert.doesNotMatch(carrierIntegrations, /setSaved|useEffect/);
 

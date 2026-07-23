@@ -47,9 +47,14 @@ type ShopifySyncDeps = {
 type ShopifySyncResult = {
   enabled: boolean;
   accounts: number;
+  attemptedAccounts: number;
   synced: number;
   errors: number;
 };
+
+function throwIfShopifySyncAborted(signal?: AbortSignal): void {
+  signal?.throwIfAborted();
+}
 
 function asDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
@@ -215,6 +220,7 @@ export async function syncShopifyAccount(
   let cursor: string | null = null;
   let pagesWalked = 0;
   do {
+    throwIfShopifySyncAborted(deps.signal);
     const result = await importOrders('shopify', {
       companyId: account.clientId ?? 0,
       accountId: String(account.id),
@@ -224,15 +230,20 @@ export async function syncShopifyAccount(
       cursor,
       limit: 50,
       storeId: syntheticStoreIdForCredentialAccount('shopify', account.id),
+      signal: deps.signal,
     });
 
+    throwIfShopifySyncAborted(deps.signal);
     const normalized = result.orders.map((order) => normalizedOrderToStoreOrder(order, account));
     if (normalized.length > 0) {
+      throwIfShopifySyncAborted(deps.signal);
       synced += await persistOrders(normalized);
     }
 
+    throwIfShopifySyncAborted(deps.signal);
     const maxUpdatedAt = asDate(result.diagnostics?.maxUpdatedAt);
     if (maxUpdatedAt) {
+      throwIfShopifySyncAborted(deps.signal);
       await recordProgress(account.id, {
         syncCursorAt: maxUpdatedAt,
         lastSyncedAt: new Date(),
@@ -241,6 +252,7 @@ export async function syncShopifyAccount(
       account.syncCursorAt = maxDate(account.syncCursorAt, maxUpdatedAt);
       account.lastSyncError = null;
     } else if (!result.cursor) {
+      throwIfShopifySyncAborted(deps.signal);
       await recordProgress(account.id, {
         lastSyncedAt: new Date(),
         lastSyncError: null,
@@ -261,19 +273,22 @@ export async function syncShopifyAccount(
 
 export async function syncShopifyOrders(signal?: AbortSignal): Promise<ShopifySyncResult> {
   if (!env.SHOPIFY_SYNC_ENABLED) {
-    return { enabled: false, accounts: 0, synced: 0, errors: 0 };
+    return { enabled: false, accounts: 0, attemptedAccounts: 0, synced: 0, errors: 0 };
   }
 
   const accounts = await loadActiveShopifySyncAccounts();
   let synced = 0;
   let errors = 0;
+  let attemptedAccounts = 0;
 
   for (const account of accounts) {
     if (signal?.aborted) break; // audit SY-3: stop cleanly between accounts
+    attemptedAccounts += 1;
     try {
       const result = await syncShopifyAccount(account, { signal });
       synced += result.synced;
     } catch (error) {
+      throwIfShopifySyncAborted(signal);
       errors += 1;
       const auth = isAuthFailure(error) ? nextAuthError(account.lastSyncError) : null;
       await updateAccountProgress(account.id, {
@@ -287,5 +302,5 @@ export async function syncShopifyOrders(signal?: AbortSignal): Promise<ShopifySy
     }
   }
 
-  return { enabled: true, accounts: accounts.length, synced, errors };
+  return { enabled: true, accounts: accounts.length, attemptedAccounts, synced, errors };
 }

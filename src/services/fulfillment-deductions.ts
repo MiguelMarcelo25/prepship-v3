@@ -9,6 +9,8 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { env } from '../lib/env';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
+import { fulfillmentLineClaims, orderLifecycleEvents } from '../db/schema/order-lifecycle';
+import { orders } from '../db/schema/orders';
 import { consumeOutboundPackage } from './package-consumption';
 import { applyInventoryMovementInTransaction } from './inventory-movement';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
@@ -127,7 +129,7 @@ export async function deductPackageForShipment(input: {
 // What stops:
 //   - Auto-creation of inventory rows on first ship of an unknown SKU
 //   - All `'ship'` type entries in inventory_ledger
-//   - All stockQty mutations triggered by the label/sync paths
+//   - All inventory movements triggered by the label/sync paths
 //
 // Default (unset or any other value) preserves the original behavior so
 // existing deployments aren't surprised. Flip the flag in Vercel/Render
@@ -153,6 +155,156 @@ function isInventoryAutoDeductEnabled(): boolean {
     );
   }
   return enabled;
+}
+
+export type FulfillmentClaimApplicationResult = {
+  applied: number;
+  alreadyApplied: number;
+  lockedDown: boolean;
+};
+
+/**
+ * Per user override unlock shipped data on 2026-07-16 (PS-424): apply the
+ * immutable per-shipment/per-line claims created by OrderLifecycleCommand.
+ * The existing validated INVENTORY_AUTO_DEDUCT resolver remains the only kill
+ * switch, and stock still changes only through the canonical movement owner.
+ */
+export async function applyInventoryClaimsForLifecycleEvent(
+  lifecycleEventId: number,
+  conn: Pick<typeof db, 'transaction'> = db,
+): Promise<FulfillmentClaimApplicationResult> {
+  if (!isInventoryAutoDeductEnabled()) {
+    return { applied: 0, alreadyApplied: 0, lockedDown: true };
+  }
+  if (conn !== db && process.env.NODE_ENV !== 'test') {
+    throw new Error('Inventory claim executor may only be injected in tests');
+  }
+  if (conn === db) await ensureInventoryLedgerSchema();
+
+  return conn.transaction(async (tx) => {
+    const [event] = await tx
+      .select({ orderId: orderLifecycleEvents.orderId, effectiveAt: orderLifecycleEvents.effectiveAt })
+      .from(orderLifecycleEvents)
+      .where(eq(orderLifecycleEvents.id, lifecycleEventId))
+      .limit(1);
+    if (!event) throw new Error(`Lifecycle event ${lifecycleEventId} does not exist`);
+
+    const claims = await tx
+      .select()
+      .from(fulfillmentLineClaims)
+      .where(and(
+        eq(fulfillmentLineClaims.lifecycleEventId, lifecycleEventId),
+        eq(fulfillmentLineClaims.status, 'pending'),
+      ))
+      .orderBy(fulfillmentLineClaims.id)
+      .for('update');
+    if (claims.length === 0) return { applied: 0, alreadyApplied: 0, lockedDown: false };
+
+    const [order] = await tx
+      .select({
+        id: orders.id,
+        clientId: orders.clientId,
+        orderNumber: orders.orderNumber,
+        orderDate: orders.orderDate,
+      })
+      .from(orders)
+      .where(eq(orders.id, event.orderId))
+      .limit(1);
+    if (!order) throw new Error(`Fulfillment claim order ${event.orderId} no longer exists`);
+
+    let applied = 0;
+    let alreadyApplied = 0;
+    for (const claim of claims) {
+      let inventoryId = claim.inventoryId;
+      if (claim.direction === 'deduct') {
+        if (!claim.sku) {
+          await tx
+            .update(fulfillmentLineClaims)
+            .set({ status: 'review', lastError: 'missing_sku', updatedAt: new Date() })
+            .where(eq(fulfillmentLineClaims.id, claim.id));
+          continue;
+        }
+        const skuMatches = sql`lower(${inventory.sku}) = lower(${claim.sku})`;
+        let row: { id: number } | null = null;
+        if (order.clientId != null) {
+          const [exact] = await tx
+            .select({ id: inventory.id })
+            .from(inventory)
+            .where(and(eq(inventory.clientId, order.clientId), skuMatches, eq(inventory.active, true)))
+            .limit(1);
+          row = exact ?? null;
+        }
+        if (!row) {
+          const [global] = await tx
+            .select({ id: inventory.id })
+            .from(inventory)
+            .where(and(isNull(inventory.clientId), skuMatches, eq(inventory.active, true)))
+            .limit(1);
+          row = global ?? null;
+        }
+        if (!row) {
+          const [created] = await tx
+            .insert(inventory)
+            .values({
+              clientId: order.clientId ?? null,
+              sku: claim.sku,
+              name: claim.name,
+              active: true,
+            })
+            .returning({ id: inventory.id });
+          if (!created) throw new Error(`Failed to create inventory row for ${claim.sku}`);
+          row = created;
+        }
+        inventoryId = row.id;
+      }
+
+      if (!inventoryId) {
+        await tx
+          .update(fulfillmentLineClaims)
+          .set({ status: 'review', lastError: 'missing_inventory_identity', updatedAt: new Date() })
+          .where(eq(fulfillmentLineClaims.id, claim.id));
+        continue;
+      }
+
+      const movement = await applyInventoryMovementInTransaction(tx, {
+        inventoryId,
+        type: claim.direction === 'deduct' ? 'ship' : 'return',
+        qty: claim.direction === 'deduct' ? -claim.quantity : claim.quantity,
+        orderId: order.id,
+        note:
+          `${claim.direction === 'deduct' ? 'Fulfill' : 'Void'} order ${order.orderNumber ?? order.id}` +
+          `${claim.shipmentId ? ` / shipment ${claim.shipmentId}` : ''} / line ${claim.lineKey}`,
+        createdBy: `order_lifecycle:${claim.direction}`,
+        effectiveAt: event.effectiveAt,
+        idempotencyKey: claim.idempotencyKey,
+        sourceEntity: 'fulfillment_line_claim',
+        sourceId: String(claim.id),
+        nameIfMissing: claim.name,
+      });
+      const appliedAt = new Date();
+      await tx
+        .update(fulfillmentLineClaims)
+        .set({
+          inventoryId,
+          status: 'applied',
+          attempts: sql`${fulfillmentLineClaims.attempts} + 1`,
+          lastError: null,
+          appliedAt,
+          updatedAt: appliedAt,
+        })
+        .where(eq(fulfillmentLineClaims.id, claim.id));
+      if (claim.direction === 'reverse' && claim.originalClaimId) {
+        await tx
+          .update(fulfillmentLineClaims)
+          .set({ status: 'reversed', updatedAt: appliedAt })
+          .where(eq(fulfillmentLineClaims.id, claim.originalClaimId));
+      }
+      if (movement.status === 'already_applied') alreadyApplied += 1;
+      else applied += 1;
+    }
+
+    return { applied, alreadyApplied, lockedDown: false };
+  });
 }
 
 export async function deductInventoryForOrder(
@@ -183,10 +335,12 @@ export async function deductInventoryForOrder(
     let skipped = 0;
     for (const line of lines) {
       const skuMatches = sql`lower(${inventory.sku}) = lower(${line.sku})`;
-      let row: { id: number; stockQty: number } | null = null;
+      // Per user override unlock shipped data on 2026-07-22: PS-462 removes the
+      // legacy balance cache; shipment deductions append only the canonical ledger movement.
+      let row: { id: number } | null = null;
       if (order.clientId != null) {
         const [exact] = await tx
-          .select({ id: inventory.id, stockQty: inventory.stockQty })
+          .select({ id: inventory.id })
           .from(inventory)
           .where(and(eq(inventory.clientId, order.clientId), skuMatches, eq(inventory.active, true)))
           .limit(1);
@@ -194,7 +348,7 @@ export async function deductInventoryForOrder(
       }
       if (!row) {
         const [global] = await tx
-          .select({ id: inventory.id, stockQty: inventory.stockQty })
+          .select({ id: inventory.id })
           .from(inventory)
           .where(and(isNull(inventory.clientId), skuMatches, eq(inventory.active, true)))
           .limit(1);
@@ -208,10 +362,9 @@ export async function deductInventoryForOrder(
             clientId: order.clientId ?? null,
             sku: line.sku,
             name: line.name,
-            stockQty: 0,
             active: true,
           })
-          .returning({ id: inventory.id, stockQty: inventory.stockQty });
+          .returning({ id: inventory.id });
         if (!created) throw new Error(`Failed to create inventory row for ${line.sku}`);
         row = created;
       }
@@ -234,10 +387,10 @@ export async function deductInventoryForOrder(
       }
 
       // PS-247 (Per user override unlock shipped data on 2026-06-16): ATOMIC decrement.
-      // Pre-PS-247 this read row.stockQty (the un-locked SELECT above) and wrote a pre-computed
+      // Pre-PS-247 this read a cached balance and wrote a pre-computed
       // balanceAfter, so two concurrent ship-deductions both read the same start value and one
       // decrement was LOST (read-modify-write race under READ COMMITTED — the SELECT takes no row
-      // lock). `stock_qty - qty` applies in-DB under the row lock, so concurrent deductions compose.
+      // lock). The canonical ledger insert now composes concurrent deductions directly.
       // No floor — negative stock is an intentional backorder signal (PS-224, boss directive). The
       // (orderId, inventoryId) ship-ledger idempotency guard above still blocks double-deducting the
       // SAME order; this only fixes the cross-order concurrency race.
@@ -253,6 +406,8 @@ export async function deductInventoryForOrder(
         createdBy: input.source ?? 'label',
         effectiveAt: input.effectiveAt ?? toMovementDate(order.orderDate) ?? new Date(),
         idempotencyKey: `inventory:ship:order:${order.id}:inventory:${row.id}`,
+        sourceEntity: input.shipmentId ? 'shipment' : 'order',
+        sourceId: String(input.shipmentId ?? order.id),
         nameIfMissing: line.name,
       });
       if (movement.status === 'already_applied') {

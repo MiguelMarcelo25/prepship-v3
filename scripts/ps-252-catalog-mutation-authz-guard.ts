@@ -22,7 +22,7 @@ function check(name: string, cond: boolean): void {
   else console.log(`ok   ${name}`);
 }
 
-const { hasAppPermission } = await import('../src/middleware/auth');
+const { evaluateBusinessRoutePolicy, hasAppPermission } = await import('../src/middleware/auth');
 
 // ── behavioral: the gate's permission (settings:write) is internal-staff only ─────────────────
 check('client_user (portal) lacks settings:write', hasAppPermission({ role: 'client_user' }, 'settings:write') === false);
@@ -49,10 +49,14 @@ check('locations POST /:id/default gated', locations.includes(`app.post('/:id{[0
 // packages: PS-252 finish — all mutations gated on settings:write (combined config gate; warehouse
 // stock is edited via the inventory receive/adjust routes, so a single gate is safe).
 const packages = readFileSync('src/routes/packages.ts', 'utf8');
-check('packages POST / gated', packages.includes(`app.post('/', ${gate}`));
-check('packages PATCH /:id gated', packages.includes(`app.patch('/:id{[0-9]+}', ${gate}`));
-check('packages PUT /:id gated', packages.includes(`app.put('/:id{[0-9]+}', ${gate}`));
-check('packages DELETE /:id gated (config-only route)', packages.includes(`app.delete('/:id{[0-9]+}', ${gate}`));
+check('packages POST / gated', packages.includes("requireBusinessRoutePolicy('packages.catalog.create')"));
+check('packages PATCH /:id gated', packages.includes("requireBusinessRoutePolicy('packages.catalog.patch')"));
+check('packages PUT /:id gated', packages.includes("requireBusinessRoutePolicy('packages.catalog.put')"));
+check('packages DELETE /:id gated (config-only route)', packages.includes("requireBusinessRoutePolicy('packages.catalog.delete')"));
+check('package catalog policy denies warehouse',
+  evaluateBusinessRoutePolicy('packages.catalog.create', { role: 'warehouse' }).allowed === false);
+check('global package stock receive policy denies warehouse',
+  evaluateBusinessRoutePolicy('packages.receive', { role: 'warehouse' }).allowed === false);
 
 // PS-252 finish: parent-SKU catalog mutations (pure config) are gated; reads (list + detail) stay open.
 const parentSkus = readFileSync('src/routes/parent-skus.ts', 'utf8');
@@ -68,7 +72,7 @@ check('parent-skus DELETE /:id gated', parentSkus.includes(`app.delete('/:id{[0-
 // (admin.ts mutations are already gated by requireAdmin at the main.ts /admin/* mount.)
 const clientsRoute = readFileSync('src/routes/clients.ts', 'utf8');
 check('clients POST /sync-stores gated on settings:write',
-  clientsRoute.includes(`app.post('/sync-stores', ${gate}`));
+  clientsRoute.includes("requireBusinessRoutePolicy('clients.catalog.sync-stores')"));
 
 check('package.json wires test:ps-252-catalog-mutation-authz',
   /test:ps-252-catalog-mutation-authz/.test(readFileSync('package.json', 'utf8')));

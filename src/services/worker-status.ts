@@ -1,7 +1,10 @@
+import postgres from 'postgres';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
-import { getSetting, setSetting } from './settings';
+import { getSetting } from './settings';
+import { nextWorkerJobSkipSummary } from './worker-job-skip-health';
 import { recordWorkerStatusEvent } from './worker-status-events';
+import { classifyWorkerResolvedResult } from './worker-result-classification';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
 const WORKER_STATUS_STALE_SECONDS = 120;
@@ -26,11 +29,17 @@ const WORKER_STATUS_PERSIST_ABANDON_MS = Math.max(
 
 type WorkerMode = (typeof WORKER_STATUS_MODES)[number];
 type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
+type WorkerStatusSql = ReturnType<typeof postgres>;
 
 export type WorkerJobSnapshot = {
   name: string;
+  jobId?: string | null;
+  generationId?: string | null;
+  lane?: string | null;
   status: WorkerJobStatus;
   startedAt: string | null;
+  deadlineAt?: string | null;
+  timeoutMs?: number | null;
   finishedAt: string | null;
   durationMs: number | null;
   summary: Record<string, unknown> | null;
@@ -47,13 +56,83 @@ export type WorkerStatusSnapshot = {
   startedAt: string;
   heartbeatAt: string;
   currentJob: string | null;
+  activeLanes?: Record<string, Omit<WorkerActiveLaneStatus, 'ageSeconds'>>;
+  syncWatermarks?: {
+    ordersCompletedAt: string | null;
+    shipmentsCompletedAt: string | null;
+  };
   jobs: Record<string, WorkerJobSnapshot>;
+};
+
+export type WorkerActiveLaneStatus = {
+  jobName: string;
+  jobId: string | null;
+  generationId: string | null;
+  lane: string | null;
+  startedAt: string | null;
+  ageSeconds: number | null;
+  deadlineAt: string | null;
+  timeoutMs: number | null;
+};
+
+export type WorkerJobExecutionContext = {
+  jobId?: string | null;
+  generationId?: string | null;
+  lane?: string | null;
+  startedAtMs?: number;
+  timeoutMs?: number | null;
 };
 
 const processStartedAt = new Date().toISOString();
 let snapshot: WorkerStatusSnapshot = createSnapshot('disabled');
 let persistSnapshotInFlight: Promise<void> | null = null;
 let persistSnapshotStartedAtMs = 0;
+let persistSnapshotSqlInFlight: WorkerStatusSql | null = null;
+const workerStatusPoolerCompatibility = { max_pipeline: 1 } as const;
+
+function createWorkerStatusSql(): WorkerStatusSql {
+  // Per user override unlock shipped data on 2026-07-18: worker telemetry
+  // must never consume the application pool used by order/shipment sync.
+  // Supavisor can occasionally finish a settings statement server-side while
+  // leaving its client promise unsettled; this isolated pool can be terminated
+  // and replaced without starving authoritative sync work.
+  return postgres(env.DATABASE_URL, {
+    prepare: false,
+    max: 1,
+    idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+    max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
+    connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+    connection: {
+      statement_timeout: Math.max(250, WORKER_STATUS_PERSIST_TIMEOUT_MS - 250),
+    },
+    ...workerStatusPoolerCompatibility,
+  });
+}
+
+let workerStatusSql = createWorkerStatusSql();
+
+async function writeWorkerStatusSetting(
+  persistenceSql: WorkerStatusSql,
+  key: string,
+  value: string,
+): Promise<void> {
+  await persistenceSql`
+    INSERT INTO settings (key, value)
+    VALUES (${key}, ${value})
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+  `;
+}
+
+function rotateWorkerStatusSql(staleSql: WorkerStatusSql | null): void {
+  if (!staleSql || workerStatusSql !== staleSql) return;
+  workerStatusSql = createWorkerStatusSql();
+  void staleSql.end({ timeout: 0 }).catch((err) => {
+    console.warn(
+      '[worker-status] failed to terminate stale telemetry connection:',
+      err instanceof Error ? err.message : err,
+    );
+  });
+}
 
 function workerStatusSnapshotKey(mode: WorkerMode): string {
   return `${WORKER_STATUS_KEY}:${mode}`;
@@ -71,37 +150,45 @@ function createSnapshot(mode: WorkerMode): WorkerStatusSnapshot {
     startedAt: processStartedAt,
     heartbeatAt: now,
     currentJob: null,
+    activeLanes: {},
+    syncWatermarks: {
+      ordersCompletedAt: null,
+      shipmentsCompletedAt: null,
+    },
     jobs: {},
   };
 }
 
-function summarizeResult(result: unknown): Record<string, unknown> | null {
-  if (!result || typeof result !== 'object') return null;
-  const source = result as Record<string, unknown>;
-  const summary: Record<string, unknown> = {};
-  for (const key of [
-    'synced',
-    'pages',
-    'inserted',
-    'updated',
-    'matchedOrders',
-    'ordersMarkedShipped',
-    'processed',
-    'succeeded',
-    'failed',
-    'skipped',
-    'total',
-    'refreshed',
-    'days',
-    'dailyRows',
-    'skuRows',
-    'inventoryRows',
-    'billingRows',
-    'lastSyncedAt',
-  ]) {
-    if (source[key] !== undefined) summary[key] = source[key];
+export function workerActiveLaneStatus(
+  status: WorkerStatusSnapshot | null,
+  nowMs: number = Date.now(),
+): WorkerActiveLaneStatus | null {
+  const jobName = status?.currentJob;
+  const sharedLane = status?.activeLanes?.['shipstation-sync'];
+  if (sharedLane) {
+    const startedMs = sharedLane.startedAt ? Date.parse(sharedLane.startedAt) : Number.NaN;
+    return {
+      ...sharedLane,
+      ageSeconds: Number.isFinite(startedMs)
+        ? Math.max(0, Math.round((nowMs - startedMs) / 1_000))
+        : null,
+    };
   }
-  return Object.keys(summary).length ? summary : null;
+  if (!jobName) return null;
+  const job = status.jobs[jobName];
+  const startedMs = job?.startedAt ? Date.parse(job.startedAt) : Number.NaN;
+  return {
+    jobName,
+    jobId: job?.jobId ?? null,
+    generationId: job?.generationId ?? null,
+    lane: job?.lane ?? null,
+    startedAt: job?.startedAt ?? null,
+    ageSeconds: Number.isFinite(startedMs)
+      ? Math.max(0, Math.round((nowMs - startedMs) / 1_000))
+      : null,
+    deadlineAt: job?.deadlineAt ?? null,
+    timeoutMs: job?.timeoutMs ?? null,
+  };
 }
 
 async function persistSnapshot(): Promise<void> {
@@ -114,20 +201,28 @@ async function persistSnapshot(): Promise<void> {
     console.warn(
       '[worker-status] abandoning stale status persist; allowing a fresh snapshot write'
     );
+    rotateWorkerStatusSql(persistSnapshotSqlInFlight);
     persistSnapshotInFlight = null;
     persistSnapshotStartedAtMs = 0;
+    persistSnapshotSqlInFlight = null;
   }
 
   // Worker status is observability. A slow settings write must not hold sync lanes.
   let tracked: Promise<void>;
+  const persistenceSql = workerStatusSql;
   persistSnapshotStartedAtMs = Date.now();
+  persistSnapshotSqlInFlight = persistenceSql;
   tracked = (async () => {
     const serialized = JSON.stringify(snapshot);
-    await setSetting(workerStatusSnapshotKey(snapshot.mode), serialized);
+    await writeWorkerStatusSetting(
+      persistenceSql,
+      workerStatusSnapshotKey(snapshot.mode),
+      serialized,
+    );
     // Keep the legacy key as the sync-scheduler view. The dedicated print
     // worker must not overwrite it or /sync/status will report scheduler=false.
     if (snapshot.schedulerEnabled) {
-      await setSetting(WORKER_STATUS_KEY, serialized);
+      await writeWorkerStatusSetting(persistenceSql, WORKER_STATUS_KEY, serialized);
     }
   })()
     .catch((err) => {
@@ -140,6 +235,7 @@ async function persistSnapshot(): Promise<void> {
       if (persistSnapshotInFlight === tracked) {
         persistSnapshotInFlight = null;
         persistSnapshotStartedAtMs = 0;
+        persistSnapshotSqlInFlight = null;
       }
     });
   persistSnapshotInFlight = tracked;
@@ -151,6 +247,9 @@ async function persistSnapshot(): Promise<void> {
       'worker-status persist'
     );
   } catch (err) {
+    // The deadline bounds the caller, while rotating the dedicated pool also
+    // cancels the underlying query so timed-out telemetry cannot accumulate.
+    rotateWorkerStatusSql(persistenceSql);
     console.warn(
       '[worker-status] status persist exceeded deadline; continuing without blocking sync:',
       err instanceof Error ? err.message : err
@@ -159,7 +258,23 @@ async function persistSnapshot(): Promise<void> {
 }
 
 export async function setWorkerMode(mode: WorkerMode): Promise<void> {
-  snapshot = createSnapshot(mode);
+  const next = createSnapshot(mode);
+  // PS-436: lane ownership is process-local, but completed order/shipment
+  // watermarks are durable truth. Preserve only those completion timestamps
+  // across worker restarts; never resurrect a prior process's currentJob.
+  try {
+    const priorRaw = await getSetting(workerStatusSnapshotKey(mode));
+    const prior = priorRaw ? JSON.parse(priorRaw) as WorkerStatusSnapshot : null;
+    if (prior?.syncWatermarks) {
+      next.syncWatermarks = {
+        ordersCompletedAt: prior.syncWatermarks.ordersCompletedAt ?? null,
+        shipmentsCompletedAt: prior.syncWatermarks.shipmentsCompletedAt ?? null,
+      };
+    }
+  } catch {
+    // A missing/corrupt observability snapshot must not block worker startup.
+  }
+  snapshot = next;
   await persistSnapshot();
 }
 
@@ -175,19 +290,41 @@ export async function recordWorkerHeartbeat(): Promise<void> {
   });
 }
 
-export async function recordWorkerJobStart(name: string): Promise<void> {
-  const now = new Date().toISOString();
+export async function recordWorkerJobStart(
+  name: string,
+  context: WorkerJobExecutionContext = {},
+): Promise<void> {
+  const startedAtMs = context.startedAtMs ?? Date.now();
+  const now = new Date(startedAtMs).toISOString();
+  const timeoutMs = context.timeoutMs ?? null;
   snapshot.currentJob = name;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
     name,
+    jobId: context.jobId ?? null,
+    generationId: context.generationId ?? null,
+    lane: context.lane ?? null,
     status: 'running',
     startedAt: now,
+    deadlineAt: timeoutMs == null ? null : new Date(startedAtMs + timeoutMs).toISOString(),
+    timeoutMs,
     finishedAt: null,
     durationMs: null,
     summary: null,
     error: null,
   };
+  if (context.lane) {
+    snapshot.activeLanes ??= {};
+    snapshot.activeLanes[context.lane] = {
+      jobName: name,
+      jobId: context.jobId ?? null,
+      generationId: context.generationId ?? null,
+      lane: context.lane,
+      startedAt: now,
+      deadlineAt: timeoutMs == null ? null : new Date(startedAtMs + timeoutMs).toISOString(),
+      timeoutMs,
+    };
+  }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
   void recordWorkerStatusEvent({
@@ -195,7 +332,15 @@ export async function recordWorkerJobStart(name: string): Promise<void> {
     pid: snapshot.pid,
     eventType: 'job_start',
     jobName: name,
-    details: { status: 'running', startedAt: now },
+    details: {
+      status: 'running',
+      startedAt: now,
+      jobId: context.jobId ?? null,
+      generationId: context.generationId ?? null,
+      lane: context.lane ?? null,
+      deadlineAt: timeoutMs == null ? null : new Date(startedAtMs + timeoutMs).toISOString(),
+      timeoutMs,
+    },
   });
 }
 
@@ -205,26 +350,53 @@ export async function recordWorkerJobSuccess(
   result: unknown
 ): Promise<void> {
   const now = new Date().toISOString();
+  const prior = snapshot.jobs[name];
+  const classification = classifyWorkerResolvedResult(result);
   snapshot.currentJob = snapshot.currentJob === name ? null : snapshot.currentJob;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
+    ...prior,
     name,
-    status: 'succeeded',
-    startedAt: snapshot.jobs[name]?.startedAt ?? new Date(startedAtMs).toISOString(),
+    status: classification.status,
+    startedAt: prior?.startedAt ?? new Date(startedAtMs).toISOString(),
     finishedAt: now,
     durationMs: Date.now() - startedAtMs,
-    summary: summarizeResult(result),
-    error: null,
+    summary: classification.summary,
+    error: classification.error,
   };
+  if (prior?.lane && snapshot.activeLanes?.[prior.lane]?.jobId === (prior.jobId ?? null)) {
+    delete snapshot.activeLanes[prior.lane];
+  }
+  if (classification.status === 'succeeded' && name === 'prepship.sync.orders') {
+    snapshot.syncWatermarks ??= { ordersCompletedAt: null, shipmentsCompletedAt: null };
+    snapshot.syncWatermarks.ordersCompletedAt = now;
+  } else if (classification.status === 'succeeded' && name === 'prepship.sync.shipments') {
+    snapshot.syncWatermarks ??= { ordersCompletedAt: null, shipmentsCompletedAt: null };
+    snapshot.syncWatermarks.shipmentsCompletedAt = now;
+  }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
-  void recordWorkerStatusEvent({
-    service: snapshot.service,
-    pid: snapshot.pid,
-    eventType: 'job_complete',
-    jobName: name,
-    details: { status: 'succeeded', durationMs: Date.now() - startedAtMs },
-  });
+  if (classification.status === 'failed') {
+    void recordWorkerStatusEvent({
+      service: snapshot.service,
+      pid: snapshot.pid,
+      eventType: 'job_failed',
+      jobName: name,
+      details: {
+        status: 'failed',
+        durationMs: Date.now() - startedAtMs,
+        error: classification.error,
+      },
+    });
+  } else {
+    void recordWorkerStatusEvent({
+      service: snapshot.service,
+      pid: snapshot.pid,
+      eventType: 'job_complete',
+      jobName: name,
+      details: { status: 'succeeded', durationMs: Date.now() - startedAtMs },
+    });
+  }
 }
 
 export async function recordWorkerJobFailure(
@@ -233,17 +405,22 @@ export async function recordWorkerJobFailure(
   err: unknown
 ): Promise<void> {
   const now = new Date().toISOString();
+  const prior = snapshot.jobs[name];
   snapshot.currentJob = snapshot.currentJob === name ? null : snapshot.currentJob;
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
+    ...prior,
     name,
     status: 'failed',
-    startedAt: snapshot.jobs[name]?.startedAt ?? new Date(startedAtMs).toISOString(),
+    startedAt: prior?.startedAt ?? new Date(startedAtMs).toISOString(),
     finishedAt: now,
     durationMs: Date.now() - startedAtMs,
     summary: null,
     error: err instanceof Error ? err.message : String(err),
   };
+  if (prior?.lane && snapshot.activeLanes?.[prior.lane]?.jobId === (prior.jobId ?? null)) {
+    delete snapshot.activeLanes[prior.lane];
+  }
   await persistSnapshot();
   // PS-256: best-effort durable event (no-op when flag off).
   void recordWorkerStatusEvent({
@@ -264,6 +441,7 @@ export async function recordWorkerJobSkipped(
   reason: string
 ): Promise<void> {
   const now = new Date().toISOString();
+  const prior = snapshot.jobs[name];
   snapshot.heartbeatAt = now;
   snapshot.jobs[name] = {
     name,
@@ -271,7 +449,7 @@ export async function recordWorkerJobSkipped(
     startedAt: null,
     finishedAt: now,
     durationMs: null,
-    summary: { reason },
+    summary: nextWorkerJobSkipSummary(prior, reason, now),
     error: null,
   };
   await persistSnapshot();
@@ -281,6 +459,7 @@ export async function getPersistedWorkerStatus(): Promise<{
   status: WorkerStatusSnapshot | null;
   stale: boolean;
   heartbeatAgeSeconds: number | null;
+  activeLane: WorkerActiveLaneStatus | null;
   snapshots: Record<
     string,
     {
@@ -340,9 +519,19 @@ export async function getPersistedWorkerStatus(): Promise<{
   const selected = selectedScheduler ?? legacy ?? null;
 
   if (!selected) {
-    return { status: null, stale: true, heartbeatAgeSeconds: null, snapshots };
+    return {
+      status: null,
+      stale: true,
+      heartbeatAgeSeconds: null,
+      activeLane: null,
+      snapshots,
+    };
   }
-  return { ...selected, snapshots };
+  return {
+    ...selected,
+    activeLane: workerActiveLaneStatus(selected.status),
+    snapshots,
+  };
 }
 
 export function getApiRuntimeStatus() {

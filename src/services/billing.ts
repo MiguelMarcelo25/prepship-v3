@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 // Audit B-4 (2026-07-13): xact advisory lock serializes concurrent storage-line writers.
 import { advisoryLockKeyPair } from '../lib/advisory-lock';
@@ -21,9 +21,13 @@ import { ensureBillingStorageProofSchema } from '../db/ensure-billing-storage-pr
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { roundMoney } from '../lib/money';
 import { logStructured, reportError } from '../lib/structured-log';
-import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
+import {
+  calendarStoragePeriodsForRange,
+  computeClientStorageBilling,
+  type StorageLedgerMovement,
+} from './billing-storage';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
-import { decideShippingLineBilling } from './billing-shipping-line';
+import { resolveCustomerShippingMoney } from './customer-shipping-money';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
 // Slice 2c (fixed): the per-account OVERRIDE is wired via the shipment's providerAccountId — the
@@ -39,7 +43,7 @@ import { resolvePerAccountMarkupRule } from './shipping-workflow/per-account-mar
 // inventory via raw SQL for cubic-feet, which is not box resolution).
 // #798 2c: loadCarrierMarkups is the SOT loader for settings markup.<account> (same map the rate
 // display + orders row-money read) — billing delegates to it rather than re-deriving the rules.
-import { SS_BASELINE_CARRIER_CODES, loadCarrierMarkups } from './rates';
+import { loadCarrierMarkups } from './rates';
 import {
   boxDimsKey,
   decidePackageCostLine,
@@ -74,17 +78,27 @@ import {
 import { getBundlesForOrders } from './shipment-bundles/bundle-read-model';
 import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-policy';
 import { env } from '../lib/env';
+import {
+  BILLING_POLICY_WEEKEND_ROLLFORWARD,
+  assertBillingWeekdayOperationAllowed,
+  billingLineEffectiveDayRangeSql,
+  billingLineEffectiveDaySql,
+  billingProviderActivityTimestampSql,
+  billingSourceCalendarSql,
+  resolveBillingCalendarDay,
+  type BillingPolicyVersion,
+} from './billing-calendar-policy';
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
 import {
-  assertBillingPeriodOpen,
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,
   ensureBillingFinalizationPolicySchema,
   finalizedBillingOrderIdsForRange,
   isBillingFinalizedLockError,
+  reconcileFinalizedBillingOrderAdjustments,
   rethrowAsBillingFinalizedLock,
   setBillingOrdersDirty,
 } from './billing-finalization-policy';
@@ -144,10 +158,10 @@ export function isBillingSourceOrderBillable(input: {
 export type GenerateInput = {
   clientId?: number;
   clientIds?: number[];
-  // PS-208: UTC-midnight calendar-day bounds from billingDayRange (the
-  // canonical owner, src/lib/time/billing-day.ts). dateFrom is INCLUSIVE
-  // (midnight of the first day); dateTo is EXCLUSIVE (midnight of the day
-  // AFTER the last day). Every ship_date comparison in this file must be
+  // PS-208: UTC-midnight calendar-day bounds from billingDayRange. dateFrom is
+  // INCLUSIVE; dateTo is EXCLUSIVE (midnight after the last day). PS-434 keeps
+  // the bound shape but period membership delegates to the canonical effective
+  // billing day, with ship_date only as the legacy fallback. Bounds remain
   // `>= dateFrom AND < dateTo` — never `<=`.
   dateFrom: string; // ISO, UTC midnight, inclusive
   dateTo: string; // ISO, UTC midnight, EXCLUSIVE
@@ -155,6 +169,10 @@ export type GenerateInput = {
   scopeStoreIds?: number[];
   scopeIsGlobal?: boolean;
   scopeRestricted?: boolean;
+  actorId?: string | null;
+  actorEmail?: string | null;
+  /** Internal test clock only. HTTP callers never supply this value. */
+  now?: Date;
 };
 
 export type BillingGenerationStatus = {
@@ -192,37 +210,35 @@ function billingSummaryHasValues(summary: { clients: BillingSummaryRow[] }): boo
       row.packageTotal > 0 ||
       row.shippingTotal > 0 ||
       row.storageTotal > 0 ||
-      row.grandTotal > 0
+      row.adjustmentTotal !== 0 ||
+      row.grandTotal !== 0
   );
 }
 
-// PS-208: a billing ship date is a CALENDAR DAY (canonical owner:
-// src/lib/time/billing-day.ts). The raw sources can carry a time-of-day
-// (shipments.ship_date is a real instant; raw fulfilledAt/shippedAt are
-// marketplace timestamps), so normalize to UTC midnight of the UTC day HERE —
-// every billing_line_items.ship_date written by generateLineItems then lands
-// exactly on the storage invariant, and the day-range bounds
-// (>= dateFrom AND < dateTo) are exact day membership. No timezone other than
-// UTC may ever touch this value.
-const billingShipDateSql = sql<Date | null>`date_trunc('day', coalesce(
+// PS-434 generation entry boundary. Per user override unlock shipped data on
+// 2026-07-16: read the canonical source instant without mutating orders or
+// shipments. Date-only provider values are preserved as their stated calendar
+// day; true instants use the Los Angeles activity day. The calendar owner then
+// decides both persisted actual and effective billing days.
+const billingSourceActivityTimestampSql = sql<Date | null>`coalesce(
   ${shipments.shipDate},
-  case
-    when coalesce(${orders.raw}->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
-      then (${orders.raw}->>'fulfilledAt')::timestamptz
-    else null
-  end,
-  case
-    when coalesce(${orders.raw}->>'shipDate', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
-      then (${orders.raw}->>'shipDate')::timestamptz
-    else null
-  end,
-  case
-    when coalesce(${orders.raw}->>'shippedAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
-      then (${orders.raw}->>'shippedAt')::timestamptz
-    else null
-  end,
+  ${billingProviderActivityTimestampSql(sql`${orders.raw}->>'fulfilledAt'`)},
+  ${billingProviderActivityTimestampSql(sql`${orders.raw}->>'shipDate'`)},
+  ${billingProviderActivityTimestampSql(sql`${orders.raw}->>'shippedAt'`)},
   ${orders.orderDate}
-) at time zone 'UTC') at time zone 'UTC'`;
+)`;
+const billingLegacyActivityDaySql = sql<Date | null>`date_trunc(
+  'day', ${billingSourceActivityTimestampSql} at time zone 'UTC'
+) at time zone 'UTC'`;
+const billingSourceCalendar = billingSourceCalendarSql({
+  sourceTimestamp: billingSourceActivityTimestampSql,
+  legacyActivityDay: billingLegacyActivityDaySql,
+  effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+});
+const billingPersistedEffectiveDaySql = billingLineEffectiveDaySql(
+  billingLineItems.billingEffectiveDate,
+  billingLineItems.shipDate,
+);
 
 // PS-207 migration readiness; migration 0043 owns billing_box_resolutions.
 export async function ensureBillingBoxResolutionsSchema(): Promise<void> {
@@ -381,6 +397,14 @@ export async function billingGenerationStatus(
 ): Promise<BillingGenerationStatus> {
   const fromIso = new Date(input.dateFrom).toISOString();
   const toIso = new Date(input.dateTo).toISOString();
+  const billedEffectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
+  const billedEffectiveDayB2 = billingLineEffectiveDaySql(
+    sql`b2.billing_effective_date`,
+    sql`b2.ship_date`,
+  );
 
   const cacheKey = billingStatusCacheKey(input, fromIso, toIso);
   if (BILLING_STATUS_CACHE_TTL_MS > 0) {
@@ -396,10 +420,10 @@ export async function billingGenerationStatus(
   const billingRowPromise = db.execute<{
     latest_billing_ship_date: string | null;
   }>(sql`
-    select max(b.ship_date)::text as latest_billing_ship_date
+    select max(${billedEffectiveDay})::text as latest_billing_ship_date
     from billing_line_items b
-    where b.ship_date >= ${fromIso}::timestamptz
-      and b.ship_date < ${toIso}::timestamptz
+    where ${billedEffectiveDay} >= ${fromIso}::timestamptz
+      and ${billedEffectiveDay} < ${toIso}::timestamptz
       and b.order_id is not null
       ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
       -- Per user override unlock shipped data on 2026-07-16: restricted billing
@@ -426,8 +450,8 @@ export async function billingGenerationStatus(
         and exists (
           select 1 from billing_line_items b
           where b.client_id = c.id
-            and b.ship_date >= ${fromIso}::timestamptz
-            and b.ship_date < ${toIso}::timestamptz
+            and ${billedEffectiveDay} >= ${fromIso}::timestamptz
+            and ${billedEffectiveDay} < ${toIso}::timestamptz
         )
         and greatest(
           coalesce((select max(updated_at) from client_package_prices where client_id = c.id), 'epoch'::timestamptz),
@@ -435,8 +459,8 @@ export async function billingGenerationStatus(
         ) > (
           select max(b.created_at) from billing_line_items b
           where b.client_id = c.id
-            and b.ship_date >= ${fromIso}::timestamptz
-            and b.ship_date < ${toIso}::timestamptz
+            and ${billedEffectiveDay} >= ${fromIso}::timestamptz
+            and ${billedEffectiveDay} < ${toIso}::timestamptz
         )
     ) as pricing_stale
   `);
@@ -448,8 +472,8 @@ export async function billingGenerationStatus(
         from billing_fee_waivers fw
         inner join billing_line_items b on b.order_id = fw.order_id
         inner join clients c on c.id = b.client_id
-        where b.ship_date >= ${fromIso}::timestamptz
-          and b.ship_date < ${toIso}::timestamptz
+        where ${billedEffectiveDay} >= ${fromIso}::timestamptz
+          and ${billedEffectiveDay} < ${toIso}::timestamptz
           and b.order_id is not null
           and c.active = true
           and c.name not in (${systemClientNamesSql})
@@ -459,8 +483,8 @@ export async function billingGenerationStatus(
             select max(b.created_at)
             from billing_line_items b
             where b.order_id = fw.order_id
-              and b.ship_date >= ${fromIso}::timestamptz
-              and b.ship_date < ${toIso}::timestamptz
+              and ${billedEffectiveDay} >= ${fromIso}::timestamptz
+              and ${billedEffectiveDay} < ${toIso}::timestamptz
               ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
           )
       ) as fee_waiver_stale
@@ -484,8 +508,8 @@ export async function billingGenerationStatus(
         inner join billing_line_items b on b.order_id = s.order_id
         inner join clients c on c.id = b.client_id
         where s.voided = true
-          and b.ship_date >= ${fromIso}::timestamptz
-          and b.ship_date < ${toIso}::timestamptz
+          and ${billedEffectiveDay} >= ${fromIso}::timestamptz
+          and ${billedEffectiveDay} < ${toIso}::timestamptz
           and b.order_id is not null
           and c.active = true
           and c.name not in (${systemClientNamesSql})
@@ -495,8 +519,8 @@ export async function billingGenerationStatus(
             select max(b2.created_at)
             from billing_line_items b2
             where b2.order_id = s.order_id
-              and b2.ship_date >= ${fromIso}::timestamptz
-              and b2.ship_date < ${toIso}::timestamptz
+              and ${billedEffectiveDayB2} >= ${fromIso}::timestamptz
+              and ${billedEffectiveDayB2} < ${toIso}::timestamptz
               ${input.clientId !== undefined ? sql`and b2.client_id = ${input.clientId}` : sql``}
           )
       ) as void_stale
@@ -519,6 +543,21 @@ export async function billingGenerationStatus(
   // Per user override unlock shipped data on 2026-07-06: PS-387 makes Billing
   // freshness use the same read-only lifecycle source predicate as generation.
   const sourceLifecyclePredicate = orderLifecycleBillingSourcePredicateAlias('o');
+  const statusSourceTimestamp = sql<Date | null>`coalesce(
+    s.ship_date,
+    ${billingProviderActivityTimestampSql(sql`o.raw->>'fulfilledAt'`)},
+    ${billingProviderActivityTimestampSql(sql`o.raw->>'shipDate'`)},
+    ${billingProviderActivityTimestampSql(sql`o.raw->>'shippedAt'`)},
+    o.order_date
+  )`;
+  const statusLegacyDay = sql<Date | null>`date_trunc(
+    'day', ${statusSourceTimestamp} at time zone 'UTC'
+  ) at time zone 'UTC'`;
+  const statusSourceCalendar = billingSourceCalendarSql({
+    sourceTimestamp: statusSourceTimestamp,
+    legacyActivityDay: statusLegacyDay,
+    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+  });
   const [sourceRow] = await db.execute<{
     latest_source_ship_date: string | null;
   }>(sql`
@@ -641,9 +680,54 @@ export async function billingGenerationStatus(
       )
   `);
 
+  // PS-434 late-arrival boundary: compare every source shipment/order whose
+  // canonical EFFECTIVE day is in the requested range against its persisted
+  // line identity. A Sunday record discovered after Monday is therefore stale
+  // even though its source timestamp sorts before Monday's billed watermark.
+  const [sourceMissingRow] = await db.execute<{ source_missing: boolean }>(sql`
+    select exists (
+      select 1
+      from orders o
+      left join shipments s
+        on s.order_id = o.id
+        and coalesce(s.voided, false) = false
+        and coalesce(s.is_return, false) = false
+      where ${sourceLifecyclePredicate}
+        and ${statusSourceCalendar.billingEffectiveDay} >= ${fromIso}::timestamptz
+        and ${statusSourceCalendar.billingEffectiveDay} < ${toIso}::timestamptz
+        and exists (
+          select 1
+          from clients c
+          where c.active = true
+            and c.name not in (${systemClientNamesSql})
+            ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+            and ${billingClientScopePredicate(input)}
+            and (
+              o.client_id = c.id
+              or (o.store_id is not null and o.store_id = any(c.store_ids))
+              or coalesce(
+                case when coalesce(o.raw->>'storeId', '') ~ '^[0-9]+$'
+                  then (o.raw->>'storeId')::int else null end,
+                case when coalesce(o.raw->'advancedOptions'->>'storeId', '') ~ '^[0-9]+$'
+                  then (o.raw->'advancedOptions'->>'storeId')::int else null end
+              ) = any(c.store_ids)
+            )
+        )
+        and not exists (
+          select 1
+          from billing_line_items b
+          where b.order_id = o.id
+            and b.shipment_id is not distinct from s.id
+            and ${billedEffectiveDay} >= ${fromIso}::timestamptz
+            and ${billedEffectiveDay} < ${toIso}::timestamptz
+        )
+    ) as source_missing
+  `);
+
   const latestSource = sourceRow?.latest_source_ship_date
     ? new Date(sourceRow.latest_source_ship_date)
     : null;
+  const sourceMissing = sourceMissingRow?.source_missing === true;
 
   const from = new Date(fromIso);
 
@@ -651,7 +735,7 @@ export async function billingGenerationStatus(
     // No new shipments to bill. Still rebuild if prices changed after the
     // existing lines were generated, so a box-price edit re-prices them —
     // or if a billed label was voided (audit B-3), so the dead charge drops.
-    if (pricingStale || feeWaiverStale || voidStale) {
+    if (pricingStale || feeWaiverStale || voidStale || sourceMissing) {
       return rememberBillingStatus(cacheKey, {
         upToDate: false,
         dateFrom: fromIso,
@@ -675,6 +759,26 @@ export async function billingGenerationStatus(
     });
   }
 
+  if (
+    !sourceMissing &&
+    !pricingStale &&
+    !feeWaiverStale &&
+    !voidStale &&
+    latestBilling &&
+    isoDayStart(latestBilling) === isoDayStart(latestSource)
+  ) {
+    return rememberBillingStatus(cacheKey, {
+      upToDate: true,
+      dateFrom: fromIso,
+      dateTo: toIso,
+      clientId: input.clientId,
+      latestBillingShipDate: billingRow?.latest_billing_ship_date ?? null,
+      latestSourceShipDate: sourceRow?.latest_source_ship_date ?? null,
+      missingFrom: null,
+      missingTo: null,
+    });
+  }
+
   const latestBillingDay = latestBilling ? isoDayStart(latestBilling) : null;
   const latestSourceDay = isoDayStart(latestSource);
   // A price/config change requires rebuilding the WHOLE range (to re-price the
@@ -682,7 +786,7 @@ export async function billingGenerationStatus(
   // void (audit B-3) likewise rebuilds the whole range so the voided label's
   // lines are deleted, not just appended after.
   const missingFrom =
-    pricingStale || feeWaiverStale || voidStale || !latestBilling
+    pricingStale || feeWaiverStale || voidStale || sourceMissing || !latestBilling
       ? isoDayStart(from)
       : latestBillingDay === latestSourceDay
         ? latestBillingDay
@@ -758,6 +862,12 @@ export async function generateLineItems(input: GenerateInput) {
   const to = new Date(input.dateTo);
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
+  // Per user override unlock shipped data on 2026-07-16: PS-434 blocks this
+  // derived shipped-billing money workflow at the backend boundary on a
+  // California weekend. Unset cutoff remains byte-compatible/default-off.
+  assertBillingWeekdayOperationAllowed({
+    effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+  });
   // Per user override unlock shipped data on 2026-07-11: PS-416 verifies the
   // backend-owned freshness source before regenerating shipped-order billing.
   // Regeneration is a money mutation. Verify the backend-owned
@@ -771,14 +881,10 @@ export async function generateLineItems(input: GenerateInput) {
   // PS-370: verify migration-owned selected-rate schema before reading it.
   await ensureShipmentsSelectedRateCostColumn();
   await ensureBillingFinalizationPolicySchema();
-  // Audit 3.6 / B-2: a close record freezes the whole client/period, including
-  // future regeneration attempts and late line inserts. Reject before any
-  // generator read/delete/insert work; the DB trigger is the race/script backstop.
-  await assertBillingPeriodOpen({
-    clientId: input.clientId,
-    dateFrom: fromIso,
-    dateTo: toIso,
-  });
+  // Per user override unlock shipped data on 2026-05-23: PS-449 permits a
+  // regeneration read of finalized shipped/cancelled source orders solely to
+  // calculate an append-only current-period correction. Frozen billing rows
+  // remain excluded from the delete/rebuild transaction below.
 
   // Scope-independent prefetch reads, fired TOGETHER (they used to run
   // serially — one pooler round-trip after another). Each is awaited exactly
@@ -841,10 +947,7 @@ export async function generateLineItems(input: GenerateInput) {
       coalesce(b.storage_fee_per_cu_ft, '0'::numeric)::text as "storageFeePerCuFt",
       coalesce(b.billing_mode, 'per_shipment') as "billingMode",
       coalesce(b.active, true) as active,
-      coalesce(
-        b.hugrab_shipping_rate_override_enabled,
-        upper(c.name) = 'HUGRAB'
-      ) as "hugrabShippingRateOverrideEnabled",
+      coalesce(b.hugrab_shipping_rate_override_enabled, false) as "hugrabShippingRateOverrideEnabled",
       coalesce(
         b.hugrab_shipping_rate_override_threshold,
         ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD}::numeric
@@ -916,7 +1019,9 @@ export async function generateLineItems(input: GenerateInput) {
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
       orderDate: orders.orderDate,
-      billingShipDate: billingShipDateSql,
+      billingShipDate: billingSourceCalendar.actualActivityDay,
+      billingEffectiveDate: billingSourceCalendar.billingEffectiveDay,
+      billingPolicyVersion: billingSourceCalendar.policyVersion,
       orderStoreId: orders.storeId,
       orderItems: orders.items,
       orderRaw: orders.raw,
@@ -943,8 +1048,8 @@ export async function generateLineItems(input: GenerateInput) {
         // read-only lifecycle classification for Billing source inclusion.
         // It does not mutate orders/shipments or weaken shipped locks.
         orderLifecycleBillingSourcePredicate(),
-        sql`${billingShipDateSql} >= ${fromIso}::timestamptz`,
-        sql`${billingShipDateSql} < ${toIso}::timestamptz`
+        sql`${billingSourceCalendar.billingEffectiveDay} >= ${fromIso}::timestamptz`,
+        sql`${billingSourceCalendar.billingEffectiveDay} < ${toIso}::timestamptz`
       )
     );
 
@@ -968,6 +1073,8 @@ export async function generateLineItems(input: GenerateInput) {
     orderNumber: string | null;
     clientId: number | null;
     shipDate: Date | null;
+    billingEffectiveDate: Date | null;
+    billingPolicyVersion: BillingPolicyVersion;
     labelCost: string | null;
     cost: string | null;
     otherCost: string | null;
@@ -1029,6 +1136,10 @@ export async function generateLineItems(input: GenerateInput) {
         // skipped every billing row and left clients (e.g. HUGRAB) un-billed.
         // Coerce to a real Date here.
         shipDate: row.billingShipDate ? new Date(row.billingShipDate) : null,
+        billingEffectiveDate: row.billingEffectiveDate
+          ? new Date(row.billingEffectiveDate)
+          : null,
+        billingPolicyVersion: row.billingPolicyVersion,
         labelCost: row.labelCost,
         cost: row.cost,
         otherCost: row.otherCost,
@@ -1080,6 +1191,10 @@ export async function generateLineItems(input: GenerateInput) {
   const billableRows = allBillableRows.filter(
     (row) => row.orderId == null || !finalizedOrderIds.has(row.orderId),
   );
+  // PS-449 recomputes finalized candidates through the same canonical billing
+  // calculator. Only billableRows may be rebuilt; calculationRows are also
+  // compared with their immutable finalized invoice totals afterward.
+  const calculationRows = allBillableRows;
   const skippedFinalizedOrderCount = new Set(
     allBillableRows
       .map((row) => row.orderId)
@@ -1167,6 +1282,8 @@ export async function generateLineItems(input: GenerateInput) {
     orderNumber: string | null;
     shipmentId: number | null;
     shipDate: Date | null;
+    billingEffectiveDate?: Date | null;
+    billingPolicyVersion?: BillingPolicyVersion | null;
     lineType: string;
     description: string;
     qty: string;
@@ -1186,7 +1303,7 @@ export async function generateLineItems(input: GenerateInput) {
   const cShippingRateByShipmentId = new Map<number, number>();
   await requireBillingRegenerationRead('house shipping-rate sidecar', async () => {
     const houseShipmentIds = [
-      ...new Set(billableRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
+      ...new Set(calculationRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
     ];
     if (houseShipmentIds.length) {
       await ensureOrderCompetitiveRateSchema();
@@ -1208,7 +1325,7 @@ export async function generateLineItems(input: GenerateInput) {
   // order is waived (never product/marketplace/box/storage/shipping).
   // Sidecar failures propagate before the billing-line transaction begins.
   const orderIdsInScope = [
-    ...new Set(billableRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
+    ...new Set(calculationRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
   ];
   const [feeWaiverByOrderId, manualBillingOverrideByOrderId] = await Promise.all([
     requireBillingRegenerationRead(
@@ -1227,7 +1344,7 @@ export async function generateLineItems(input: GenerateInput) {
     ? await getBundlesForOrders(orderIdsInScope)
     : new Map();
 
-  for (const s of billableRows) {
+  for (const s of calculationRows) {
     if (s.clientId === null) {
       skipped += 1;
       continue;
@@ -1384,27 +1501,24 @@ export async function generateLineItems(input: GenerateInput) {
         clientShippingMarkupPct: toNum(cfg.shippingMarkupPct),
         clientShippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
       });
-      const shippingDecision = decideShippingLineBilling({
-        labelCost,
+      const shippingDecision = resolveCustomerShippingMoney({
+        selectedRateCost: labelCost,
         cShippingRateAmount,
         billingMode: cfg.billingMode,
-        isBaselineCarrier: SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? ''),
+        carrierCode: s.carrierCode,
         refUspsRate: toNum(s.refUspsRate),
         refUpsRate: toNum(s.refUpsRate),
         shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
         shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
         shippingMarkupKind: resolvedShippingMarkup?.adjustmentKind ?? 'customer_profit_markup',
         hugrabShippingRateOverride: {
-          clientName: cfg.clientName,
-          selectedRateCost: labelCost,
-          config: {
-            enabled: cfg.hugrabShippingRateOverrideEnabled,
-            threshold: cfg.hugrabShippingRateOverrideThreshold,
-            amount: cfg.hugrabShippingRateOverrideAmount,
-          },
+          enabled: cfg.hugrabShippingRateOverrideEnabled,
+          threshold: cfg.hugrabShippingRateOverrideThreshold,
+          amount: cfg.hugrabShippingRateOverrideAmount,
         },
       });
-      const billedShippingAmount = shippingDecision.billedAmount;
+      const billedShippingAmount = shippingDecision.cShippingRateAmount;
+      const billingDescriptionSuffix = shippingDecision.billingDescriptionSuffix;
       rows.push({
         clientId,
         orderId: s.orderId,
@@ -1412,7 +1526,7 @@ export async function generateLineItems(input: GenerateInput) {
         shipmentId: s.id,
         shipDate: s.shipDate,
         lineType: 'shipping',
-        description: `Shipping${shippingDecision.descriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
+        description: `Shipping${billingDescriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
         qty: '1',
         unitCost: roundMoney(billedShippingAmount).toFixed(2),
         totalCost: roundMoney(billedShippingAmount).toFixed(2),
@@ -1570,6 +1684,8 @@ export async function generateLineItems(input: GenerateInput) {
     for (const row of effectiveRows) {
       allRows.push({
         ...row,
+        billingEffectiveDate: s.billingEffectiveDate,
+        billingPolicyVersion: s.billingPolicyVersion,
         description: withShipmentBillingLineage(row.description, row.shipmentId),
       });
     }
@@ -1584,9 +1700,12 @@ export async function generateLineItems(input: GenerateInput) {
       .map((row) => row.orderId)
       .filter((orderId): orderId is number => orderId != null && orderId > 0),
   )];
+  const editableRows = allRows.filter(
+    (row) => row.orderId == null || !finalizedOrderIds.has(row.orderId),
+  );
   const requestedWindowOrderLines = and(
-    sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-    sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+    sql`${billingPersistedEffectiveDaySql} >= ${fromIso}::timestamptz`,
+    sql`${billingPersistedEffectiveDaySql} < ${toIso}::timestamptz`,
   );
   // Per user override unlock shipped data on 2026-07-14 (Audit B-5):
   // a canonical billing ship-date correction can move an order across periods.
@@ -1622,8 +1741,8 @@ export async function generateLineItems(input: GenerateInput) {
           billingLineItemIsEditablePredicate(),
         ),
       );
-      for (let i = 0; i < allRows.length; i += CHUNK) {
-        const chunk = allRows.slice(i, i + CHUNK);
+      for (let i = 0; i < editableRows.length; i += CHUNK) {
+        const chunk = editableRows.slice(i, i + CHUNK);
         if (!chunk.length) continue;
         const inserted = await tx
           .insert(billingLineItems)
@@ -1652,26 +1771,52 @@ export async function generateLineItems(input: GenerateInput) {
     if (isBillingFinalizedLockError(error)) rethrowAsBillingFinalizedLock(error);
     throw error;
   }
+
+  const finalizedCandidateTotalsByClient = new Map<number, Map<number, number>>();
+  for (const row of allRows) {
+    if (row.orderId == null || !finalizedOrderIds.has(row.orderId)) continue;
+    let clientTotals = finalizedCandidateTotalsByClient.get(row.clientId);
+    if (!clientTotals) {
+      clientTotals = new Map<number, number>();
+      finalizedCandidateTotalsByClient.set(row.clientId, clientTotals);
+    }
+    clientTotals.set(row.orderId, roundMoney((clientTotals.get(row.orderId) ?? 0) + toNum(row.totalCost)));
+  }
+
+  let finalizedAdjustmentCount = 0;
+  let finalizedAdjustmentCreditCount = 0;
+  let finalizedAdjustmentDebitCount = 0;
+  let finalizedAdjustmentUntouchedCount = 0;
+  for (const [clientId, candidateTotals] of finalizedCandidateTotalsByClient) {
+    const result = await reconcileFinalizedBillingOrderAdjustments({
+      clientId,
+      dateFrom: fromIso,
+      dateTo: toIso,
+      candidates: [...candidateTotals].map(([orderId, currentTotal]) => ({
+        orderId,
+        currentTotal: currentTotal.toFixed(2),
+      })),
+      actorId: input.actorId,
+      actorEmail: input.actorEmail,
+      now: input.now,
+    });
+    finalizedAdjustmentCount += result.adjustedOrderCount;
+    finalizedAdjustmentCreditCount += result.creditCount;
+    finalizedAdjustmentDebitCount += result.debitCount;
+    finalizedAdjustmentUntouchedCount += result.untouchedOrderCount;
+  }
   // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
   // The billable-storage math is owned by computeClientStorageBilling
   // (src/services/billing-storage.ts). For each client with a positive storage
-  // rate, it rebuilds each active positive-volume SKU's on-hand timeline from the
+  // rate, it rebuilds each positive-volume SKU's on-hand timeline from the
   // canonical inventory_ledger and integrates cubic-foot-DAYS over the billing
   // month, prorated by the actual days in that month — replacing the old
-  // end-of-period Σ stock_qty × cuFt snapshot. One frozen storage line per client;
+  // end-of-period balance snapshot. One frozen storage line per client;
   // per-unit volume via cuFtPerUnit(); rate from billing_config. Reads inventory /
   // inventory_ledger only (never mutates order/shipment rows).
-  const periodStart = new Date(input.dateFrom);
-  const periodEnd = new Date(input.dateTo);
-  // PS-373: the one storage line is dated on the LAST billed day of the period
-  // (inclusive), NOT the exclusive period end. The summary aggregate and the
-  // regen delete both bound on `ship_date < dateTo`, so a line dated exactly on
-  // periodEnd was excluded from its own month's storage_total and only swept up
-  // by the NEXT month's regen. periodEnd is the exclusive UTC-midnight day-after,
-  // so periodEnd − 1 day is the last billed day and lives inside [dateFrom,
-  // dateTo): it lands in the correct month and regen cleanly rebuilds it.
-  const STORAGE_LINE_DAY_MS = 24 * 60 * 60 * 1000;
-  const storageShipDate = new Date(periodEnd.getTime() - STORAGE_LINE_DAY_MS);
+  const storagePeriods = calendarStoragePeriodsForRange(input.dateFrom, input.dateTo);
+  const storageRangeStart = storagePeriods[0]?.periodStart ?? new Date(input.dateFrom);
+  const storageRangeEnd = storagePeriods.at(-1)?.periodEnd ?? new Date(input.dateTo);
 
   const existingStorageRows = await db
     .select({
@@ -1684,8 +1829,8 @@ export async function generateLineItems(input: GenerateInput) {
       and(
         sql`${billingLineItems.orderId} is null`,
         eq(billingLineItems.lineType, 'storage'),
-        sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-        sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+        sql`${billingLineItems.shipDate} >= ${storageRangeStart.toISOString()}::timestamptz`,
+        sql`${billingLineItems.shipDate} < ${storageRangeEnd.toISOString()}::timestamptz`,
         input.clientId !== undefined
           ? eq(billingLineItems.clientId, input.clientId)
           : undefined,
@@ -1704,7 +1849,11 @@ export async function generateLineItems(input: GenerateInput) {
     ...existingStorageRows.map((row) => row.clientId),
   ])];
 
-  const cleanupEditableStorage = async (clientId: number): Promise<void> => {
+  const cleanupEditableStorage = async (
+    clientId: number,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<void> => {
     await db.transaction(async (tx) => {
       await tx
         .delete(billingLineItems)
@@ -1713,8 +1862,8 @@ export async function generateLineItems(input: GenerateInput) {
             eq(billingLineItems.clientId, clientId),
             sql`${billingLineItems.orderId} is null`,
             eq(billingLineItems.lineType, 'storage'),
-            sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-            sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+            sql`${billingLineItems.shipDate} >= ${periodStart.toISOString()}::timestamptz`,
+            sql`${billingLineItems.shipDate} < ${periodEnd.toISOString()}::timestamptz`,
             billingLineItemScopePredicate(input),
             billingLineItemIsEditablePredicate(),
           ),
@@ -1754,8 +1903,8 @@ export async function generateLineItems(input: GenerateInput) {
       height: number | null;
     }>(sql`
       select id, client_id, sku, cu_ft_override, length, width, height
-      from inventory
-      where client_id = any(${intArraySql(storageClientIds)}) and active = true
+       from inventory
+       where client_id = any(${intArraySql(storageClientIds)})
     `);
     for (const r of invRowsAll) {
       const list = storageInvRowsByClient.get(Number(r.client_id)) ?? [];
@@ -1776,7 +1925,7 @@ export async function generateLineItems(input: GenerateInput) {
         select inventory_id, type, qty, order_id, coalesce(effective_at, created_at) as effective_at
         from inventory_ledger
         where inventory_id = any(${intArraySql(allInvIds)})
-          and coalesce(effective_at, created_at) < ${periodEnd.toISOString()}::timestamptz
+          and coalesce(effective_at, created_at) < ${storageRangeEnd.toISOString()}::timestamptz
       `);
       for (const row of ledgerRowsAll) {
         const id = Number(row.inventory_id);
@@ -1787,18 +1936,29 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
-  for (const clientId of storageClientIdsToProcess) {
+  for (const storagePeriod of storagePeriods) {
+    const { monthKey, periodStart, periodEnd, lineDate: storageShipDate } = storagePeriod;
+    const storageCalendar = resolveBillingCalendarDay({
+      actualActivityDay: storageShipDate.toISOString().slice(0, 10),
+      effectiveDate: env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE,
+    });
+    const storageBillingEffectiveDate = new Date(
+      `${storageCalendar.billingEffectiveDay}T00:00:00.000Z`,
+    );
+
+    for (const clientId of storageClientIdsToProcess) {
     const cfg = configByClient.get(clientId);
     const storageRate = toNum(cfg?.storageFeePerCuFt ?? '0');
     if (!cfg || storageRate <= 0 || cfg.active === false) {
-      await cleanupEditableStorage(clientId);
+      await cleanupEditableStorage(clientId, periodStart, periodEnd);
       continue;
     }
 
-    // The client's active SKUs with their canonical cuFt inputs.
+    // Historical monthly storage must include deactivated catalog rows when
+    // their signed ledger held inventory during this month.
     const invRows = storageInvRowsByClient.get(clientId) ?? [];
     if (!invRows.length) {
-      await cleanupEditableStorage(clientId);
+      await cleanupEditableStorage(clientId, periodStart, periodEnd);
       continue;
     }
 
@@ -1814,16 +1974,13 @@ export async function generateLineItems(input: GenerateInput) {
       periodEnd,
     });
     if (storage.amount <= 0) {
-      await cleanupEditableStorage(clientId);
+      await cleanupEditableStorage(clientId, periodStart, periodEnd);
       continue;
     }
 
-    const description =
-      `Storage — ${storage.totalCuFtDays.toFixed(2)} cuft-days over ${storage.daysInMonth} days ` +
-      `× $${storageRate.toFixed(4)}/cuft/mo (${storage.skuProofs.length} SKU${storage.skuProofs.length === 1 ? '' : 's'})` +
-      (storage.exceptions.length
-        ? ` — ${storage.exceptions.length} negative-balance exception${storage.exceptions.length === 1 ? '' : 's'}`
-        : '');
+    // PS-462: stable client+calendar-month display identity. Volatile math and
+    // exception details live in the frozen proof sidecar, not this unique key.
+    const description = `Storage — ${monthKey}`;
 
     // Invoice-line display (numeric(10,2)): bill the average cuft held over the
     // month (cuft-months = cuft-days / days) at the monthly rate, so
@@ -1858,7 +2015,7 @@ export async function generateLineItems(input: GenerateInput) {
         // commit/rollback; the second writer waits (ms — this tx is 3 small
         // statements), then its delete sees the committed row.
         const [storageLockClassId, storageLockObjId] = advisoryLockKeyPair(
-          `billing-storage:${clientId}:${fromIso}:${toIso}`,
+          `billing-storage:${clientId}:${monthKey}`,
         );
         await tx.execute(
           sql`select pg_advisory_xact_lock(${storageLockClassId}, ${storageLockObjId})`,
@@ -1873,8 +2030,8 @@ export async function generateLineItems(input: GenerateInput) {
               eq(billingLineItems.clientId, clientId),
               sql`${billingLineItems.orderId} is null`,
               eq(billingLineItems.lineType, 'storage'),
-              sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-              sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+              sql`${billingLineItems.shipDate} >= ${periodStart.toISOString()}::timestamptz`,
+              sql`${billingLineItems.shipDate} < ${periodEnd.toISOString()}::timestamptz`,
               billingLineItemScopePredicate(input),
               billingLineItemIsEditablePredicate(),
             ),
@@ -1898,6 +2055,8 @@ export async function generateLineItems(input: GenerateInput) {
             orderNumber: null,
             shipmentId: null,
             shipDate: storageShipDate,
+            billingEffectiveDate: storageBillingEffectiveDate,
+            billingPolicyVersion: storageCalendar.policyVersion,
             lineType: 'storage',
             description,
             qty: cuFtMonths.toFixed(2),
@@ -1927,10 +2086,12 @@ export async function generateLineItems(input: GenerateInput) {
       }
       reportError('billing.storage_line.freeze_failed', storageErr, {
         clientId,
-        dateFrom: input.dateFrom,
-        dateTo: input.dateTo,
+        monthKey,
+        dateFrom: periodStart.toISOString(),
+        dateTo: periodEnd.toISOString(),
       });
     }
+  }
   }
 
   // New lines were just written — any cached freshness verdict in this
@@ -1957,9 +2118,13 @@ export async function generateLineItems(input: GenerateInput) {
     total: roundMoney(total),
     skipped,
     skippedFinalizedOrderCount,
+    finalizedAdjustmentCount,
+    finalizedAdjustmentCreditCount,
+    finalizedAdjustmentDebitCount,
+    finalizedAdjustmentUntouchedCount,
     skippedFinalizedStorageCount: skippedFinalizedStorageGroups.size,
     billingSummaryMetricsRows,
-    message: `Generated ${generated} line items from ${billableRows.length} billable shipments/orders; ${skippedFinalizedOrderCount} finalized order(s) and ${skippedFinalizedStorageGroups.size} finalized storage period(s) left unchanged.`,
+    message: `Generated ${generated} line items from ${billableRows.length} editable shipments/orders; finalized rows stayed unchanged (${finalizedAdjustmentCount} current-period adjustment(s), ${finalizedAdjustmentUntouchedCount} untouched order(s)); ${skippedFinalizedStorageGroups.size} finalized storage period(s) left unchanged.`,
   };
 }
 
@@ -1973,6 +2138,7 @@ export type BillingSummaryRow = {
   shippingTotal: number;
   missingShippingCostCount?: number;
   storageTotal: number;
+  adjustmentTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -1987,8 +2153,8 @@ async function hasBillingLineItemsForSummary(input: GenerateInput): Promise<bool
     select exists (
       select 1
       from billing_line_items
-      where ship_date >= ${input.dateFrom}::timestamptz
-        and ship_date < ${input.dateTo}::timestamptz
+      where coalesce(billing_effective_date, ship_date) >= ${input.dateFrom}::timestamptz
+        and coalesce(billing_effective_date, ship_date) < ${input.dateTo}::timestamptz
         ${input.clientId !== undefined ? sql`and client_id = ${input.clientId}` : sql``}
         and ${billingLineItemScopePredicate(input)}
       limit 1
@@ -2091,6 +2257,7 @@ export async function billingSummary(
         shippingTotal: 0,
         missingShippingCostCount: 0,
         storageTotal: 0,
+        adjustmentTotal: 0,
         fulfillmentFeeTotal: 0,
         orderCount: 0,
         grandTotal: 0,
@@ -2103,6 +2270,7 @@ export async function billingSummary(
           shipping: 0,
           shipping_missing: 0,
           storage: 0,
+          billing_adjustment: 0,
         },
       })),
       grandTotal: 0,
@@ -2139,6 +2307,7 @@ export async function billingSummary(
     package_total: string;
     shipping_total: string;
     storage_total: string;
+    adjustment_total: string;
     missing_shipping_cost_count: number;
     order_count: number;
     grand_total: string;
@@ -2152,13 +2321,14 @@ export async function billingSummary(
       coalesce(sum(case when b.line_type = 'shipping' then ${summaryAmount} else 0 end), 0)::text as shipping_total,
       sum(case when b.line_type = 'shipping_missing' and not ${summaryCancelledNoCharge} then 1 else 0 end)::int as missing_shipping_cost_count,
       coalesce(sum(case when b.line_type = 'storage' then ${summaryAmount} else 0 end), 0)::text as storage_total,
+      coalesce(sum(case when b.line_type = 'billing_adjustment' then ${summaryAmount} else 0 end), 0)::text as adjustment_total,
       count(distinct b.order_id)::int as order_count,
       coalesce(sum(${summaryAmount}), 0)::text as grand_total
     from clients c
     left join billing_line_items b
       on b.client_id = c.id
-      and b.ship_date >= ${input.dateFrom}::timestamptz
-      and b.ship_date < ${input.dateTo}::timestamptz
+      and coalesce(b.billing_effective_date, b.ship_date) >= ${input.dateFrom}::timestamptz
+      and coalesce(b.billing_effective_date, b.ship_date) < ${input.dateTo}::timestamptz
     left join orders o on o.id = b.order_id
     where c.active = true
       and c.name not in (${systemClientNamesSql})
@@ -2175,6 +2345,7 @@ export async function billingSummary(
     const shippingTotal = roundMoney(toNum(r.shipping_total));
     const missingShippingCostCount = Number(r.missing_shipping_cost_count ?? 0);
     const storageTotal = roundMoney(toNum(r.storage_total));
+    const adjustmentTotal = roundMoney(toNum(r.adjustment_total));
     const grandTotal = roundMoney(toNum(r.grand_total));
     const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
     const fulfillmentFeeTotal = roundMoney(
@@ -2190,6 +2361,7 @@ export async function billingSummary(
       shippingTotal,
       missingShippingCostCount,
       storageTotal,
+      adjustmentTotal,
       fulfillmentFeeTotal,
       orderCount: Number(r.order_count ?? 0),
       grandTotal,
@@ -2202,6 +2374,7 @@ export async function billingSummary(
         shipping: shippingTotal,
         shipping_missing: missingShippingCostCount,
         storage: storageTotal,
+        billing_adjustment: adjustmentTotal,
       },
     };
   });
@@ -2225,11 +2398,15 @@ export async function billingDetails(input: GenerateInput) {
       orderNumber: billingLineItems.orderNumber,
       shipmentId: billingLineItems.shipmentId,
       shipDate: billingLineItems.shipDate,
+      billingEffectiveDate: billingLineItems.billingEffectiveDate,
+      billingPolicyVersion: billingLineItems.billingPolicyVersion,
       lineType: billingLineItems.lineType,
       description: billingLineItems.description,
       qty: billingLineItems.qty,
       unitCost: billingLineItems.unitCost,
       totalCost: billingLineItems.totalCost,
+      sourceFinalizationId: billingLineItems.sourceFinalizationId,
+      billingAdjustmentId: billingLineItems.billingAdjustmentId,
       overridePackageId: billingLineItems.packageId,
       invoiced: billingLineItems.invoiced,
       createdAt: billingLineItems.createdAt,
@@ -2268,17 +2445,21 @@ export async function billingDetails(input: GenerateInput) {
     .leftJoin(orderOverrides, eq(billingLineItems.orderId, orderOverrides.orderId))
     .where(
       and(
-        gte(billingLineItems.shipDate, from),
-        // PS-208: `to` is the EXCLUSIVE day-after midnight — lt, never lte
-        // (the drizzle form the literal `<=` sweep missed).
-        lt(billingLineItems.shipDate, to),
+        // PS-208: `to` is the EXCLUSIVE day-after midnight. The canonical
+        // range owner emits a strict `<` upper bound, never `<=`.
+        billingLineEffectiveDayRangeSql(
+          billingLineItems.billingEffectiveDate,
+          billingLineItems.shipDate,
+          from,
+          to,
+        ),
         input.clientId !== undefined
           ? eq(billingLineItems.clientId, input.clientId)
           : undefined,
         billingLineItemScopePredicate(input)
       )
     )
-    .orderBy(desc(billingLineItems.shipDate), desc(billingLineItems.id));
+    .orderBy(desc(billingPersistedEffectiveDaySql), desc(billingLineItems.id));
 
   const staleOrderIds = Array.from(
     new Set(
@@ -2635,6 +2816,12 @@ export async function billingDetails(input: GenerateInput) {
       } = row;
       return {
         ...rest,
+        actualActivityDate: row.shipDate,
+        rolledFromWeekend:
+          row.billingPolicyVersion === BILLING_POLICY_WEEKEND_ROLLFORWARD &&
+          row.shipDate != null &&
+          row.billingEffectiveDate != null &&
+          row.shipDate.getTime() !== row.billingEffectiveDate.getTime(),
         orderStatus: detailOrderStatus,
         effectiveOrderStatus: rowLifecycle.effectiveOrderStatus,
         orderLifecycleStatus: rowLifecycle.orderLifecycleStatus,

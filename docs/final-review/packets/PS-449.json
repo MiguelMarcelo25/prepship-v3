@@ -1,0 +1,354 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-449",
+  "title": "Immutable finalized billing with signed current-period adjustments",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "356183a11ce05b3992ebddc8da1c6f64978a5a41"
+  },
+  "riskDomains": [
+    "billing_inventory_lifecycle",
+    "timing_live"
+  ],
+  "claimedScore": 100,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Regeneration keeps every finalized source line byte-identical and posts only the remaining signed credit or debit into the backend-selected current billing day.",
+      "evidenceIds": [
+        "current-period-adjustment-integration",
+        "current-period-adjustment-adversarial"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Finalize, regeneration, and manual adjustment posting serialize through the canonical per-client transaction lock; database constraints enforce one immutable projection, client identity, durable idempotency, and signed balance limits.",
+      "evidenceIds": [
+        "current-period-adjustment-integration",
+        "current-period-adjustment-adversarial",
+        "finalized-billing-regression"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "high",
+      "status": "met",
+      "description": "Billing summaries, detail rows, CSV, XLSX, HTML, and React consume the same signed backend projection; routes and UI collect intent without re-owning authoritative money calculations.",
+      "evidenceIds": [
+        "billing-parity-gates",
+        "billing-browser-e2e",
+        "source-of-truth-pack"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Migration 0074 is additive, applied transactionally before runtime deployment, verifies every required object, and preserves historical billing counts and totals without order or shipment mutation.",
+      "evidenceIds": [
+        "migration-rollout-live",
+        "current-period-adjustment-integration"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "Strict TypeScript, production frontend build, rate source-of-truth, runtime-DDL ownership, billing regressions, mocked browser proof, and all 53 mandatory source-of-truth commands pass.",
+      "evidenceIds": [
+        "release-build-gates",
+        "billing-parity-gates",
+        "source-of-truth-pack"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "The exact reviewed SHA is Production Ready on Vercel and live on the Render API, sync worker, and print worker; startup schema gates and public health/readiness pass with zero GitHub Actions runs.",
+      "evidenceIds": [
+        "live-deployment-readiness"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/billing-finalization-policy.ts owns finalization admission, per-client transaction locking, frozen totals, signed adjustment idempotency, regeneration reconciliation, and remaining-balance enforcement",
+      "src/services/billing-invoice-totals.ts owns authoritative invoice totals shared by reads and finalization",
+      "drizzle/0065_billing_close_workflow.sql and drizzle/0074_billing_current_period_adjustments.sql own immutable finalized facts, signed projection constraints, and database race backstops",
+      "src/services/billing.ts identifies finalized candidates through canonical billing calculation and delegates adjustment posting to the policy owner",
+      "src/routes/billing.ts transports scoped authenticated intent and audit facts while frontend components render backend DTOs"
+    ],
+    "oldOwners": [
+      {
+        "path": "Legacy post-finalization credit-note-only correction path",
+        "disposition": "delegated",
+        "delegatesTo": "billing-finalization-policy.ts signed current-period adjustment posting"
+      },
+      {
+        "path": "Frontend subtotal and status derivations",
+        "disposition": "delegated",
+        "delegatesTo": "backend billing row, total, and status owners"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/billing.ts finalize and adjustment handlers",
+        "action": "modified",
+        "delegatesTo": "billing-finalization-policy.ts for authoritative write decisions"
+      },
+      {
+        "path": "web/src/components/Views/BillingCloseWorkflowPanel.tsx",
+        "action": "modified",
+        "delegatesTo": "backend-issued finalization and signed adjustment DTOs"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Money, effective-day selection, signed reconciliation, locks, idempotency, and persistence remain backend/database owned. Routes stay thin and React does not calculate or persist authoritative corrections."
+    }
+  },
+  "evidence": [
+    {
+      "id": "current-period-adjustment-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-449-billing-finalization",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-449-current-period-adjustments-integration.ts",
+        "scripts/ps-449-billing-finalization-guard.ts",
+        "drizzle/0074_billing_current_period_adjustments.sql"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "frozen_rows_byte_identical",
+        "credit_debit_convergence",
+        "current_period_projection"
+      ],
+      "proves": "The real 0059/0065/0071/0074 migrations run in PGlite; a credit then debit converges to canonical money, repeat regeneration is a no-op, frozen source bytes remain identical, and a net-credit current period finalizes correctly."
+    },
+    {
+      "id": "current-period-adjustment-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-449-billing-finalization",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-449-current-period-adjustments-integration.ts",
+        "drizzle/0074_billing_current_period_adjustments.sql"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "immutable_adjustment_update_rejected",
+        "immutable_adjustment_delete_rejected",
+        "orphan_projection_rejected",
+        "legacy_rollback_write_rejected"
+      ],
+      "proves": "Database backstops reject adjustment mutation, missing projections, and prior legacy writes while leaving finalized history unchanged."
+    },
+    {
+      "id": "finalized-billing-regression",
+      "classification": "adversarial",
+      "command": "npm run test:ps-412-finalized-billing",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-412-finalized-billing-guard.ts",
+        "drizzle/0059_billing_finalized_lock.sql",
+        "drizzle/0065_billing_close_workflow.sql",
+        "drizzle/0074_billing_current_period_adjustments.sql"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run",
+        "mixed_finalization_rollback",
+        "closed_period_mutation_rejected",
+        "overlapping_close_rejected",
+        "over_credit_rejected"
+      ],
+      "proves": "The established finalized-billing suite still rejects sibling mutation, TRUNCATE, overlapping close, mixed-finalization partial writes, history mutation, and excessive credits."
+    },
+    {
+      "id": "rollback-fail-closed",
+      "classification": "adversarial",
+      "command": "npm run test:ps-449-billing-finalization",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-449-current-period-adjustments-integration.ts",
+        "docs/ps-tickets/PS-449.md",
+        "drizzle/0074_billing_current_period_adjustments.sql"
+      ],
+      "assertions": [
+        "legacy_rollback_write_rejected",
+        "no_unprojected_adjustment_created",
+        "migration_retained_on_app_rollback"
+      ],
+      "proves": "With 0074 retained, the prior legacy correction insert fails closed with BILLING_ADJUSTMENT_LEGACY_WRITE_DISABLED; an emergency application rollback cannot silently create an unprojected correction."
+    },
+    {
+      "id": "billing-browser-e2e",
+      "classification": "e2e",
+      "command": "npm run test:audit-billing-close-workflow-ux:browser",
+      "result": "pass",
+      "artifactPaths": [
+        "web/e2e/billing-close-workflow.spec.js",
+        "web/src/components/Views/BillingView.tsx",
+        "web/src/components/Views/BillingCloseWorkflowPanel.tsx"
+      ],
+      "assertions": [
+        "mocked_backend_only",
+        "adjustment_intent_sent",
+        "locked_edits_disabled",
+        "signed_backend_rows_rendered"
+      ],
+      "proves": "The real Billing UI finalizes and renders a locked period, submits only operator adjustment intent, and displays backend-issued signed correction rows; all browser traffic is intercepted by local mocks."
+    },
+    {
+      "id": "billing-parity-gates",
+      "classification": "static",
+      "command": "npm run test:ps-416-billing-fail-closed && npm run test:ps-323-billing-sot-parity && npm run test:ps-362-billing-detail-sot-export && npm run test:ps-372-billing-read-divergence && npm run test:rate-source-of-truth && npm run test:runtime-ddl",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-416-billing-fail-closed-guard.ts",
+        "scripts/ps-323-billing-sot-parity-guard.ts",
+        "scripts/ps-362-billing-detail-sot-export-guard.ts",
+        "scripts/ps-372-billing-read-divergence-guard.ts",
+        "scripts/runtime-ddl-guard.mjs"
+      ],
+      "assertions": [],
+      "proves": "Generation remains fail closed; backend billing reads, detail, export, rate truth, and migration-owned runtime readiness remain aligned."
+    },
+    {
+      "id": "source-of-truth-pack",
+      "classification": "integration",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-449-billing-finalization-guard.ts",
+        "scripts/ps-449-current-period-adjustments-integration.ts"
+      ],
+      "assertions": [
+        "all_53_commands_pass",
+        "billing_owner_preserved",
+        "runtime_schema_ready"
+      ],
+      "proves": "All 53 mandatory source-of-truth, billing, authorization, runtime-schema, durable-worker, rate, inventory, and safety commands pass."
+    },
+    {
+      "id": "release-build-gates",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web && git diff --check",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts"
+      ],
+      "assertions": [],
+      "proves": "Strict backend/frontend TypeScript, the production Vite build, and whitespace validation pass."
+    },
+    {
+      "id": "migration-rollout-live",
+      "classification": "live",
+      "command": "npm run migrate:ps-449-current-period-adjustments -- --apply --confirm=apply-ps-449-current-period-adjustments-0074, followed by dry-run verification on 2026-07-22",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/apply-ps-449-current-period-adjustments-migration.ts",
+        "drizzle/0074_billing_current_period_adjustments.sql",
+        "docs/final-review/packets/PS-449.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "transactional_schema_apply",
+        "all_0074_objects_present",
+        "historical_billing_counts_and_totals_unchanged",
+        "orders_shipments_unchanged"
+      ],
+      "proves": "Production migration 0074 completed before runtime deployment, all required columns/indexes/constraints/functions/triggers are present, and guarded before/after snapshots confirmed no historical billing total/count or order/shipment mutation."
+    },
+    {
+      "id": "live-deployment-readiness",
+      "classification": "live",
+      "command": "Read-only Vercel/GitHub deployment inspection, Render deploy inspection and startup-log filtering, GET /health and GET /health/ready, plus diagnostic GET /health/deep on 2026-07-22",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-449.json",
+        "src/main.ts",
+        "src/worker.ts",
+        "src/routes/health.ts"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_implementation_sha_live",
+        "vercel_production_ready",
+        "render_api_live",
+        "render_sync_worker_live",
+        "render_print_worker_live",
+        "runtime_schema_startup_ready",
+        "readiness_http_200",
+        "zero_github_actions_runs",
+        "no_provider_or_application_data_mutation"
+      ],
+      "proves": "Vercel production deployment dpl_Ht5LYdeR9EEdmqsijNapSGYhJW96, GitHub production deployment 5548879729, and Render deploys dep-d9g2menlk1mc739qn3g0, dep-d9g2meurnols739u0chg, and dep-d9g2meurnols739u0e5g bind exact SHA 356183a11ce05b3992ebddc8da1c6f64978a5a41. Startup logs report migration-owned schema ready before API/worker start; public health and readiness are green; GitHub Actions scheduled no run. Deep health separately reported a pre-existing order_status_backlog while the database, orders, print queue, print worker, fulfillment outbox, and event loop components remained healthy; that diagnostic is not claimed as PS-449 pass evidence."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git diff --name-status 5e21fb133ae21738b4786d24dc61998173dd0151..356183a11ce05b3992ebddc8da1c6f64978a5a41 && git diff --check",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-449.md",
+        "src/services/billing-finalization-policy.ts",
+        "src/services/billing.ts",
+        "drizzle/0074_billing_current_period_adjustments.sql"
+      ],
+      "assertions": [],
+      "proves": "The implementation changes the canonical billing policy, additive billing schema/read models, thin transport/UI consumers, tests, and guarded rollout only. No enumerated shipped-lock file was modified."
+    }
+  ],
+  "migrations": {
+    "touched": true,
+    "paths": [
+      "drizzle/0074_billing_current_period_adjustments.sql"
+    ],
+    "verification": {
+      "command": "npm run test:ps-449-billing-finalization && npm run test:runtime-ddl && guarded production apply/dry-run verification",
+      "result": "pass",
+      "artifactPaths": [
+        "drizzle/0074_billing_current_period_adjustments.sql",
+        "scripts/ps-449-current-period-adjustments-integration.ts",
+        "scripts/apply-ps-449-current-period-adjustments-migration.ts"
+      ]
+    },
+    "rollbackPlan": "Retain additive migration 0074 and all immutable history. Forward-revert application behavior only; correction creation remains unavailable because the database rejects legacy writes until the current-period v2 writer is restored. Never drop 0074 objects, rewrite billing history, or mutate orders/shipments as rollback."
+  },
+  "rollback": {
+    "strategy": "Redeploy a reviewed application forward-revert while retaining migration 0074. Do not issue corrections during the rollback window; the tested database guard fails old legacy correction writes closed. Restore the current-period v2 writer in a reviewed forward fix.",
+    "tested": true,
+    "evidenceIds": [
+      "rollback-fail-closed",
+      "current-period-adjustment-integration"
+    ]
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Migration 0074 is verified in production and the exact implementation SHA is Production Ready on Vercel and live on all three Render PrepShip services. Health and readiness pass; deep-health diagnostics identified only an unrelated pre-existing order-status backlog while PS-449-relevant database and runtime components remained healthy. Verification used deployment metadata, filtered startup logs, and credential-free health GETs only; it did not finalize or adjust a live invoice, call a provider, buy postage, print labels, notify a marketplace, or mutate application data.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/final-review/packets/PS-449.json"
+    ]
+  },
+  "caveats": []
+}

@@ -44,20 +44,23 @@ assert.equal(resolveShipmentConfirmationProvider({ sourceProvider: null, externa
 
 // ── (2) mark-shipped-externally routes through the resolver ────────────────
 const svc = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
+const lifecycle = readFileSync('src/services/order-lifecycle-command.ts', 'utf8');
 
 assert.ok(svc.includes("import { confirmShipmentDirectNow, resolveShipmentConfirmationProvider } from './outbox'"),
   'the service must import the canonical resolver + the direct dispatcher');
-assert.ok(/resolveShipmentConfirmationProvider\(\{\s*sourceProvider: order\.sourceProvider \?\? null,\s*externalOrderId: order\.externalOrderId,?\s*\}\)/.test(svc),
+assert.ok(svc.includes('dependencies.resolveProvider ?? resolveShipmentConfirmationProvider') &&
+  /resolveProvider\(\{\s*sourceProvider: order\.sourceProvider \?\? null,\s*externalOrderId: order\.externalOrderId,?\s*\}\)/.test(svc),
   'the notify provider must come from the canonical resolver over the ORDER facts');
 // ShipStation keeps its exact v1 call — but ONLY inside the shipstation branch.
-const ssCalls = svc.match(/ssMarkOrderShippedV1\(/g) ?? [];
+const ssCalls = svc.match(/markShipStationShipped\(/g) ?? [];
 assert.equal(ssCalls.length, 1, 'exactly one ShipStation markasshipped call site may exist');
 const ssBranchIdx = svc.indexOf("provider === 'shipstation'");
-const ssCallIdx = svc.indexOf('ssMarkOrderShippedV1(');
+const ssCallIdx = svc.indexOf('markShipStationShipped(');
 assert.ok(ssBranchIdx > -1 && ssCallIdx > ssBranchIdx,
   'the ShipStation call must be gated behind the resolved shipstation provider');
 // Direct marketplaces dispatch through the outbox-shaped connector call.
-assert.ok(svc.includes('confirmShipmentDirectNow({'),
+assert.ok(svc.includes('dependencies.confirmDirect ?? confirmShipmentDirectNow') &&
+  svc.includes('confirmDirect({'),
   'non-ShipStation providers must dispatch through the canonical direct confirmer');
 assert.ok(svc.includes('requires a tracking number to confirm shipment'),
   'direct dispatch must refuse without a tracking number (connectors require it)');
@@ -68,16 +71,22 @@ assert.ok(svc.includes('Per user override unlock shipped data on 2026-06-13'),
   'the override-scoped change must carry its citation comment');
 
 // ── (3) LOCKDOWN NOT WEAKENED ───────────────────────────────────────────────
-// Forward-only flip: only an AWAITING order can transition; the WHERE guard
-// stays byte-intact.
-assert.ok(svc.includes("eq(orders.orderStatus, 'awaiting_shipment')"),
-  'the forward-only awaiting->shipped WHERE guard must stay');
-// The unmark branch flips ONLY the flag (never status).
-assert.ok(/\.set\(\{ externallyShipped: false, updatedAt: new Date\(\) \}\)/.test(svc),
+// Forward-only protection is now centralized under the lifecycle row lock.
+assert.ok(svc.includes("transition: 'external_shipped'") &&
+  lifecycle.includes("order.orderStatus === 'cancelled'") &&
+  lifecycle.includes(".for('update')"),
+  'the shipped-external path must delegate to row-locked terminal rejection');
+// The unmark branch remains flag-only through the canonical command.
+assert.ok(svc.includes("transition: 'external_unmark'") &&
+  lifecycle.includes(".set({ externallyShipped: false"),
   'unmark must keep flipping only the flag, never order status');
-// Inventory deduction still runs through the kill-switch-governed owner.
-assert.ok(/enqueueInventoryDeduction\(\s*order,[\s\S]*tx,/.test(svc),
-  'the shipped-external path must enqueue the durable inventory deduction lane');
+// Manual actions cannot prove shipment-line quantities. They persist an
+// explicit review claim and never guess the mutable full order.
+assert.ok(svc.includes("kind: 'unavailable'") &&
+  svc.includes('Manual external-shipped action did not identify fulfilled line quantities') &&
+  !svc.includes('fulfilledLines: order.items') &&
+  lifecycle.includes("reviewReason: 'fulfillment_lines_unavailable'"),
+  'the shipped-external path must fail closed to review when exact line facts are unavailable');
 // The route still guards with assertOrderEditable BEFORE the service.
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 const routeStart = ordersRoute.indexOf("'/:id{[0-9]+}/shipped-external'");
@@ -92,7 +101,8 @@ const outbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
 assert.ok(outbox.includes('export async function confirmShipmentDirectNow'),
   'outbox must own the one-shot direct confirmation');
 const helperStart = outbox.indexOf('export async function confirmShipmentDirectNow');
-const helperBlock = outbox.slice(helperStart, helperStart + 2600);
+const helperEnd = outbox.indexOf('\nexport ', helperStart + 1);
+const helperBlock = outbox.slice(helperStart, helperEnd > helperStart ? helperEnd : helperStart + 6000);
 assert.ok(helperBlock.includes("resolveStoreConnector(args.provider, 'shipment.confirm')"),
   'the direct confirmer must resolve the SAME store-connector capability as the worker');
 assert.ok(helperBlock.includes('loadStoreCredentials(args.provider'),

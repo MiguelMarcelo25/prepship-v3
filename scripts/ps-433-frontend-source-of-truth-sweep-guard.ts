@@ -24,6 +24,7 @@ const rateBrowser = read('web/src/components/RateBrowserModal.tsx');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const invoice = read('web/src/pages/Invoice.tsx');
 const sharedClient = read('web/src/lib/v2-apiClient/shared.ts');
+const apiClientSource = read('web/src/lib/v2-apiClient.ts');
 const datePicker = read('web/src/components/DateRangePicker.tsx');
 const rangeToggle = read('web/src/components/RangeToggle.tsx');
 const analysisParity = read('web/src/components/Views/analysis-parity.ts');
@@ -105,11 +106,17 @@ assert.match(billingRoute, /return c\.json\(\{ data: rows, totals \}\)/);
 assert.match(invoice, /totals\.pickPackTotal/);
 assert.match(invoice, /totals\?\.grandTotal/);
 assert.doesNotMatch(invoice, /\.reduce\([\s\S]{0,240}totalCost/);
-const cachedStart = sharedClient.indexOf('export async function cachedSafe');
-const cachedEnd = sharedClient.indexOf('export async function cachedRequest', cachedStart);
-const cachedSafe = sharedClient.slice(cachedStart, cachedEnd > cachedStart ? cachedEnd : undefined);
-assert.ok(cachedSafe.indexOf('if (options.throwOnError) throw err;') >= 0);
-assert.ok(cachedSafe.indexOf('if (options.throwOnError) throw err;') < cachedSafe.indexOf('current?.hasValue'));
+assert.doesNotMatch(
+  `${sharedClient}\n${apiClientSource}`,
+  /\bcachedSafe\b/,
+  'the retired stale-cache fallback must not return for money reads',
+);
+const billingSummaryStart = apiClientSource.indexOf('fetchBillingSummary(');
+const billingSummaryEnd = apiClientSource.indexOf('fetchShippingMarginAnalytics(', billingSummaryStart);
+assert.ok(billingSummaryStart >= 0 && billingSummaryEnd > billingSummaryStart);
+const billingSummary = apiClientSource.slice(billingSummaryStart, billingSummaryEnd);
+assert.match(billingSummary, /const \[res, clientsRes\] = await Promise\.all\(\[\s*api\.get/);
+assert.doesNotMatch(billingSummary, /\bsafe\s*\(/);
 
 // Client rate-source writes and reporting windows have explicit backend owners.
 assert.equal(evaluateClientRateSourcePolicy({ clientId: 4, rateSourceClientId: 4, source: null }).ok, false);

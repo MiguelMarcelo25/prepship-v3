@@ -92,10 +92,13 @@ const testLabelIdx = labelsSvc.indexOf('if (body.testLabel === true)');
 // branch opens (earlier occurrences belong to other functions). testLabel returns
 // before reaching it, so testLabel mode never hits the real provider.
 const realSsIdx = labelsSvc.indexOf("createCarrierLabel('shipstation'", testLabelIdx);
+const testLabelBlock = labelsSvc.slice(testLabelIdx, realSsIdx);
 check('ShipStation testLabel branch short-circuits BEFORE the real ShipStation provider call',
   testLabelIdx >= 0 && realSsIdx > testLabelIdx);
 check('ShipStation testLabel mode is $0 (no postage)',
-  /testLabel === true[\s\S]{0,2600}?cost: '0\.00'/.test(labelsSvc));
+  /cost: '0\.00'/.test(testLabelBlock) &&
+    /labelCost: '0\.00'/.test(testLabelBlock) &&
+    /selectedRateCost: '0\.00'/.test(testLabelBlock));
 const outbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
 check('outbox suppresses internal/manual/none source → no marketplace notify',
   /isNoMarketplaceProvider[\s\S]*?'internal'/.test(outbox) && /if \(isNoMarketplaceProvider\(sourceProvider\)\) return null/.test(outbox));

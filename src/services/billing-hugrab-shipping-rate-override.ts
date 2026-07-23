@@ -1,6 +1,5 @@
 import { roundMoney } from '../lib/money';
 
-export const HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME = 'HUGRAB';
 export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD = 6;
 export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT = 7.73;
 
@@ -11,7 +10,6 @@ export type HugrabShippingRateOverrideConfig = {
 };
 
 export type HugrabShippingRateOverrideInput = {
-  clientName: string | null | undefined;
   customerShippingRate: number;
   selectedRateCost: number | null | undefined;
   config?: HugrabShippingRateOverrideConfig | null;
@@ -40,10 +38,6 @@ function positiveNumber(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? roundMoney(parsed) : fallback;
 }
 
-function isHugrabClient(clientName: string | null | undefined): boolean {
-  return String(clientName ?? '').trim().toUpperCase() === HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME;
-}
-
 export function resolveHugrabShippingRateOverride(
   input: HugrabShippingRateOverrideInput,
 ): HugrabShippingRateOverrideDecision {
@@ -51,9 +45,9 @@ export function resolveHugrabShippingRateOverride(
   const selectedRateCost = input.selectedRateCost == null ? null : roundMoney(Number(input.selectedRateCost));
   const threshold = positiveNumber(input.config?.threshold, DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD);
   const amount = positiveNumber(input.config?.amount, DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT);
-  const enabled = input.config?.enabled ?? true;
+  const enabled = input.config?.enabled === true;
 
-  if (!isHugrabClient(input.clientName) || !enabled || currentShippingRate <= 0) {
+  if (!enabled || currentShippingRate <= 0) {
     return {
       customerShippingRate: currentShippingRate,
       selectedRateCost,
@@ -91,10 +85,7 @@ export async function hugrabShippingRateOverrideConfigsByClientId(
   const rows = (await pg`
     select
       c.id as client_id,
-      coalesce(
-        b.hugrab_shipping_rate_override_enabled,
-        upper(c.name) = ${HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME}
-      ) as enabled,
+      coalesce(b.hugrab_shipping_rate_override_enabled, false) as enabled,
       coalesce(
         b.hugrab_shipping_rate_override_threshold,
         ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD}::numeric

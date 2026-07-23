@@ -47,35 +47,29 @@ function check(name: string, got: unknown, want: unknown) {
   else console.log(`ok   ${name}`);
 }
 
-// ── 1. The PS-198 case: applied rate carries ONLY the opaque snapshot ref ─────
-// (proofSource/requestFingerprint were dropped by a display translation). The ref
-// must still be returned so the backend can validate the snapshot server-side.
+// ── 1. PS-422: applied rate carries one opaque backend selectionRef ───────────
 check(
-  'ids-only candidate yields the full snapshot ref (no legacy proof required)',
-  rateQuoteRefFromCandidates([{ rateQuoteId: 'rq_abc', selectedRateKey: 'srk_def' }]),
-  { rateQuoteId: 'rq_abc', selectedRateKey: 'srk_def' },
+  'selectionRef-only candidate yields the opaque purchase authorization',
+  rateQuoteRefFromCandidates([{ selectionRef: 'sqa_opaque' }]),
+  { selectionRef: 'sqa_opaque' },
 );
 
-// ── 2. Candidate order: the explicit candidate wins over the saved fallback ───
 check(
-  'first candidate carrying both ids wins',
+  'first candidate carrying selectionRef wins',
   rateQuoteRefFromCandidates([
-    { rateQuoteId: 'rq_new', selectedRateKey: 'srk_new' },
-    { rateQuoteId: 'rq_old', selectedRateKey: 'srk_old', proofSource: 'backend_rate_response', requestFingerprint: 'fp_old' },
+    { selectionRef: 'sqa_new' },
+    { selectionRef: 'sqa_old', proofSource: 'backend_rate_response', requestFingerprint: 'fp_old' },
   ]),
-  { rateQuoteId: 'rq_new', selectedRateKey: 'srk_new' },
+  { selectionRef: 'sqa_new' },
 );
 
-// ── 3. A HALF ref (one id missing) is NOT a snapshot ref on its own ───────────
-// — it must fall through to the legacy-proof selection, which here picks the
-// fully-proven saved rate.
 check(
-  'half ref falls through to the legacy-proven candidate',
+  'legacy id/key pairs no longer reconstruct purchase authority',
   rateQuoteRefFromCandidates([
     { rateQuoteId: 'rq_half' },
     { rateQuoteId: 'rq_saved', selectedRateKey: 'srk_saved', proofSource: 'backend_rate_response', requestFingerprint: 'fp_saved' },
   ]),
-  { rateQuoteId: 'rq_saved', selectedRateKey: 'srk_saved' },
+  {},
 );
 
 // ── 4. Legacy fallback unchanged: proven candidate without ids yields {} ──────
@@ -101,8 +95,8 @@ check(
 
 // ── 6. Non-string ids are rejected (no coercion of junk into a ref) ───────────
 check(
-  'non-string ids are ignored',
-  rateQuoteRefFromCandidates([{ rateQuoteId: 123, selectedRateKey: { v: 1 } }]),
+  'non-string selection refs are ignored',
+  rateQuoteRefFromCandidates([{ selectionRef: { v: 1 } }]),
   {},
 );
 
@@ -160,17 +154,18 @@ console.log('ok   modal defines rateBackendProof');
 const shared = readFileSync('web/src/lib/v2-apiClient/shared.ts', 'utf8');
 assert.ok(
   /rateQuoteId:\s*obj\.rateQuoteId\s*\?\?\s*null/.test(shared) &&
-  /selectedRateKey:\s*obj\.selectedRateKey\s*\?\?\s*null/.test(shared),
-  'translateRateToV2Shape must pass rateQuoteId/selectedRateKey through (null when absent)',
+  /selectedRateKey:\s*obj\.selectedRateKey\s*\?\?\s*null/.test(shared) &&
+  /selectionRef:\s*obj\.selectionRef\s*\?\?\s*null/.test(shared),
+  'translateRateToV2Shape must pass selectionRef through with legacy display metadata',
 );
-console.log('ok   translateRateToV2Shape carries the backend snapshot ref top-level');
+console.log('ok   translateRateToV2Shape carries selectionRef top-level');
 {
   // The PS-197b manual-estimate baseline must remain structurally non-purchasable:
   // its rates are translated WITHOUT backendProofMetadata (ps-197 guard pins the
   // call site; here we pin that translate itself cannot invent an id).
   assert.ok(
-    !/rateQuoteId:\s*['"`]/.test(shared),
-    'translateRateToV2Shape must not mint a rateQuoteId literal',
+    !/selectionRef:\s*['"`]/.test(shared),
+    'translateRateToV2Shape must not mint a selectionRef literal',
   );
   console.log('ok   translation cannot invent a snapshot ref');
 }
@@ -190,8 +185,8 @@ const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/ra
   const metaBlock = bestRateProof.slice(metaStart, metaEnd);
   assert.ok(metaBlock.length > 0, 'withRateRequestMetadata body must be non-empty');
   assert.ok(
-    !/rateQuoteId\s*:\s*_/.test(metaBlock) && !/selectedRateKey\s*:\s*_/.test(metaBlock),
-    'withRateRequestMetadata must not destructure-discard rateQuoteId/selectedRateKey',
+    !/selectionRef\s*:\s*_/.test(metaBlock),
+    'withRateRequestMetadata must not destructure-discard selectionRef',
   );
   console.log('ok   withRateRequestMetadata passes the snapshot ref through untouched');
 }

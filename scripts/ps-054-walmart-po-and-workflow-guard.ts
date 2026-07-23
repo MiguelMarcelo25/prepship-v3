@@ -164,8 +164,9 @@ function assertPrintQueueAndOutboxContracts() {
     'print queue must reject object-stringified label values before queue insertion',
   );
   assert(
-    printQueue.includes('let existingLabelUrl = await findExistingQueueableLabelForOrder(order.orderId)') &&
-      printQueue.includes('const recoverCreatedLabelUrl = existingLabelUrl ?? await findExistingQueueableLabelForOrder(order.orderId)') &&
+    printQueue.includes('let existingLabelUrl = await timeQueueStep(') &&
+      printQueue.includes('() => findExistingQueueSendLabel(order)') &&
+      printQueue.includes('const recoverCreatedLabelUrl = existingLabelUrl ?? await timeQueueStep(') &&
       printQueue.includes('await createLabelV2'),
     'print queue must recover by queueing an existing label instead of buying duplicate postage',
   );

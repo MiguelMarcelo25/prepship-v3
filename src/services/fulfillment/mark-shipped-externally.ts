@@ -5,21 +5,17 @@
 // LOCKDOWN SAFETY:
 //   - The route MUST still call assertOrderEditable() BEFORE this service (it stays in the route
 //     as the shipped/cancelled lockdown guard — never moved here).
-//   - The flag=true status flip is FORWARD-ONLY: the UPDATE is gated with
-//     `WHERE order_status = 'awaiting_shipment'`, so a shipped/cancelled order can NEVER be
-//     re-flipped through this path. This is defense-in-depth (a STRENGTHENING) for any future
-//     non-route caller; the route already guarantees awaiting via assertOrderEditable.
-//   - Inventory intent is durable in fulfillment_outbox; its processor calls
-//     deductInventoryForOrder unchanged, so INVENTORY_AUTO_DEDUCT still governs execution.
-import { and, eq, sql } from 'drizzle-orm';
-import { db } from '../../db/client';
+//   - The flag=true status flip is FORWARD-ONLY: OrderLifecycleCommand locks
+//     the row and rechecks awaiting_shipment for this caller, so a stale route
+//     preflight cannot re-flip a shipped/cancelled order.
+//   - Exact claims and durable intent commit with the flag; execution remains
+//     behind the unchanged INVENTORY_AUTO_DEDUCT kill switch.
 import { orders } from '../../db/schema/orders';
-import { enqueueInventoryDeduction } from './inventory-deduction-outbox';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../../lib/shipstation/labels';
 import { loadClientCredentials } from '../../lib/shipstation/credentials';
 import { confirmShipmentDirectNow, resolveShipmentConfirmationProvider } from './outbox';
-import { orderLifecycleEffectiveStatusSql } from '../order-lifecycle-status';
 import type { OrderEditWriteAuthorization } from '../order-editable-write';
+import { applyOrderLifecycleCommand } from '../order-lifecycle-command';
 
 export type MarkShippedExternallyInput = {
   /** The already-fetched order row (the route SELECTs it after assertOrderEditable). */
@@ -41,12 +37,30 @@ export type MarkShippedExternallyResult = {
   notify: { ok: boolean; reason?: string };
 };
 
+export type MarkShippedExternallyDependencies = {
+  applyLifecycleCommand?: typeof applyOrderLifecycleCommand;
+  resolveProvider?: typeof resolveShipmentConfirmationProvider;
+  confirmDirect?: typeof confirmShipmentDirectNow;
+  loadCredentials?: typeof loadClientCredentials;
+  markShipStationShipped?: typeof ssMarkOrderShippedV1;
+  now?: () => Date;
+};
+
 export async function markOrderShippedExternally(
   input: MarkShippedExternallyInput,
+  dependencies: MarkShippedExternallyDependencies = {},
 ): Promise<MarkShippedExternallyResult> {
   const { order, flag } = input;
   const id = order.id;
-  const mutableLifecycle = sql`${orderLifecycleEffectiveStatusSql()} = 'awaiting_shipment'`;
+  // Per user override unlock shipped data on 2026-07-23: PS-440 adds only
+  // injectable offline-test seams. Production defaults remain the canonical
+  // lifecycle command, outbox resolver, credentials, and provider connectors.
+  const applyLifecycle = dependencies.applyLifecycleCommand ?? applyOrderLifecycleCommand;
+  const resolveProvider = dependencies.resolveProvider ?? resolveShipmentConfirmationProvider;
+  const confirmDirect = dependencies.confirmDirect ?? confirmShipmentDirectNow;
+  const loadCredentials = dependencies.loadCredentials ?? loadClientCredentials;
+  const markShipStationShipped = dependencies.markShipStationShipped ?? ssMarkOrderShippedV1;
+  const now = dependencies.now ?? (() => new Date());
 
   let statusFlipped = false;
   if (flag) {
@@ -55,39 +69,39 @@ export async function markOrderShippedExternally(
     // Per user override unlock shipped data on 2026-07-15: the external
     // shipped transition and durable inventory-deduction intent commit in one
     // transaction. The forward-only lifecycle predicates remain unchanged.
-    const updated = await db.transaction(async (tx) => {
-      const transitioned = await tx
-        .update(orders)
-        .set({ externallyShipped: true, orderStatus: 'shipped' as const, updatedAt: new Date() })
-        .where(and(
-          eq(orders.id, id),
-          eq(orders.orderStatus, 'awaiting_shipment'),
-          // Per user override unlock shipped data on 2026-07-14: re-check the
-          // canonical lifecycle in the UPDATE itself unless the audited force path authorized it.
-          input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
-        ))
-        .returning({ id: orders.id });
-      if (transitioned.length > 0) {
-        await enqueueInventoryDeduction(
-          order,
-          { source: input.source ? `external:${input.source}` : 'external' },
-          tx,
-        );
-      }
-      return transitioned;
+    // Per user override unlock shipped data on 2026-07-16 (PS-424): status,
+    // exact fulfilled lines, inventory intent, and provenance are one command.
+    const result = await applyLifecycle({
+      orderId: id,
+      commandKey: `lifecycle:external-shipped:order:${id}`,
+      transition: 'external_shipped',
+      source: input.source ? `external:${input.source}` : 'external',
+      fulfillmentFacts: {
+        kind: 'unavailable',
+        description: 'Manual external-shipped action did not identify fulfilled line quantities',
+      },
+      trackingNumber: input.trackingNumber ?? null,
+      externallyShippedSource: input.source ?? null,
+      allowCanonicalOverride: input.writeAuthorization.allowTerminal,
+      requireAwaitingOrderStatus: true,
+      provenance: {
+        carrierCode: input.carrierCode ?? null,
+        notifyCustomer: input.notifyCustomer === true,
+        notifyMarketplace: input.notifyMarketplace === true,
+      },
     });
-    statusFlipped = updated.length > 0;
+    statusFlipped = result.statusChanged;
   } else {
-    // Unmark: flip the flag only; never change status (we don't know the prior state).
-    await db
-      .update(orders)
-      .set({ externallyShipped: false, updatedAt: new Date() })
-      .where(and(
-        eq(orders.id, id),
-        // Per user override unlock shipped data on 2026-07-14: the early route
-        // guard is carried into the final UPDATE predicate, closing its race window.
-        input.writeAuthorization.allowTerminal ? undefined : mutableLifecycle,
-      ));
+    await applyLifecycle({
+      orderId: id,
+      commandKey: `lifecycle:external-unmark:order:${id}`,
+      transition: 'external_unmark',
+      source: input.source ? `external:${input.source}` : 'external',
+      externallyShippedSource: null,
+      allowCanonicalOverride: input.writeAuthorization.allowTerminal,
+      requireAwaitingOrderStatus: true,
+      fulfillmentFacts: { kind: 'none' },
+    });
   }
 
   // Optional marketplace notify — only when the operator opted into a notify channel.
@@ -115,7 +129,7 @@ export async function markOrderShippedExternally(
     (input.notifyCustomer === true || input.notifyMarketplace === true);
   let notify: { ok: boolean; reason?: string } = { ok: false, reason: 'not requested' };
   if (shouldNotify) {
-    const provider = resolveShipmentConfirmationProvider({
+    const provider = resolveProvider({
       sourceProvider: order.sourceProvider ?? null,
       externalOrderId: order.externalOrderId,
     });
@@ -127,9 +141,9 @@ export async function markOrderShippedExternally(
         notify = { ok: false, reason: 'order has no upstream ShipStation ID — sync may be incomplete' };
       } else {
         try {
-          const creds = await loadClientCredentials(order.clientId);
-          const shipDate = new Date().toISOString().slice(0, 10);
-          await ssMarkOrderShippedV1(
+          const creds = await loadCredentials(order.clientId);
+          const shipDate = now().toISOString().slice(0, 10);
+          await markShipStationShipped(
             {
               orderId: ssUpstreamOrderId,
               carrierCode: input.carrierCode ?? null,
@@ -160,7 +174,7 @@ export async function markOrderShippedExternally(
         };
       } else {
         try {
-          notify = await confirmShipmentDirectNow({
+          notify = await confirmDirect({
             provider,
             order: {
               id: order.id,
@@ -174,7 +188,7 @@ export async function markOrderShippedExternally(
             },
             trackingNumber,
             carrierCode: input.carrierCode ?? null,
-            shipDate: new Date().toISOString().slice(0, 10),
+            shipDate: now().toISOString().slice(0, 10),
             notifyCustomer: input.notifyCustomer === true,
             notifyMarketplace: input.notifyMarketplace === true,
           });

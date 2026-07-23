@@ -3,6 +3,7 @@ import { db } from '../db/client.js';
 import { billingLineItems } from '../db/schema/billing.js';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost.js';
 import { roundMoney } from '../lib/money.js';
+import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
 import {
   assertBillingOrdersEditable,
   billingOrderHasNoFinalizedLineSql,
@@ -34,6 +35,7 @@ export type HugrabBillingShippingFloorCandidate = {
   orderId: number | null;
   orderNumber: string | null;
   shipDate: string | null;
+  billingEffectiveDate: string | null;
   currentShipping: number;
   selectedRateCost: number;
 };
@@ -65,6 +67,7 @@ type RawCandidate = {
   order_id: number | string | null;
   order_number: string | null;
   ship_date: string | null;
+  billing_effective_date: string | null;
   current_shipping: string | number;
   selected_rate_cost: string | number;
 };
@@ -146,6 +149,7 @@ function mapCandidate(row: RawCandidate): HugrabBillingShippingFloorCandidate {
     orderId: row.order_id == null ? null : Number(row.order_id),
     orderNumber: row.order_number,
     shipDate: row.ship_date,
+    billingEffectiveDate: row.billing_effective_date,
     currentShipping: roundMoney(toNumber(row.current_shipping)),
     selectedRateCost: roundMoney(toNumber(row.selected_rate_cost)),
   };
@@ -161,6 +165,10 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
   const params = resolveHugrabBillingShippingFloorParams(input);
   const limit = input.limit ?? HUGRAB_SHIPPING_FLOOR_DEFAULT_LIMIT;
   const scoped = clientScopePredicate ?? sql`true`;
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`billing_line_items.billing_effective_date`,
+    sql`billing_line_items.ship_date`,
+  );
 
   // PS-370: the SQL below coalesces s.selected_rate_cost — ensure the additive
   // fail closed if migration 0054 has not made it available before the read.
@@ -174,6 +182,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
         billing_line_items.order_id,
         billing_line_items.order_number,
         billing_line_items.ship_date,
+        ${effectiveDay} as billing_effective_date,
         billing_line_items.total_cost as current_shipping,
         coalesce(s.cost, fs.cost) as cost,
         coalesce(s.label_cost, fs.label_cost) as label_cost,
@@ -204,8 +213,8 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
         )}
         and billing_line_items.total_cost > 0
         and billing_line_items.description not ilike 'Included%'
-        and billing_line_items.ship_date >= ${input.dateFrom}::timestamptz
-        and billing_line_items.ship_date < ${input.dateTo}::timestamptz
+        and ${effectiveDay} >= ${input.dateFrom}::timestamptz
+        and ${effectiveDay} < ${input.dateTo}::timestamptz
         and ${scoped}
     ),
     priced_rows as (
@@ -215,6 +224,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
         src.order_id,
         src.order_number,
         src.ship_date::text as ship_date,
+        src.billing_effective_date::text as billing_effective_date,
         src.current_shipping::text as current_shipping,
         round(
           coalesce(
@@ -262,6 +272,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
       order_id,
       order_number,
       ship_date,
+      billing_effective_date,
       current_shipping,
       selected_rate_cost::text as selected_rate_cost
     from priced_rows
@@ -275,7 +286,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
           else abs(current_shipping::numeric - ${params.targetShipping}) > 0.004
         end
       )
-    order by ship_date desc nulls last, billing_line_id desc
+    order by billing_effective_date desc nulls last, billing_line_id desc
     limit ${limit}
   `);
 

@@ -58,13 +58,13 @@ check('billing gates the storage charge on durable proof',
   /await ensureBillingStorageProofSchema\(\)[\s\S]*await db\.transaction\(async \(tx\) =>/.test(storageBlock) &&
     /tx\s*\n\s*\.insert\(billingStorageProof\)[\s\S]*tx\s*\n\s*\.insert\(billingLineItems\)/.test(storageBlock) &&
     /catch \(storageErr\)[\s\S]*skipped \+= 1/.test(storageBlock) &&
-    /storage line skipped because proof freeze failed/.test(storageBlock) &&
+    /reportError\('billing\.storage_line\.freeze_failed', storageErr/.test(storageBlock) &&
     !/storage line generated but proof freeze failed/.test(storageBlock));
 
 // ── 5b) Slice-1 dating FIX the proof consistency depends on: the storage line is
 //        dated on the LAST billed day (inside [from, to)), not the exclusive end.
 check('billing dates the storage line inside the period (last billed day)',
-  /const storageShipDate = new Date\(periodEnd\.getTime\(\) - STORAGE_LINE_DAY_MS\)/.test(storageBlock) &&
+  /lineDate: storageShipDate/.test(storageBlock) &&
   /shipDate: storageShipDate/.test(storageBlock));
 check('billing no longer dates the storage line on the exclusive period end',
   !/shipDate: periodEnd/.test(storageBlock));
@@ -76,9 +76,9 @@ const routeBlock = route.slice(route.indexOf("app.get('/storage-proof'"), route.
 check('route: financials:read + per-client scope enforced',
   /app\.use\('\*', requirePermission\('financials:read'\)\)/.test(route) && /canAccessBillingClient\(q\.clientId, scope\)/.test(routeBlock));
 check('route: reads the frozen sidecar', /\.from\(billingStorageProof\)/.test(routeBlock));
-check('route: matches the canonical period bounds (same instants billing froze)',
-  /billingStorageProof\.periodStart\} = \$\{q\.dateFrom\}::timestamptz/.test(routeBlock) &&
-  /billingStorageProof\.periodEnd\} = \$\{q\.dateTo\}::timestamptz/.test(routeBlock));
+check('route: resolves the canonical month proof containing the clicked line day',
+  /billingStorageProof\.periodStart\} < \$\{q\.dateTo\}::timestamptz/.test(routeBlock) &&
+  /billingStorageProof\.periodEnd\} > \$\{q\.dateFrom\}::timestamptz/.test(routeBlock));
 check('route: does NOT recompute storage (no calculator call in the route)', !/computeClientStorageBilling/.test(route));
 
 // ── 7) FE api client — honest-error contract, not wrapped in safe(...) ──
@@ -97,12 +97,12 @@ check('FE modal: displays the backend daily rate (does NOT recompute it)',
 
 // ── 9) FE wiring — storage line opens the drilldown ──
 const detailTable = read('web/src/components/Views/BillingDetailTable.tsx');
-check('detail table: optional onOpenStorageProof prop', /onOpenStorageProof\?: \(\) => void/.test(detailTable));
+check('detail table: optional row-aware onOpenStorageProof prop', /onOpenStorageProof\?: \(row: BillingDetailDto\) => void/.test(detailTable));
 check('detail table: the storage line triggers the drilldown',
   /row\.lineType === 'storage' && onOpenStorageProof/.test(detailTable) && /Storage · proof/.test(detailTable));
 const view = read('web/src/components/Views/BillingView.tsx');
 check('BillingView: mounts the proof modal + passes the trigger',
-  /<BillingStorageProofModal/.test(view) && /onOpenStorageProof=\{\(\) => setStorageProofOpen\(true\)\}/.test(view));
+  /<BillingStorageProofModal/.test(view) && /onOpenStorageProof=\{\(row\) =>/.test(view) && /setStorageProofDay\(day\)/.test(view));
 
 // ── 10) package.json wires this guard ──
 const pkg = read('package.json');

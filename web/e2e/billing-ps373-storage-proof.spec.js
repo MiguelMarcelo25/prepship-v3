@@ -148,14 +148,34 @@ async function setup(page) {
     if (path === '/users') return route.fulfill(json({ users: [] }))
     if (path === '/locations') return route.fulfill(json([]))
     if (path === '/packages') return route.fulfill(json({ data: [] }))
+    // PS-433 moved billing preset dates to this backend source of truth. Keep
+    // the PS-373 browser fixture on the January proof period below.
+    if (path === '/billing/preset-window') {
+      return route.fulfill(json({ from: '2026-01-01', to: '2026-01-31' }))
+    }
     if (path === '/billing/config') return route.fulfill(json([]))
     if (path === '/billing/package-prices') return route.fulfill(json({ data: [] }))
     if (path === '/billing/fetch-ref-rates/status') return route.fulfill(json({ status: 'idle' }))
     if (path === '/billing/summary') {
+      const summaryRow = {
+        clientId: 1,
+        clientName: 'Alpha Client',
+        pickPackTotal: 0,
+        additionalTotal: 0,
+        pickPackFeeTotal: 0,
+        packageTotal: 0,
+        shippingTotal: 0,
+        storageTotal: Number(STORAGE_TOTAL),
+        fulfillmentFeeTotal: Number(STORAGE_TOTAL),
+        orderCount: 1,
+        grandTotal: Number(STORAGE_TOTAL),
+        total: Number(STORAGE_TOTAL),
+        count: 1,
+        byType: { pick_pack: 0, additional_unit: 0, package_cost: 0, storage: Number(STORAGE_TOTAL), shipping: 0 },
+      }
       return route.fulfill(json({
-        clients: [
-          { clientId: 1, count: 1, total: Number(STORAGE_TOTAL), byType: { pick_pack: 0, additional: 0, package_cost: 0, storage: Number(STORAGE_TOTAL), shipping: 0 } },
-        ],
+        data: [summaryRow],
+        clients: [summaryRow],
         grandTotal: Number(STORAGE_TOTAL),
       }))
     }

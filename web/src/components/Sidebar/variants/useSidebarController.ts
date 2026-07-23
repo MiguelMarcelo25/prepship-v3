@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../../../api/client'
+import { endpointQueryKeys } from '../../../lib/endpoint-query-keys'
+import { queryClient } from '../../../lib/query-client'
 import { useAuth } from '../../../lib/auth'
 import {
   buildSidebarSections,
@@ -96,7 +98,12 @@ export function useSidebarController(props: SidebarVariantProps) {
       if (document.visibilityState !== 'visible') return
       lastCountsLoadRef.current = Date.now()
       try {
-        setCounts(await apiClient.fetchCounts({ dateStart, dateEnd }))
+        const filter = { dateStart, dateEnd }
+        setCounts(await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.counts(filter),
+          queryFn: () => apiClient.fetchCounts(filter),
+          staleTime: 120_000,
+        }))
       } catch (error) {
         console.error('Failed to fetch sidebar counts:', error)
       }
@@ -119,6 +126,7 @@ export function useSidebarController(props: SidebarVariantProps) {
     // linger in the sidebar count tree for up to 10 seconds before
     // the interval-driven refresh dropped it.
     const onClientActiveChanged = () => {
+      void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.countsRoot })
       void loadCounts()
     }
     document.addEventListener('visibilitychange', onVisible)

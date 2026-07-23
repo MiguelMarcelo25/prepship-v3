@@ -97,7 +97,11 @@ assert.match(service, /await persistQueueSendJobSnapshot\(job, QUEUE_SEND_PROGRE
 assert.ok(!/shouldPersistProgress\(job\.current/.test(service));
 assert.match(service, /shouldPersistMergeProgress\(processed, sorted\.length\)/);
 assert.ok(service.includes('getQueueSendJobItemRecords'));
-assert.match(store, /WHERE print_queue_send_jobs\.updated_at <= \$\{snapshot\.updatedAt\}/);
+assert.match(
+  store,
+  /WHERE print_queue_send_jobs\.generation = \$\{snapshot\.generation\}[\s\S]*?snapshot_updated_at[\s\S]*?<= \$\{snapshot\.persistedAt\}/,
+  'progress/full snapshots must remain monotonic inside the current durable generation',
+);
 assert.match(route, /completed_order_attempts:/);
 assert.match(route, /order_attempts_total:/);
 assert.match(route, /progress_semantics:\s*'order_attempts'/);

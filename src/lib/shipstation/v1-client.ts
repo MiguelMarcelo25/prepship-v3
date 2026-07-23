@@ -73,21 +73,29 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
     );
   }
 
-  const execute = () =>
-    breaker.execute(async () => {
+  const execute = () => {
+    // Per user override unlock shipped data on 2026-07-23: PS-440 gives one
+    // deadline ownership of admission, every retry/backoff, headers, and body
+    // consumption. Recreating it per attempt let a nominal 25s request run for
+    // minutes while retrying; provider and persistence semantics are unchanged.
+    const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const requestSignal = opts.signal
+      ? AbortSignal.any([opts.signal, timeoutSignal])
+      : timeoutSignal;
+
+    return breaker.execute(async () => {
       const maxRetries = opts.maxRetries ?? 5;
       let attempt = 0;
       while (true) {
         // Per user override unlock shipped data on 2026-07-14: the shipment
         // worker's deadline owns retries and rate-limit waits at this boundary.
-        throwIfRequestAborted(opts.signal);
+        throwIfRequestAborted(requestSignal);
         attempt += 1;
-        await bucket.acquire();
-        throwIfRequestAborted(opts.signal);
-        const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-        const signal = opts.signal
-          ? AbortSignal.any([opts.signal, timeoutSignal])
-          : timeoutSignal;
+        // Per user override unlock shipped data on 2026-07-18: propagate the
+        // worker signal through v1 admission so order-priority preemption can
+        // release the shared lane even while the fleet token bucket is empty.
+        await bucket.acquire({ signal: requestSignal });
+        throwIfRequestAborted(requestSignal);
         const res = await timedFetch('shipstation.v1.request', `${V1_BASE}${path}`, {
           method: opts.method ?? 'GET',
           headers: {
@@ -95,7 +103,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
             'Content-Type': 'application/json',
           },
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-          signal,
+          signal: requestSignal,
         }, { path, attempt });
 
         if (res.status === 429) {
@@ -106,7 +114,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
           const backoffMs = retryAfter
             ? retryAfter * 1000
             : Math.min(30_000, 2 ** attempt * 1000);
-          await sleep(backoffMs, undefined, { signal: opts.signal });
+          await sleep(backoffMs, undefined, { signal: requestSignal });
           continue;
         }
 
@@ -121,7 +129,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
             );
           }
           const backoffMs = Math.min(4_000, 2 ** attempt * 1000);
-          await sleep(backoffMs, undefined, { signal: opts.signal });
+          await sleep(backoffMs, undefined, { signal: requestSignal });
           continue;
         }
 
@@ -138,6 +146,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
         return (await res.json()) as T;
       }
     });
+  };
 
   if (!opts.dedupeKey) return execute();
 

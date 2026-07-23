@@ -1,6 +1,10 @@
 # Shopify to PrepShip Connection Walkthrough
 
-Last updated: 2026-07-07
+Last updated: 2026-07-18
+
+> This is a store-specific KF Goodies record. For all new customer setups,
+> use the current universal guide:
+> [Connect Shopify to PrepShip](shopify-prepship-client-setup-readme.md).
 
 ## Goal
 
@@ -27,13 +31,16 @@ admin store URL and normalizes it to the `.myshopify.com` domain.
 3. Add these Admin API scopes:
 
 ```text
-read_orders
-read_products
-read_locations
+read_customers
+read_draft_orders
 read_fulfillments
 write_fulfillments
+read_locations
+read_orders
 read_merchant_managed_fulfillment_orders
 write_merchant_managed_fulfillment_orders
+write_orders
+read_products
 ```
 
 4. Release the app version.
@@ -68,9 +75,10 @@ identity when the credentials and scopes are valid.
 
 If Shopify returns `app_not_installed`, the Client ID and Secret reached
 Shopify, but that app is not installed on the exact shop domain you entered.
-Install or reinstall the app on `kf-goodies-2.myshopify.com`, or create a
-store-admin custom app and paste its real `shpat_` Admin API Access Token into
-the legacy token field.
+Install or reinstall the app on `kf-goodies-2.myshopify.com`. If the store
+already has a legacy Shopify-admin custom app, its real `shpat_` Admin API
+Access Token can be used in the legacy token field. Shopify no longer allows
+new admin-created custom apps, so new setups should use the Dev Dashboard path.
 
 ## What PrepShip Now Does
 

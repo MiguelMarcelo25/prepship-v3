@@ -1,0 +1,356 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-437",
+  "title": "Unify customer shipping money across PrepShip and Client Portal and reconcile exact historical return receipts",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "24bade0f23c62e44a616746b29daa2f401d2e087"
+  },
+  "riskDomains": [
+    "rate_label",
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 97,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "PrepShip owns one policy-versioned purchased-cost, customer-rate, and margin tuple; the HUGRAB rule activates only from persisted client-ID billing configuration, and Billing, return read models, and Client Portal delegate instead of deriving alternate truth.",
+      "evidenceIds": [
+        "focused-ps437-guard",
+        "implementation-scope-proof"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "New Client Portal returns persist the exact provider-selected label cost before invoking the scoped PrepShip freeze boundary, while missing or partial legacy facts fail closed.",
+      "evidenceIds": [
+        "focused-ps437-guard",
+        "client-portal-ci"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "high",
+      "status": "met",
+      "description": "The customer-shipping-money endpoint enforces client/store scope and permission and does not disclose internal purchased-cost or margin fields in its response.",
+      "evidenceIds": [
+        "focused-ps437-guard"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "Exactly two historical real return receipts were repaired from matching persisted provider evidence to the canonical frozen tuple; three explicit offline zero-cost test rows remained unchanged and the post-audit delta is zero.",
+      "evidenceIds": [
+        "live-return-reconciliation",
+        "bounded-reconciliation-adversarial"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "The historical repair found no Billing line, invoice, or finalized period and changed no Billing history, status, label, postage, provider, marketplace, print, or inventory fact.",
+      "evidenceIds": [
+        "live-return-reconciliation",
+        "billing-boundary-integration",
+        "billing-boundary-adversarial"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "Strict typecheck, production web build, focused PS-437 checks, rate and billing behavioral boundaries, shipped/return lockdown checks, and the complete source-of-truth pack pass; both applications are live and ready on their target branches.",
+      "evidenceIds": [
+        "strict-typecheck",
+        "frontend-build",
+        "full-sot-guard-pack",
+        "client-portal-ci",
+        "live-deployment-readiness",
+        "live-return-reconciliation"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/customer-shipping-money.ts customer shipping decision/freeze owner and persisted client-ID policy gate",
+      "src/services/customer-shipping-money-snapshot.ts immutable tuple contract",
+      "src/services/billing-shipping-line.ts and src/services/billing.ts existing Billing policy owners consumed by the customer-money owner",
+      "Client Portal provider label receipt persistence followed by PrepShip scoped freeze delegation"
+    ],
+    "oldOwners": [
+      {
+        "path": "Client Portal src/services/customer-shipping-rate.ts local customer-rate formula",
+        "disposition": "deleted",
+        "delegatesTo": "PrepShip src/services/customer-shipping-money.ts through the scoped freeze endpoint"
+      },
+      {
+        "path": "Client Portal return/Billing helpers choosing customer rate from legacy components",
+        "disposition": "delegated",
+        "delegatesTo": "the PrepShip policy-versioned frozen customer-shipping-money tuple"
+      },
+      {
+        "path": "PrepShip Billing and return read paths with separate customer-rate fallbacks",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/customer-shipping-money.ts and strict snapshot reader"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/routes/client-portal/integrations.ts",
+        "action": "modified",
+        "delegatesTo": "the canonical target/scope lookup and freezeReturnCustomerShippingMoney service"
+      },
+      {
+        "path": "Client Portal src/services/prepship-customer-shipping-money.ts",
+        "action": "added",
+        "delegatesTo": "the PrepShip client-scoped customer-shipping-money freeze endpoint"
+      },
+      {
+        "path": "scripts/ps-437-reconcile-return-money.ts",
+        "action": "added",
+        "delegatesTo": "the canonical PrepShip policy preview and fixed persisted-provider-receipt guards; dry-run rolls back by default"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Neither React nor Client Portal owns authoritative shipping-money policy. The HUGRAB override cannot be activated by a mutable display name and requires persisted client-ID billing configuration. The reconciliation cannot estimate a cost or call a provider; it accepts only two fixed rows whose durable label receipt components agree and asks the canonical PrepShip policy owner for the frozen tuple."
+    }
+  },
+  "evidence": [
+    {
+      "id": "focused-ps437-guard",
+      "classification": "static",
+      "command": "npm run test:ps-437-customer-shipping-money && npm run test:return-order-summary && npm run test:order-editable-lockdown",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-437-customer-shipping-money-guard.ts",
+        "scripts/return-order-summary-guard.mjs",
+        "scripts/order-editable-lockdown-guard.mjs",
+        "src/services/customer-shipping-money.ts"
+      ],
+      "assertions": [],
+      "proves": "Policy thresholds, complete tuple parsing, fail-closed missing cost, scoped endpoint placement, thin return display consumption, reconciliation safety flags, and shipped/cancelled mutation locks remain present."
+    },
+    {
+      "id": "rate-boundary-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-rate-boundary with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "src/services/shipping-workflow/apply-best-rate.ts",
+        "src/services/shipping-workflow/rate-fingerprint.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "The real backend rate/proof boundary integrates with an injected provider seam and rejects mismatched order, account, and rate facts before provider activity."
+    },
+    {
+      "id": "rate-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-rate-boundary with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Cross-order, cross-account, and stale/mismatched selected-rate facts fail before the provider spy is touched."
+    },
+    {
+      "id": "billing-boundary-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts",
+        "src/services/billing-invoice-totals.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "The Billing source of truth preserves line cardinality and stable totals across repeated reads of a current PostgreSQL-compatible fixture."
+    },
+    {
+      "id": "billing-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Cancelled/return, duplicate, out-of-window, and cross-client fixtures cannot corrupt authoritative Billing cardinality or totals."
+    },
+    {
+      "id": "bounded-reconciliation-adversarial",
+      "classification": "adversarial",
+      "command": "npx tsx scripts/ps-437-reconcile-return-money.ts --expected-count=2 (rollback-only production preflight)",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-437-reconcile-return-money.ts",
+        "docs/final-review/evidence/PS-437-return-reconciliation.json"
+      ],
+      "assertions": [
+        "cardinality",
+        "idempotency",
+        "provider_spy_untouched"
+      ],
+      "proves": "The default transaction rolled back after exactly two fixed candidates passed receipt agreement, active-return, client, no-snapshot, no-Billing, and canonical-policy guards; the script has no provider-capable import or generic scan/update path."
+    },
+    {
+      "id": "live-return-reconciliation",
+      "classification": "live",
+      "command": "Rollback-only preflight; npx tsx scripts/ps-437-reconcile-return-money.ts --apply --confirm-production --expected-count=2; then npx tsx scripts/ps-437-return-money-audit.ts",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/evidence/PS-437-return-reconciliation.json",
+        "docs/ps-tickets/PS-437.md"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "cardinality",
+        "idempotency",
+        "provider_spy_untouched"
+      ],
+      "proves": "Production now has two exact policy-versioned frozen return tuples at zero canonical delta and three unchanged offline no-charge fixtures, with zero Billing/provider/label/postage/marketplace/print/inventory side effect."
+    },
+    {
+      "id": "client-portal-ci",
+      "classification": "integration",
+      "command": "Client Portal GitHub Actions CI run 29548396218 and DB-backed integration run 29548396231",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-437.md"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Client Portal main passes its compile/test pipeline and DB-backed return integration after the exact-cost persistence and PrepShip freeze delegation change."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass with the audit and reconciliation tooling."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production PrepShip web bundle builds successfully with 2,977 modules transformed."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert test-only environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The complete mandatory source-of-truth, rate, label, Billing, lifecycle, lockdown, and runtime-schema guard pack passes."
+    },
+    {
+      "id": "live-deployment-readiness",
+      "classification": "live",
+      "command": "Read-only Vercel and Render deployment inspection, post-deploy error-log inspection, and public GET /health, /health/ready, /health/deep, and Vercel production alias on 2026-07-23",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-437.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_implementation_sha_live",
+        "vercel_ready",
+        "render_api_worker_print_live",
+        "readiness_http_200",
+        "provider_spy_untouched"
+      ],
+      "proves": "Vercel deployment dpl_EgK3MGnNcyL9MSG1UKADYiFY2BtF is Ready and Promoted in Production for exact SHA 24bade0f23c62e44a616746b29daa2f401d2e087. Render API dep-d9gksocvikkc739l1do0, sync worker dep-d9gksomigcvs73ai2230, and print worker dep-d9gksosvikkc739l1fog are live on the same SHA. The Vercel production alias, /health, /health/ready, and /health/deep returned HTTP 200; Print Queue reported zero queued/provider-pending work, worker heartbeat was current, and no post-deploy error was present. Verification called no label, postage, marketplace mutation, Billing generation, inventory mutation, or production order/shipment write boundary."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --stat --oneline 24bade0f23c62e44a616746b29daa2f401d2e087 && git diff --check 5986b8a399583637706e47bf5dcc217943ec880f..24bade0f23c62e44a616746b29daa2f401d2e087",
+      "result": "pass",
+      "artifactPaths": [
+        "src/services/customer-shipping-money.ts",
+        "src/services/billing-hugrab-shipping-rate-override.ts",
+        "src/services/billing-shipping-line.ts",
+        "src/services/billing.ts",
+        "src/services/shipping-workflow/rate-money.ts",
+        "src/routes/billing.ts",
+        "web/src/components/Views/billing-parity.ts",
+        "scripts/ps-437-customer-shipping-money-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed PrepShip commit removes every active display-name fallback from the canonical policy owner and its Billing, rate-display, route, and frontend draft consumers; persisted client-ID billing configuration is required, focused guards forbid fallback reintroduction, and no migration or destructive schema change exists."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "No migrations were added or modified; not applicable.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "Revert the PS-437 application commits to remove runtime behavior. Do not blindly reverse the two historical frozen money facts; if policy truth is later disproved, use a separately reviewed, exact-evidence correction that preserves Billing-finalization rules."
+  },
+  "rollback": {
+    "strategy": "Revert the PrepShip PS-437 implementation/report commits and the three Client Portal PS-437 commits. Production historical tuples are already canonical evidence-backed facts and require a separate reviewed correction rather than a destructive rollback.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Exact implementation SHA 24bade0f23c62e44a616746b29daa2f401d2e087 is Ready and Promoted in Vercel production deployment dpl_EgK3MGnNcyL9MSG1UKADYiFY2BtF and live on Render API dep-d9gksocvikkc739l1do0, sync worker dep-d9gksomigcvs73ai2230, and print worker dep-d9gksosvikkc739l1fog. Public shell, health, readiness, and deep health are HTTP 200 with no post-deploy errors. The earlier post-apply production audit continues to prove the exact two frozen tuples, three unchanged offline fixtures, zero canonical delta, and no Billing-history or external side effect from the bounded correction. This release verification performed no business-data mutation.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/final-review/evidence/PS-437-return-reconciliation.json",
+      "docs/ps-tickets/PS-437.md"
+    ]
+  },
+  "caveats": []
+}

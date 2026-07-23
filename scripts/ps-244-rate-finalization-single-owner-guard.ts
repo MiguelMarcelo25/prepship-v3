@@ -50,7 +50,8 @@ check('backfill delegates to the finalizer (destructured bestRate)',
 // PS-419 made backend snapshot enforcement unconditional. The compatibility
 // selectedRateProof field may still be transported, but it cannot authorize postage.
 check('purchase boundary requires backend snapshot refs',
-  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(store));
+  /const ref = parseShippingQuoteSelectionRef\(body\.selectionRef\)/.test(store)
+  && /if \(!ref\) \{[\s\S]{0,200}throwStrictRateQuoteError\('backend_rate_quote_required'\)/.test(store));
 check('purchase boundary has no carried-proof fallback',
   !/snapshot_fallback|legacy_only|assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(store));
 

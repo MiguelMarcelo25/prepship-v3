@@ -1,5 +1,6 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
+import { useQueryClient } from '@tanstack/react-query'
 import { Box, CalendarClock, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
 // PS-155: the Package modals were extracted verbatim to ./packages-modals (behavior-preserving).
 // ReceiveStockModal + AdjustStockModal own only the modal BODY render; PackagesView keeps the modal
@@ -12,6 +13,7 @@ import {
 } from './packages-modals'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
+import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -53,21 +55,6 @@ const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 const PACKAGES_PAGE_SIZE_OPTIONS = [25, 50, 100]
 const PACKAGES_DEFAULT_PAGE_SIZE = 50
 const RECENT_PACKAGE_DAYS = 30
-
-// Module-scope cache for the /packages/usage-summary aggregate.
-// Surviving unmount/remount means re-visiting /packages within 30s
-// (e.g. flipping tabs, closing a drawer) skips even the single backend
-// request. Keyed by the `days` window so future filter UIs can vary
-// the window without invalidating each other. The TTL is short enough
-// that fresh-shipped data still appears on a normal page reload, but
-// long enough that nav-pop / drawer-close / settings-tab-bounce feels
-// instant. Mutations (adjust, receive, sync, purge) call
-// `clearPackagesUsageCache()` so the next read is fresh.
-const USAGE_CACHE_TTL_MS = 30_000
-const USAGE_CACHE = new Map<number, { byPackageId: Record<number, number | null>; fetchedAt: number }>()
-function clearPackagesUsageCache(): void {
-  USAGE_CACHE.clear()
-}
 
 function getLowStockPackages(packages: PackageDto[]): PackageDto[] {
   return packages.filter(
@@ -274,6 +261,7 @@ interface BillingDefaultModalState {
 
 export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const toastContext = useContext(ToastContext)
+  const queryClient = useQueryClient()
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [lowStockPackages, setLowStockPackages] = useState<PackageDto[]>([])
   const [loading, setLoading] = useState(true)
@@ -363,18 +351,24 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     const loadPackages = async () => {
       setLoading(true)
       setError(null)
-
-      const packagesResult = await apiClient.fetchPackages()
-
-      if (cancelled) return
-
-      const nextPackages = packagesResult
-      setPackages(nextPackages)
-      setReorderInputs(Object.fromEntries(nextPackages.map((pkg) => [pkg.packageId, String(pkg.reorderLevel ?? 10)])))
-      setError(null)
-      setLowStockPackages(getLowStockPackages(nextPackages))
-
-      setLoading(false)
+      try {
+        const packagesResult = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.packages(),
+          queryFn: () => apiClient.fetchPackages(),
+        })
+        if (cancelled) return
+        const nextPackages = packagesResult
+        setPackages(nextPackages)
+        setReorderInputs(Object.fromEntries(nextPackages.map((pkg) => [pkg.packageId, String(pkg.reorderLevel ?? 10)])))
+        setError(null)
+        setLowStockPackages(getLowStockPackages(nextPackages))
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load packages')
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
     void loadPackages()
@@ -382,7 +376,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [queryClient])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -402,11 +396,9 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   // request, ~500 small {packageId, used} entries (and only for packages
   // with non-zero usage in the window — empties are omitted server-side).
   //
-  // Module-level 30-second cache (USAGE_CACHE) survives unmount/remount
-  // (e.g. tab navigation, drawer close + reopen) so re-visiting /packages
-  // within 30s reuses the in-memory result and skips even the one
-  // remaining request. Cache is keyed by `days` so future filter UIs
-  // can vary the window without colliding.
+  // The canonical TanStack entry survives unmount/remount, so re-visiting
+  // /packages within 30 seconds reuses the endpoint result. The `days`
+  // parameter is part of that key so future windows cannot collide.
   useEffect(() => {
     if (packages.length === 0) {
       setUsageByPackageId({})
@@ -415,11 +407,12 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     let cancelled = false
     const days = 30
 
-    const cached = USAGE_CACHE.get(days)
-    const now = Date.now()
-    if (cached && now - cached.fetchedAt < USAGE_CACHE_TTL_MS) {
+    const usageKey = endpointQueryKeys.packagesUsage(days)
+    const cached = queryClient.getQueryData<{ packageId: number; used: number }[]>(usageKey)
+    const cachedAt = queryClient.getQueryState(usageKey)?.dataUpdatedAt ?? 0
+    if (cached && Date.now() - cachedAt < 30_000) {
       // Hydrate from cache instantly — no flash, no spinner.
-      setUsageByPackageId(cached.byPackageId)
+      setUsageByPackageId(Object.fromEntries(cached.map((row) => [row.packageId, row.used])))
       setUsageLoading(false)
       return
     }
@@ -428,7 +421,11 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     const timer = window.setTimeout(() => {
       void (async () => {
       try {
-        const rows = await apiClient.fetchPackagesUsageSummary(days)
+        const rows = await queryClient.fetchQuery({
+          queryKey: endpointQueryKeys.packagesUsage(days),
+          queryFn: () => apiClient.fetchPackagesUsageSummary(days),
+          staleTime: 30_000,
+        })
         if (cancelled) return
         const next: Record<number, number | null> = {}
         for (const row of rows ?? []) {
@@ -436,7 +433,6 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
             next[row.packageId] = Number(row.used) || 0
           }
         }
-        USAGE_CACHE.set(days, { byPackageId: next, fetchedAt: Date.now() })
         setUsageByPackageId(next)
       } catch {
         if (!cancelled) setUsageByPackageId({})
@@ -449,7 +445,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [packages])
+  }, [packages, queryClient])
 
   function handleResizePackageColumn(key: PackagesColumnKey, width: number) {
     setColumnWidths((current) => ({ ...current, [key]: width }))
@@ -496,7 +492,11 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   }
 
   const refreshPackages = async () => {
-    const nextPackages = await apiClient.fetchPackages()
+    const nextPackages = await queryClient.fetchQuery({
+      queryKey: endpointQueryKeys.packages(),
+      queryFn: () => apiClient.fetchPackages(),
+      staleTime: 0,
+    })
     setPackages(nextPackages)
     setReorderInputs(Object.fromEntries(nextPackages.map((pkg) => [pkg.packageId, String(pkg.reorderLevel ?? 10)])))
     setLowStockPackages(getLowStockPackages(nextPackages))
@@ -704,7 +704,10 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       // Purge wipes test ledger rows AND restores stock — both invalidate
       // the cached 30-day usage numbers. Without this clear, the column
       // would still show the pre-purge "USED" totals until the TTL.
-      clearPackagesUsageCache()
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.packagesRoot }),
+        queryClient.invalidateQueries({ queryKey: endpointQueryKeys.packagesUsageRoot }),
+      ])
       await refreshPackages()
       window.dispatchEvent(new CustomEvent('prepship:client-active-changed'))
     } catch (purgeError) {
@@ -895,11 +898,6 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       if (!result?.package) throw new Error('Receive failed')
       setReceiveModal(null)
       showToast(`✅ Received ${payload.qty} units. New total: ${result.package?.stockQty ?? '?'}`)
-      // Receive creates a positive ledger row — usage-summary only
-      // counts negatives, so technically nothing to invalidate, but
-      // future windowed views may diff stock-in vs stock-out, so we
-      // bust the cache to be safe + it forces a fresh aggregate.
-      clearPackagesUsageCache()
       await refreshPackages()
     } catch (receiveError) {
       showToast(`❌ ${receiveError instanceof Error ? receiveError.message : 'Receive failed'}`, 'error')
@@ -925,8 +923,6 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       if (!result?.package) throw new Error('Adjust failed')
       setAdjustModal(null)
       showToast(`✅ Adjusted. New total: ${result.package?.stockQty ?? '?'}`)
-      // Adjust can be positive OR negative — negatives change usage-30d.
-      clearPackagesUsageCache()
       await refreshPackages()
     } catch (adjustError) {
       showToast(`❌ ${adjustError instanceof Error ? adjustError.message : 'Adjust failed'}`, 'error')

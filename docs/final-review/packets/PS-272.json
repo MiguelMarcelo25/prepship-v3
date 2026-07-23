@@ -1,0 +1,326 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-272",
+  "title": "Re-certify sync reliability guards against the current durable-worker architecture",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "b896242d3ac116ab46ea5183c9f1aabef761b0ff"
+  },
+  "riskDomains": [
+    "governance"
+  ],
+  "claimedScore": 95,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "high",
+      "status": "met",
+      "description": "The PS-272 closeout guard follows the current one-confirmation fulfillment bound and shipment order-priority delegation instead of stale pre-refactor source text.",
+      "evidenceIds": [
+        "ps272-bounded-closeout",
+        "implementation-scope-proof"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "high",
+      "status": "met",
+      "description": "The connection-owner audit permits only the current explicit pools and separately proves that stuck-job recovery and worker telemetry remain isolated one-connection control-plane clients.",
+      "evidenceIds": [
+        "connection-owner-boundary",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "high",
+      "status": "met",
+      "description": "Rate workflow reservation proof follows the PS-428 durable unique active-request fence and conflict convergence rather than the removed session advisory-lock implementation.",
+      "evidenceIds": [
+        "sync-advisory-boundary",
+        "durable-worker-integration"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "medium",
+      "status": "met",
+      "description": "Multi-instance deferral evidence tolerates formatting while still requiring exact durable rate payload and deferral metadata preservation.",
+      "evidenceIds": [
+        "multi-instance-readiness",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "The mandatory source-of-truth pack, strict typecheck, production web build, API/readiness contracts, and security readiness suite pass with the guard updates.",
+      "evidenceIds": [
+        "full-sot-guard-pack",
+        "strict-typecheck",
+        "frontend-build",
+        "api-readiness",
+        "security-readiness"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "The implementation is offline test maintenance only and does not change runtime sync behavior, provider calls, labels, postage, marketplace notifications, migrations, or protected shipped/cancelled data.",
+      "evidenceIds": [
+        "implementation-scope-proof",
+        "closure-unit-fixtures",
+        "closure-adversarial-fixtures",
+        "closure-failure-fixtures"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/services/sync-scheduler.ts#runFulfillmentOutboxTick",
+      "src/services/sync-job-queue.ts#runShipmentSyncWithOrderPriority",
+      "src/services/sync-stuck-job-reaper.ts",
+      "src/services/worker-status.ts#createWorkerStatusSql",
+      "drizzle/0067_durable_worker_execution_fences.sql#rate_browse_jobs_request_active_unq"
+    ],
+    "oldOwners": [
+      {
+        "path": "scripts/ps-272-bounded-sync-closeout-guard.ts pre-priority-worker assertions",
+        "disposition": "delegated",
+        "delegatesTo": "scripts/ps-272-bounded-sync-drain-guard.ts and src/services/sync-job-queue.ts"
+      },
+      {
+        "path": "scripts/sync-advisory-lock-guard.mjs rateBrowseJobLockSql assertions",
+        "disposition": "deleted",
+        "delegatesTo": "drizzle/0067_durable_worker_execution_fences.sql#rate_browse_jobs_request_active_unq"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "scripts/audit-imported-handler-boundary-guard.ts",
+        "action": "modified",
+        "delegatesTo": "the explicit runtime pool constructors and their one-connection invariants"
+      },
+      {
+        "path": "scripts/audit-multi-instance-readiness-guard.ts",
+        "action": "modified",
+        "delegatesTo": "src/services/sync-job-queue.ts#deferBusySyncJob"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Only evidence guards changed. Each assertion points at the current runtime or migration owner; no guard introduces business truth, no alternate sync state is created, and no product caller changes."
+    }
+  },
+  "evidence": [
+    {
+      "id": "closure-unit-fixtures",
+      "classification": "unit",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "docs/final-review/evidence-packet.schema.json"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "The canonical closure evaluator and complete governance fixture pass offline."
+    },
+    {
+      "id": "closure-adversarial-fixtures",
+      "classification": "adversarial",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs"
+      ],
+      "assertions": [
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Wrong-SHA, wrong-branch, static-only, source-of-truth bypass, and unsupported-score packets are rejected or capped."
+    },
+    {
+      "id": "closure-failure-fixtures",
+      "classification": "failure-injection",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Injected malformed, stale-identity, missing-tier, and unverified-live evidence cannot produce a false green."
+    },
+    {
+      "id": "ps272-bounded-closeout",
+      "classification": "static",
+      "command": "npm run test:ps-272-bounded-sync-closeout && npm run test:ps-272-bounded-sync",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-272-bounded-sync-closeout-guard.ts",
+        "scripts/ps-272-bounded-sync-drain-guard.ts",
+        "src/services/sync-job-queue.ts",
+        "src/services/sync-scheduler.ts"
+      ],
+      "assertions": [],
+      "proves": "The closeout and focused guards agree on current service-owned page/time limits, one-confirmation outbox work, and shipment priority delegation."
+    },
+    {
+      "id": "connection-owner-boundary",
+      "classification": "static",
+      "command": "npm run test:audit-imported-handler-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-imported-handler-boundary-guard.ts",
+        "src/services/sync-stuck-job-reaper.ts",
+        "src/services/worker-status.ts"
+      ],
+      "assertions": [],
+      "proves": "Every runtime postgres constructor is explicitly allowlisted, while recovery and telemetry pools are separately constrained to one connection."
+    },
+    {
+      "id": "sync-advisory-boundary",
+      "classification": "static",
+      "command": "npm run test:sync-advisory-lock",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sync-advisory-lock-guard.mjs",
+        "src/services/rate-browse-job-store.ts",
+        "drizzle/0067_durable_worker_execution_fences.sql"
+      ],
+      "assertions": [],
+      "proves": "Queue lane locking remains isolated and rate reservation uses durable uniqueness plus conflict convergence without a session-held rate lock."
+    },
+    {
+      "id": "durable-worker-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-428-durable-worker-execution",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-428-durable-worker-execution-guard.ts",
+        "scripts/ps-428-durable-worker-execution-integration.ts",
+        "drizzle/0067_durable_worker_execution_fences.sql"
+      ],
+      "assertions": [],
+      "proves": "PostgreSQL-compatible integration proves the active-request uniqueness and durable worker generation fences."
+    },
+    {
+      "id": "multi-instance-readiness",
+      "classification": "integration",
+      "command": "npm run test:audit-multi-instance-readiness",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-multi-instance-readiness-guard.ts",
+        "src/services/sync-job-queue.ts",
+        "src/services/best-rate-ratchet-db.ts"
+      ],
+      "assertions": [],
+      "proves": "Durable rate payload preservation and concurrent best-rate ratchet behavior pass against the current multi-instance implementation."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs"
+      ],
+      "assertions": [],
+      "proves": "All 48 mandatory source-of-truth and architecture guards pass in one uninterrupted run."
+    },
+    {
+      "id": "strict-typecheck",
+      "classification": "static",
+      "command": "npm run typecheck",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json"
+      ],
+      "assertions": [],
+      "proves": "Backend and frontend strict TypeScript checks pass."
+    },
+    {
+      "id": "frontend-build",
+      "classification": "static",
+      "command": "npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "vite.config.ts",
+        "web/src"
+      ],
+      "assertions": [],
+      "proves": "The production frontend bundle builds successfully."
+    },
+    {
+      "id": "api-readiness",
+      "classification": "static",
+      "command": "npm run test:api-contracts && npm run test:health-deep-readiness",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/api-contracts-guard.mjs",
+        "scripts/health-deep-readiness-guard.mjs"
+      ],
+      "assertions": [],
+      "proves": "API contract and deep-health readiness guards remain green."
+    },
+    {
+      "id": "security-readiness",
+      "classification": "static",
+      "command": "npm run test:security-readiness",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/security-readiness-guard.mjs",
+        "reports/security-readiness/latest.md"
+      ],
+      "assertions": [],
+      "proves": "The complete authentication, RBAC, tenant-scope, redaction, dependency-policy, RLS, audit, privacy, and session security suite passes."
+    },
+    {
+      "id": "implementation-scope-proof",
+      "classification": "static",
+      "command": "git show --name-only --format= b896242d3ac116ab46ea5183c9f1aabef761b0ff",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-imported-handler-boundary-guard.ts",
+        "scripts/audit-multi-instance-readiness-guard.ts",
+        "scripts/ps-272-bounded-sync-closeout-guard.ts",
+        "scripts/sync-advisory-lock-guard.mjs"
+      ],
+      "assertions": [],
+      "proves": "The reviewed implementation commit changes only four offline evidence guards and touches no runtime, frontend, migration, provider adapter, or protected shipped/cancelled file."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "No migrations were added or modified; not applicable.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "Revert the packet-only commit, then revert b896242d3ac116ab46ea5183c9f1aabef761b0ff; no schema or production-data rollback is required."
+  },
+  "rollback": {
+    "strategy": "Revert the packet-only commit and implementation commit. This restores the previous offline assertions and changes no runtime or data state.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "The implementation changes offline evidence guards only. It does not invoke providers, purchase labels or postage, notify marketplaces, write a production database, or mutate shipped/cancelled data.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}

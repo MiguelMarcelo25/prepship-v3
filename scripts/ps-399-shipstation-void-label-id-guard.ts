@@ -68,7 +68,7 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 const pkg = readFileSync('package.json', 'utf8');
 
 assert.ok(
-  /ssVoidLabel/.test(ssConnector) && /await ssVoidLabel\(raw/.test(ssConnector),
+  /ssVoidLabel/.test(ssConnector) && /await ssVoidLabel\(\s*raw,[\s\S]*input\.signal/.test(ssConnector),
   'ShipStation connector must void provider label ids through ssVoidLabel(label_id)',
 );
 assert.ok(
