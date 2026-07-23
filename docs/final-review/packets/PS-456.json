@@ -1,0 +1,318 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-456",
+  "title": "Typed imported-handler boundaries and shared database pool ownership",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "028dc2e1d9d8b0ede38659e0e641b50c7c9d6f85"
+  },
+  "riskDomains": [
+    "auth_scope",
+    "governance"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "carrier-accounts.ts and store-accounts.ts compile under strict TypeScript, consume shared credential normalization and persistence owners, and use the process-wide database pool.",
+      "evidenceIds": [
+        "imported-handler-boundary",
+        "credential-auth-integration",
+        "implementation-scope"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "rates-multi.ts uses the typed Node adapter contract and contains no local TypeScript suppression or database-pool constructor.",
+      "evidenceIds": [
+        "imported-handler-boundary",
+        "connector-marketplace-guards"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Shopify, Walmart, and eBay imported handlers are typed at their Node/JSON boundary and delegate provider work to connector owners without introducing live calls in certification.",
+      "evidenceIds": [
+        "imported-handler-boundary",
+        "connector-marketplace-guards",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "critical",
+      "status": "met",
+      "description": "All eight files under src/lib/imported-handlers contain zero @ts-nocheck directives, construct zero postgres() clients, never close the shared pool, and delegate normal connection ownership to src/db/client.ts.",
+      "evidenceIds": [
+        "imported-handler-boundary",
+        "implementation-scope",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "high",
+      "status": "met",
+      "description": "Strict backend/frontend TypeScript, the production web build, credential and tenant-scope behavior, connector boundaries, marketplace guards, and all 56 mandatory source-of-truth commands pass at the reviewed stable SHA.",
+      "evidenceIds": [
+        "typecheck-build",
+        "credential-auth-integration",
+        "tenant-scope-adversarial",
+        "connector-marketplace-guards",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "The closure is exact-SHA governed and offline: malformed/stale evidence is rejected and certification creates no database connection, credential migration, label, postage purchase, provider notification, or production data mutation.",
+      "evidenceIds": [
+        "governance-unit",
+        "governance-adversarial",
+        "governance-failure-injection",
+        "provider-safety-proof"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "src/lib/node-handler.ts owns the typed NodeStyleRequest/NodeStyleResponse contract and shared JSON body parser",
+      "src/db/client.ts owns the process-wide postgres.js pool used by ordinary request handlers",
+      "src/lib/credential-accounts.ts and src/services/credential-accounts.ts own credential normalization and persistence",
+      "src/services/credential-account-schema.ts owns migration readiness checks without runtime data migration",
+      "drizzle/0063_credential_account_cutover.sql owns the idempotent legacy credential-row cutover",
+      "src/connectors/carrier and src/connectors/store own provider payload translation and provider communication"
+    ],
+    "oldOwners": [
+      {
+        "path": "local untyped request/response and JSON readers inside imported handlers",
+        "disposition": "delegated",
+        "delegatesTo": "src/lib/node-handler.ts"
+      },
+      {
+        "path": "per-request postgres() clients and handler-owned pool shutdown",
+        "disposition": "delegated",
+        "delegatesTo": "src/db/client.ts"
+      },
+      {
+        "path": "request-time migration of legacy marketplace credential rows",
+        "disposition": "delegated",
+        "delegatesTo": "drizzle/0063_credential_account_cutover.sql"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "src/lib/imported-handlers/*",
+        "action": "modified",
+        "delegatesTo": "typed Node adapter, shared credential services, shared DB pool, and provider connector owners"
+      },
+      {
+        "path": "api/carrier-accounts.ts and api/store-accounts.ts",
+        "action": "modified",
+        "delegatesTo": "shared credential normalization, JSON parsing, schema readiness, and persistence owners"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "Imported handlers remain thin ports. They validate transport intent and delegate typed parsing, credentials, database connections, and provider behavior to named backend owners."
+    }
+  },
+  "evidence": [
+    {
+      "id": "imported-handler-boundary",
+      "classification": "static",
+      "command": "npm run test:audit-imported-handler-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-imported-handler-boundary-guard.ts",
+        "IMPORTED_HANDLERS_BOUNDARY_AUDIT.md",
+        "src/lib/imported-handlers",
+        "src/lib/node-handler.ts",
+        "src/db/client.ts"
+      ],
+      "assertions": [],
+      "proves": "All eight imported handlers are present, typechecked, free of local pool construction/shutdown, and delegated to the shared Node and database boundaries."
+    },
+    {
+      "id": "credential-auth-integration",
+      "classification": "integration",
+      "command": "npm run test:credential-accounts && npm run test:rbac-permissions",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/credential-accounts-guard.mjs",
+        "scripts/rbac-permissions-guard.mjs",
+        "src/services/credential-accounts.ts",
+        "src/middleware/auth.ts"
+      ],
+      "assertions": [
+        "negative_role_resource_matrix",
+        "no_side_effect_on_rejection"
+      ],
+      "proves": "Credential account ports share normalization/persistence owners, client and support roles are denied credential writes, and rejection occurs before credential or database effects."
+    },
+    {
+      "id": "tenant-scope-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:client-store-scope and test:ps-421-method-capability-matrix through npm run test:sot-guard-pack",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/client-store-scope-guard.mjs",
+        "scripts/ps-421-method-capability-matrix-guard.ts",
+        "src/services/client-store-scope.ts"
+      ],
+      "assertions": [
+        "negative_role_resource_matrix",
+        "no_side_effect_on_rejection"
+      ],
+      "proves": "Cross-tenant client/store claims, unsupported roles, and out-of-scope resources fail closed before injected database, provider, cache, or job spies."
+    },
+    {
+      "id": "connector-marketplace-guards",
+      "classification": "unit",
+      "command": "npm run test:ps-032-connector-boundary && npm run test:ps-032-connector-orchestrators && npm run test:connector-architecture && npm run test:connector-registry && npm run test:marketplace-order-auth-cors && npm run test:shopify-order-sync && npm run test:ps-054-walmart-workflow && npm run test:ebay-nosku-title-fallback-grouping",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-032-connector-boundary-guard.mjs",
+        "scripts/ps-032-connector-orchestrator-guard.mjs",
+        "scripts/marketplace-order-auth-cors-guard.mjs",
+        "scripts/shopify-order-sync-guard.ts",
+        "scripts/ps-054-walmart-po-and-workflow-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "Carrier and marketplace HTTP ownership remains in connectors; Shopify, Walmart, and eBay boundary behavior passes with static or mocked provider transport."
+    },
+    {
+      "id": "governance-unit",
+      "classification": "unit",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs",
+        "docs/final-review/evidence-packet.schema.json"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "The canonical closure fixtures validate complete packets and reject malformed or unsupported evidence."
+    },
+    {
+      "id": "governance-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Wrong branch/SHA, source-of-truth bypass, unmet critical work, and static-only behavioral claims cannot produce a green closure."
+    },
+    {
+      "id": "governance-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Injected malformed, stale, incomplete, and false-green evidence is deterministically rejected or score-capped."
+    },
+    {
+      "id": "typecheck-build",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts"
+      ],
+      "assertions": [],
+      "proves": "Strict backend/frontend TypeScript passes and the production Vite application builds successfully with 2,978 modules transformed."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert localhost and .invalid test environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/audit-imported-handler-boundary-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 56 mandatory backend-truth, auth/scope, connector, worker, billing, inventory, rate, label, schema, and lifecycle commands pass offline."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git show --name-status bc930508fe3a2533ce178ee58f5fdfca6b9459dd && git show --name-status 8160db3c1d6e1402bfea9b5ae24db5211a4dd7e4 && git diff --check bc930508fe3a2533ce178ee58f5fdfca6b9459dd^..8160db3c1d6e1402bfea9b5ae24db5211a4dd7e4",
+      "result": "pass",
+      "artifactPaths": [
+        "IMPORTED_HANDLERS_BOUNDARY_AUDIT.md",
+        "scripts/audit-imported-handler-boundary-guard.ts",
+        "src/lib/imported-handlers",
+        "src/db/client.ts",
+        "drizzle/0063_credential_account_cutover.sql"
+      ],
+      "assertions": [],
+      "proves": "Implementation commit bc930508 owns the typed-handler/shared-pool cutover and certification commit 8160db3c permanently guards it; both are ancestors of the reviewed stable SHA."
+    },
+    {
+      "id": "provider-safety-proof",
+      "classification": "static",
+      "command": "Review the invoked PS-032/static/mocked guard sources and the full SOT pack offline contract",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-032-connector-boundary-guard.mjs",
+        "scripts/ps-054-walmart-po-and-workflow-guard.ts",
+        "scripts/sot-guard-pack.mjs",
+        "AGENTS.md"
+      ],
+      "assertions": [],
+      "proves": "Verification used static analysis, injected policy behavior, PGlite/in-memory fixtures, and replaced provider transports; it sent no real credential, label, postage, fulfillment, or marketplace request and changed no production data."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "No migration is added or modified by the PS-456 exact-SHA closure commit; historical migration 0063 is verified by the imported-handler and credential guards.",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "The closure adds documentation only. If the typed-handler implementation must be rolled back, use a reviewed forward revert of application code while preserving already-applied additive migration 0063 and all later migrations; never reverse credential rows in a request handler."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the packet-only closure commit if its evidence is invalid. A product rollback must separately forward-revert the bounded handler changes while keeping the shared migration history and database facts intact.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "PS-456 certification is a strict typing, ownership, and offline provider-boundary proof. It changes no runtime code at the reviewed SHA and requires no live credential, provider, label, or database operation.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
