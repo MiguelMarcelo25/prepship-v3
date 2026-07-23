@@ -74,7 +74,9 @@ check(
     ordersView.includes('...selection,') &&
     !ordersView.includes('createDirectCarrierLabelThenQueue') &&
     printQueueService.includes('async function processQueueSendOrder') &&
-    /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\r?\n\s*\.\.\.labelInput,/.test(printQueueService) &&
+    /const input = \{\s*\r?\n\s*\.\.\.labelInput,\s*\r?\n\s*orderId: order\.orderId,\s*\r?\n\s*orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,\s*\r?\n\s*\};/.test(printQueueService) &&
+    printQueueService.includes('resumeLabelV2FromDurableReceipt(input, labelPurchaseScope)') &&
+    printQueueService.includes('createLabelV2(input, labelPurchaseScope)') &&
     labelsService.includes('selectionRef: body.selectionRef') &&
     labelsService.includes('assertShippingQuoteContextMatches({') &&
     labelsService.includes('assertShippingQuoteAccountMatches({') &&
