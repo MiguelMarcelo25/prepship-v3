@@ -686,6 +686,7 @@
     "test:ps-361-shipment-sync-watchdog": "tsx scripts/ps-361-shipment-sync-watchdog-guard.ts",
     "test:ps-397-order-sync-freshness": "tsx scripts/ps-397-order-sync-freshness-guard.ts",
     "test:ps-436-sync-starvation": "tsx scripts/ps-436-sync-starvation-guard.ts",
+    "test:ps-442-sync-fairness": "tsx scripts/ps-442-sync-fairness-guard.ts",
     "test:sync-continuous-self-healing": "tsx scripts/sync-continuous-self-healing-guard.ts",
     "test:ps-400-sync-freshness": "tsx scripts/ps-400-sync-freshness-split-child-guard.ts",
     "test:ps-409-status-catchup-backlog": "tsx scripts/ps-409-status-catchup-backlog-guard.ts",

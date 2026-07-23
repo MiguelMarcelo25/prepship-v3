@@ -147,9 +147,13 @@ let shipStationConsumerLeadership: ShipStationConsumerLeadershipController | nul
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
+// Per user override unlock shipped data on 2026-07-23: queue wake-up control
+// only. These entries never mutate orders, shipments, labels, or providers.
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([
   JOBS.orders,
   JOBS.shipments,
+  JOBS.inventoryImport,
+  JOBS.syncProducts,
   JOBS.rateBackfill,
   JOBS.fulfillmentOutbox,
 ]);
@@ -1036,6 +1040,9 @@ function assertDurableBusyDeferral(
   if (name === JOBS.fulfillmentOutbox) {
     throw new Error('durable fulfillment-outbox deferral failed; retrying original queue job');
   }
+  if (BUSY_DEFER_JOB_NAMES.has(name)) {
+    throw new Error(`durable ${name} deferral failed; retrying original queue job`);
+  }
 }
 
 async function reconcileDurableSchedule(
@@ -1781,7 +1788,9 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     runShopifyOrderSyncTick(signal),
   );
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
-  await registerWorker(JOBS.syncProducts, runSyncProductsTick);
+  await registerWorker(JOBS.syncProducts, (_jobData, { signal }) =>
+    runSyncProductsTick(signal),
+  );
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
   // Per user override unlock shipped data on 2026-07-02: queued mode already
   // owns the external-shipped lane via pg-boss + advisory locks. Call the

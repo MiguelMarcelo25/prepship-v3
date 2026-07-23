@@ -172,6 +172,7 @@ export async function listShipStationProducts<TProduct = unknown>(
     apiSecret: input.apiSecret,
     dedupeKey: input.dedupeKey,
     timeoutMs: input.timeoutMs,
+    signal: input.signal,
   });
 }
 

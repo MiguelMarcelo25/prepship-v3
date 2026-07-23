@@ -35,7 +35,19 @@ import { db } from '../db/client';
 import { inventory } from '../db/schema/inventory';
 import { clients } from '../db/schema/clients';
 import { listShipStationProducts } from '../connectors/store/shipstation';
-import { createSyncRunBudget, syncRunBudgetTimeExhausted } from '../lib/sync-run-budget';
+import {
+  createSyncRunBudget,
+  syncRunBudgetExhausted,
+  syncRunBudgetTimeExhausted,
+} from '../lib/sync-run-budget';
+import {
+  PRODUCT_SYNC_NEXT_ACCOUNT_KEY,
+  followingProductSyncAccountId,
+  productSyncPageKey,
+  rotateProductSyncAccounts,
+} from './inventory-product-sync-progress';
+import { sanitizeShipStationSyncError } from './shipstation-sync-account-state';
+import { getSetting, getSettingNumber, setSetting } from './settings';
 
 // PS-265: bound the per-run SKU import so the job finishes UNDER the worker's ~10-min deadline.
 // It was an unbounded full-catalog DISTINCT scan + a per-row N+1 (SELECT-then-upsert) over EVERY
@@ -138,7 +150,12 @@ export interface SyncShipStationProductsResult {
   inserted: number;
   updated: number;
   skipped: number;
-  byAccount: Record<string, { inserted: number; updated: number }>;
+  pages: number;
+  attemptedAccounts: number;
+  deferredAccounts: number;
+  timeBudgetExhausted: boolean;
+  errors: Array<{ account: string; message: string }>;
+  byAccount: Record<string, { inserted: number; updated: number; pages: number; error?: string }>;
   message: string;
 }
 
@@ -183,7 +200,11 @@ type SSAccount = {
 // for products that DO have images sourced elsewhere (e.g. extracted
 // from order items by importSkusFromOrders). We only OVERWRITE the
 // imageUrl column when SS actually returned a non-null value.
-export async function syncShipStationProducts(): Promise<SyncShipStationProductsResult> {
+export async function syncShipStationProducts(opts: {
+  signal?: AbortSignal;
+  maxPagesPerAccount?: number;
+  timeBudgetMs?: number;
+} = {}): Promise<SyncShipStationProductsResult> {
   // Build the account list — env-main first, then any active client
   // that has its own ShipStation credentials wired in Settings.
   const accounts: SSAccount[] = [
@@ -209,26 +230,53 @@ export async function syncShipStationProducts(): Promise<SyncShipStationProducts
     }
   }
 
+  const nextAccountId = await getSetting(PRODUCT_SYNC_NEXT_ACCOUNT_KEY);
+  const orderedAccounts = rotateProductSyncAccounts(accounts, nextAccountId);
+  const budget = createSyncRunBudget({
+    maxPages: opts.maxPagesPerAccount ?? 2,
+    timeBudgetMs: opts.timeBudgetMs,
+  });
+
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
-  const byAccount: Record<string, { inserted: number; updated: number }> = {};
+  let pages = 0;
+  let attemptedAccounts = 0;
+  const errors: Array<{ account: string; message: string }> = [];
+  const byAccount: SyncShipStationProductsResult['byAccount'] = {};
 
-  for (const acct of accounts) {
-    byAccount[acct.label] = { inserted: 0, updated: 0 };
-    let page = 1;
+  for (const [accountIndex, acct] of orderedAccounts.entries()) {
+    if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
+    opts.signal?.throwIfAborted();
+    attemptedAccounts += 1;
+    byAccount[acct.label] = { inserted: 0, updated: 0, pages: 0 };
+    const storedPage = await getSettingNumber(productSyncPageKey(acct));
+    let page = storedPage && storedPage > 0 ? Math.trunc(storedPage) : 1;
+    let pagesThisAccount = 0;
+
+    // Persist the next turn before provider I/O. A crash or slow account cannot
+    // pin the durable rotation on the same catalog forever; completed pages
+    // still resume from their own per-account cursor below.
+    const followingAccountId = followingProductSyncAccountId(orderedAccounts, accountIndex);
+    if (followingAccountId) {
+      await setSetting(PRODUCT_SYNC_NEXT_ACCOUNT_KEY, followingAccountId);
+    }
 
     try {
-      while (true) {
+      while (!opts.signal?.aborted && !syncRunBudgetTimeExhausted(budget)) {
         const res = await listShipStationProducts<SSProduct>({
           pageSize: 500,
           page,
           apiKey: acct.apiKey,
           apiSecret: acct.apiSecret,
           dedupeKey: `products:list:${acct.label}:${page}`,
+          timeoutMs: 30_000,
+          signal: opts.signal,
         });
+        opts.signal?.throwIfAborted();
 
         for (const p of res.products) {
+          opts.signal?.throwIfAborted();
           const sku = (p.sku ?? '').trim();
           if (!sku) {
             skipped += 1;
@@ -294,22 +342,40 @@ export async function syncShipStationProducts(): Promise<SyncShipStationProducts
           }
         }
 
-        if (page >= res.pages || !res.products.length) break;
+        pages += 1;
+        pagesThisAccount += 1;
+        byAccount[acct.label]!.pages += 1;
+        const drained = page >= res.pages || !res.products.length;
+        await setSetting(productSyncPageKey(acct), String(drained ? 1 : page + 1));
+        if (drained || syncRunBudgetExhausted(budget, pagesThisAccount)) break;
         page += 1;
       }
     } catch (err) {
+      if (opts.signal?.aborted) throw err;
+      const message = sanitizeShipStationSyncError(err);
+      errors.push({ account: acct.label, message });
+      byAccount[acct.label]!.error = message;
       console.error(
         `[sync-products] account "${acct.label}" failed:`,
-        (err as Error).message
+        message,
       );
     }
   }
+
+  opts.signal?.throwIfAborted();
+  const timeBudgetExhausted = syncRunBudgetTimeExhausted(budget);
+  const deferredAccounts = Math.max(accounts.length - attemptedAccounts, 0);
 
   return {
     inserted,
     updated,
     skipped,
+    pages,
+    attemptedAccounts,
+    deferredAccounts,
+    timeBudgetExhausted,
+    errors,
     byAccount,
-    message: `Synced ${inserted + updated} products across ${accounts.length} account(s) (${inserted} new, ${updated} updated, ${skipped} without SKU)`,
+    message: `Synced ${inserted + updated} products across ${attemptedAccounts}/${accounts.length} account(s) in ${pages} page(s) (${inserted} new, ${updated} updated, ${skipped} without SKU, ${errors.length} account error(s)); durable cursors will resume remaining work.`,
   };
 }

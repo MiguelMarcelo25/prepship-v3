@@ -254,8 +254,9 @@ export function resolveSyncJobAdmission(
     };
   }
 
-  const busyDeferSingletonKey =
-    intent.kind === 'busy-defer' && name === SHIPSTATION_SYNC_JOBS.orders
+  const busyDeferSingletonKey = policy === 'standard'
+    ? 'busy-defer'
+    : intent.kind === 'busy-defer' && name === SHIPSTATION_SYNC_JOBS.orders
       ? ORDER_RECOVERY_SINGLETON_KEY
       : refreshSingletonKey(name);
   return {

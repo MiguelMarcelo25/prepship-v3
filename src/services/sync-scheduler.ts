@@ -178,19 +178,23 @@ export async function runInventoryImportFromOrders(): Promise<void> {
 // only overwrite when SS actually returned a value (so a null SS
 // response doesn't destroy a URL we already extracted from an order
 // item).
-export async function runSyncProductsTick(): Promise<void> {
+export async function runSyncProductsTick(signal?: AbortSignal): Promise<void> {
   if (syncProductsRunning) {
     console.log('[scheduler] inventory sync-products already running — skipping tick');
     return;
   }
   syncProductsRunning = true;
   try {
-    const result = await runSchedulerJob('inventory sync-products', () => syncShipStationProducts());
+    const result = await runSchedulerJob('inventory sync-products', () =>
+      syncShipStationProducts({ signal }),
+    );
     if (!result) return;
     console.log(
-      `[scheduler] inventory sync-products: ${result.inserted} new + ${result.updated} updated across ${Object.keys(result.byAccount).length} account(s)`
+      `[scheduler] inventory sync-products: ${result.inserted} new + ${result.updated} updated across ${Object.keys(result.byAccount).length} account(s); ` +
+      `pages=${result.pages}, deferredAccounts=${result.deferredAccounts}, errors=${result.errors.length}`
     );
   } catch (err) {
+    if (signal?.aborted) throw err;
     console.error(
       '[scheduler] inventory sync-products failed:',
       err instanceof Error ? err.message : err

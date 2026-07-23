@@ -211,6 +211,30 @@ async function withRefreshRun<T>(
   }
 }
 
+export const REPORTING_REFRESH_RUN_STALE_AFTER_MINUTES = 30;
+
+/** Mark crash-abandoned diagnostic rows terminal before a new refresh begins. */
+export async function reapStaleReportingRefreshRuns(
+  staleAfterMinutes: number = REPORTING_REFRESH_RUN_STALE_AFTER_MINUTES,
+): Promise<number> {
+  const boundedMinutes = Math.max(5, Math.min(Math.trunc(staleAfterMinutes), 24 * 60));
+  const rows = await db.execute<{ id: number }>(sql`
+    update reporting_refresh_runs
+    set
+      status = 'failure',
+      finished_at = now(),
+      duration_ms = least(
+        2147483647,
+        greatest(0, extract(epoch from (now() - started_at)) * 1000)
+      )::integer,
+      error = 'Worker stopped before reporting refresh completed'
+    where status = 'running'
+      and started_at < now() - (${boundedMinutes}::text || ' minutes')::interval
+    returning id
+  `);
+  return rows.length;
+}
+
 async function refreshDailySalesMetrics(from: Date, to: Date): Promise<number> {
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
@@ -652,6 +676,10 @@ export async function refreshReportingMetrics(
   } = {}
 ): Promise<ReportingMetricsRefreshResult> {
   await ensureReportingMetricsTables();
+  const reapedRuns = await reapStaleReportingRefreshRuns();
+  if (reapedRuns > 0) {
+    console.warn(`[reporting] closed ${reapedRuns} crash-abandoned refresh run(s)`);
+  }
   const days = options.days ?? DEFAULT_REFRESH_DAYS;
   const to = new Date();
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);

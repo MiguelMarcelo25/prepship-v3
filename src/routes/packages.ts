@@ -8,6 +8,11 @@ import { packageLedger } from '../db/schema/package-ledger';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
 import { ensurePackageConsumptionSchema } from '../services/package-consumption-schema';
+import {
+  PACKAGE_CONSUMPTION_REVIEW_STATUSES,
+  listPackageConsumptionReviews,
+  type PackageConsumptionReviewStatus,
+} from '../services/package-consumption-review-read-model';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   hasAppPermission,
@@ -157,6 +162,19 @@ app.get('/', async (c) => {
     });
   }
   return c.json(rows.map((row) => publicPackageRow(row, canViewFinancials)));
+});
+
+// PS-442 operator surface for durable package-consumption review work. This is
+// read-only: it never resolves a review, changes stock, or mutates shipment data.
+app.get('/consumption-reviews', async (c) => {
+  const requestedStatus = c.req.query('status')?.trim().toLowerCase();
+  const status = PACKAGE_CONSUMPTION_REVIEW_STATUSES.includes(
+    requestedStatus as PackageConsumptionReviewStatus,
+  )
+    ? requestedStatus as PackageConsumptionReviewStatus
+    : 'pending';
+  const limit = parsePositiveIntQuery(c.req.query('limit'), 100, 500);
+  return c.json(await listPackageConsumptionReviews({ status, limit }));
 });
 
 app.get('/:id{[0-9]+}', async (c) => {

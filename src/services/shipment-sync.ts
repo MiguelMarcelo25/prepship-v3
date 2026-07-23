@@ -28,6 +28,7 @@ import {
   syncRunBudgetTimeExhausted,
 } from '../lib/sync-run-budget';
 import { shipStationSyncWatermarkKeys } from './shipstation-sync-account-state';
+import { orderShipmentSyncAccountsByWatermark } from './shipment-sync-fairness';
 // PS-286 (per user override `unlock shipped data` on 2026-06-17): best-effort capture of
 // shipments.label_url after each account's sync — the v1 list payload omits it.
 import { enrichLabelUrls } from './shipment-label-url-enrich';
@@ -627,6 +628,8 @@ export type ShipmentSyncResult = {
   orphaned: number; // shipments with no matching order row
   ordersMarkedShipped: number;
   pages: number;
+  deferredAccounts: number;
+  timeBudgetExhausted: boolean;
   lastSyncedAt: string;
   sinceIso: string;
 };
@@ -734,12 +737,29 @@ export async function syncShipments(
   let errors = 0;
 
   const accounts = await loadShipmentSyncAccounts();
-  for (const acct of accounts) {
+  // Per user override unlock shipped data on 2026-07-23: schedule account
+  // polling by oldest durable cursor only. This does not weaken shipped or
+  // cancelled locks, rewrite shipment history, or change provider side effects.
+  const accountProgress = await Promise.all(
+    accounts.map(async (account) => {
+      const watermark = await readShipmentSyncWatermark(account);
+      return {
+        account,
+        accountId: account.sourceAccountId,
+        watermarkMs: watermark.value,
+        primaryKey: watermark.primaryKey,
+      };
+    }),
+  );
+  const fairAccounts = orderShipmentSyncAccountsByWatermark(accountProgress);
+  for (const accountProgressEntry of fairAccounts) {
+    const acct = accountProgressEntry.account;
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
     attemptedAccounts += 1;
     try {
       throwIfShipmentSyncAborted(opts.signal);
-      const { primaryKey: key, value: storedLastSync } = await readShipmentSyncWatermark(acct);
+      const key = accountProgressEntry.primaryKey;
+      const storedLastSync = accountProgressEntry.watermarkMs;
       const lastSync =
         opts.sinceMs ??
         (storedLastSync != null
@@ -903,6 +923,8 @@ export async function syncShipments(
   const matchedOrders = totalMatched;
   const pages = maxPages;
   const sinceIso = earliestSinceIso;
+  const timeBudgetExhausted = syncRunBudgetTimeExhausted(budget);
+  const deferredAccounts = Math.max(accounts.length - attemptedAccounts, 0);
 
   throwIfShipmentSyncAborted(opts.signal);
   return {
@@ -917,6 +939,8 @@ export async function syncShipments(
     orphaned: fetched - matchedOrders,
     ordersMarkedShipped,
     pages,
+    deferredAccounts,
+    timeBudgetExhausted,
     lastSyncedAt: new Date(runStartMs).toISOString(),
     sinceIso,
   };

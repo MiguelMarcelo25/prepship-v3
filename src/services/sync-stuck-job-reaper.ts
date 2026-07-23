@@ -24,6 +24,7 @@ import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline.js';
 import { syncJobLaneFor, type SyncJobLane } from './sync-job-lanes';
 import { isSyncLaneAdvisoryLockHeld } from './sync-lane-lock';
 import {
+  MANUAL_FULL_ORDER_SINGLETON_KEY,
   ORDER_RECOVERY_SINGLETON_KEY,
   ORDER_REFRESH_SINGLETON_KEY,
   SHIPMENT_REFRESH_SINGLETON_KEY,
@@ -103,6 +104,9 @@ export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
     ORDER_RECOVERY_SINGLETON_KEY,
     ORDER_REFRESH_SINGLETON_KEY,
     SHIPMENT_REFRESH_SINGLETON_KEY,
+    // Per user override unlock shipped data on 2026-07-23: reap only stale
+    // manual-full queue wake-ups; no order or shipment row is changed.
+    MANUAL_FULL_ORDER_SINGLETON_KEY,
   ]),
 ];
 
