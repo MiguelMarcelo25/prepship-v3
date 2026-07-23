@@ -406,6 +406,7 @@
     "test:billing-formula": "tsx scripts/billing-formula-guard.ts",
     "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",
     "test:billing-edit-draft-cache": "tsx scripts/billing-edit-draft-cache-guard.ts",
+    "test:ps-441-sot-migration": "npm run test:ps-433-frontend-source-of-truth && npm run test:billing-edit-draft-cache && tsx scripts/ps-441-sot-migration-guard.ts",
     "test:billing-line-item-warning-summary": "tsx scripts/billing-line-item-warning-summary-guard.ts",
     "test:ps-310-billing-export-sku-qty": "tsx scripts/ps-310-billing-export-sku-qty-guard.ts",
     "test:ps-362-billing-detail-sot-export": "tsx scripts/ps-362-billing-detail-sot-export-guard.ts",

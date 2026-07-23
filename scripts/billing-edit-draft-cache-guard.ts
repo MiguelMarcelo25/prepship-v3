@@ -46,19 +46,19 @@ assert.equal(billingEditDraftKey(rowA), 'order:2115', 'draft key should be stabl
 
 const cached = rememberBillingEditDraft({}, rowA, draft('0.99'))
 assert.deepEqual(
-  billingEditDraftForRow(cached, rowA, draft('0.00'), null),
+  billingEditDraftForRow(cached, rowA, draft('0.00')),
   draft('0.99'),
   'reopening the same preview row must keep the unsaved box cost draft',
 )
 
 assert.equal(
-  billingEditDraftForRow(cached, rowB, draft('0.00'), { row: rowA, draft: draft('0.99') }).packageCost,
-  '0.99',
-  'switching to another no-box-cost row with the same box should carry the typed box cost',
+  billingEditDraftForRow(cached, rowB, draft('0.00')).packageCost,
+  '0.00',
+  'switching orders must never carry a box-cost draft, even when both rows use the same box',
 )
 
 assert.equal(
-  billingEditDraftForRow(cached, rowDifferentBox, draft('0.00'), { row: rowA, draft: draft('0.99') }).packageCost,
+  billingEditDraftForRow(cached, rowDifferentBox, draft('0.00')).packageCost,
   '0.00',
   'switching to a different box must not carry the previous box cost',
 )
@@ -70,6 +70,7 @@ assert.deepEqual(
 )
 
 const billingView = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8')
+const billingDraftCache = readFileSync('web/src/components/Views/billing-edit-draft-cache.ts', 'utf8')
 assert.match(
   billingView,
   /billingEditDraftCacheRef/,
@@ -78,7 +79,12 @@ assert.match(
 assert.match(
   billingView,
   /billingEditDraftForRow/,
-  'BillingView must restore or carry the cached box-cost draft when switching preview rows',
+  'BillingView must restore only the selected order\'s cached draft',
+)
+assert.doesNotMatch(
+  `${billingView}\n${billingDraftCache}`,
+  /carryFrom|sameBillingBox/,
+  'frontend billing drafts must not infer or carry box-cost money across orders',
 )
 
 console.log('billing edit draft cache guard passed')

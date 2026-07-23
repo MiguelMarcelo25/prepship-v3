@@ -1367,11 +1367,10 @@ export default function BillingView() {
       const cache = current
         ? rememberBillingEditDraft(billingEditDraftCacheRef.current, current.row, current.draft)
         : billingEditDraftCacheRef.current
-      const carryFrom = current ? { row: current.row, draft: current.draft } : null
       billingEditDraftCacheRef.current = cache
       return {
         row,
-        draft: billingEditDraftForRow(cache, row, createBillingEditDraft(row), carryFrom),
+        draft: billingEditDraftForRow(cache, row, createBillingEditDraft(row)),
         saving: false,
         error: null,
       }
