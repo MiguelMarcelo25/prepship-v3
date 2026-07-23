@@ -31,6 +31,10 @@ const commandEnv = {
   [pathKey]: [resolve('node_modules/.bin'), process.env[pathKey]].filter(Boolean).join(delimiter),
 };
 const leafNodeOptions = process.env.PREPSHIP_CERTIFICATION_LEAF_NODE_OPTIONS;
+// PGlite-backed inventory integrations need more heap than static guards, while
+// the lightweight workflow controller can remain small on Render Starter.
+const elevatedLeafNodeOptions =
+  process.env.PREPSHIP_CERTIFICATION_ELEVATED_LEAF_NODE_OPTIONS ?? process.env.NODE_OPTIONS;
 const elevatedLeafScripts = new Set([
   'test:inventory-source-of-truth',
   'test:ps-414-inventory-ledger',
@@ -249,10 +253,13 @@ for (const group of GROUPS) {
     const started = process.hrtime.bigint();
     try {
       const command = directPackageCommand(script);
+      const nodeOptions = elevatedLeafScripts.has(script)
+        ? elevatedLeafNodeOptions
+        : leafNodeOptions;
       const result = await runCommand(
         command,
-        leafNodeOptions && !elevatedLeafScripts.has(script)
-          ? { ...commandEnv, NODE_OPTIONS: leafNodeOptions }
+        nodeOptions
+          ? { ...commandEnv, NODE_OPTIONS: nodeOptions }
           : commandEnv,
       );
       if (result.error) throw result.error;
