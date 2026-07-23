@@ -1,0 +1,324 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-458",
+  "title": "Canonical TanStack endpoint caches and client-mutation invalidation",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "ccf2940d012b684cfda5a2e6cfa994106b4bef71"
+  },
+  "riskDomains": [
+    "governance"
+  ],
+  "claimedScore": 96,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "Shared frontend GET endpoints use the canonical endpointQueryKeys owner, the hand-rolled cachedReads/cachedSafe layer and Packages module cache are removed, and no migrated endpoint retains a competing legacy key.",
+      "evidenceIds": [
+        "cache-unification-integration",
+        "cache-hygiene-static",
+        "implementation-scope"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Client create, update, delete, active-toggle, and store-sync mutation paths delegate to one client-cache invalidation owner covering the canonical client, store, count, and inventory families; the obsolete ['inventory'] alias is rejected.",
+      "evidenceIds": [
+        "cache-unification-integration",
+        "client-mutation-evidence"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "The Orders and Dashboard client-count scenario shares one TanStack cache entry, one root invalidation produces one refetch, and the real Clients-page mutation callbacks are statically bound to that canonical invalidator rather than a synthetic-only path.",
+      "evidenceIds": [
+        "cache-unification-integration",
+        "client-mutation-evidence"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "The focused PS-458, PS-448, cache-hygiene, failure-state, and Settings guards pass together with strict TypeScript, the production Vite build, and all 56 mandatory source-of-truth commands.",
+      "evidenceIds": [
+        "focused-frontend-guards",
+        "typecheck-build",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "Backend endpoints remain authoritative for every DTO and business value; the frontend helper owns only request invalidation identity and changes no money, rates, labels, inventory quantity, billing, auth/scope, provider routing, or shipped/cancelled protection.",
+      "evidenceIds": [
+        "architecture-placement",
+        "provider-safety",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "high",
+      "status": "met",
+      "description": "The closure is exact-SHA governed, adds no migration, rejects stale or malformed proof, and records the earlier audit blocker plus its bounded correction without claiming any live customer or provider mutation.",
+      "evidenceIds": [
+        "governance-unit",
+        "governance-adversarial",
+        "governance-failure-injection",
+        "implementation-scope"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "backend API endpoints own every returned DTO and business value",
+      "web/src/lib/endpoint-query-keys.ts owns canonical frontend request identities",
+      "web/src/lib/client-query.ts owns the canonical client-list keys and query options",
+      "web/src/lib/client-cache-invalidation.ts#invalidateClientDependentQueries owns the frontend cache families invalidated by successful client mutations",
+      "web/src/lib/query-client.ts owns the singleton TanStack Query client used for dedupe, freshness, retention, and refetch"
+    ],
+    "oldOwners": [
+      {
+        "path": "web/src/lib/v2-apiClient/shared.ts cachedReads/cachedSafe/clearCachedReads",
+        "disposition": "deleted",
+        "delegatesTo": "TanStack Query using endpointQueryKeys"
+      },
+      {
+        "path": "web/src/components/Views/PackagesView.tsx module-level usage cache",
+        "disposition": "deleted",
+        "delegatesTo": "TanStack Query using endpointQueryKeys.packagesUsage"
+      },
+      {
+        "path": "web/src/pages/Clients_variants/useClientsData.tsx and InventoryView.tsx per-view client invalidation lists",
+        "disposition": "delegated",
+        "delegatesTo": "web/src/lib/client-cache-invalidation.ts#invalidateClientDependentQueries"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "web/src/lib/v2-apiClient.ts",
+        "action": "modified",
+        "delegatesTo": "backend endpoints for data and the canonical frontend invalidator after successful client mutations"
+      },
+      {
+        "path": "web/src/pages/Clients_variants/useClientsData.tsx",
+        "action": "modified",
+        "delegatesTo": "backend client routes for mutations and the shared invalidator for cache freshness"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The new helper never computes or chooses business values. It only enumerates TanStack Query families that must be marked stale after backend-owned mutations, removing two competing invalidation lists."
+    }
+  },
+  "evidence": [
+    {
+      "id": "cache-unification-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-458-query-cache-unification",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-458-query-cache-unification-guard.ts",
+        "web/src/lib/endpoint-query-keys.ts",
+        "web/src/lib/client-cache-invalidation.ts",
+        "web/src/pages/Clients_variants/useClientsData.tsx"
+      ],
+      "assertions": [
+        "shared_cache_dedupe",
+        "single_root_invalidation",
+        "cross_view_refetch",
+        "real_mutation_wiring",
+        "obsolete_alias_rejected"
+      ],
+      "proves": "Orders and Dashboard share one client query, a successful mutation invalidates one root and refetches once, and the real API/Clients-page mutation boundaries delegate to the same client/store/count/inventory invalidation owner."
+    },
+    {
+      "id": "client-mutation-evidence",
+      "classification": "static",
+      "command": "Review docs/final-review/evidence/PS-458-client-mutation-invalidation.json and git show c9b0f90032b1798c56fe5e15f9a6853dd5c2da13",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/evidence/PS-458-client-mutation-invalidation.json",
+        "web/src/lib/client-cache-invalidation.ts",
+        "web/src/lib/v2-apiClient.ts",
+        "web/src/pages/Clients_variants/useClientsData.tsx",
+        "web/src/components/Views/InventoryView.tsx"
+      ],
+      "assertions": [],
+      "proves": "The audit blocker is corrected at the actual mutation entry points, every named canonical family is present, and the duplicate Inventory-view invalidation list is removed."
+    },
+    {
+      "id": "cache-hygiene-static",
+      "classification": "static",
+      "command": "npm run test:audit-frontend-cache-bundle-hygiene && npm run test:ps-448-view-query-cache",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/audit-frontend-cache-bundle-hygiene-guard.ts",
+        "scripts/ps-448-view-query-cache-guard.ts",
+        "web/src/lib/endpoint-query-keys.ts"
+      ],
+      "assertions": [],
+      "proves": "The legacy read-cache layer and migrated view-specific key aliases remain absent while Dashboard, Billing, Inventory, Packages, Locations, and Settings use the TanStack owner."
+    },
+    {
+      "id": "focused-frontend-guards",
+      "classification": "static",
+      "command": "npm run test:frontend-failure-states && npm run test:settings-query-migration",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/frontend-failure-states-guard.mjs",
+        "scripts/settings-query-migration-guard.mjs",
+        "web/src/lib/v2-apiClient.ts"
+      ],
+      "assertions": [],
+      "proves": "Transport errors still fail visibly, destructive client callers handle rejections, and Settings query migration behavior stays intact."
+    },
+    {
+      "id": "architecture-placement",
+      "classification": "static",
+      "command": "Review docs/ps-tickets/PS-458.md and the PS-458 implementation diff",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-458.md",
+        "web/src/lib/client-cache-invalidation.ts",
+        "ARCHITECTURE.md"
+      ],
+      "assertions": [],
+      "proves": "The documentation names backend DTO authority, the frontend request-identity owner, the earliest stale-data injection point, delegating callers, and the mutation-consistency boundary."
+    },
+    {
+      "id": "typecheck-build",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web with inert Vite environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts"
+      ],
+      "assertions": [],
+      "proves": "Strict backend/frontend TypeScript passes and the production Vite build completes with 2,979 modules transformed."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert localhost/.invalid environment values and a dummy test-only JWT secret",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/ps-458-query-cache-unification-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 56 mandatory source-of-truth, rate, label, billing, inventory, auth/scope, lifecycle, migration-readiness, worker, and governance commands pass offline."
+    },
+    {
+      "id": "governance-unit",
+      "classification": "unit",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs",
+        "docs/final-review/evidence-packet.schema.json"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Complete packets pass and malformed or unsupported evidence is rejected deterministically."
+    },
+    {
+      "id": "governance-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Wrong branch/SHA, stale proof, source-of-truth bypass, and unmet critical criteria cannot produce a green closure."
+    },
+    {
+      "id": "governance-failure-injection",
+      "classification": "failure-injection",
+      "command": "npm run test:final-review-closure",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/final-review-closure-fixtures.mjs",
+        "scripts/final-review-closure.mjs"
+      ],
+      "assertions": [
+        "malformed_rejected",
+        "sha_drift_rejected",
+        "false_green_score_caps"
+      ],
+      "proves": "Injected malformed, stale, incomplete, and false-green packets are rejected or score-capped."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git show --name-status 27b7d2e3c5cfb8a24ced9ae5f9dd31efe02fe8a3 && git show --name-status c9b0f90032b1798c56fe5e15f9a6853dd5c2da13 && git show --name-status ccf2940d012b684cfda5a2e6cfa994106b4bef71 && git diff --check",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-458.md",
+        "scripts/ps-458-query-cache-unification-guard.ts",
+        "web/src/lib/endpoint-query-keys.ts",
+        "web/src/lib/client-cache-invalidation.ts",
+        "docs/final-review/evidence/PS-458-client-mutation-invalidation.json"
+      ],
+      "assertions": [],
+      "proves": "The original cache consolidation, bounded mutation-wiring correction, and evidence commit are separately identifiable; the correction changes six frontend/guard/doc files and adds no backend route, service, schema, migration, or protected shipped/cancelled surface."
+    },
+    {
+      "id": "provider-safety",
+      "classification": "static",
+      "command": "Review the PS-458 evidence side-effect counters and offline guard contracts",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/evidence/PS-458-client-mutation-invalidation.json",
+        "scripts/ps-458-query-cache-unification-guard.ts",
+        "scripts/sot-guard-pack.mjs",
+        "AGENTS.md"
+      ],
+      "assertions": [],
+      "proves": "Verification used source scans, in-memory TanStack behavior, inert environment values, and offline fixtures only: zero live providers, labels, postage, marketplace notifications, production database mutations, or shipped/cancelled writes."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git show --name-only c9b0f90032b1798c56fe5e15f9a6853dd5c2da13 and git show --name-only ccf2940d012b684cfda5a2e6cfa994106b4bef71 contain no drizzle migration",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema rollback is needed. If PS-458 must be reversed, use reviewed forward reverts of the bounded mutation-invalidation correction and the original cache-unification commit; do not alter migration history or production data."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the PS-458 correction and packet commits. A product rollback may separately forward-revert the original cache-unification implementation while preserving all backend DTO, database, migration, and historical order/shipment facts.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "not-required",
+    "reason": "Acceptance is frontend cache-identity and mutation-wiring behavior that is fully exercised by in-memory/static guards and a production build. Mutating a real production client solely for certification would create avoidable customer-scope impact; deployment health and exact-SHA parity are verified separately after push.",
+    "followUpOwner": null,
+    "artifactPaths": []
+  },
+  "caveats": []
+}
