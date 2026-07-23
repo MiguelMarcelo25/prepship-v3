@@ -1,0 +1,358 @@
+{
+  "$schema": "../evidence-packet.schema.json",
+  "schemaVersion": 1,
+  "taskId": "PS-441",
+  "title": "Migrate the 42 verified frontend source-of-truth violations to backend owners",
+  "target": {
+    "branch": "prepshipv4-stable",
+    "reviewedSha": "77667cff28cc24487f11c5f298e72e59a6999cb1"
+  },
+  "riskDomains": [
+    "rate_label",
+    "billing_inventory_lifecycle"
+  ],
+  "claimedScore": 100,
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "severity": "critical",
+      "status": "met",
+      "description": "All 42 verified findings remain committed and reviewable with the 15 High / 27 Medium split, canonical owner, imperfect-data entry point, disposition, thin caller, and executable proof.",
+      "evidenceIds": [
+        "confirmed-42-map",
+        "ps441-closure-guard"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "severity": "critical",
+      "status": "met",
+      "description": "Rate money, eligibility, official Best Rate identity, selected-rate proof, and account identity remain backend-owned; cross-order, cross-account, and fact-mismatch attempts fail before provider activity.",
+      "evidenceIds": [
+        "rate-boundary-integration",
+        "rate-boundary-adversarial",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "severity": "critical",
+      "status": "met",
+      "description": "Invoice totals and money-read failure remain backend-owned, with PostgreSQL-compatible cardinality, idempotency, cancellation, scope, and repeat-run proof.",
+      "evidenceIds": [
+        "billing-boundary-integration",
+        "billing-boundary-adversarial",
+        "full-sot-guard-pack"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "severity": "high",
+      "status": "met",
+      "description": "Billing edit drafts restore only for the exact order and never infer or copy a box-cost amount across orders; intentional cross-order corrections remain behind the backend PS-311 preview/apply owner.",
+      "evidenceIds": [
+        "billing-draft-isolation",
+        "ps311-backend-owner-integration",
+        "implementation-scope"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "severity": "critical",
+      "status": "met",
+      "description": "PS-441 is permanently wired into the mandatory source-of-truth pack, and the exact candidate passes the focused closure suite, complete 56-command pack, strict typecheck, and production web build.",
+      "evidenceIds": [
+        "ps441-closure-guard",
+        "full-sot-guard-pack",
+        "typecheck-and-build"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "severity": "critical",
+      "status": "met",
+      "description": "The exact reviewed SHA is Ready and Promoted in Vercel Production, public production and stable aliases resolve to HTTP 200, remote stable has exact parity, and GitHub Actions scheduled zero runs.",
+      "evidenceIds": [
+        "live-vercel-deployment"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "severity": "critical",
+      "status": "met",
+      "description": "Implementation and verification performed no production database write, label purchase, postage charge, marketplace notification, provider mutation, inventory movement, or shipped/cancelled data mutation.",
+      "evidenceIds": [
+        "implementation-scope",
+        "rate-boundary-adversarial",
+        "billing-boundary-integration"
+      ]
+    }
+  ],
+  "architecture": {
+    "canonicalOwners": [
+      "docs/ps-tickets/PS-433/sot-confirmed.json is the persisted 42-item migrated/reclassified map",
+      "src/services/rates.ts, src/services/shipping-workflow/apply-best-rate.ts, src/services/rate-browse-response-producer.ts, and src/services/rate-source-display.ts own rate money, ranking, proof, eligibility, and source identity",
+      "src/services/billing-invoice-totals.ts and the shared fail-closed client policy own invoice totals and money-read failure",
+      "src/services/client-rate-source-policy.ts owns client rate-source selection",
+      "src/services/reporting-window-presets.ts owns billing and analysis reporting windows",
+      "src/services/billing-box-policy.ts, src/services/billing-box-cost-bulk.ts, and src/services/billing-box-cost-by-dims.ts own box identity, cost, and reviewed cross-order correction"
+    ],
+    "oldOwners": [
+      {
+        "path": "web/src/components/Views/rates-parity.ts and RateBrowserModal.tsx frontend markup, ranking, eligibility, source, and CHEAPEST authority",
+        "disposition": "deleted",
+        "delegatesTo": "backend-issued rate DTO money, selectedRateKey, eligibility, source identity, and proof"
+      },
+      {
+        "path": "web/src/pages/Invoice.tsx frontend invoice-total recomputation and shared-client stale money fallback",
+        "disposition": "deleted",
+        "delegatesTo": "src/services/billing-invoice-totals.ts and fail-closed money reads"
+      },
+      {
+        "path": "web/src/components date/reporting controls that derived authoritative reporting windows",
+        "disposition": "delegated",
+        "delegatesTo": "src/services/reporting-window-presets.ts"
+      },
+      {
+        "path": "web/src/components/Views/billing-edit-draft-cache.ts cross-order box-cost carry",
+        "disposition": "deleted",
+        "delegatesTo": "exact-order draft cache identity and backend PS-311 reviewed bulk box-cost commands"
+      }
+    ],
+    "wrappers": [
+      {
+        "path": "web/src/components/Views/billing-edit-draft-cache.ts",
+        "action": "modified",
+        "delegatesTo": "the selected order's backend DTO fallback and exact-order unsaved draft only; it owns no reusable box-cost policy"
+      },
+      {
+        "path": "web/src/components/Views/BillingView.tsx",
+        "action": "modified",
+        "delegatesTo": "billingEditDraftForRow for exact-order UI state and backend PS-311 commands for cross-order business changes"
+      }
+    ],
+    "sotBypass": {
+      "present": false,
+      "details": "The remaining frontend alternate money path was deleted. Rate, billing, client-source, reporting-window, and box-cost truth remains in named backend owners; the frontend only renders DTO facts and submits operator intent."
+    }
+  },
+  "evidence": [
+    {
+      "id": "confirmed-42-map",
+      "classification": "static",
+      "command": "npm run test:ps-441-sot-migration",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-433/sot-confirmed.json",
+        "docs/ps-tickets/PS-441.md",
+        "scripts/ps-441-sot-migration-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "The repository retains exactly 42 unique findings, split 15 High and 27 Medium, with valid deleted/delegated/forbidden dispositions and every proof command wired in package.json."
+    },
+    {
+      "id": "ps441-closure-guard",
+      "classification": "unit",
+      "command": "npm run test:ps-441-sot-migration",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-441-sot-migration-guard.ts",
+        "scripts/billing-edit-draft-cache-guard.ts",
+        "web/src/components/Views/billing-edit-draft-cache.ts"
+      ],
+      "assertions": [
+        "same_order_draft_restored",
+        "same_box_cross_order_money_rejected",
+        "all_42_proof_commands_resolve"
+      ],
+      "proves": "The PS-441 owner map is permanent and exact-order draft state cannot become cross-order billing truth."
+    },
+    {
+      "id": "rate-boundary-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-rate-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts",
+        "src/services/shipping-workflow/apply-best-rate.ts",
+        "src/services/client-rate-source-policy.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Backend snapshot, fingerprint, purchase-account, and client rate-source owners integrate with an injected provider boundary; only valid backend proof reaches it."
+    },
+    {
+      "id": "rate-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-rate-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-rate-boundary-behavior.ts"
+      ],
+      "assertions": [
+        "cross_order_rejected",
+        "cross_account_rejected",
+        "fact_mismatch_rejected",
+        "provider_spy_untouched"
+      ],
+      "proves": "Cross-order proof, cross-account purchase identity, mismatched request facts, and cross-client source identity are rejected before provider activity."
+    },
+    {
+      "id": "billing-boundary-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts",
+        "src/services/billing-invoice-totals.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "The real invoice-totals owner runs on a current PostgreSQL-compatible fixture and returns stable totals without changing line cardinality."
+    },
+    {
+      "id": "billing-boundary-adversarial",
+      "classification": "adversarial",
+      "command": "npm run test:ps-433-billing-boundary",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-433-billing-source-of-truth-integration.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "cardinality",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Cancelled non-return charges, retained return charges, out-of-window rows, another client's rows, duplicate lines, and repeat reads cannot corrupt invoice totals."
+    },
+    {
+      "id": "billing-draft-isolation",
+      "classification": "adversarial",
+      "command": "npm run test:billing-edit-draft-cache",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/billing-edit-draft-cache-guard.ts",
+        "web/src/components/Views/billing-edit-draft-cache.ts",
+        "web/src/components/Views/BillingView.tsx"
+      ],
+      "assertions": [
+        "same_order_draft_restored",
+        "same_box_cross_order_money_rejected",
+        "different_box_cross_order_money_rejected"
+      ],
+      "proves": "An unsaved draft is isolated by exact order identity and cannot contaminate another order even when the package id and label are identical."
+    },
+    {
+      "id": "ps311-backend-owner-integration",
+      "classification": "integration",
+      "command": "npm run test:ps-311-bulk-box-cost-integration && npm run test:ps-311b-box-cost-by-dims-integration",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/ps-311-bulk-box-cost-integration.ts",
+        "scripts/ps-311b-box-cost-by-dims-integration.ts",
+        "src/services/billing-box-cost-bulk.ts",
+        "src/services/billing-box-cost-by-dims.ts"
+      ],
+      "assertions": [
+        "migrated_db_fixture",
+        "scope_isolation",
+        "finalized_rows_skipped",
+        "idempotency",
+        "repeat_run"
+      ],
+      "proves": "Intentional multi-order box-cost correction remains a backend-scoped, previewable, transactional, idempotent workflow that excludes finalized and out-of-scope rows."
+    },
+    {
+      "id": "full-sot-guard-pack",
+      "classification": "static",
+      "command": "npm run test:sot-guard-pack with inert offline environment values",
+      "result": "pass",
+      "artifactPaths": [
+        "scripts/sot-guard-pack.mjs",
+        "scripts/ps-335-sot-guard-pack-guard.ts",
+        "scripts/ps-441-sot-migration-guard.ts"
+      ],
+      "assertions": [],
+      "proves": "All 56 mandatory source-of-truth, rate, billing, lifecycle, scope, queue, sync, inventory, and hygiene commands pass with PS-441 required by the runner and guard-of-guard."
+    },
+    {
+      "id": "typecheck-and-build",
+      "classification": "static",
+      "command": "npm run typecheck && npm run build:web",
+      "result": "pass",
+      "artifactPaths": [
+        "tsconfig.json",
+        "web/tsconfig.json",
+        "vite.config.ts"
+      ],
+      "assertions": [],
+      "proves": "Strict backend/frontend TypeScript passes and the production frontend builds successfully with 2,978 modules transformed."
+    },
+    {
+      "id": "implementation-scope",
+      "classification": "static",
+      "command": "git show --stat --oneline 77667cff28cc24487f11c5f298e72e59a6999cb1 && git diff --check 77667cff28cc24487f11c5f298e72e59a6999cb1^..77667cff28cc24487f11c5f298e72e59a6999cb1",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/ps-tickets/PS-441.md",
+        "scripts/ps-441-sot-migration-guard.ts",
+        "web/src/components/Views/BillingView.tsx",
+        "web/src/components/Views/billing-edit-draft-cache.ts"
+      ],
+      "assertions": [],
+      "proves": "The reviewed implementation deletes the cross-order frontend money branch and adds offline evidence/wiring only. It adds no migration and touches no shipped/cancelled locked file, provider adapter, inventory path, or database mutation path."
+    },
+    {
+      "id": "live-vercel-deployment",
+      "classification": "live",
+      "command": "Read-only Vercel deployment metadata, git remote parity, gh run list, and public GET production/stable aliases on 2026-07-23",
+      "result": "pass",
+      "artifactPaths": [
+        "docs/final-review/packets/PS-441.json"
+      ],
+      "assertions": [
+        "staging_or_live_artifact",
+        "exact_implementation_sha_live",
+        "vercel_ready_promoted",
+        "production_http_200",
+        "stable_alias_http_200",
+        "github_actions_zero_runs",
+        "provider_spy_untouched"
+      ],
+      "proves": "Vercel deployment dpl_FfQhM312yhLE1jTspRTkEAWKpSsG is READY and PROMOTED in Production for exact SHA 77667cff28cc24487f11c5f298e72e59a6999cb1. Production returned HTTP 200 and the stable alias resolved to HTTP 200; origin/prepshipv4-stable matched the exact SHA and GitHub Actions returned zero runs. No Render deploy was needed because the runtime diff is frontend-only."
+    }
+  ],
+  "migrations": {
+    "touched": false,
+    "paths": [],
+    "verification": {
+      "command": "git show --name-only --format= 77667cff28cc24487f11c5f298e72e59a6999cb1",
+      "result": "not-applicable",
+      "artifactPaths": []
+    },
+    "rollbackPlan": "No schema or data rollback is required. Forward-revert the packet-only commit and implementation SHA 77667cff28cc24487f11c5f298e72e59a6999cb1, push the reviewed revert to prepshipv4-stable, and allow the existing Vercel project to deploy it."
+  },
+  "rollback": {
+    "strategy": "Forward-revert the packet-only commit and implementation SHA, push the reviewed revert to prepshipv4-stable, and allow Vercel to deploy the revert. Do not mutate billing, orders, shipments, labels, provider state, inventory, or marketplace state during rollback.",
+    "tested": false,
+    "evidenceIds": []
+  },
+  "liveVerification": {
+    "status": "verified",
+    "reason": "Exact reviewed SHA 77667cff28cc24487f11c5f298e72e59a6999cb1 is READY and PROMOTED on Vercel. Production and stable-branch aliases resolve to HTTP 200, remote stable has exact parity, and GitHub Actions scheduled zero runs. Verification was read-only and initiated no shipping, marketplace, billing, inventory, provider, or production-data side effect.",
+    "followUpOwner": null,
+    "artifactPaths": [
+      "docs/final-review/packets/PS-441.json"
+    ]
+  },
+  "caveats": []
+}
