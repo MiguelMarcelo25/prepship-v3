@@ -20,7 +20,7 @@
 // Continues on failure and prints a per-checkpoint summary; exits 1 if any
 // suite fails so it can gate CI.
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { delimiter, resolve } from 'node:path';
 
@@ -49,6 +49,28 @@ function directPackageCommand(script, ancestors = []) {
   return command.replace(/\bnpm run ([A-Za-z0-9:_-]+)/g, (_match, nestedScript) => (
     `(${directPackageCommand(nestedScript, [...ancestors, script])})`
   ));
+}
+
+function runCommand(command, env) {
+  return new Promise((resolveRun) => {
+    const child = spawn(shellCommand, [...shellPrefix, command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    let tail = '';
+    let error = null;
+    const captureTail = (chunk) => {
+      tail = `${tail}${chunk.toString()}`.slice(-32_768);
+    };
+    child.stdout.on('data', captureTail);
+    child.stderr.on('data', captureTail);
+    child.on('error', (spawnError) => {
+      error = spawnError;
+    });
+    child.on('close', (status) => {
+      resolveRun({ error, status: status ?? 1, tail });
+    });
+  });
 }
 
 // Each script appears once; the first group it is listed under owns it.
@@ -227,18 +249,17 @@ for (const group of GROUPS) {
     const started = process.hrtime.bigint();
     try {
       const command = directPackageCommand(script);
-      const result = spawnSync(shellCommand, [...shellPrefix, command], {
-        stdio: 'pipe',
-        encoding: 'utf8',
-        env: leafNodeOptions && !elevatedLeafScripts.has(script)
+      const result = await runCommand(
+        command,
+        leafNodeOptions && !elevatedLeafScripts.has(script)
           ? { ...commandEnv, NODE_OPTIONS: leafNodeOptions }
           : commandEnv,
-      });
+      );
       if (result.error) throw result.error;
       if (result.status !== 0) {
         const failure = new Error(`${script} exited with status ${result.status ?? 1}`);
-        failure.stdout = result.stdout;
-        failure.stderr = result.stderr;
+        failure.stdout = result.tail;
+        failure.stderr = '';
         throw failure;
       }
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
