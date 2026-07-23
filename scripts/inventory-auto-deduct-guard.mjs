@@ -38,7 +38,8 @@ assert(
   // PS-136: the deduction lives in the extracted owner (shared kill-switch-governed path,
   // keyed external:<source>); the route delegates via markOrderShippedExternally().
   // Re-anchored to where the logic moved — protection intact, no lockdown logic changed.
-  markShippedExternally.includes('applyOrderLifecycleCommand({') &&
+  markShippedExternally.includes('dependencies.applyLifecycleCommand ?? applyOrderLifecycleCommand') &&
+    markShippedExternally.includes('const result = await applyLifecycle({') &&
     markShippedExternally.includes("transition: 'external_shipped'") &&
     markShippedExternally.includes('external:${input.source}') &&
     ordersRoute.includes('markOrderShippedExternally('),

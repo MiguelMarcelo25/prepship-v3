@@ -131,8 +131,8 @@ function buildNotificationPayload(results) {
       ? 'PrepShip shipping roundtrip certification failed'
       : 'PrepShip shipping roundtrip certification passed',
     status: failed.length ? 'failed' : 'passed',
-    branch: process.env.GITHUB_REF_NAME ?? 'local',
-    commit: (process.env.GITHUB_SHA ?? 'local').slice(0, 12),
+    branch: process.env.GITHUB_REF_NAME ?? process.env.RENDER_GIT_BRANCH ?? 'local',
+    commit: (process.env.GITHUB_SHA ?? process.env.RENDER_GIT_COMMIT ?? 'local').slice(0, 12),
     runUrl,
     failedSuites: failed.map((result) => ({
       suite: result.key,

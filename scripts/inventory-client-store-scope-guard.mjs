@@ -100,7 +100,8 @@ assert(
 );
 assert(
   routeSource.includes('ledgerScope') &&
-    routeSource.includes('inventoryScopePredicate(ledgerScope)'),
+    routeSource.includes('inventoryLedgerScopePredicate(ledgerScope)') &&
+    routeSource.includes('ledgerClientIdSql'),
   'inventory ledger applies client/store scope',
 );
 assert(
