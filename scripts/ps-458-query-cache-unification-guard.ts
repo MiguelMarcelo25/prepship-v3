@@ -26,6 +26,9 @@ function sourceFiles(dir: string): string[] {
 
 const webSources = sourceFiles('web/src').map(read).join('\n')
 const apiClient = read('web/src/lib/v2-apiClient.ts')
+const clientInvalidation = read('web/src/lib/client-cache-invalidation.ts')
+const clientsData = read('web/src/pages/Clients_variants/useClientsData.tsx')
+const inventoryView = read('web/src/components/Views/InventoryView.tsx')
 const shared = read('web/src/lib/v2-apiClient/shared.ts')
 const dashboard = read('web/src/components/Views/DashboardView.tsx')
 const billing = read('web/src/components/Views/BillingView.tsx')
@@ -63,12 +66,29 @@ assert.doesNotMatch(webSources, /\['settings', '(?:locations|marketplace-fee-sto
 assert.doesNotMatch(webSources, /\['packages', 'custom'\]|\['inventory', 'stock'/,
   'Inventory surfaces must use package/inventory endpoint keys')
 
-assert.match(apiClient, /invalidateQueries\(\{ queryKey: endpointQueryKeys\.storesRoot \}\)/,
-  'client mutations must invalidate the canonical stores family')
-assert.match(apiClient, /invalidateQueries\(\{ queryKey: endpointQueryKeys\.countsRoot \}\)/,
-  'client mutations must invalidate the canonical counts family')
-assert.match(apiClient, /invalidateQueries\(\{ queryKey: clientQueryKeys\.root \}\)/,
-  'client mutations must invalidate every active/admin client consumer')
+for (const keyOwner of [
+  'clientQueryKeys.root',
+  'endpointQueryKeys.storesRoot',
+  'endpointQueryKeys.countsRoot',
+  'endpointQueryKeys.inventoryRoot',
+]) {
+  assert.ok(clientInvalidation.includes(keyOwner),
+    `client mutation invalidator must include ${keyOwner}`)
+}
+assert.equal(
+  (apiClient.match(/invalidateClientDependentQueries\(queryClient\)/g) ?? []).length,
+  4,
+  'all v2 API client create/update/delete/sync mutations must delegate to the canonical invalidator',
+)
+assert.equal(
+  (clientsData.match(/invalidateClientDependentQueries\(queryClient\)/g) ?? []).length,
+  3,
+  'the real Clients page delete/toggle/sync mutations must delegate to the canonical invalidator',
+)
+assert.doesNotMatch(clientsData, /\['inventory'\]/,
+  'the Clients page must not invalidate the obsolete inventory alias')
+assert.doesNotMatch(inventoryView, /queryClient\.invalidateQueries\(\{ queryKey: clientQueryKeys\.root \}\)/,
+  'Inventory client mutations must not reimplement the shared invalidation owner')
 assert.match(apiClient, /invalidatePackageReads\(\)/,
   'package mutations must invalidate canonical package families')
 assert.match(apiClient, /invalidateBillingReads\(\{ summary: true, shippingMargin: true \}\)/,

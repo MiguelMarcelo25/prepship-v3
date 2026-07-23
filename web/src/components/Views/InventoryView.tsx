@@ -26,7 +26,7 @@ import {
 } from '../ConfirmActiveToggleDialog'
 import { api } from '../../lib/api'
 import { endpointQueryKeys } from '../../lib/endpoint-query-keys'
-import { activeClientRowsQueryOptions, clientDtosFromRows, clientQueryKeys } from '../../lib/client-query'
+import { activeClientRowsQueryOptions, clientDtosFromRows } from '../../lib/client-query'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
 import { SortableHeader, nextSortState, sortRows, type SortState } from '../SortableTable'
@@ -2740,22 +2740,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       window.dispatchEvent(new CustomEvent('prepship:client-active-changed', {
         detail: { clientId: client.clientId, active: next }
       }))
-      // 2026-05-12: full React Query cache flush across every surface
-      // that reads client-keyed data. Mirrors pages/Clients.tsx so a
-      // toggle from THIS view propagates exactly the same way as a
-      // toggle from the admin Clients page — sidebar, dashboard,
-      // analysis, billing, inventory all repaint within ms instead of
-      // waiting for the 60s staleTime tick. Re-enable case especially:
-      // toggling a client back ON immediately surfaces them everywhere.
-      queryClient.invalidateQueries({ queryKey: clientQueryKeys.root })
-      queryClient.invalidateQueries({ queryKey: ['clients-order-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['orders-count'] })
-      queryClient.invalidateQueries({ queryKey: ['v2-hooks:orders'] })
-      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.inventoryRoot })
-      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingConfigs })
-      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot })
-      queryClient.invalidateQueries({ queryKey: ['analysis-sku-breakdown'] })
-      queryClient.invalidateQueries({ queryKey: ['analysis-sku-daily'] })
+      // apiClient.updateClientRecord owns the shared client-dependent cache
+      // invalidation, so this view delegates instead of maintaining a second
+      // key list.
       await refreshInventoryView()
       // Drop the override — fresh server data is now authoritative.
       setClientActiveOverrides((current) => {

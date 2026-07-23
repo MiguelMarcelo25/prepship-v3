@@ -16,9 +16,9 @@ import { getCachedAuthToken } from './auth-session-cache';
 import {
   activeClientRowsQueryOptions,
   clientDtosFromRows,
-  clientQueryKeys,
   includeInactiveClientRowsQueryOptions,
 } from './client-query';
+import { invalidateClientDependentQueries } from './client-cache-invalidation';
 import { queryClient } from './query-client';
 import { endpointQueryKeys } from './endpoint-query-keys';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
@@ -118,12 +118,6 @@ function stableRateBrowseKey(body: Record<string, unknown>): string {
     keyed[key] = Array.isArray(value) ? [...value].map(String).sort() : value;
   }
   return JSON.stringify(keyed);
-}
-
-function invalidateClientReads(): void {
-  void queryClient.invalidateQueries({ queryKey: clientQueryKeys.root });
-  void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.storesRoot });
-  void queryClient.invalidateQueries({ queryKey: endpointQueryKeys.countsRoot });
 }
 
 function invalidatePackageReads(includeUsage = true): void {
@@ -484,7 +478,7 @@ export const apiClient = {
 
   createClient(data: Record<string, unknown>): Promise<any> {
     return api.post<any>('/clients', normalizeClientMutationPayload(data)).then((res) => {
-      invalidateClientReads();
+      invalidateClientDependentQueries(queryClient);
       return res;
     });
   },
@@ -495,7 +489,7 @@ export const apiClient = {
 
   updateClient(clientId: number, data: Record<string, unknown>): Promise<any> {
     return api.patch<any>(`/clients/${clientId}`, normalizeClientMutationPayload(data)).then((res) => {
-      invalidateClientReads();
+      invalidateClientDependentQueries(queryClient);
       return res;
     });
   },
@@ -506,7 +500,7 @@ export const apiClient = {
 
   deleteClientRecord(clientId: number): Promise<any> {
     return api.delete<any>(`/clients/${clientId}`).then((res) => {
-      invalidateClientReads();
+      invalidateClientDependentQueries(queryClient);
       return res;
     });
   },
@@ -516,7 +510,7 @@ export const apiClient = {
       'syncClientsFromStores',
       async () => {
         const res = await api.post<any>('/clients/sync-stores', {});
-        invalidateClientReads();
+        invalidateClientDependentQueries(queryClient);
         return {
           ...res,
           clients: normalizeClientDtoRows(Array.isArray(res?.clients) ? res.clients : []),
