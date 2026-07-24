@@ -5,7 +5,7 @@
   "title": "Crash-safe Print Queue mixed-batch recovery and provider outcome fencing",
   "target": {
     "branch": "prepshipv4-stable",
-    "reviewedSha": "c36ba94e6b1b296435430d49431a44300b6dc355"
+    "reviewedSha": "372d1710fbba043aeaabdb20ba6fbf96940955dd"
   },
   "riskDomains": [
     "rate_label",
@@ -254,7 +254,7 @@
       "result": "pass",
       "artifactPaths": ["vite.config.ts", "web/src"],
       "assertions": [],
-      "proves": "The production Vite frontend bundle builds successfully with 2,979 modules transformed at the reviewed SHA."
+      "proves": "The production Vite frontend bundle builds successfully with 2,991 modules transformed at the reviewed SHA."
     },
     {
       "id": "label-regressions",
@@ -343,7 +343,7 @@
     {
       "id": "implementation-scope-proof",
       "classification": "static",
-      "command": "git diff --name-status fc6b0138^..1771781f && git diff --name-status 24bade0f23c62e44a616746b29daa2f401d2e087..c36ba94e6b1b296435430d49431a44300b6dc355 -- src/routes/print-queue.ts src/services/print-queue.ts src/services/fulfillment-deductions.ts web/src/components/Views/OrdersView.tsx web/src/lib/v2-apiClient.ts src/db/schema/orders.ts src/db/schema/shipments.ts src/routes/orders.ts src/services/print-queue src/services/print-queue-worker.ts src/services/fulfillment-operation-ledger.ts src/services/shipping-workflow/rate-quote-snapshot-store.ts src/services/labels.ts src/lib/shipstation/v1-client.ts scripts/ps-095-selected-rate-proof-pass-through-guard.ts",
+      "command": "git diff --name-status fc6b0138^..1771781f && git diff --name-status 24bade0f23c62e44a616746b29daa2f401d2e087..372d1710fbba043aeaabdb20ba6fbf96940955dd -- src/routes/print-queue.ts src/services/print-queue.ts src/services/fulfillment-deductions.ts web/src/components/Views/OrdersView.tsx web/src/lib/v2-apiClient.ts src/db/schema/orders.ts src/db/schema/shipments.ts src/routes/orders.ts src/routes/rates.ts src/lib/business-route-policy.ts scripts/ps-464-architecture-boundary-policy.ts src/services/print-queue src/services/print-queue-worker.ts src/services/fulfillment-operation-ledger.ts src/services/shipping-workflow/rate-quote-snapshot-store.ts src/services/labels.ts src/lib/shipstation/v1-client.ts scripts/ps-095-selected-rate-proof-pass-through-guard.ts",
       "result": "pass",
       "artifactPaths": [
         "src/services/print-queue-worker.ts",
@@ -355,7 +355,7 @@
         "AGENTS.md"
       ],
       "assertions": [],
-      "proves": "The historical implementation range is bounded to PS-444 recovery plus the production-compatible PS-439 forward revert. Later compatible PS-440 fail-closed label-artifact validation, PS-458 read-cache plumbing, PS-464 architecture enforcement, API Timing presentation, and the PS-095 durable-input guard refresh were reviewed at exact stable SHA c36ba94e; they do not weaken PS-444 purchase fencing, backend retry ownership, or shipped/cancelled protections. Exact-current PS-444, provider-ledger, lifecycle, label, rate, lockdown, strict TypeScript, browser, build, and all 57 source-of-truth guards pass. This packet refresh changes no product runtime."
+      "proves": "The historical implementation range is bounded to PS-444 recovery plus the production-compatible PS-439 forward revert. Later compatible PS-440 fail-closed label-artifact validation, PS-458 read-cache plumbing, PS-464 architecture enforcement, API Timing presentation, the PS-095 durable-input guard refresh, and PS-443 exact-route policy closure were reviewed at exact stable SHA 372d1710; they do not weaken PS-444 purchase fencing, backend retry ownership, or shipped/cancelled protections. The PS-443 closure gives its two existing durable batch POST routes distinct matrix identities while preserving their rates:quote permission, per-order scope checks, and backend workflow owner. Exact-current PS-444, provider-ledger, lifecycle, label, rate, lockdown, strict TypeScript, browser, build, and all 57 source-of-truth guards pass. This packet refresh changes no product runtime."
     }
   ],
   "migrations": {
