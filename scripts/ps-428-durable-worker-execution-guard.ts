@@ -49,6 +49,8 @@ assert.match(rateWorker, /execute:\s*async \(signal\)/);
 assert.match(rateStore, /generation < \$\{RATE_BROWSE_MAX_EXECUTION_GENERATIONS\}/);
 assert.match(rateStore, /status = 'queued' AND updated_at < \$\{staleBefore\}/);
 assert.match(rateStore, /SET status = 'error',[\s\S]*generation = generation \+ 1/);
+assert.match(rateStore, /'updatedAt', \$\{nowIso\}::text/);
+assert.match(rateStore, /'error', \$\{exhaustedMessage\}::text/);
 assert.match(
   rateWorker,
   /produceRateBrowsePayload\(\{[\s\S]*?signal,[\s\S]*?\}\)/,

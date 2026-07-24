@@ -154,23 +154,29 @@ async function main(): Promise<void> {
     ['rate-stale-queued'],
     'recovery ignores fresh queued and exhausted jobs',
   );
-  await db.exec(`
+  const exhaustedMessage = 'attempts exhausted';
+  const terminalAt = new Date().toISOString();
+  await db.query(`
     UPDATE rate_browse_jobs
     SET status = 'error',
         active = false,
         generation = generation + 1,
+        message = $1,
         snapshot = snapshot || jsonb_build_object(
           'phase', 'error',
           'generation', generation + 1,
-          'error', 'attempts exhausted'
+          'updatedAt', $2::text,
+          'finishedAt', $2::text,
+          'message', $1::text,
+          'error', $1::text
         ),
-        updated_at = now(),
-        finished_at = now()
+        updated_at = $2::timestamptz,
+        finished_at = $2::timestamptz
     WHERE active = true
       AND generation >= ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}
       AND status IN ('running', 'partial')
       AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '1 minute')
-  `);
+  `, [exhaustedMessage, terminalAt]);
   const exhaustedRate = await db.query<{
     status: string;
     active: boolean;
@@ -189,7 +195,10 @@ async function main(): Promise<void> {
       jobId: 'rate-exhausted',
       phase: 'error',
       generation: RATE_BROWSE_MAX_EXECUTION_GENERATIONS + 1,
-      error: 'attempts exhausted',
+      updatedAt: terminalAt,
+      finishedAt: terminalAt,
+      message: exhaustedMessage,
+      error: exhaustedMessage,
     },
   });
 

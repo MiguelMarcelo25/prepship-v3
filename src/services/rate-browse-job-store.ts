@@ -459,10 +459,10 @@ export async function listRecoverableRateBrowseJobIds(input: {
         snapshot = COALESCE(snapshot, '{}'::jsonb) || jsonb_build_object(
           'phase', 'error',
           'generation', generation + 1,
-          'updatedAt', ${nowIso},
-          'finishedAt', ${nowIso},
-          'message', ${exhaustedMessage},
-          'error', ${exhaustedMessage}
+          'updatedAt', ${nowIso}::text,
+          'finishedAt', ${nowIso}::text,
+          'message', ${exhaustedMessage}::text,
+          'error', ${exhaustedMessage}::text
         ),
         diagnostics = COALESCE(diagnostics, '{}'::jsonb) || jsonb_build_object(
           'recoveryExhausted', true,
