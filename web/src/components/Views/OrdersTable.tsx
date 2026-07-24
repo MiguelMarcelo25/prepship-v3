@@ -94,7 +94,7 @@ export type OrdersTableProps = {
   isReadOnly: boolean
   // ── row + group handlers (bodies stay in OrdersView) ──
   toggleSkuGroupSelection: (orderIds: number[], checked?: boolean) => void
-  onOrderRowClick: (orderId: number) => void
+  onOrderRowClick: (orderId: number, forceSelection?: boolean) => void
   openShipStationOrder: (orderId: number) => void
   // ── row-nav collaborators (bodies stay in OrdersView; called by the
   //    table-local Arrow/Enter/Ctrl-C keyboard listener) ──

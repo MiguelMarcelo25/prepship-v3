@@ -347,12 +347,14 @@ for (const viewport of [
 
     const awaitingRows = page.locator('#ordersTable tbody tr.order-row')
     const firstAwaitingCheckbox = awaitingRows.first().locator('input[type="checkbox"]')
-    await firstAwaitingCheckbox.check()
+    const firstSelectCell = awaitingRows.first().locator('td[data-col="select"]')
+    await firstSelectCell.click({ position: { x: 1, y: 1 } })
+    await expect(firstAwaitingCheckbox).toBeChecked()
     await expect(page.locator('#ordersSelectionToolbar')).toBeVisible()
     const checkboxBox = await firstAwaitingCheckbox.boundingBox()
     expect(checkboxBox).not.toBeNull()
-    expect(checkboxBox.width).toBeGreaterThanOrEqual(20)
-    expect(checkboxBox.height).toBeGreaterThanOrEqual(20)
+    expect(checkboxBox.width).toBeGreaterThanOrEqual(24)
+    expect(checkboxBox.height).toBeGreaterThanOrEqual(24)
 
     // Once checkbox selection starts, the whole row becomes a batch-selection
     // target. A slightly missed checkbox must add the row instead of replacing

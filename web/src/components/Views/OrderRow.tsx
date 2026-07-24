@@ -38,7 +38,7 @@ export type OrderRowProps = {
   // live value; the flat branch passes false — mirroring the pre-extraction
   // markup where only the grouped rows carried the ps-shipping-row class.
   isTransitioningShipped: boolean
-  onOrderRowClick: (orderId: number) => void
+  onOrderRowClick: (orderId: number, forceSelection?: boolean) => void
   openShipStationOrder: (orderId: number) => void
   setKbRowId: (orderId: number | null) => void
   renderCell: (order: OrderSummaryDto, column: TableColumn) => ReactNode
@@ -119,6 +119,12 @@ export const OrderRow = memo(function OrderRow({
           // explicit td width is a belt-and-braces
           // guard for subpixel rendering edge cases.
           style={{ width: column.width, maxWidth: column.width }}
+          onClick={column.key === 'select'
+            ? (event) => {
+                event.stopPropagation()
+                onOrderRowClick(order.orderId, true)
+              }
+            : undefined}
           title={
             column.key === 'select'
               ? 'Use checkbox for multi-select'

@@ -58,10 +58,12 @@ const checks = [
       // Browse-mode rows still open details. Once selection starts, OrdersView
       // routes the same row click through the canonical selection toggle.
       orderRow.includes('onClick={() => onOrderRowClick(order.orderId)}') &&
-      ordersView.includes('const handleOrderRowClick = (orderId: number) => {') &&
-      ordersView.includes('if (!isReadOnly && selectedOrderIds.length > 0) {') &&
+      ordersView.includes('const handleOrderRowClick = (orderId: number, forceSelection = false) => {') &&
+      ordersView.includes('if (!isReadOnly && (forceSelection || selectedOrderIds.length > 0)) {') &&
       ordersView.includes('toggleOrderSelection(orderId)') &&
       ordersView.includes('orderRowClickRef.current = handleOrderRowClick') &&
+      orderRow.includes("onClick={column.key === 'select'") &&
+      orderRow.includes('onOrderRowClick(order.orderId, true)') &&
       !orderRow.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersTable.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersView.includes('onClick={() => updateSelection([order.orderId])}'),

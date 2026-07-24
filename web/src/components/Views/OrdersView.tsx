@@ -2183,8 +2183,8 @@ export default function OrdersView({
     onActiveOrderIdChange?.(orderId)
   }
 
-  const handleOrderRowClick = (orderId: number) => {
-    if (!isReadOnly && selectedOrderIds.length > 0) {
+  const handleOrderRowClick = (orderId: number, forceSelection = false) => {
+    if (!isReadOnly && (forceSelection || selectedOrderIds.length > 0)) {
       toggleOrderSelection(orderId)
       return
     }
@@ -6138,13 +6138,16 @@ export default function OrdersView({
   // isReadOnly participates here only as an epoch INPUT so a read-only flip
   // still repaints every row.
   const renderTableCellRef = useRef<((order: OrderSummaryDto, column: TableColumn) => ReactNode) | null>(null)
-  const orderRowClickRef = useRef<((orderId: number) => void) | null>(null)
+  const orderRowClickRef = useRef<((orderId: number, forceSelection?: boolean) => void) | null>(null)
   const openShipStationOrderRef = useRef<((orderId: number) => void) | null>(null)
   const stableRenderTableCell = useCallback(
     (order: OrderSummaryDto, column: TableColumn): ReactNode => renderTableCellRef.current!(order, column),
     [],
   )
-  const stableHandleOrderRowClick = useCallback((orderId: number) => { orderRowClickRef.current!(orderId) }, [])
+  const stableHandleOrderRowClick = useCallback(
+    (orderId: number, forceSelection?: boolean) => { orderRowClickRef.current!(orderId, forceSelection) },
+    [],
+  )
   const stableOpenShipStationOrder = useCallback((orderId: number) => { openShipStationOrderRef.current!(orderId) }, [])
   const orderCellsEpoch = useMemo(
     () => ({
