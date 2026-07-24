@@ -13,6 +13,7 @@ name: Render Auto-Deploy (CI-gated)
 # If the secrets are absent the deploy job fails LOUDLY (so a missing setup never looks "green").
 
 on:
+  workflow_dispatch:
   push:
     branches: [prepshipv4-stable]
     # Redeploy when BACKEND runtime changes, and let edits to this gate verify themselves.
