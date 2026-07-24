@@ -28,12 +28,15 @@ const observability = read('OBSERVABILITY_ALERTING_PLAN.md');
 
 expect(
   'package exposes api observability metrics guard',
-  packageJson.includes('"test:api-observability-metrics"')
+  packageJson.includes('"test:api-observability-metrics"') &&
+    packageJson.includes('api-observability-metrics-behavior.ts')
 );
 
 expect(
   'main observes every API request timing',
-  main.includes("import { observeApiTiming }") && main.includes('observeApiTiming({')
+  main.includes("import { observeApiTiming }") &&
+    main.includes('matchedRoutePath(c) || url.pathname') &&
+    main.includes('observeApiTiming({')
 );
 
 expect(
@@ -72,27 +75,40 @@ expect(
     settingsView.includes('systemStatus') &&
     settingsView.includes('<SystemStatusPanel') &&
     systemStatusPanel.includes('DB Check') &&
-    systemStatusPanel.includes('Hot API Routes') &&
+    systemStatusPanel.includes('API Routes') &&
     systemStatusPanel.includes('Runtime Flags')
 );
 
 expect(
-  'api timing snapshot includes p95 and p99 route stats',
-  metrics.includes('p95Ms') &&
-    metrics.includes('p99Ms') &&
-    metrics.includes('recentSamples') &&
-    metrics.includes('MAX_RECENT_DURATIONS') &&
-    metrics.includes('MAX_BUCKETS')
+  'api timing owner normalizes routes and owns rolling-window health',
+  metrics.includes('normalizeApiMetricPath') &&
+    metrics.includes('API_TIMING_WINDOW_MS') &&
+    metrics.includes('API_TIMING_MIN_CONFIDENT_SAMPLES') &&
+    metrics.includes('classifyApiRouteHealth') &&
+    metrics.includes('errorRate') &&
+    metrics.includes('budgetMs') &&
+    metrics.includes('confidence') &&
+    metrics.includes('health') &&
+    metrics.includes('summary')
 );
 
 expect(
-  'api timing toolbar separates latest route status from historical 5xx samples',
-  home.includes('apiTimingCurrent5xxRouteCount') &&
-    home.includes('apiTimingHistorical5xxCount') &&
-    home.includes('Latest route status') &&
-    home.includes('past 5xx') &&
-    home.includes('since API restart') &&
-    !home.includes('>Errors<')
+  'api timing toolbar consumes backend health without frontend thresholds',
+  home.includes('Sync health &amp; API performance') &&
+    home.includes('Route health') &&
+    home.includes('timingHealthBadgeTone(route.health)') &&
+    home.includes("route.confidence === 'learning'") &&
+    !home.includes('function timingTone') &&
+    !home.includes('apiTimingCurrent5xxRouteCount') &&
+    !home.includes('apiTimingHistorical5xxCount')
+);
+
+expect(
+  'system status consumes the backend route health contract',
+  route.includes('summary: timing.summary') &&
+    route.includes('confidence: route.confidence') &&
+    route.includes('health: route.health') &&
+    systemStatusPanel.includes('apiHealthBadgeTone(route.health)')
 );
 
 expect(

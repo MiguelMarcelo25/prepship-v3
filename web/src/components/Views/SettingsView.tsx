@@ -101,7 +101,7 @@ import { HugrabInsurancePolicyCard } from '../Settings/HugrabInsurancePolicyCard
 import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrationsCard'
 // PS-155: SystemStatus / Cache / Sandbox panels extracted to sibling files (behavior-preserving;
 // all state + async handlers stay in this view and are passed as props).
-import { SystemStatusPanel } from './SystemStatusPanel'
+import { SystemStatusPanel, type ObservabilityStatus } from './SystemStatusPanel'
 import { CacheManagementPanel } from './CacheManagementPanel'
 import { SandboxTestOrdersPanel } from './SandboxTestOrdersPanel'
 // PS-155: Automation availability panel extracted (pure presentation; state + handlers + PS-057
@@ -464,39 +464,6 @@ export default function SettingsView() {
     | { kind: 'error'; message: string }
   >({ kind: 'idle' })
   const [seedCount, setSeedCount] = useState<string>('25')
-  type ObservabilityStatus = {
-    ok: boolean
-    generatedAt: string
-    process?: {
-      nodeEnv?: string
-      uptimeSeconds?: number
-      memory?: {
-        rssBytes?: number
-        heapTotalBytes?: number
-        heapUsedBytes?: number
-      }
-    }
-    runtime?: Record<string, boolean | string | number | null | undefined>
-    database?: {
-      ok: boolean
-      durationMs: number
-      error?: string
-    }
-    apiTiming?: {
-      routeCount?: number
-      hotRoutes?: Array<{
-        method: string
-        path: string
-        count: number
-        errorCount: number
-        p95Ms: number
-        p99Ms: number
-        maxMs: number
-        lastStatus?: number | null
-        lastObservedAt?: string | null
-      }>
-    }
-  }
   const [automationSavingKey, setAutomationSavingKey] = useState<string | null>(null)
   const [automationQuery, setAutomationQuery] = useState('')
   const [automationStatusFilter, setAutomationStatusFilter] = useState<'all' | 'disabled' | 'enabled'>('all')

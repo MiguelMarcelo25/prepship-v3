@@ -81,8 +81,8 @@ assert(main.includes('X-Request-Id'), 'API returns X-Request-Id response header'
 assert(main.includes('normalizeRequestId'), 'API normalizes incoming request IDs');
 assert(main.includes("c.get('requestId')"), 'API timing/error logs include request ID');
 assert(main.includes('exposeHeaders'), 'API exposes request/timing headers to browsers');
-assert(main.includes("'[api:error]'"), 'API has structured error log marker');
-assert(main.includes("'[api:timing]'"), 'API has structured timing log marker');
+assert(main.includes("reportError('api.request.failed'"), 'API has structured error log marker');
+assert(main.includes("logStructured('info', 'api.request.slow'"), 'API has structured timing log marker');
 assert(ordersRoute.includes('requestIdFromContext'), 'orders list timing logs read request ID');
 assert(ordersRoute.includes("'[orders:list] completed'"), 'orders list has structured completed log marker');
 assert(ordersRoute.includes("'[orders:list] failed'"), 'orders list has structured failed log marker');

@@ -73,11 +73,13 @@ type AnalysisOpenContext = {
   clientId?: number | null
   requestId: number
 }
+type ApiTimingHealth = 'learning' | 'healthy' | 'slow' | 'error'
 type ApiTimingRoute = {
   method: string
   path: string
   count: number
   errorCount: number
+  errorRate: number
   avgMs: number
   p50Ms: number
   p95Ms: number
@@ -86,6 +88,9 @@ type ApiTimingRoute = {
   lastDurationMs: number
   lastStatus: number
   lastObservedAt: string
+  budgetMs: number
+  confidence: 'learning' | 'ready'
+  health: ApiTimingHealth
 }
 type LabelOperationLogEntry = {
   id: string
@@ -105,6 +110,27 @@ type ApiTimingSnapshot = {
   startedAt: string
   generatedAt: string
   routeCount: number
+  window: {
+    durationMs: number
+    label: string
+    startedAt: string
+    sampleCapacityPerRoute: number
+    minimumSamplesForPercentiles: number
+  }
+  summary: {
+    state: 'idle' | ApiTimingHealth
+    windowSampleCount: number
+    healthyRouteCount: number
+    slowRouteCount: number
+    errorRouteCount: number
+    learningRouteCount: number
+    slowestCurrent: {
+      method: string
+      path: string
+      durationMs: number
+      health: ApiTimingHealth
+    } | null
+  }
   routes: ApiTimingRoute[]
   labelOperationLogs?: LabelOperationLogEntry[]
 }
@@ -143,17 +169,37 @@ function formatTimingDate(value: string | null | undefined) {
   }).format(date)
 }
 
-function timingTone(ms: number) {
-  if (ms >= 1000) return 'text-rose-700'
-  if (ms >= 500) return 'text-amber-700'
-  return 'text-emerald-700'
+function timingHealthTextTone(health: ApiTimingHealth | 'idle' | null | undefined) {
+  if (health === 'error') return 'text-rose-700'
+  if (health === 'slow') return 'text-amber-700'
+  if (health === 'healthy') return 'text-emerald-700'
+  return 'text-ink'
 }
 
-function timingHealthTone(route: ApiTimingRoute | null | undefined) {
-  if (!route) return 'text-ink'
-  if (route.lastStatus >= 500) return 'text-rose-700'
-  if (route.lastStatus >= 400) return 'text-amber-700'
-  return timingTone(route.lastDurationMs)
+function timingHealthBadgeTone(health: ApiTimingHealth) {
+  if (health === 'error') return 'bg-rose-100 text-rose-700'
+  if (health === 'slow') return 'bg-amber-100 text-amber-700'
+  if (health === 'healthy') return 'bg-emerald-100 text-emerald-700'
+  return 'bg-surface-2 text-ink-2 ring-1 ring-line'
+}
+
+function timingHealthLabel(health: ApiTimingHealth) {
+  if (health === 'error') return 'Error'
+  if (health === 'slow') return 'Slow'
+  if (health === 'healthy') return 'Healthy'
+  return 'Learning'
+}
+
+function timingSummaryLabel(summary: ApiTimingSnapshot['summary'] | null | undefined) {
+  if (!summary || summary.state === 'idle') return 'No samples'
+  if (summary.errorRouteCount > 0) {
+    return `${summary.errorRouteCount} ${summary.errorRouteCount === 1 ? 'error' : 'errors'}`
+  }
+  if (summary.slowRouteCount > 0) {
+    return `${summary.slowRouteCount} ${summary.slowRouteCount === 1 ? 'slow route' : 'slow routes'}`
+  }
+  if (summary.state === 'learning') return 'Learning'
+  return 'All healthy'
 }
 
 function formatOperationAction(action: LabelOperationLogEntry['action']) {
@@ -638,17 +684,8 @@ export default function Home() {
   const syncPill = useMemo(() => formatSyncPill(syncStatus), [syncStatus])
   const apiTimingRoutes = apiTimingSnapshot?.routes ?? []
   const labelOperationLogs = apiTimingSnapshot?.labelOperationLogs ?? []
-  const slowestApiRoute = apiTimingRoutes[0] ?? null
   const ordersApiRoute =
     apiTimingRoutes.find((route) => route.method === 'GET' && route.path === '/orders') ?? null
-  const apiTimingHistorical5xxCount = apiTimingRoutes.reduce(
-    (sum, route) => sum + Number(route.errorCount ?? 0),
-    0,
-  )
-  const apiTimingCurrent5xxRouteCount = apiTimingRoutes.reduce(
-    (sum, route) => sum + (route.lastStatus >= 500 ? 1 : 0),
-    0,
-  )
 
   const refreshApiTiming = async () => {
     setApiTimingLoading(true)
@@ -1431,14 +1468,14 @@ export default function Home() {
                 <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
                   <div>
                     <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-brand">
-                      Production API timing
+                      Production diagnostics
                     </div>
                     <h2 id="apiTimingTitle" className="mt-1 text-[20px] font-extrabold tracking-tight text-ink">
-                      Timing from the last sync toolbar
+                      Sync health &amp; API performance
                     </h2>
                     <div className="mt-1 text-[12px] text-ink-3">
                       {apiTimingSnapshot?.generatedAt
-                        ? `Updated ${formatTimingDate(apiTimingSnapshot.generatedAt)} CA`
+                        ? `${apiTimingSnapshot.window.label} · Updated ${formatTimingDate(apiTimingSnapshot.generatedAt)} CA · API reset ${formatTimingDate(apiTimingSnapshot.startedAt)} CA`
                         : 'Click refresh to load the latest backend timing snapshot.'}
                     </div>
                   </div>
@@ -1477,51 +1514,66 @@ export default function Home() {
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Routes
+                        Requests
                       </div>
                       <div className="mt-1 text-2xl font-extrabold tabular-nums text-ink">
-                        {apiTimingSnapshot?.routeCount ?? 0}
+                        {apiTimingSnapshot?.summary.windowSampleCount ?? 0}
                       </div>
-                      <div className="mt-1 text-[11.5px] text-ink-3">tracked in memory</div>
+                      <div className="mt-1 text-[11.5px] text-ink-3">
+                        {apiTimingSnapshot?.routeCount ?? 0} normalized routes · {apiTimingSnapshot?.window.label.toLowerCase() ?? 'current window'}
+                      </div>
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Orders current
+                        Orders p95
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingHealthTone(ordersApiRoute)}`}>
-                        {ordersApiRoute ? formatTimingMs(ordersApiRoute.lastDurationMs) : '-'}
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingHealthTextTone(ordersApiRoute?.health)}`}>
+                        {ordersApiRoute?.confidence === 'learning'
+                          ? 'Learning'
+                          : ordersApiRoute
+                            ? formatTimingMs(ordersApiRoute.p95Ms)
+                            : '-'}
                       </div>
                       <div className="mt-1 text-[11.5px] text-ink-3">
-                        p95 {ordersApiRoute ? formatTimingMs(ordersApiRoute.p95Ms) : '-'}
+                        {ordersApiRoute
+                          ? ordersApiRoute.confidence === 'learning'
+                            ? `${ordersApiRoute.count}/${apiTimingSnapshot?.window.minimumSamplesForPercentiles ?? 20} samples needed`
+                            : `current ${formatTimingMs(ordersApiRoute.lastDurationMs)} · budget ${formatTimingMs(ordersApiRoute.budgetMs)}`
+                          : 'no samples yet'}
                       </div>
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
                         Slowest current
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingHealthTone(slowestApiRoute)}`}>
-                        {slowestApiRoute ? formatTimingMs(slowestApiRoute.lastDurationMs) : '-'}
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingHealthTextTone(apiTimingSnapshot?.summary.slowestCurrent?.health)}`}>
+                        {apiTimingSnapshot?.summary.slowestCurrent
+                          ? formatTimingMs(apiTimingSnapshot.summary.slowestCurrent.durationMs)
+                          : '-'}
                       </div>
                       <div className="mt-1 truncate text-[11.5px] text-ink-3">
-                        {slowestApiRoute ? `${slowestApiRoute.method} ${slowestApiRoute.path}` : 'no samples yet'}
+                        {apiTimingSnapshot?.summary.slowestCurrent
+                          ? `${apiTimingSnapshot.summary.slowestCurrent.method} ${apiTimingSnapshot.summary.slowestCurrent.path}`
+                          : 'no samples yet'}
                       </div>
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Latest route status
+                        Route health
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold ${apiTimingCurrent5xxRouteCount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                        {apiTimingCurrent5xxRouteCount > 0
-                          ? `${apiTimingCurrent5xxRouteCount} ${apiTimingCurrent5xxRouteCount === 1 ? 'route' : 'routes'} need review`
-                          : 'All clear'}
+                      <div className={`mt-1 text-2xl font-extrabold ${timingHealthTextTone(apiTimingSnapshot?.summary.state)}`}>
+                        {timingSummaryLabel(apiTimingSnapshot?.summary)}
                       </div>
                       <div className="mt-1 text-[11.5px] text-ink-3">
-                        {apiTimingHistorical5xxCount} past 5xx {apiTimingHistorical5xxCount === 1 ? 'sample' : 'samples'} since API restart
+                        {apiTimingSnapshot
+                          ? `${apiTimingSnapshot.summary.learningRouteCount} learning · ${apiTimingSnapshot.summary.healthyRouteCount} healthy`
+                          : 'waiting for backend snapshot'}
                       </div>
                     </div>
                   </div>
 
-                  <div className="mt-4 overflow-hidden rounded-xl bg-surface ring-1 ring-line">
+                  {labelOperationLogs.length > 0 ? (
+                    <div className="mt-4 overflow-hidden rounded-xl bg-surface ring-1 ring-line">
                     <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
                       <div>
                         <div className="text-[12px] font-extrabold text-ink">Label / Queue Logs</div>
@@ -1620,14 +1672,15 @@ export default function Home() {
                         </tbody>
                       </table>
                     </div>
-                  </div>
+                    </div>
+                  ) : null}
 
                   <div className="mt-4 overflow-hidden rounded-xl bg-surface ring-1 ring-line">
                     <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
                       <div>
-                        <div className="text-[12px] font-extrabold text-ink">Hot API Routes</div>
+                        <div className="text-[12px] font-extrabold text-ink">API routes</div>
                         <div className="text-[11.5px] text-ink-3">
-                          Current shows what is happening now. Typical and spike columns show recent history.
+                          Normalized route identities from {apiTimingSnapshot?.window.label.toLowerCase() ?? 'the active window'}; p95 health starts after {apiTimingSnapshot?.window.minimumSamplesForPercentiles ?? 20} samples.
                         </div>
                       </div>
                       {apiTimingLoading ? (
@@ -1642,19 +1695,18 @@ export default function Home() {
                         <thead className="bg-surface-2 text-[10px] uppercase tracking-wider text-ink-3">
                           <tr>
                             <th className="px-4 py-2 font-bold">Route</th>
-                            <th className="px-3 py-2 text-right font-bold">Count</th>
+                            <th className="px-3 py-2 text-right font-bold">Requests</th>
                             <th className="px-3 py-2 text-right font-bold" title="Normal request speed. Half of recent requests were faster than this.">Typical</th>
-                            <th className="px-3 py-2 text-right font-bold" title="Slow-but-not-rare spike. 95% of recent requests were faster than this.">Slow Spike</th>
-                            <th className="px-3 py-2 text-right font-bold" title="Rare slow spike. 99% of recent requests were faster than this.">Rare Spike</th>
-                            <th className="px-3 py-2 text-right font-bold" title="Slowest request still remembered by the API timing window.">Worst</th>
-                            <th className="px-3 py-2 text-right font-bold" title="Most recent request speed. This controls the green/red health color.">Current</th>
-                            <th className="px-4 py-2 text-right font-bold">Status</th>
+                            <th className="px-3 py-2 text-right font-bold" title="95% of requests in this window were faster than this.">p95</th>
+                            <th className="px-3 py-2 text-right font-bold">Error rate</th>
+                            <th className="px-3 py-2 text-right font-bold" title="Most recent request speed and HTTP status.">Current</th>
+                            <th className="px-4 py-2 text-right font-bold">Health</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-line">
                           {apiTimingRoutes.length === 0 && !apiTimingLoading ? (
                             <tr>
-                              <td colSpan={8} className="px-4 py-6 text-center text-ink-3">
+                              <td colSpan={7} className="px-4 py-6 text-center text-ink-3">
                                 No API timing samples yet.
                               </td>
                             </tr>
@@ -1670,21 +1722,28 @@ export default function Home() {
                                 </td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.count}</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p50Ms)}</td>
-                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p95Ms)}</td>
-                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p99Ms)}</td>
-                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.maxMs)}</td>
-                                <td className={`px-3 py-2.5 text-right tabular-nums font-bold ${timingHealthTone(route)}`}>{formatTimingMs(route.lastDurationMs)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">
+                                  {route.confidence === 'learning'
+                                    ? `Learning ${route.count}/${apiTimingSnapshot?.window.minimumSamplesForPercentiles ?? 20}`
+                                    : formatTimingMs(route.p95Ms)}
+                                </td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">
+                                  {route.errorRate.toFixed(1)}%
+                                </td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">
+                                  <div className="font-bold">{formatTimingMs(route.lastDurationMs)}</div>
+                                  <div className="text-[10.5px] text-ink-3">HTTP {route.lastStatus || '-'}</div>
+                                </td>
                                 <td className="px-4 py-2.5 text-right">
                                   <span className={[
-                                    'inline-flex min-w-[42px] justify-center rounded-full px-2 py-0.5 text-[10.5px] font-bold tabular-nums',
-                                    route.lastStatus >= 500
-                                      ? 'bg-rose-100 text-rose-700'
-                                      : route.lastStatus >= 400
-                                        ? 'bg-amber-100 text-amber-700'
-                                        : 'bg-emerald-100 text-emerald-700',
+                                    'inline-flex min-w-[62px] justify-center rounded-full px-2 py-0.5 text-[10.5px] font-bold',
+                                    timingHealthBadgeTone(route.health),
                                   ].join(' ')}>
-                                    {route.lastStatus || '-'}
+                                    {timingHealthLabel(route.health)}
                                   </span>
+                                  <div className="mt-1 text-[10px] tabular-nums text-ink-3">
+                                    budget {formatTimingMs(route.budgetMs)}
+                                  </div>
                                 </td>
                               </tr>
                             ))

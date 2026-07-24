@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server';
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
+import { routePath as matchedRoutePath } from 'hono/route';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { env } from './lib/env';
@@ -95,7 +96,7 @@ app.use('*', async (c, next) => {
       contentLength && /^\d+$/.test(contentLength) ? Number(contentLength) : null;
     observeApiTiming({
       method: c.req.method,
-      path: url.pathname,
+      path: matchedRoutePath(c) || url.pathname,
       status: c.res.status,
       durationMs,
       responseBytes,

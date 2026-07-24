@@ -7,6 +7,8 @@ import { RefreshCcw } from 'lucide-react'
 import { ButtonSpinner, SkeletonStack, StatusLine } from './settings-ui'
 import { formatCaDateTimeLabeled } from '../../lib/ca-time'
 
+type ApiTimingHealth = 'learning' | 'healthy' | 'slow' | 'error'
+
 // Locally-shaped mirror of the parent's internal ObservabilityStatus type.
 export type ObservabilityStatus = {
   ok: boolean
@@ -27,17 +29,36 @@ export type ObservabilityStatus = {
     error?: string
   }
   apiTiming?: {
+    startedAt?: string
     routeCount?: number
+    window?: {
+      label?: string
+      minimumSamplesForPercentiles?: number
+    }
+    summary?: {
+      state?: 'idle' | ApiTimingHealth
+      windowSampleCount?: number
+      healthyRouteCount?: number
+      slowRouteCount?: number
+      errorRouteCount?: number
+      learningRouteCount?: number
+    }
     hotRoutes?: Array<{
       method: string
       path: string
       count: number
       errorCount: number
+      errorRate: number
+      p50Ms: number
       p95Ms: number
       p99Ms: number
       maxMs: number
+      lastDurationMs: number
       lastStatus?: number | null
       lastObservedAt?: string | null
+      budgetMs: number
+      confidence: 'learning' | 'ready'
+      health: ApiTimingHealth
     }>
   }
 }
@@ -68,6 +89,20 @@ function formatFlagValue(value: unknown): string {
   if (typeof value === 'boolean') return value ? 'enabled' : 'disabled'
   if (value === null || typeof value === 'undefined') return 'n/a'
   return String(value)
+}
+
+function apiHealthBadgeTone(health: ApiTimingHealth): string {
+  if (health === 'error') return 'bg-rose-100 text-rose-700'
+  if (health === 'slow') return 'bg-amber-100 text-amber-700'
+  if (health === 'healthy') return 'bg-emerald-100 text-emerald-700'
+  return 'bg-surface-2 text-ink-2 ring-1 ring-line'
+}
+
+function apiHealthLabel(health: ApiTimingHealth): string {
+  if (health === 'error') return 'Error'
+  if (health === 'slow') return 'Slow'
+  if (health === 'healthy') return 'Healthy'
+  return 'Learning'
 }
 
 export function SystemStatusPanel({
@@ -111,13 +146,13 @@ export function SystemStatusPanel({
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                         <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
                           <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
-                            API Routes
+                            API Requests
                           </div>
                           <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">
-                            {systemStatus.apiTiming?.routeCount ?? 0}
+                            {systemStatus.apiTiming?.summary?.windowSampleCount ?? 0}
                           </div>
                           <div className="mt-1 text-[11.5px] text-ink-3">
-                            tracked in timing memory
+                            {systemStatus.apiTiming?.routeCount ?? 0} normalized routes · {systemStatus.apiTiming?.window?.label?.toLowerCase() ?? 'current window'}
                           </div>
                         </div>
                         <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
@@ -184,9 +219,9 @@ export function SystemStatusPanel({
 
                       <div className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden">
                         <div className="px-4 py-3 border-b border-line">
-                          <div className="text-[12px] font-extrabold text-ink">Hot API Routes</div>
+                          <div className="text-[12px] font-extrabold text-ink">API Routes</div>
                           <div className="text-[11.5px] text-ink-3 mt-0.5">
-                            Use this to spot slow or failing endpoints during a browser lag report.
+                            Backend-classified health for normalized routes in {systemStatus.apiTiming?.window?.label?.toLowerCase() ?? 'the active window'}.
                           </div>
                         </div>
                         <div className="overflow-x-auto">
@@ -194,11 +229,11 @@ export function SystemStatusPanel({
                             <thead className="bg-surface-2 text-[10.5px] uppercase tracking-wider text-ink-3">
                               <tr>
                                 <th className="px-4 py-2 font-bold">Route</th>
-                                <th className="px-3 py-2 font-bold text-right">Count</th>
-                                <th className="px-3 py-2 font-bold text-right">Errors</th>
+                                <th className="px-3 py-2 font-bold text-right">Requests</th>
+                                <th className="px-3 py-2 font-bold text-right">Error rate</th>
                                 <th className="px-3 py-2 font-bold text-right">p95</th>
-                                <th className="px-3 py-2 font-bold text-right">p99</th>
-                                <th className="px-3 py-2 font-bold text-right">Max</th>
+                                <th className="px-3 py-2 font-bold text-right">Current</th>
+                                <th className="px-3 py-2 font-bold text-right">Health</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-line">
@@ -216,10 +251,24 @@ export function SystemStatusPanel({
                                       <span className="break-all">{route.path}</span>
                                     </td>
                                     <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.count}</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.errorCount}</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{Math.round(route.p95Ms)}ms</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{Math.round(route.p99Ms)}ms</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{Math.round(route.maxMs)}ms</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.errorRate.toFixed(1)}%</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">
+                                      {route.confidence === 'learning'
+                                        ? `Learning ${route.count}/${systemStatus.apiTiming?.window?.minimumSamplesForPercentiles ?? 20}`
+                                        : `${Math.round(route.p95Ms)}ms`}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">
+                                      {Math.round(route.lastDurationMs)}ms
+                                      <div className="text-[10.5px] text-ink-3">HTTP {route.lastStatus ?? '-'}</div>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right">
+                                      <span className={[
+                                        'inline-flex min-w-[62px] justify-center rounded-full px-2 py-0.5 text-[10.5px] font-bold',
+                                        apiHealthBadgeTone(route.health),
+                                      ].join(' ')}>
+                                        {apiHealthLabel(route.health)}
+                                      </span>
+                                    </td>
                                   </tr>
                                 ))
                               )}

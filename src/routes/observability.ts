@@ -72,11 +72,17 @@ app.get('/status', async (c) => {
     path: route.path,
     count: route.count,
     errorCount: route.errorCount,
+    errorRate: route.errorRate,
+    p50Ms: route.p50Ms,
     p95Ms: route.p95Ms,
     p99Ms: route.p99Ms,
     maxMs: route.maxMs,
+    lastDurationMs: route.lastDurationMs,
     lastStatus: route.lastStatus,
     lastObservedAt: route.lastObservedAt,
+    budgetMs: route.budgetMs,
+    confidence: route.confidence,
+    health: route.health,
   }));
 
   return c.json({
@@ -103,8 +109,10 @@ app.get('/status', async (c) => {
     },
     database,
     apiTiming: {
+      startedAt: timing.startedAt,
       routeCount: timing.routeCount,
       window: timing.window,
+      summary: timing.summary,
       hotRoutes,
     },
   });
