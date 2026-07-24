@@ -16,6 +16,8 @@ type Props = {
 const clearDeclaration = (): HazmatDeclarationDraft => ({ status: 'clear', materials: [] })
 
 function displayedDeclaration(state: OrderHazmatDto, shipped: boolean): HazmatDeclarationDraft {
+  // Per user override unlock shipped data on 2026-07-25: terminal views render
+  // only the immutable purchase snapshot and never expose declaration writes.
   if (shipped) return state.frozenPurchaseFacts?.declaration ?? clearDeclaration()
   return state.declaration ?? clearDeclaration()
 }
@@ -185,6 +187,7 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
       <label className="mt-2 block text-[10px] font-semibold uppercase tracking-wide text-ink-3">
         Declaration
         <select
+          aria-label="Hazmat declaration status"
           className="mt-1 h-7 w-full rounded border border-line bg-surface px-2 text-[11px] text-ink disabled:opacity-60"
           value={draft.status}
           disabled={!editable}
@@ -230,6 +233,7 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
                 onChange={(event) => update('dryIceWeightValue', numberOrNull(event.target.value))}
               />
               <select
+                aria-label="Dry ice weight unit"
                 className="h-7 rounded border border-line bg-surface px-2 text-[11px]"
                 disabled={!editable}
                 value={draft.dryIceWeightUnit ?? ''}

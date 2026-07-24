@@ -72,5 +72,17 @@ assert.match(labels, /shipmentHazmatSnapshots/);
 const queue = source('src/services/print-queue.ts');
 assert.match(queue, /Per user override unlock shipped data on 2026-07-25/);
 assert.doesNotMatch(queue, /(?:update|delete)\(shipmentHazmatSnapshots\)/);
+assert.match(source('web/src/components/Views/OrdersHazmatDeclaration.tsx'), /Per user override unlock shipped data on 2026-07-25/);
+
+const browserProof = source('web/e2e/orders-ps465-hazmat.spec.js');
+assert.match(browserProof, /Every request is intercepted/);
+assert.match(browserProof, /Saved\. The previous rate was cleared; re-rate before buying a label\./);
+assert.match(browserProof, /Hazmat declaration changed in another session/);
+assert.match(browserProof, /Shipped hazmat snapshot is immutable\./);
+assert.match(browserProof, /Immutable hazmat snapshot revision/);
+assert.match(
+  source('package.json'),
+  /"test:ps-465-hazmat:browser": "playwright test web\/e2e\/orders-ps465-hazmat\.spec\.js --reporter=line"/,
+);
 
 console.log('PS-465 additive migration, rollout, permission, and lockdown guard passed');
