@@ -103,9 +103,14 @@ export function shouldSendShipmentSyncWatchdogAlert(
   return typeof sentAt !== 'number' || !Number.isFinite(sentAt) || nowMs - sentAt >= cooldownMs;
 }
 
-function alertPayload(input: AlertInput, candidate: ShipmentSyncWatchdogAlertCandidate) {
+export function buildShipmentSyncWatchdogAlertPayload(
+  input: AlertInput,
+  candidate: ShipmentSyncWatchdogAlertCandidate,
+) {
+  const headline = `PrepShip shipment sync watchdog: ${candidate.state} (${candidate.kind})`;
   return {
-    text: `PrepShip shipment sync watchdog: ${candidate.state} (${candidate.kind})`,
+    text: headline,
+    content: headline,
     service: 'prepship-v4',
     component: 'shipment-sync-watchdog',
     state: candidate.state,
@@ -155,7 +160,7 @@ export async function notifyShipmentSyncWatchdogEscalation(
       const response = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(alertPayload(input, candidate)),
+        body: JSON.stringify(buildShipmentSyncWatchdogAlertPayload(input, candidate)),
         signal: controller.signal,
       });
       if (response.status < 200 || response.status >= 300) {

@@ -12,6 +12,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'service';
 process.env.SUPABASE_JWT_SECRET ??= 'secret';
 
 const {
+  buildShipmentSyncWatchdogAlertPayload,
   shipmentSyncWatchdogAlertCandidate,
   shouldSendShipmentSyncWatchdogAlert,
 } = await import('../src/services/shipment-sync-watchdog-alert');
@@ -61,6 +62,22 @@ assert.equal(
   'same in-app state may alert again after 30 minutes',
 );
 assert.notEqual(alertOnly.key, capExhausted.key, 'alert-only and cap exhaustion are distinct states');
+
+const inAppPayload = buildShipmentSyncWatchdogAlertPayload({
+  state: 'worker_stale',
+  verdictReason: 'worker heartbeat is stale',
+  recovery: {
+    action: 'alert_only',
+    status: 'completed',
+    at: new Date(now).toISOString(),
+    reason: 'worker heartbeat is stale',
+  },
+  checkedAt: new Date(now).toISOString(),
+  nowMs: now,
+  source: 'timer',
+}, alertOnly);
+assert.equal(inAppPayload.content, inAppPayload.text, 'in-app alert supports Discord and Slack payloads');
+assert.ok(inAppPayload.content.length <= 2_000, 'Discord alert content stays within its message limit');
 
 const checks = [
   { name: 'Render /health/ready', ok: false },
@@ -113,6 +130,8 @@ const payload = buildAlertPayload({
 const serializedPayload = JSON.stringify(payload);
 assert.doesNotMatch(serializedPayload, /Bearer abc|token=secret|private\.example/);
 assert.match(serializedPayload, /manualAction/);
+assert.equal(payload.content, payload.text, 'external alert supports Discord and Slack payloads');
+assert.ok(payload.content.length <= 2_000, 'Discord alert content stays within its message limit');
 
 const exitCodes: number[] = [];
 const recordFailure = createWorkerFailureBreaker(3, (code) => exitCodes.push(code));

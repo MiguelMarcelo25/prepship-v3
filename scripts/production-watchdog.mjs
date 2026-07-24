@@ -321,8 +321,10 @@ export function shouldSendAlert(
 }
 
 export function buildAlertPayload({ checks, health, state, mode, action, reason }) {
+  const headline = `PrepShip production watchdog: ${health.ok ? 'healthy' : 'unhealthy'} (${action})`;
   return {
-    text: `PrepShip production watchdog: ${health.ok ? 'healthy' : 'unhealthy'} (${action})`,
+    text: headline,
+    content: headline,
     service: 'prepship-v4',
     status: health.ok ? 'healthy' : 'unhealthy',
     mode,
