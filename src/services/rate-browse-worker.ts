@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { env } from '../lib/env';
 import { withPgBossPoolLifetime } from '../lib/pg-boss-pool-lifetime';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
-import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
+import { SYNC_JOB_CANCELLATION_GRACE_MS } from '../lib/sync-job-deadline';
 import { runDurableWorkerAttempt } from './durable-worker-attempt';
 import {
   acknowledgeRateBrowseJobCancellation,
@@ -28,7 +28,39 @@ export const RATE_BROWSE_JOB_NAME = 'prepship.rate-browse.execute';
 export const RATE_BROWSE_WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
 export const RATE_BROWSE_WORKER_HEARTBEAT_STALE_MS = 60_000;
 export const RATE_BROWSE_WORKER_RECOVERY_INTERVAL_MS = 60_000;
-export const RATE_BROWSE_WORKER_TIMEOUT_MS = SYNC_JOB_HANDLER_TIMEOUT_MS;
+// Interactive rate browse has one consumer slot. Bound it independently from
+// the longer sync-job lease so a wedged cached lookup cannot hold every later
+// operator request for ten minutes.
+export const RATE_BROWSE_WORKER_TIMEOUT_MS = Math.max(
+  30_000,
+  Math.min(
+    5 * 60_000,
+    Number(process.env.RATE_BROWSE_WORKER_TIMEOUT_MS) || 60_000,
+  ),
+);
+
+export function armRateBrowseWorkerHardDeadline(input: {
+  jobId: string;
+  generation: number;
+  timeoutMs?: number;
+  graceMs?: number;
+  terminate?: () => void;
+}): () => void {
+  const timeoutMs = input.timeoutMs ?? RATE_BROWSE_WORKER_TIMEOUT_MS;
+  const graceMs = input.graceMs ?? SYNC_JOB_CANCELLATION_GRACE_MS;
+  // This watchdog is deliberately independent of the work promise and its DB
+  // cancellation hooks: Supavisor can leave either promise unsettled.
+  const timer = setTimeout(() => {
+    console.error(
+      `[rate-browse-worker] ${input.jobId} generation ${input.generation} `
+        + `ignored cancellation for ${graceMs}ms; terminating worker while the durable generation is fenced`,
+    );
+    if (input.terminate) input.terminate();
+    else process.exit(1);
+  }, timeoutMs + graceMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+}
 
 const payloadSchema = z.object({
   jobId: z.string().uuid(),
@@ -151,7 +183,7 @@ async function persistCurrent(
   if (!persisted) throw new Error(`Rate browse generation ${claim.generation} is stale`);
 }
 
-async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, unknown>> {
+async function executeClaimWithinFence(claim: RateBrowseJobClaim): Promise<Record<string, unknown>> {
   const running: RateBrowseWorkflowSnapshot = {
     ...claim.snapshot,
     generation: claim.generation,
@@ -227,6 +259,18 @@ async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, u
     },
   }), claim);
   return attempt.value;
+}
+
+async function executeClaim(claim: RateBrowseJobClaim): Promise<Record<string, unknown>> {
+  const disarmHardDeadline = armRateBrowseWorkerHardDeadline({
+    jobId: claim.snapshot.jobId,
+    generation: claim.generation,
+  });
+  try {
+    return await executeClaimWithinFence(claim);
+  } finally {
+    disarmHardDeadline();
+  }
 }
 
 async function recoverRateBrowseJobs(target: PgBoss): Promise<number> {

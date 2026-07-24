@@ -86,6 +86,7 @@ import {
   resolveRateBackfillDbWriteConcurrency,
 } from './rate-backfill-execution-policy';
 import { awaitSettledWork } from '../lib/sync-job-cancellation';
+import { stampRateSourceDisplay } from './rate-source-display';
 import {
   createRateBackfillDiagnosticBuffers,
   normalizeRateBackfillDiagnosticSamples,
@@ -1505,7 +1506,7 @@ async function runBackfill(
           delete persistedFinalizedBest.markup;
           const secondBestRate =
             rawAmountSecondBest && combined.bestRateComplete
-              ? {
+              ? stampRateSourceDisplay({
                   ...rawAmountSecondBest,
                   selectedRateKey: selectedRateOpaqueKey(secondBest),
                   ...(finalizedBest.rateQuoteId ? { rateQuoteId: finalizedBest.rateQuoteId } : {}),
@@ -1518,7 +1519,7 @@ async function runBackfill(
                   isComplete: combined.bestRateComplete,
                   rateCount: combined.combinedRates.length,
                   matchType: result.cached ? 'exact' : 'live',
-                }
+                })
               : null;
           const bestWithMetadata = {
             ...persistedFinalizedBest,
@@ -1545,13 +1546,16 @@ async function runBackfill(
             insuranceProvider: (result as { effectiveInsuranceProvider?: string | null }).effectiveInsuranceProvider ?? null,
             insuredValue: (result as { effectiveInsuredValue?: number | null }).effectiveInsuredValue ?? null,
           });
+          // Backfill is a persisted-rate producer, so it must use the same
+          // backend provenance owner as the live Rate Browser response.
+          const sourceStampedBest = stampRateSourceDisplay(stampedBest as Record<string, unknown>);
           // PS-271: no-downgrade ratchet (automated persist site). Keep a CHEAPER fresh best for the
           // SAME shipment inputs (same requestFingerprint) instead of overwriting it with a thin Shipp
           // re-quote that dropped UPS/USPS; a different fingerprint (inputs changed) or a cheaper-or-
           // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
           assertBackfillCanContinue(jobId, context.signal, `best-rate persistence order ${row.id}`);
           const persisted = await persistBestRateWithRatchet(row.id, {
-            bestRateJson: stampedBest,
+            bestRateJson: sourceStampedBest,
             bestRateDims: dimsLabel,
             bestRateAt: now,
             updatedAt: now,
@@ -1559,7 +1563,7 @@ async function runBackfill(
           assertBackfillCanContinue(jobId, context.signal, `post-persistence order ${row.id}`);
           if (persisted.blocked) {
             job.skipped++;
-            recordPreExpiryOutcome(stampedBest, false, {
+            recordPreExpiryOutcome(sourceStampedBest, false, {
               forceRefresh: rateFetchDecision.forceRefresh,
               cached: result.cached,
             });
@@ -1570,7 +1574,7 @@ async function runBackfill(
             );
           } else {
             job.updated++;
-            recordPreExpiryOutcome(stampedBest, true, {
+            recordPreExpiryOutcome(sourceStampedBest, true, {
               forceRefresh: rateFetchDecision.forceRefresh,
               cached: result.cached,
             });

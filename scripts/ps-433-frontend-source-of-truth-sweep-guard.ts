@@ -31,6 +31,8 @@ const analysisParity = read('web/src/components/Views/analysis-parity.ts');
 const billingParity = read('web/src/components/Views/billing-parity.ts');
 const dashboard = read('web/src/components/Views/DashboardView.tsx');
 const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
+const orderRateDto = read('src/services/order-rate-dto.ts');
+const rateBackfill = read('src/services/rates-backfill.ts');
 const clientRoutes = `${read('src/routes/clients.ts')}\n${read('src/routes/admin.ts')}`;
 const analysisRoute = read('src/routes/analysis.ts');
 const billingRoute = read('src/routes/billing.ts');
@@ -80,6 +82,15 @@ assert.doesNotMatch(rateBrowser, /function isBlockedRate|TEST_MOCK_SERVICE_TEMPL
 assert.match(rateBrowseProducer, /getCarrierAccountsForRateContext/);
 assert.match(rateBrowseProducer, /stampRateSourceDisplayList/);
 assert.match(sharedClient, /rateSourceLabel: obj\.rateSourceLabel/);
+assert.match(orderRateDto, /stampRateSourceDisplay\(backendRate\)/);
+assert.match(rateBackfill, /sourceStampedBest = stampRateSourceDisplay/);
+const cachedSeedStart = rateBrowser.indexOf('function buildOrderBestRateSeed');
+const cachedSeedEnd = rateBrowser.indexOf('function rateRowTextKey', cachedSeedStart);
+assert.ok(cachedSeedStart >= 0 && cachedSeedEnd > cachedSeedStart);
+const cachedSeed = rateBrowser.slice(cachedSeedStart, cachedSeedEnd);
+assert.match(cachedSeed, /rateSourceKind:/);
+assert.match(cachedSeed, /rateSourceLabel:/);
+assert.match(cachedSeed, /rateSourceDetail:/);
 
 // Test-mode rates and Apply persistence use the same backend rate/quote owners.
 assert.doesNotMatch(ordersView, /buildTestMockRate|buildBestTestRateForShipment|buildTestRateBrowserAccounts/);

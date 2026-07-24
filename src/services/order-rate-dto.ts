@@ -36,6 +36,7 @@ import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-
 import { roundMoney } from '../lib/money';
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 import { isPricedRate } from './rates-combined';
+import { stampRateSourceDisplay } from './rate-source-display';
 // PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
 // (the route has client opt-in + the raw provider); persisted into best_rate_json and round-tripped
 // here so the awaiting row renders 'House rate needs refresh' verbatim instead of a plain SHIPP amount.
@@ -56,6 +57,9 @@ export interface OrderBestRateDto {
   carrierCode: string | null;
   shippingProviderId: number | null;
   carrierNickname: string | null;
+  rateSourceKind: string | null;
+  rateSourceLabel: string | null;
+  rateSourceDetail: string | null;
   guaranteed: boolean;
   zone: string | null;
   sourceClientId: number | null;
@@ -356,6 +360,9 @@ export interface SecondBestRateDto {
   serviceName: string | null;
   carrierNickname: string | null;
   shippingProviderId: number | null;
+  rateSourceKind: string | null;
+  rateSourceLabel: string | null;
+  rateSourceDetail: string | null;
   shipmentCost: number;
   otherCost: number;
   insuranceCost: number | null;
@@ -388,6 +395,21 @@ function readRateIsShippBrokered(record: Record<string, unknown>): boolean {
     ),
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, 'rate.serviceCode'),
   });
+}
+
+function normalizeRateSourceDisplay(
+  record: Record<string, unknown>,
+  path: string,
+): Pick<OrderBestRateDto, 'rateSourceKind' | 'rateSourceLabel' | 'rateSourceDetail'> {
+  // Provider identity is backend truth. Re-stamp from the verbatim backend
+  // rate when Apply wrapped it, instead of trusting a client-supplied label.
+  const backendRate = isRecord(record.raw) ? record.raw : record;
+  const stamped = stampRateSourceDisplay(backendRate);
+  return {
+    rateSourceKind: readNullableString(stamped.rateSourceKind ?? null, `${path}.rateSourceKind`),
+    rateSourceLabel: readNullableString(stamped.rateSourceLabel ?? null, `${path}.rateSourceLabel`),
+    rateSourceDetail: readNullableString(stamped.rateSourceDetail ?? null, `${path}.rateSourceDetail`),
+  };
 }
 
 function hasAnyMeaningfulRateField(rate: OrderBestRateDto): boolean {
@@ -477,6 +499,7 @@ function normalizeSecondBestRate(value: unknown, path = 'bestRate.secondBestRate
       value.shippingProviderId ?? value.providerAccountId ?? value.carrier_id ?? null,
       `${path}.shippingProviderId`,
     ),
+    ...normalizeRateSourceDisplay(value, path),
     shipmentCost,
     otherCost,
     insuranceCost,
@@ -586,6 +609,7 @@ export function normalizeOrderBestRateDto(
       record.carrierNickname ?? record.carrier_nickname ?? record._carrierName ?? null,
       `${path}.carrierNickname`,
     ),
+    ...normalizeRateSourceDisplay(record, path),
     guaranteed: readBoolean(record.guaranteed ?? record.guaranteed_service ?? false, `${path}.guaranteed`),
     zone: readNullableStringLike(record.zone ?? null, `${path}.zone`),
     sourceClientId: readNullableNumber(record.sourceClientId ?? record.clientId ?? null, `${path}.sourceClientId`),

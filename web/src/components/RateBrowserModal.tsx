@@ -696,6 +696,15 @@ function buildOrderBestRateSeed(
       toOptionalString(raw.carrierNickname) ??
       toOptionalString(raw.carrier_nickname) ??
       (formatAccountDisplay(account, '') || null),
+    rateSourceKind:
+      toOptionalString(bestRate.rateSourceKind) ??
+      toOptionalString(raw.rateSourceKind),
+    rateSourceLabel:
+      toOptionalString(bestRate.rateSourceLabel) ??
+      toOptionalString(raw.rateSourceLabel),
+    rateSourceDetail:
+      toOptionalString(bestRate.rateSourceDetail) ??
+      toOptionalString(raw.rateSourceDetail),
     shippingProviderId,
     shipmentCost,
     otherCost,

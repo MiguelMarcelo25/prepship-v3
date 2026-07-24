@@ -674,6 +674,7 @@
     "test:ps-346-rate-order-slow-paths": "tsx scripts/ps-346-rate-order-slow-paths-guard.ts",
     "test:ps-346-orders-refetch-coordinator": "tsx scripts/ps-346-orders-refetch-coordinator-behavior.ts",
     "test:ps-346-rate-browse-partial-workflow": "tsx scripts/ps-346-rate-browse-partial-workflow-behavior.ts",
+    "test:rate-browse-worker-fail-closed": "tsx scripts/rate-browse-worker-fail-closed-behavior.ts",
     "test:ps-346-rate-browser-partial-finalizing": "tsx scripts/ps-346-rate-browser-partial-finalizing-guard.ts",
     "test:ps-346-rate-browser-open-live-workflow": "tsx scripts/ps-346-rate-browser-open-live-workflow-guard.ts",
     "test:ps-346-print-queue-volume-evidence": "tsx scripts/ps-346-print-queue-volume-evidence-guard.ts",

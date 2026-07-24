@@ -12,6 +12,7 @@ import {
   finalizeAppliedBestRateFromSnapshot,
 } from '../src/services/shipping-workflow/apply-best-rate.js';
 import { assertPurchaseAccountMatchesProof } from '../src/services/shipping-workflow/rate-fingerprint.js';
+import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto.js';
 
 const fetchedAt = '2026-07-15T08:00:00.000Z';
 const now = Date.parse('2026-07-15T09:00:00.000Z');
@@ -123,5 +124,34 @@ const valid = attemptProviderPurchase({
 });
 assert.deepEqual(valid, { ok: true });
 assert.equal(providerSpyCalls, 1, 'one valid backend-issued proof reaches the provider spy exactly once');
+
+const legacyShipStationBest = normalizeOrderBestRateDto({
+  carrier_id: 'se-433542',
+  carrier_code: 'stamps_com',
+  service_code: 'usps_ground_advantage',
+  service_type: 'USPS Ground Advantage',
+  shipping_amount: { amount: 5.73, currency: 'USD' },
+  other_amount: { amount: 0, currency: 'USD' },
+});
+assert.equal(legacyShipStationBest?.rateSourceKind, 'shipstation');
+assert.equal(legacyShipStationBest?.rateSourceLabel, 'ShipStation');
+assert.equal(legacyShipStationBest?.rateSourceDetail, 'Provider #433542');
+
+const appliedDirectBest = normalizeOrderBestRateDto({
+  carrierCode: 'ups',
+  serviceCode: 'ups_ground',
+  shipmentCost: 9.25,
+  otherCost: 0,
+  shippingProviderId: 10_000_002,
+  rateSourceLabel: 'Unknown source',
+  raw: {
+    directCarrierAccountId: 2,
+    provider: 'ups',
+    carrier_nickname: 'Warehouse UPS',
+  },
+});
+assert.equal(appliedDirectBest?.rateSourceKind, 'direct');
+assert.equal(appliedDirectBest?.rateSourceLabel, 'UPS Direct');
+assert.equal(appliedDirectBest?.rateSourceDetail, 'Warehouse UPS');
 
 console.log('PASS PS-433 adversarial rate boundary behavior');

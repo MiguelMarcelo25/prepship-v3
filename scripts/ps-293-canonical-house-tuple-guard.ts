@@ -62,9 +62,10 @@ async function main() {
   const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
   check('rates-backfill delegates to the SAME stampHouseTuple owner',
     /import \{ stampHouseTuple \}/.test(backfill) && /await stampHouseTuple\(/.test(backfill));
-  check('rates-backfill PERSISTS the stamped best (bestRateJson: stampedBest), not the un-stamped one',
+  check('rates-backfill PERSISTS the house-stamped best plus canonical source provenance',
     /const stampedBest = await stampHouseTuple\(/.test(backfill) &&
-    /bestRateJson:\s*stampedBest(?:\s+as\s+unknown)?/.test(backfill) &&
+    /const sourceStampedBest = stampRateSourceDisplay\(stampedBest/.test(backfill) &&
+    /bestRateJson:\s*sourceStampedBest/.test(backfill) &&
     !/bestRateJson: bestWithMetadata as unknown/.test(backfill));
 
   if (failures > 0) {
