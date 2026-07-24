@@ -49,6 +49,9 @@ export const APP_PERMISSIONS = [
   'inventory:write',
   'rates:quote',
   'print_queue:write',
+  // PS-465: trained internal operators may mutate the compliance declaration.
+  // Warehouse users require an explicit JWT claim; portal roles never receive it.
+  'hazmat:write',
   'scope:global',
 ] as const;
 
@@ -70,6 +73,7 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
     'inventory:write',
     'rates:quote',
     'print_queue:write',
+    'hazmat:write',
   ],
   warehouse: [
     'settings:read',

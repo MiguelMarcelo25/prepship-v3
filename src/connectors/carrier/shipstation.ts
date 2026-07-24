@@ -17,6 +17,8 @@ type ShipStationRateEstimateInput = {
   timeoutMs?: number;
   signal?: AbortSignal;
   priority?: 'interactive' | 'batch' | 'background';
+  /** Full shipment rating is required when advanced options affect carrier acceptance. */
+  rateMode?: 'shipment';
 };
 
 type ShipStationCreateLabelFromRateInput = {
@@ -54,6 +56,19 @@ function isRateLabelInput(input: ShipStationCreateLabelInput): input is ShipStat
 
 function isShipmentLabelInput(input: ShipStationCreateLabelInput): input is ShipStationCreateLabelFromShipmentInput {
   return 'shipment' in input;
+}
+
+export function shipStationRateEndpoint(rateMode?: 'shipment'): '/v2/rates' | '/v2/rates/estimate' {
+  return rateMode === 'shipment' ? '/v2/rates' : '/v2/rates/estimate';
+}
+
+export function extractShipStationRates(
+  payload: Array<Record<string, unknown>>
+    | { rates?: Array<Record<string, unknown>>; rate_response?: { rates?: Array<Record<string, unknown>> } },
+): Array<Record<string, unknown>> {
+  return Array.isArray(payload)
+    ? payload
+    : (payload.rate_response?.rates ?? payload.rates ?? []);
 }
 
 export async function listShipStationV2Shipments<TList>(
@@ -117,8 +132,12 @@ export function createShipStationCarrierConnector(): CarrierConnector<
     provider: 'shipstation',
     capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: async (input) => {
-      const payload = await ssRequest<Array<Record<string, unknown>> | { rates?: Array<Record<string, unknown>> }>(
-        '/v2/rates/estimate',
+      const endpoint = shipStationRateEndpoint(input.rateMode);
+      const payload = await ssRequest<
+        Array<Record<string, unknown>>
+        | { rates?: Array<Record<string, unknown>>; rate_response?: { rates?: Array<Record<string, unknown>> } }
+      >(
+        endpoint,
         {
           method: 'POST',
           body: input.body ?? {},
@@ -134,7 +153,7 @@ export function createShipStationCarrierConnector(): CarrierConnector<
           priority: input.priority,
         },
       );
-      return Array.isArray(payload) ? payload : (payload.rates ?? []);
+      return extractShipStationRates(payload);
     },
     createLabel: async (input) => {
       if (isRateLabelInput(input)) {

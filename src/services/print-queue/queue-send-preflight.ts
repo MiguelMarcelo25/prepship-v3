@@ -7,7 +7,16 @@ import {
   RateProofValidationUnavailableError,
 } from '../shipping-workflow/rate-quote-snapshot-store';
 import { SelectedRateProofError } from '../shipping-workflow/rate-fingerprint';
-import { ShippingQuoteAuthorizationError } from '../shipping-workflow/shipping-quote-authorization';
+import {
+  ShippingQuoteAuthorizationError,
+  shippingQuoteAuthorizedPurchaseFacts,
+} from '../shipping-workflow/shipping-quote-authorization';
+import { getOrderHazmatForShipping } from '../order-hazmat.js';
+import {
+  authorizeHazmatPurchase,
+  hazmatQuoteFactsForShipping,
+  HazmatShippingError,
+} from '../shipping-workflow/hazmat-shipping-policy.js';
 import { getActiveLabelPurchaseLockOrderIds } from '../../lib/label-purchase-lock';
 import { getHeldLabelOperationOrderIds } from '../fulfillment-operation-ledger';
 import {
@@ -260,12 +269,39 @@ async function classifyRateProof(
     ) {
       return 'stale_or_mismatched_rate_proof';
     }
+    // Per user override unlock shipped data on 2026-07-25: compare immutable
+    // purchase proof only; this preflight performs no shipment/order mutation.
+    const currentHazmatState = await getOrderHazmatForShipping(fact.orderId);
+    const currentHazmat = hazmatQuoteFactsForShipping(currentHazmatState);
+    const authorizedHazmat = selection.authorizationContext.shipment.hazmat ?? null;
+    if (
+      (currentHazmat?.declarationHash ?? null) !== (authorizedHazmat?.declarationHash ?? null)
+      || (currentHazmat?.revision ?? null) !== (authorizedHazmat?.revision ?? null)
+    ) {
+      return 'stale_or_mismatched_rate_proof';
+    }
+    if (currentHazmat) {
+      const purchaseFacts = shippingQuoteAuthorizedPurchaseFacts(selection).hazmat;
+      if (!purchaseFacts) return 'stale_or_mismatched_rate_proof';
+      const currentlyAuthorized = authorizeHazmatPurchase({
+        facts: currentHazmat,
+        profile: purchaseFacts.profile,
+        capabilities: currentHazmatState.capabilities,
+      });
+      if (currentlyAuthorized.snapshotHash !== purchaseFacts.snapshotHash) {
+        return 'stale_or_mismatched_rate_proof';
+      }
+    }
     return null;
   } catch (error) {
     if (error instanceof RateProofValidationUnavailableError) {
       return 'rate_proof_check_unavailable';
     }
-    if (error instanceof SelectedRateProofError || error instanceof ShippingQuoteAuthorizationError) {
+    if (
+      error instanceof SelectedRateProofError
+      || error instanceof ShippingQuoteAuthorizationError
+      || error instanceof HazmatShippingError
+    ) {
       return 'stale_or_mismatched_rate_proof';
     }
     const structured = error as { name?: unknown; code?: unknown } | null;

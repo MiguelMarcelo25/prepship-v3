@@ -1,5 +1,7 @@
 import { normalizeShippingOptions } from '../shipping-options.js';
 import type { Address } from './types.js';
+import type { CanonicalHazmatPurchaseFacts } from '../../services/shipping-workflow/hazmat-declaration.js';
+import { applyShipStationHazmatToShipment } from './hazmat.js';
 
 export type ShipstationAddressInput = {
   name?: string | null;
@@ -33,6 +35,8 @@ export type CreateExternalLabelInput = {
   externalShipmentId?: string;
   signal?: AbortSignal;
   testLabel?: boolean;
+  /** Backend-sealed facts only; request callers may not construct provider hazmat fields. */
+  hazmat?: CanonicalHazmatPurchaseFacts | null;
 };
 
 function toAddress(input: ShipstationAddressInput, fallbackPhone = '000-000-0000'): Address {
@@ -89,8 +93,7 @@ export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
   if (hasInsurance) {
     pkg.insured_value = { amount: options.insuredValue, currency: 'usd' };
   }
-  return {
-    shipment: {
+  const shipment = applyShipStationHazmatToShipment({
       carrier_id: input.carrierId,
       service_code: input.serviceCode,
       ship_date: new Date().toISOString().slice(0, 10),
@@ -101,7 +104,9 @@ export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
       ...(hasInsurance ? { insurance_provider: options.insuranceProvider } : {}),
       external_order_id: input.orderNumber ?? undefined,
       external_shipment_id: normalizeShipStationExternalShipmentId(input.externalShipmentId) ?? undefined,
-    },
+    }, input.hazmat);
+  return {
+    shipment,
     is_return_label: false,
     label_layout: '4x6',
     label_format: 'pdf',

@@ -122,6 +122,69 @@ export type RateRecalculateBatchDto = {
   finished_at: string | null;
 };
 
+export type HazmatMaterialDraft = {
+  sequence?: number;
+  unNaNumber?: string | null;
+  properShippingName?: string | null;
+  hazardClass?: string | null;
+  packingGroup?: 'i' | 'ii' | 'iii' | null;
+  amount?: number | null;
+  amountUnit?: string | null;
+  quantity?: number | null;
+  transportMean?: string | null;
+  regulationLevel?: string | null;
+};
+
+export type HazmatDeclarationDraft = {
+  schemaVersion?: 1;
+  status: 'clear' | 'active';
+  limitedQuantity?: boolean | null;
+  containsBattery?: boolean | null;
+  dryIce?: boolean | null;
+  dryIceWeightValue?: number | null;
+  dryIceWeightUnit?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+  uspsCategory?: string | null;
+  uspsPackageLevel?: boolean | null;
+  regulatedContentType?: string | null;
+  materials?: HazmatMaterialDraft[];
+};
+
+export type OrderHazmatDto = {
+  orderId: number;
+  declaration: HazmatDeclarationDraft | null;
+  revision: number;
+  semanticHash: string | null;
+  capabilities: {
+    featureEnabled: boolean;
+    writeEnabled: boolean;
+    clientAllowed: boolean;
+    profiles: Record<string, {
+      profile: string;
+      label: string;
+      visible: boolean;
+      ratingSupported: boolean;
+      purchaseSupported: boolean;
+      unavailableReason: string | null;
+      warnings: string[];
+    }>;
+  };
+  validation: {
+    valid: boolean;
+    issues: Array<{ path: string; code: string; message: string; severity: string }>;
+  };
+  requiresRerate: boolean;
+  frozenPurchaseFacts: {
+    schemaVersion: 1;
+    revision: number;
+    declarationHash: string;
+    snapshotHash: string;
+    profile: string;
+    declaration: HazmatDeclarationDraft;
+  } | null;
+};
+
 // PS-167: stableRateBrowseKey + parseDailyStatsSummary are kept in the barrel (not moved to
 // ./v2-apiClient/shared) because text-blob guards grep THIS file for strings unique to their
 // bodies — recalculate-best-rate-strict reads 'insuranceProvider'/'insuredValue'; daily-strip-progress
@@ -927,6 +990,31 @@ export const apiClient = {
       },
       null
     )
+  },
+
+  fetchOrderHazmat(orderId: number): Promise<OrderHazmatDto> {
+    return api.get<{ data: OrderHazmatDto }>(`/orders/${orderId}/hazmat`)
+      .then((response) => response.data);
+  },
+
+  validateOrderHazmat(
+    orderId: number,
+    input: { expectedRevision: number; declaration: HazmatDeclarationDraft },
+  ): Promise<{ declaration: HazmatDeclarationDraft; validation: OrderHazmatDto['validation'] }> {
+    return api.post<{ data: { declaration: HazmatDeclarationDraft; validation: OrderHazmatDto['validation'] } }>(
+      `/orders/${orderId}/hazmat/validate`,
+      input,
+    ).then((response) => response.data);
+  },
+
+  saveOrderHazmat(
+    orderId: number,
+    input: { expectedRevision: number; declaration: HazmatDeclarationDraft },
+  ): Promise<OrderHazmatDto & { changed: boolean; invalidatedRate: boolean }> {
+    return api.put<{ data: OrderHazmatDto & { changed: boolean; invalidatedRate: boolean } }>(
+      `/orders/${orderId}/hazmat`,
+      input,
+    ).then((response) => response.data);
   },
 
 
