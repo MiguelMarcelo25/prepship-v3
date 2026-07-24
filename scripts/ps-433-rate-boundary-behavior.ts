@@ -6,13 +6,27 @@
  * postage, create a label, or mutate shipped/cancelled data.
  */
 import assert from 'node:assert/strict';
-import { evaluateClientRateSourcePolicy } from '../src/services/client-rate-source-policy.js';
-import {
+
+// Seed an inert environment before loading backend owners. This behavior proof
+// uses injected data only and must never inherit live DB credentials.
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'postgres://ps433:offline@127.0.0.1:1/ps433';
+process.env.SUPABASE_URL = 'https://example.test';
+process.env.SUPABASE_ANON_KEY = 'offline';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'offline';
+process.env.SUPABASE_JWT_SECRET = 'offline';
+
+const { evaluateClientRateSourcePolicy } = await import(
+  '../src/services/client-rate-source-policy.js'
+);
+const {
   buildApplyBestRatePatch,
   finalizeAppliedBestRateFromSnapshot,
-} from '../src/services/shipping-workflow/apply-best-rate.js';
-import { assertPurchaseAccountMatchesProof } from '../src/services/shipping-workflow/rate-fingerprint.js';
-import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto.js';
+} = await import('../src/services/shipping-workflow/apply-best-rate.js');
+const { assertPurchaseAccountMatchesProof } = await import(
+  '../src/services/shipping-workflow/rate-fingerprint.js'
+);
+const { normalizeOrderBestRateDto } = await import('../src/services/order-rate-dto.js');
 
 const fetchedAt = '2026-07-15T08:00:00.000Z';
 const now = Date.parse('2026-07-15T09:00:00.000Z');

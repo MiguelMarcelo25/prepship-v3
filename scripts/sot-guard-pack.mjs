@@ -70,6 +70,16 @@ const REQUIRED_GUARDS = [
 
 const npmCli = process.env.npm_execpath;
 const results = [];
+// Enforce the pack's offline contract even when a developer shell has live DB credentials.
+const OFFLINE_GUARD_ENV = {
+  ...process.env,
+  NODE_ENV: 'test',
+  DATABASE_URL: 'postgres://sot_guard:offline@127.0.0.1:1/sot_guard',
+  SUPABASE_URL: 'https://example.test',
+  SUPABASE_ANON_KEY: 'offline',
+  SUPABASE_SERVICE_ROLE_KEY: 'offline',
+  SUPABASE_JWT_SECRET: 'offline',
+};
 
 for (const command of REQUIRED_GUARDS) {
   const startedAt = Date.now();
@@ -78,10 +88,12 @@ for (const command of REQUIRED_GUARDS) {
     ? spawnSync(process.execPath, [npmCli, 'run', command], {
         stdio: 'inherit',
         shell: false,
+        env: OFFLINE_GUARD_ENV,
       })
     : spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', command], {
         stdio: 'inherit',
         shell: process.platform === 'win32',
+        env: OFFLINE_GUARD_ENV,
       });
   const durationMs = Date.now() - startedAt;
   results.push({

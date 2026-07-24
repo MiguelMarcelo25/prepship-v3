@@ -7,14 +7,28 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { evaluateClientRateSourcePolicy } from '../src/services/client-rate-source-policy.js';
-import {
+
+// Seed an inert environment before loading backend owners. This guard exercises
+// pure functions and source text only; it must never inherit live DB credentials.
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'postgres://ps433:offline@127.0.0.1:1/ps433';
+process.env.SUPABASE_URL = 'https://example.test';
+process.env.SUPABASE_ANON_KEY = 'offline';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'offline';
+process.env.SUPABASE_JWT_SECRET = 'offline';
+
+const { evaluateClientRateSourcePolicy } = await import(
+  '../src/services/client-rate-source-policy.js'
+);
+const {
   resolveBillingPresetWindow,
   resolveDashboardReportingWindow,
   resolveReportingPickerPreset,
-} from '../src/services/reporting-window-presets.js';
-import { stampRateSourceDisplay } from '../src/services/rate-source-display.js';
-import { finalizeAppliedBestRateFromSnapshot } from '../src/services/shipping-workflow/apply-best-rate.js';
+} = await import('../src/services/reporting-window-presets.js');
+const { stampRateSourceDisplay } = await import('../src/services/rate-source-display.js');
+const { finalizeAppliedBestRateFromSnapshot } = await import(
+  '../src/services/shipping-workflow/apply-best-rate.js'
+);
 
 const read = (path: string): string => readFileSync(path, 'utf8');
 
