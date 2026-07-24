@@ -487,17 +487,23 @@ export async function replaceCarrierAccountClientAssignments(
 export async function ensureSyntheticStoreClient(
   sql: SqlLike,
   account: { provider: string; accountId: number; label: string | null },
-): Promise<{ syntheticStoreId: number; clientName: string; created: boolean } | null> {
+): Promise<{ clientId: number; syntheticStoreId: number; clientName: string; created: boolean }> {
   const syntheticStoreId = syntheticStoreIdForCredentialAccount(account.provider, account.accountId);
 
   const existing = (await sql`
-    SELECT id FROM clients
+    SELECT id, name FROM clients
     WHERE store_ids @> ARRAY[${syntheticStoreId}]::integer[]
     LIMIT 1
-  `) as Array<{ id: number }>;
+  `) as Array<{ id: number; name: string }>;
 
-  if (existing.length > 0) {
-    return null;
+  const existingClientId = Number(existing[0]?.id);
+  if (Number.isFinite(existingClientId) && existingClientId > 0) {
+    return {
+      clientId: existingClientId,
+      syntheticStoreId,
+      clientName: existing[0]!.name,
+      created: false,
+    };
   }
 
   const baseName = STORE_PROVIDER_LABELS[account.provider] ?? account.provider.toUpperCase();
@@ -506,12 +512,29 @@ export async function ensureSyntheticStoreClient(
   const clientName =
     account.label && !labelMatchesProvider ? `${baseName} - ${account.label}` : account.label || baseName;
 
-  await sql`
+  const inserted = (await sql`
     INSERT INTO clients (name, store_ids, active, is_test)
     VALUES (${clientName}, ARRAY[${syntheticStoreId}]::integer[], true, false)
-  `;
+    RETURNING id
+  `) as Array<{ id: number }>;
+  const clientId = Number(inserted[0]?.id);
+  if (!Number.isFinite(clientId) || clientId <= 0) {
+    throw new Error(
+      `Synthetic store client could not be created for ${account.provider} account ${account.accountId}`,
+    );
+  }
 
-  return { syntheticStoreId, clientName, created: true };
+  return { clientId, syntheticStoreId, clientName, created: true };
+}
+
+export async function resolveSyntheticStoreClientContext(
+  sql: SqlLike,
+  account: { provider: string; accountId: number; label: string | null },
+): Promise<{ clientId: number; syntheticStoreId: number }> {
+  // The synthetic-store mapping owns imported-order client identity.
+  // store_accounts.client_id remains the submission/cutover scope and may differ.
+  const context = await ensureSyntheticStoreClient(sql, account);
+  return { clientId: context.clientId, syntheticStoreId: context.syntheticStoreId };
 }
 
 export async function deleteSyntheticStoreClientForAccount(

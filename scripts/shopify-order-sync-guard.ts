@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import type { NormalizedOrder } from '../src/connectors/types';
+import type { SqlLike } from '../src/services/credential-accounts';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/prepship_test';
 process.env.SUPABASE_URL ??= 'http://localhost:54321';
@@ -12,6 +13,7 @@ const {
   shopifySyncSince,
   syncShopifyAccount,
 } = await import('../src/services/shopify-order-sync');
+const { resolveSyntheticStoreClientContext } = await import('../src/services/credential-accounts');
 
 const account = {
   id: 42,
@@ -32,6 +34,22 @@ assert.equal(
   '2026-07-08T10:00:00.000Z',
 );
 
+const syntheticStoreLookups: unknown[] = [];
+const resolverSql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+  assert.match(strings.join('?'), /SELECT id, name FROM clients/);
+  syntheticStoreLookups.push(values[0]);
+  return [{ id: 31, name: 'Shopify' }];
+}) as unknown as SqlLike;
+assert.deepEqual(
+  await resolveSyntheticStoreClientContext(resolverSql, {
+    provider: 'shopify',
+    accountId: account.id,
+    label: 'Shopify Connect Test',
+  }),
+  { clientId: 31, syntheticStoreId: 9_200_042 },
+);
+assert.deepEqual(syntheticStoreLookups, [9_200_042]);
+
 const normalizedOrder: NormalizedOrder = {
   sourceProvider: 'shopify',
   sourceAccountId: '42',
@@ -48,8 +66,12 @@ const normalizedOrder: NormalizedOrder = {
 
 const calls: string[] = [];
 await syncShopifyAccount(account, {
+  resolveClientContext: async (syncAccount) => {
+    calls.push(`owner:${syncAccount.id}:${account.clientId}`);
+    return { clientId: 31, syntheticStoreId: 9_200_042 };
+  },
   importOrders: async (provider, input) => {
-    calls.push(`import:${provider}:${input.sinceDate}:${input.cursor ?? 'none'}:${input.storeId}`);
+    calls.push(`import:${provider}:${input.sinceDate}:${input.cursor ?? 'none'}:${input.companyId}:${input.storeId}`);
     return {
       provider: 'shopify',
       accountId: '42',
@@ -59,6 +81,8 @@ await syncShopifyAccount(account, {
     };
   },
   persistOrders: async (orders) => {
+    assert.equal(orders[0]?.clientId, 31, 'sync must persist under the synthetic-store client owner');
+    assert.equal(orders[0]?.storeId, 9_200_042);
     calls.push(`persist:${orders.length}`);
     return orders.length;
   },
@@ -68,7 +92,8 @@ await syncShopifyAccount(account, {
 });
 
 assert.deepEqual(calls, [
-  'import:shopify:2026-07-08T12:00:00.000Z:none:9200042',
+  'owner:42:7',
+  'import:shopify:2026-07-08T12:00:00.000Z:none:31:9200042',
   'persist:1',
   'progress:42:2026-07-08T12:10:00.000Z:clear',
 ]);
@@ -76,6 +101,7 @@ assert.deepEqual(calls, [
 const failedCalls: string[] = [];
 await assert.rejects(
   () => syncShopifyAccount(account, {
+    resolveClientContext: async () => ({ clientId: 31, syntheticStoreId: 9_200_042 }),
     importOrders: async () => ({
       provider: 'shopify',
       accountId: '42',

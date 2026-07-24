@@ -72,6 +72,7 @@ async function proveShopifyCancellation(): Promise<void> {
   await assert.rejects(
     syncShopifyAccount(account, {
       signal: abort.signal,
+      resolveClientContext: async () => ({ clientId: 44, syntheticStoreId: 9_200_440 }),
       importOrders: async (_provider, input) => {
         assert.equal(input.signal, abort.signal, 'worker cancellation must reach Shopify GraphQL');
         abort.abort(new DOMException('cancelled', 'AbortError'));

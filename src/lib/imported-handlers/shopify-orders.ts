@@ -15,8 +15,7 @@ import { importStoreOrders } from '../../services/store-connector-orchestrator';
 import { buildNormalizedOrderSource } from '../../services/normalized-order-persistence';
 import { upsertNormalizedStoreOrders } from '../../services/store-order-import';
 import {
-  ensureSyntheticStoreClient,
-  syntheticStoreIdForCredentialAccount,
+  resolveSyntheticStoreClientContext,
   type SqlLike,
 } from '../../services/credential-accounts';
 import {
@@ -86,15 +85,8 @@ async function clientContextForStore(sql: SqlLike, account: {
   provider: string;
   accountId: number;
   label: string | null;
-}): Promise<{ clientId: number | null; syntheticStoreId: number }> {
-  await ensureSyntheticStoreClient(sql, account);
-  const syntheticStoreId = syntheticStoreIdForCredentialAccount(account.provider, account.accountId);
-  const rows = await sql<Array<{ id: number }>>`
-    SELECT id FROM clients
-    WHERE store_ids @> ARRAY[${syntheticStoreId}]::integer[]
-    LIMIT 1
-  `;
-  return { clientId: rows[0]?.id ?? null, syntheticStoreId };
+}): Promise<{ clientId: number; syntheticStoreId: number }> {
+  return resolveSyntheticStoreClientContext(sql, account);
 }
 
 export default async function handler(

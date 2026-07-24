@@ -5,7 +5,7 @@ import type {
   StoreOrderImportInput,
 } from '../connectors/types.js';
 import { env } from '../lib/env.js';
-import { syntheticStoreIdForCredentialAccount } from './credential-accounts.js';
+import { resolveSyntheticStoreClientContext } from './credential-accounts.js';
 import { importStoreOrders } from './store-connector-orchestrator.js';
 import {
   upsertNormalizedStoreOrders,
@@ -37,6 +37,9 @@ type ShopifySyncDeps = {
   ) => Promise<NormalizedStoreOrderImportResult>;
   persistOrders?: (orders: NormalizedStoreOrder[]) => Promise<number>;
   updateAccountProgress?: (id: number, progress: ShopifySyncProgress) => Promise<void>;
+  resolveClientContext?: (
+    account: Pick<ShopifySyncAccount, 'id'>,
+  ) => Promise<{ clientId: number; syntheticStoreId: number }>;
   // Audit SY-3/SY-8 (2026-07-13): cooperative cancellation. The pg-boss deadline
   // races and abandons handlers — without a checkpoint an abandoned walk kept
   // importing pages (and writing cursors) while its lane lock was already
@@ -87,9 +90,11 @@ function money(value: number | null | undefined): string {
   return Number.isFinite(value as number) ? (value as number).toFixed(2) : '0';
 }
 
-function normalizedOrderToStoreOrder(order: NormalizedOrder, account: ShopifySyncAccount): NormalizedStoreOrder {
+function normalizedOrderToStoreOrder(
+  order: NormalizedOrder,
+  context: { clientId: number; syntheticStoreId: number },
+): NormalizedStoreOrder {
   const raw = safeRaw(order.rawPayload);
-  const storeId = syntheticStoreIdForCredentialAccount('shopify', account.id);
   return {
     externalOrderId: `shopify-${order.sourceOrderId}`,
     source: {
@@ -102,8 +107,8 @@ function normalizedOrderToStoreOrder(order: NormalizedOrder, account: ShopifySyn
     orderNumber: order.sourceOrderNumber ?? order.sourceOrderId,
     orderStatus: normalizedStatusToOrderStatus(order.canonicalStatus),
     orderDate: order.orderDate ?? null,
-    clientId: account.clientId,
-    storeId,
+    clientId: context.clientId,
+    storeId: context.syntheticStoreId,
     customerEmail: order.customerEmail ?? null,
     shipToName: order.customerName ?? null,
     shipToCity: order.shipToCity ?? null,
@@ -215,6 +220,14 @@ export async function syncShopifyAccount(
   const importOrders = deps.importOrders ?? importStoreOrders;
   const persistOrders = deps.persistOrders ?? upsertNormalizedStoreOrders;
   const recordProgress = deps.updateAccountProgress ?? updateAccountProgress;
+  const resolveClientContext = deps.resolveClientContext
+    ?? ((syncAccount: Pick<ShopifySyncAccount, 'id'>) => resolveSyntheticStoreClientContext(sql, {
+      provider: 'shopify',
+      accountId: syncAccount.id,
+      label: null,
+    }));
+  const clientContext = await resolveClientContext(account);
+  throwIfShopifySyncAborted(deps.signal);
 
   let synced = 0;
   let cursor: string | null = null;
@@ -222,19 +235,19 @@ export async function syncShopifyAccount(
   do {
     throwIfShopifySyncAborted(deps.signal);
     const result = await importOrders('shopify', {
-      companyId: account.clientId ?? 0,
+      companyId: clientContext.clientId,
       accountId: String(account.id),
       credentials: account.credentials as Record<string, string | null | undefined>,
       sinceDate: shopifySyncSince(account),
       createdStartDate: account.syncAnchorAt?.toISOString(),
       cursor,
       limit: 50,
-      storeId: syntheticStoreIdForCredentialAccount('shopify', account.id),
+      storeId: clientContext.syntheticStoreId,
       signal: deps.signal,
     });
 
     throwIfShopifySyncAborted(deps.signal);
-    const normalized = result.orders.map((order) => normalizedOrderToStoreOrder(order, account));
+    const normalized = result.orders.map((order) => normalizedOrderToStoreOrder(order, clientContext));
     if (normalized.length > 0) {
       throwIfShopifySyncAborted(deps.signal);
       synced += await persistOrders(normalized);
