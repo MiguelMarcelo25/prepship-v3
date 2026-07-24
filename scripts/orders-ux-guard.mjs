@@ -25,9 +25,9 @@ const ordersFilterToolbarPath = path.join(root, 'web/src/components/Views/Orders
 // (handleBatchAction etc.) stay in OrdersView and are pinned against it.
 const batchPanelPath = path.join(root, 'web/src/components/Views/OrdersBatchPanel.tsx')
 // PS-166 (Wave 6): the orders <table> (thead + tbody, incl. the per-row
-// onClick={() => openOrderDetails(order.orderId)}) moved VERBATIM to its own
-// strict <OrdersTable> component (OrdersView threads state/handlers in as
-// props) — the row-click pin reads there; openOrderDetails stays in OrdersView.
+// row-click handling moved to the strict <OrdersTable> component
+// (OrdersView threads state/handlers in as props) — the row-click pin reads
+// there while OrdersView owns browse-vs-batch intent.
 const ordersTablePath = path.join(root, 'web/src/components/Views/OrdersTable.tsx')
 // 2026-07-08 (OrdersView perf): the per-row <tr> markup moved VERBATIM from
 // OrdersTable's row map into the memoized <OrderRow> component — the row-click
@@ -53,14 +53,15 @@ const normalizedOrdersView = ordersView.replace(/\r\n/g, '\n')
 
 const checks = [
   {
-    name: 'row click opens the detail drawer instead of entering bulk selection',
+    name: 'row click opens details in browse mode and extends an active batch selection',
     pass:
-      // PS-166 Wave 6: the per-row onClick moved to the extracted <OrdersTable>;
-      // 2026-07-08: it moved again, VERBATIM, into the memoized <OrderRow>
-      // (openOrderDetails still lives in OrdersView and is threaded in as a
-      // prop). Same pin, same intent — a row click opens the drawer and must
-      // never enter bulk selection, in ANY of the three files.
-      orderRow.includes('onClick={() => openOrderDetails(order.orderId)}') &&
+      // Browse-mode rows still open details. Once selection starts, OrdersView
+      // routes the same row click through the canonical selection toggle.
+      orderRow.includes('onClick={() => onOrderRowClick(order.orderId)}') &&
+      ordersView.includes('const handleOrderRowClick = (orderId: number) => {') &&
+      ordersView.includes('if (!isReadOnly && selectedOrderIds.length > 0) {') &&
+      ordersView.includes('toggleOrderSelection(orderId)') &&
+      ordersView.includes('orderRowClickRef.current = handleOrderRowClick') &&
       !orderRow.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersTable.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersView.includes('onClick={() => updateSelection([order.orderId])}'),

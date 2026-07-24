@@ -2183,6 +2183,14 @@ export default function OrdersView({
     onActiveOrderIdChange?.(orderId)
   }
 
+  const handleOrderRowClick = (orderId: number) => {
+    if (!isReadOnly && selectedOrderIds.length > 0) {
+      toggleOrderSelection(orderId)
+      return
+    }
+    openOrderDetails(orderId)
+  }
+
   const recipientInput = (key: keyof RecipientDraft, label: string, autoComplete?: string) => (
     <label className="block">
       <span className="block text-[10px] font-bold uppercase tracking-[0.08em] text-ink-4 mb-1">{label}</span>
@@ -6130,13 +6138,13 @@ export default function OrdersView({
   // isReadOnly participates here only as an epoch INPUT so a read-only flip
   // still repaints every row.
   const renderTableCellRef = useRef<((order: OrderSummaryDto, column: TableColumn) => ReactNode) | null>(null)
-  const openOrderDetailsRef = useRef<((orderId: number) => void) | null>(null)
+  const orderRowClickRef = useRef<((orderId: number) => void) | null>(null)
   const openShipStationOrderRef = useRef<((orderId: number) => void) | null>(null)
   const stableRenderTableCell = useCallback(
     (order: OrderSummaryDto, column: TableColumn): ReactNode => renderTableCellRef.current!(order, column),
     [],
   )
-  const stableOpenOrderDetails = useCallback((orderId: number) => { openOrderDetailsRef.current!(orderId) }, [])
+  const stableHandleOrderRowClick = useCallback((orderId: number) => { orderRowClickRef.current!(orderId) }, [])
   const stableOpenShipStationOrder = useCallback((orderId: number) => { openShipStationOrderRef.current!(orderId) }, [])
   const orderCellsEpoch = useMemo(
     () => ({
@@ -6565,7 +6573,7 @@ export default function OrdersView({
   // a re-rendered row always paints from current state while unchanged rows
   // keep one stable renderCell identity and bail in OrderRow's memo.
   renderTableCellRef.current = renderTableCell
-  openOrderDetailsRef.current = openOrderDetails
+  orderRowClickRef.current = handleOrderRowClick
   openShipStationOrderRef.current = openShipStationOrder
 
   // PS-306 (Wave 5): the side-panel backend-truth handlers stay PARENT-OWNED.
@@ -6940,7 +6948,7 @@ export default function OrdersView({
                   // stable-dispatch block above bundleByOrderId. Same handlers,
                   // same cells; only the prop identities are render-stable so
                   // OrderRow's memo can bail on unchanged rows.
-                  openOrderDetails={stableOpenOrderDetails}
+                  onOrderRowClick={stableHandleOrderRowClick}
                   openShipStationOrder={stableOpenShipStationOrder}
                   updateSelection={updateSelection}
                   copyText={copyText}

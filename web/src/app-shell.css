@@ -432,8 +432,8 @@ aside[aria-label="Primary navigation"] button[aria-label="Show Test Orders"][ari
 .orders-table tbody tr.order-row td{transition:background .08s ease,box-shadow .08s ease;}
 .orders-table tbody tr:nth-child(even) td{background:var(--surface2);}
 .orders-table tbody tr.order-row:hover td:not([data-col="select"]){background:rgba(37,99,235,.05);}
-.orders-table tbody tr.order-row td[data-col="select"]{cursor:pointer;text-align:center;}
-.orders-table tbody tr.order-row td[data-col="select"] input[type="checkbox"]{cursor:pointer;accent-color:var(--ss-blue);}
+.orders-table tbody tr.order-row td[data-col="select"]{cursor:pointer;text-align:center;padding-left:4px;padding-right:4px;}
+.orders-table tbody tr.order-row td[data-col="select"] input[type="checkbox"]{width:20px;height:20px;cursor:pointer;accent-color:var(--ss-blue);}
 .orders-table tbody tr.order-row:hover td[data-col="select"]{background:rgba(37,99,235,.08);box-shadow:inset 3px 0 0 rgba(37,99,235,.55);}
 .orders-table tbody tr.order-row td[data-col="select"]:hover{background:rgba(37,99,235,.14)!important;box-shadow:inset 3px 0 0 var(--ss-blue);}
 .orders-table tbody tr.row-panel-open td:not([data-col="select"]){background:var(--ss-blue-bg);}

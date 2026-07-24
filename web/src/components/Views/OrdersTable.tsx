@@ -19,7 +19,7 @@
 //   `renderCell` render-prop, called exactly where renderTableCell(order,
 //   column) was called before. Likewise every parent closure used in the
 //   thead/tbody — the header click/drag/drop/keydown handlers, finishHeaderDrag,
-//   startColumnResize, toggleSkuGroupSelection, openOrderDetails,
+//   startColumnResize, toggleSkuGroupSelection, onOrderRowClick,
 //   openShipStationOrder — is passed in as a prop; their bodies stay in
 //   OrdersView. The ONE piece of UI state owned here is the row hover/keyboard
 //   focus (kbRowId + the Arrow/Enter/Ctrl-C row-nav listener, moved DOWN from
@@ -94,7 +94,7 @@ export type OrdersTableProps = {
   isReadOnly: boolean
   // ── row + group handlers (bodies stay in OrdersView) ──
   toggleSkuGroupSelection: (orderIds: number[], checked?: boolean) => void
-  openOrderDetails: (orderId: number) => void
+  onOrderRowClick: (orderId: number) => void
   openShipStationOrder: (orderId: number) => void
   // ── row-nav collaborators (bodies stay in OrdersView; called by the
   //    table-local Arrow/Enter/Ctrl-C keyboard listener) ──
@@ -141,7 +141,7 @@ export function OrdersTable({
   transitionalShippedIds,
   isReadOnly,
   toggleSkuGroupSelection,
-  openOrderDetails,
+  onOrderRowClick,
   openShipStationOrder,
   updateSelection,
   copyText,
@@ -385,7 +385,8 @@ export function OrdersTable({
               isPanelOpen={panelOrderId === order.orderId}
               isKbFocus={kbRowId === order.orderId}
               isTransitioningShipped={entry.transitioning}
-              openOrderDetails={openOrderDetails}
+              onOrderRowClick={onOrderRowClick}
+              isBatchSelectionActive={!isReadOnly && selectedIdSet.size > 0}
               openShipStationOrder={openShipStationOrder}
               setKbRowId={setKbRowId}
               renderCell={renderCell}
@@ -464,7 +465,8 @@ export function OrdersTable({
               isPanelOpen={panelOrderId === order.orderId}
               isKbFocus={kbRowId === order.orderId}
               isTransitioningShipped={transitionalShippedIds.has(order.orderId)}
-              openOrderDetails={openOrderDetails}
+              onOrderRowClick={onOrderRowClick}
+              isBatchSelectionActive={!isReadOnly && selectedIdSet.size > 0}
               openShipStationOrder={openShipStationOrder}
               setKbRowId={setKbRowId}
               renderCell={renderCell}
@@ -485,7 +487,8 @@ export function OrdersTable({
             // Only the sku-grouped rows carried the ps-shipping-row fade class
             // before the OrderRow extraction — the flat branch stays without it.
             isTransitioningShipped={false}
-            openOrderDetails={openOrderDetails}
+            onOrderRowClick={onOrderRowClick}
+            isBatchSelectionActive={!isReadOnly && selectedIdSet.size > 0}
             openShipStationOrder={openShipStationOrder}
             setKbRowId={setKbRowId}
             renderCell={renderCell}

@@ -345,8 +345,22 @@ for (const viewport of [
     await expect(page.locator('#ordersSelectionToolbar')).toHaveCount(0)
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-02-row-click-detail.png`), fullPage: true })
 
-    await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()
+    const awaitingRows = page.locator('#ordersTable tbody tr.order-row')
+    const firstAwaitingCheckbox = awaitingRows.first().locator('input[type="checkbox"]')
+    await firstAwaitingCheckbox.check()
     await expect(page.locator('#ordersSelectionToolbar')).toBeVisible()
+    const checkboxBox = await firstAwaitingCheckbox.boundingBox()
+    expect(checkboxBox).not.toBeNull()
+    expect(checkboxBox.width).toBeGreaterThanOrEqual(20)
+    expect(checkboxBox.height).toBeGreaterThanOrEqual(20)
+
+    // Once checkbox selection starts, the whole row becomes a batch-selection
+    // target. A slightly missed checkbox must add the row instead of replacing
+    // the batch with a single-order detail action.
+    const secondAwaitingRow = awaitingRows.nth(1)
+    await secondAwaitingRow.click()
+    await expect(secondAwaitingRow.locator('input[type="checkbox"]')).toBeChecked()
+    await expect(page.locator('#ordersSelectionToolbar')).toHaveAttribute('aria-label', '2 selected orders')
     if (viewport.name === 'mobile') {
       const mobileActions = page.locator('.orders-selection-actions-mobile')
       await expect(mobileActions).toBeVisible()

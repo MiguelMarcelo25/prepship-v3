@@ -33,11 +33,12 @@ export type OrderRowProps = {
   // plain boolean is equivalent here.
   isPanelOpen: boolean
   isKbFocus: boolean
+  isBatchSelectionActive: boolean
   // 30-second Print Label success fade. Only the sku-grouped branch threads a
   // live value; the flat branch passes false — mirroring the pre-extraction
   // markup where only the grouped rows carried the ps-shipping-row class.
   isTransitioningShipped: boolean
-  openOrderDetails: (orderId: number) => void
+  onOrderRowClick: (orderId: number) => void
   openShipStationOrder: (orderId: number) => void
   setKbRowId: (orderId: number | null) => void
   renderCell: (order: OrderSummaryDto, column: TableColumn) => ReactNode
@@ -57,8 +58,9 @@ export const OrderRow = memo(function OrderRow({
   isSelected,
   isPanelOpen,
   isKbFocus,
+  isBatchSelectionActive,
   isTransitioningShipped,
-  openOrderDetails,
+  onOrderRowClick,
   openShipStationOrder,
   setKbRowId,
   renderCell,
@@ -98,8 +100,8 @@ export const OrderRow = memo(function OrderRow({
       className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
       data-expedited={expedited ? expedited.tier : undefined}
       style={{ borderLeft: `3px solid ${clientColor}` }}
-      onClick={() => openOrderDetails(order.orderId)}
-      onDoubleClick={() => openShipStationOrder(order.orderId)}
+      onClick={() => onOrderRowClick(order.orderId)}
+      onDoubleClick={isBatchSelectionActive ? undefined : () => openShipStationOrder(order.orderId)}
       onMouseEnter={() => setKbRowId(order.orderId)}
     >
       {visibleColumns.map((column) => (
@@ -117,7 +119,13 @@ export const OrderRow = memo(function OrderRow({
           // explicit td width is a belt-and-braces
           // guard for subpixel rendering edge cases.
           style={{ width: column.width, maxWidth: column.width }}
-          title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
+          title={
+            column.key === 'select'
+              ? 'Use checkbox for multi-select'
+              : isBatchSelectionActive
+                ? 'Select or deselect this order in the current batch'
+                : 'Open order details; use checkbox for bulk selection'
+          }
         >
           {renderCell(order, column)}
         </td>
