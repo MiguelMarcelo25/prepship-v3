@@ -153,7 +153,8 @@ const checks = [
       home.includes('schedulePoll(5000)') &&
       home.includes('schedulePoll(nextDelayMs)') &&
       home.includes('apiClient.fetchLegacySyncStatus({ forceRefresh: true })') &&
-      home.includes("next.status === 'syncing' ? 10_000 : 120_000") &&
+      home.includes("const providerBusy = ['running', 'queued', 'retrying'].includes(") &&
+      home.includes("next.status === 'syncing' || providerBusy ? 10_000 : 120_000") &&
       home.includes('[displayView, toastContext, syncStatus.status]') &&
       home.includes("document.visibilityState !== 'visible'") &&
       !legacySyncHome.includes('window.setInterval(() => {\n      if (document.visibilityState !== \'visible\') return\n      void poll()\n    }, 120_000)'),
