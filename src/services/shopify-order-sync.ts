@@ -23,6 +23,27 @@ export type ShopifySyncAccount = {
   lastSyncError?: string | null;
 };
 
+type ShopifySyncStatusRow = {
+  id: number;
+  label: string | null;
+  lastSyncedAt: Date | string | null;
+  lastSyncError: string | null;
+};
+
+export type ShopifyOrderSyncStatus = {
+  enabled: boolean;
+  health: 'disabled' | 'idle' | 'healthy' | 'stale' | 'error';
+  accountCount: number;
+  lastSyncedAt: string | null;
+  accounts: Array<{
+    accountId: number;
+    displayName: string;
+    state: 'fresh' | 'stale' | 'never_synced' | 'failed';
+    lastSyncedAt: string | null;
+    ageSeconds: number | null;
+  }>;
+};
+
 type ShopifySyncProgress = {
   syncCursorAt?: Date | null;
   lastSyncedAt?: Date | null;
@@ -145,6 +166,69 @@ export function isShopifySyncableAccount(account: Pick<ShopifySyncAccount, 'sour
 export function shopifySyncSince(account: Pick<ShopifySyncAccount, 'syncAnchorAt' | 'syncCursorAt'>): string {
   const since = maxDate(account.syncAnchorAt, account.syncCursorAt) ?? new Date(0);
   return since.toISOString();
+}
+
+export function buildShopifyOrderSyncStatus(
+  rows: ShopifySyncStatusRow[],
+  options: { enabled?: boolean; nowMs?: number; freshMs?: number } = {},
+): ShopifyOrderSyncStatus {
+  const enabled = options.enabled ?? env.SHOPIFY_SYNC_ENABLED;
+  const nowMs = options.nowMs ?? Date.now();
+  const freshMs = options.freshMs ?? 15 * 60_000;
+  const accounts = rows.map((row) => {
+    const syncedAt = asDate(row.lastSyncedAt);
+    const ageMs = syncedAt ? Math.max(0, nowMs - syncedAt.getTime()) : null;
+    return {
+      accountId: Number(row.id),
+      displayName: row.label?.trim() || `Shopify account ${row.id}`,
+      state: row.lastSyncError
+        ? 'failed' as const
+        : syncedAt === null
+          ? 'never_synced' as const
+          : ageMs !== null && ageMs > freshMs
+            ? 'stale' as const
+            : 'fresh' as const,
+      lastSyncedAt: syncedAt?.toISOString() ?? null,
+      ageSeconds: ageMs === null ? null : Math.floor(ageMs / 1000),
+    };
+  });
+  const oldestSyncMs = accounts.reduce<number | null>((oldest, account) => {
+    const value = asDate(account.lastSyncedAt)?.getTime() ?? null;
+    if (value === null) return oldest;
+    return oldest === null ? value : Math.min(oldest, value);
+  }, null);
+  const health: ShopifyOrderSyncStatus['health'] = !enabled
+    ? 'disabled'
+    : accounts.length === 0
+      ? 'idle'
+      : accounts.some((account) => account.state === 'failed')
+        ? 'error'
+        : accounts.some((account) => account.state !== 'fresh')
+          ? 'stale'
+          : 'healthy';
+  return {
+    enabled,
+    health,
+    accountCount: accounts.length,
+    lastSyncedAt: oldestSyncMs === null ? null : new Date(oldestSyncMs).toISOString(),
+    accounts,
+  };
+}
+
+export async function getShopifyOrderSyncStatus(): Promise<ShopifyOrderSyncStatus> {
+  const rows = await sql<ShopifySyncStatusRow[]>`
+    SELECT
+      id,
+      label,
+      last_synced_at AS "lastSyncedAt",
+      last_sync_error AS "lastSyncError"
+    FROM store_accounts
+    WHERE provider = 'shopify'
+      AND source = 'admin'
+      AND active = true
+    ORDER BY id
+  `;
+  return buildShopifyOrderSyncStatus(rows);
 }
 
 async function updateAccountProgress(id: number, progress: ShopifySyncProgress): Promise<void> {

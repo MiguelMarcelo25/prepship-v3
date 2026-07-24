@@ -10,6 +10,7 @@ import {
 import {
   enqueueManualOrderSyncJob,
   getSyncJobQueueStatus,
+  readLatestSyncJobAttemptSnapshots,
   type ManualOrderSyncEnqueueResult,
 } from '../services/sync-job-queue';
 import type { ManualOrderSyncRequest } from '../services/manual-order-sync-job';
@@ -17,6 +18,8 @@ import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
 import {
   readShipmentSyncWatchdogStatus,
 } from '../services/shipment-sync-watchdog';
+import { getShopifyOrderSyncStatus } from '../services/shopify-order-sync';
+import { buildSyncProviderStatusReadModel } from '../services/sync-provider-status-read-model';
 
 const app = new Hono();
 
@@ -67,14 +70,24 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
 });
 
 app.get('/status', async (c) => {
-  const [orders, shipments, worker, queue] = await Promise.all([
+  const nowMs = Date.now();
+  const [orders, shipments, shopify, worker, queue, attempts] = await Promise.all([
     getSyncStatus({ includeOrderCount: false }),
     getShipmentSyncStatus({ includeShipmentCount: false }),
+    getShopifyOrderSyncStatus(),
     getPersistedWorkerStatus(),
     getSyncJobQueueStatus(),
+    readLatestSyncJobAttemptSnapshots(),
   ]);
   const watchdog = await readShipmentSyncWatchdogStatus();
   const queueStatus = queue;
+  const providerStatus = buildSyncProviderStatusReadModel({
+    nowMs,
+    orders,
+    shipments,
+    shopify,
+    attempts,
+  });
   const syncState = orders.queueState === 'running'
     ? 'running'
     : orders.queueState === 'queued'
@@ -122,6 +135,9 @@ app.get('/status', async (c) => {
     ratePrefetchJob: null,
     orders,
     shipments,
+    shopify,
+    providerSummary: providerStatus.summary,
+    providers: providerStatus.providers,
     worker,
     queue: queueStatus,
     watchdog,

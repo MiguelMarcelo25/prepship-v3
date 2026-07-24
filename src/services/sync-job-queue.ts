@@ -126,6 +126,24 @@ const JOBS = {
   localTariffCalibration: 'prepship.rates.local-tariff-calibration',
 } as const;
 
+export const SYNC_STATUS_JOB_NAMES = {
+  shipstationOrders: JOBS.orders,
+  shopifyOrders: JOBS.shopifyOrders,
+  shipstationShipments: JOBS.shipments,
+} as const;
+
+export type SyncJobAttemptSnapshot = {
+  name: string;
+  state: string;
+  createdAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  skipped: boolean;
+  deferred: boolean;
+  blockedBy: string | null;
+  reason: string | null;
+};
+
 type JobName = (typeof JOBS)[keyof typeof JOBS];
 
 type PgBossJobLike = {
@@ -556,6 +574,80 @@ function dateFromUnknown(value: unknown): Date | null {
     return Number.isFinite(parsed.getTime()) ? parsed : null;
   }
   return null;
+}
+
+function safeJobOutput(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function safeJobReason(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized && normalized.length <= 160 && /^[a-z0-9_.:\- ]+$/i.test(normalized)
+    ? normalized
+    : null;
+}
+
+export function syncJobAttemptSnapshotFromRow(row: {
+  name: string;
+  state: string;
+  created_on?: unknown;
+  started_on?: unknown;
+  completed_on?: unknown;
+  output?: unknown;
+}): SyncJobAttemptSnapshot {
+  const output = safeJobOutput(row.output);
+  return {
+    name: row.name,
+    state: row.state,
+    createdAt: dateFromUnknown(row.created_on)?.toISOString() ?? null,
+    startedAt: dateFromUnknown(row.started_on)?.toISOString() ?? null,
+    completedAt: dateFromUnknown(row.completed_on)?.toISOString() ?? null,
+    skipped: output.skipped === true,
+    deferred: output.deferred === true,
+    blockedBy: safeJobReason(output.blockedBy),
+    reason: safeJobReason(output.reason),
+  };
+}
+
+export async function readLatestSyncJobAttemptSnapshots(): Promise<SyncJobAttemptSnapshot[]> {
+  try {
+    const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+    const rows = await pg<Array<{
+      name: string;
+      state: string;
+      created_on: Date | string | null;
+      started_on: Date | string | null;
+      completed_on: Date | string | null;
+      output: unknown;
+    }>>`
+      SELECT DISTINCT ON (name)
+        name, state, created_on, started_on, completed_on, output
+      FROM ${pg(jobTable)}
+      WHERE name = ANY(${Object.values(SYNC_STATUS_JOB_NAMES)})
+      ORDER BY name, created_on DESC, id DESC
+    `;
+    return rows.map(syncJobAttemptSnapshotFromRow);
+  } catch (error) {
+    console.warn(
+      '[job-queue] latest sync attempt status unavailable:',
+      error instanceof Error ? error.message : error,
+    );
+    return [];
+  }
 }
 
 async function findSupersedingManualOrderSyncJob(

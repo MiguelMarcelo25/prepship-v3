@@ -49,7 +49,11 @@ const AnalysisView = lazy(() => import('./components/Views/AnalysisView'))
 const SettingsView = lazy(() => import('./components/Views/SettingsView'))
 const BillingView = lazy(() => import('./components/Views/BillingView'))
 const ManifestsView = lazy(() => import('./components/Views/ManifestsView'))
-import { formatSyncPill } from './components/Views/orders-parity'
+import {
+  formatSyncPill,
+  type SyncProviderStatusView,
+  type SyncProviderSummaryView,
+} from './components/Views/orders-parity'
 import { resolveOrdersDateRangeForFilter } from './components/Views/orders-date-query-contract'
 import {
   INVENTORY_TAB_PATHS,
@@ -343,6 +347,8 @@ export default function Home() {
     lastSync: number | null
     count: number
     error: string | null
+    providerSummary?: SyncProviderSummaryView | null
+    providers?: SyncProviderStatusView[] | null
   }>({
     status: 'idle',
     mode: 'idle',
@@ -536,7 +542,10 @@ export default function Home() {
         })
         if (!active) return
         setSyncStatus(next)
-        nextDelayMs = next.status === 'syncing' ? 10_000 : 120_000
+        const providerBusy = ['running', 'queued', 'retrying'].includes(
+          String(next.providerSummary?.state ?? ''),
+        )
+        nextDelayMs = next.status === 'syncing' || providerBusy ? 10_000 : 120_000
 
         const nextLastSync = next.latestSync ?? next.lastSync ?? (next.latestSyncedAt ? Date.parse(next.latestSyncedAt) : null)
         if (!hasSeenInitialSyncStatusRef.current) {

@@ -635,6 +635,28 @@ export function buildPicklistPrintHtml(
   </body></html>`
 }
 
+export type SyncProviderStatusView = {
+  key: 'shipstation_orders' | 'shopify_orders' | 'shipstation_shipments'
+  label: string
+  enabled: boolean
+  state: 'disabled' | 'idle' | 'fresh' | 'stale' | 'error' | 'queued' | 'retrying' | 'running' | 'deferred'
+  fresh: boolean
+  lastSuccessfulAt: string | null
+  ageSeconds: number | null
+  cadenceMinutes: number
+  accountCount: number | null
+  blockedBy: string | null
+  blockedByLabel: string | null
+  reason: string | null
+}
+
+export type SyncProviderSummaryView = {
+  state: 'idle' | 'fresh' | 'deferred' | 'attention' | 'queued' | 'retrying' | 'running'
+  focusProviderKey: SyncProviderStatusView['key'] | null
+  attentionProviderCount: number
+  deferredProviderCount: number
+}
+
 export function formatSyncPill(sync: {
   status: 'idle' | 'syncing' | 'done' | 'error'
   syncState?: 'idle' | 'queued' | 'running' | 'retrying' | 'completed' | 'error'
@@ -656,6 +678,8 @@ export function formatSyncPill(sync: {
     }>
   } | null
   shipments?: { lastSyncedAt?: string | null } | null
+  providerSummary?: SyncProviderSummaryView | null
+  providers?: SyncProviderStatusView[] | null
   watchdog?: { verdict?: { alert?: boolean; state?: string | null; reason?: string | null; recommendedAction?: string | null } | null } | null
   ratePrefetchRunning?: boolean
   ratePrefetchJob?: {
@@ -686,6 +710,55 @@ export function formatSyncPill(sync: {
     if (account.state !== 'running' || typeof account.runAgeSeconds !== 'number') return oldest
     return oldest === null ? account.runAgeSeconds : Math.max(oldest, account.runAgeSeconds)
   }, null)
+  const providerDiagnostics = sync.providers ?? []
+  const providerSummary = sync.providerSummary ?? null
+  const focusProvider = providerDiagnostics.find(
+    (provider) => provider.key === providerSummary?.focusProviderKey,
+  ) ?? null
+  const providerOperationalDetails = providerDiagnostics
+    .filter((provider) => provider.enabled)
+    .map((provider) => {
+      const blocker = provider.blockedByLabel ? `; waiting for ${provider.blockedByLabel}` : ''
+      return `${provider.label}: ${provider.state}${blocker}`
+    })
+
+  if (providerSummary?.state === 'queued' && focusProvider?.fresh) {
+    return {
+      className: 'sync-pill done',
+      text: `All sources live · ${focusProvider.label.replace(/ (orders|shipments)$/, '')} queued`,
+      title: [
+        'Current provider data is fresh; the next scheduled refresh is queued.',
+        ...providerOperationalDetails,
+        'Click to view API timing.',
+      ].join('\n'),
+    }
+  }
+
+  if (
+    providerSummary?.state === 'running' ||
+    providerSummary?.state === 'queued' ||
+    providerSummary?.state === 'retrying'
+  ) {
+    const verb = providerSummary.state === 'running'
+      ? 'Syncing'
+      : providerSummary.state === 'retrying'
+        ? 'Retrying'
+        : 'Queued'
+    const elapsed = providerSummary.state === 'running' && runningAgeSeconds !== null
+      ? runningAgeSeconds < 60
+        ? ' <1m'
+        : ` ${Math.floor(runningAgeSeconds / 60)}m`
+      : ''
+    return {
+      className: 'sync-pill syncing',
+      text: `${verb} ${focusProvider?.label ?? 'data'}${elapsed}…`,
+      title: [
+        `${focusProvider?.label ?? 'A sync provider'} is ${providerSummary.state}.`,
+        ...providerOperationalDetails,
+        'Click to view API timing.',
+      ].join('\n'),
+    }
+  }
 
   if (sync.syncState === 'queued') {
     return {
@@ -730,7 +803,12 @@ export function formatSyncPill(sync: {
     }
   }
 
-  if (sync.status === 'done') {
+  if (
+    sync.status === 'done' ||
+    providerSummary?.state === 'fresh' ||
+    providerSummary?.state === 'deferred' ||
+    providerSummary?.state === 'attention'
+  ) {
     // Render in California time (DST-aware) with explicit "CA" label,
     // per boss directive (2026-05-07): all operator-facing times are
     // CA time. lastSync is a numeric ms-since-epoch from Date.now()
@@ -752,7 +830,11 @@ export function formatSyncPill(sync: {
     const labelSyncTime = shipmentSyncMs ? formatCa(shipmentSyncMs) : null
     const watchdogVerdict = sync.watchdog?.verdict ?? null
     const labelSyncAlert = Boolean(watchdogVerdict?.alert)
-    const syncAlert = labelSyncAlert || accountHealthAlert
+    const providerAttentionCount = providerSummary?.attentionProviderCount ?? 0
+    const deferredProviders = providerDiagnostics.filter(
+      (provider) => provider.enabled && provider.state === 'deferred',
+    )
+    const syncAlert = labelSyncAlert || accountHealthAlert || providerAttentionCount > 0
     const watchdogReason = typeof watchdogVerdict?.reason === 'string' && watchdogVerdict.reason.trim()
       ? watchdogVerdict.reason.trim()
       : null
@@ -764,6 +846,16 @@ export function formatSyncPill(sync: {
       : null
     const syncTitle = [
       syncAlert ? 'Warning: sync needs attention.' : 'Sync healthy.',
+      ...providerDiagnostics
+        .filter((provider) => provider.enabled)
+        .map((provider) => {
+          const syncedMs = provider.lastSuccessfulAt && Number.isFinite(Date.parse(provider.lastSuccessfulAt))
+            ? Date.parse(provider.lastSuccessfulAt)
+            : null
+          const lastSuccess = syncedMs === null ? 'no successful sync yet' : `last success ${formatCa(syncedMs)}`
+          const blocker = provider.blockedByLabel ? `; waiting for ${provider.blockedByLabel}` : ''
+          return `${provider.label}: ${provider.state}; ${lastSuccess}${blocker}.`
+        }),
       `Orders last synced: ${orderSyncTime}.`,
       labelSyncTime ? `Labels last synced: ${labelSyncTime}.` : 'Labels have not synced yet.',
       accountHealthAlert
@@ -777,9 +869,17 @@ export function formatSyncPill(sync: {
     ].filter(Boolean).join('\n')
     return {
       className: syncAlert ? 'sync-pill warning' : 'sync-pill done',
-      text: accountHealthAlert
+      text: providerAttentionCount > 0
+        ? `Sync attention: ${providerAttentionCount} provider${providerAttentionCount === 1 ? '' : 's'}`
+        : accountHealthAlert
         ? `Sync attention: ${attentionAccountCount} account${attentionAccountCount === 1 ? '' : 's'}`
-        : labelSyncTime
+        : deferredProviders.length > 0
+          ? `All sources live · ${deferredProviders.length === 1
+            ? deferredProviders[0]!.label.replace(/ (orders|shipments)$/, '')
+            : `${deferredProviders.length} providers`} waiting`
+          : providerDiagnostics.some((provider) => provider.enabled)
+            ? 'All sources live'
+            : labelSyncTime
           ? `Orders ${orderSyncTime} / Labels ${labelSyncTime}`
           : `Order sync ${orderSyncTime}`,
       title: syncTitle,
@@ -787,6 +887,17 @@ export function formatSyncPill(sync: {
   }
 
   if (sync.status === 'error') {
+    if ((providerSummary?.attentionProviderCount ?? 0) > 0) {
+      return {
+        className: 'sync-pill warning',
+        text: `Sync attention: ${providerSummary!.attentionProviderCount} provider${providerSummary!.attentionProviderCount === 1 ? '' : 's'}`,
+        title: [
+          'One or more sync providers need attention.',
+          ...providerOperationalDetails,
+          'Click to view API timing.',
+        ].join('\n'),
+      }
+    }
     if (accountDiagnostics.length > 0) {
       return {
         className: 'sync-pill warning',
