@@ -3,15 +3,16 @@
  * Send/Print-Queue on a row that hasn't reconciled yet" race.
  *
  * applyRateSelection / onBestRateResolved persist the chosen rate (dims + selected
- * PID + best rate) and refetch the orders SOT. That was fire-and-forget (`void
- * persist(...)`) and the Rate Browser closed immediately, so the operator could act
- * on a STALE Awaiting row before the refetch landed.
+ * PID + best rate) through the backend rate authority. That was fire-and-forget
+ * (`void persist(...)`) and the Rate Browser closed immediately, so the operator
+ * could act before the authoritative write landed.
  *
  * The row is only reachable once the modal CLOSES, and the operator's next Send runs
  * on a later render — so the safe synchronization point is the close: register each
- * in-flight persist by orderId, and have the close await the relevant ones before it
- * actually hides the modal. These are pure helpers (no React, no rate/price math);
- * the component owns the Map ref + the setState close.
+ * in-flight backend persist by orderId, and have the close await the relevant ones
+ * before it actually hides the modal. Non-authoritative read-model reconciliation
+ * may continue in the background after that write succeeds. These are pure helpers
+ * (no React, no rate/price math); the component owns the Map ref + the setState close.
  */
 
 /**

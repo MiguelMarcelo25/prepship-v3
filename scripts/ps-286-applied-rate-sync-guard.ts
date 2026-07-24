@@ -5,7 +5,9 @@
  * Each applied-rate persist (applyRateSelection + onBestRateResolved) is registered
  * in an in-flight Map by orderId, and the Rate Browser CLOSE awaits the relevant
  * ones before it hides the modal — so the row is only exposed once its SOT has
- * persisted + refetched. Pins the pure helpers + the OrdersView wiring.
+ * persisted. Rate Browser read-model reconciliation runs in the background so a
+ * stalled GET /orders cannot freeze Close after Apply succeeds. Pins the pure
+ * helpers + the OrdersView wiring.
  *
  *   npx tsx scripts/ps-286-applied-rate-sync-guard.ts
  */
@@ -72,10 +74,21 @@ async function main(): Promise<void> {
     /appliedRatePersists\w*Ref\b/.test(ov) && /useRef\(\s*new Map<number,\s*Promise<unknown>>\(\)\s*\)/.test(ov));
   check('OrdersView has a close-after-persist gate that awaits then closes',
     /closeRateBrowserAfterPersist/.test(ov) && /awaitAppliedRatePersists\s*\(/.test(ov) && /setRateBrowserOpen\(false\)/.test(ov));
-  check('OrdersView registers every applied-rate persist via trackAppliedRatePersist (>= 4 sites)',
-    (ov.match(/trackAppliedRatePersist\s*\(/g) ?? []).length >= 4);
+  check('OrdersView registers both applied-rate persists via trackAppliedRatePersist',
+    (ov.match(/trackAppliedRatePersist\s*\(/g) ?? []).length === 2);
   check('OrdersView no longer bare-void-fire-and-forgets persistAppliedRateForOrder',
     !/void persistAppliedRateForOrder\s*\(/.test(ov));
+  const persistFnStart = ov.indexOf('async function persistAppliedRateForOrder(');
+  const persistFnEnd = ov.indexOf('\n  // PS-345:', persistFnStart);
+  const persistFn = persistFnStart >= 0 && persistFnEnd > persistFnStart
+    ? ov.slice(persistFnStart, persistFnEnd)
+    : '';
+  check('the close gate still waits for backend Apply before background reconciliation',
+    /await apiClient\.applyBestRate\([\s\S]*if \(options\.refetch\)/.test(persistFn));
+  check('Rate Browser reconciliation can run in the background after Apply succeeds',
+    /if \(options\.reconcileInBackground\) \{[\s\S]*void reconcileAppliedRateReadModels\(\)\.catch/.test(persistFn));
+  check('manual and browse-resolved Rate Browser persists opt into background reconciliation',
+    (ov.match(/reconcileInBackground:\s*true/g) ?? []).length === 2);
   check('the Rate Browser modal onClose routes through the close-after-persist gate',
     /onClose=\{\(\)\s*=>\s*\{?\s*void closeRateBrowserAfterPersist\(\)/.test(ov));
   // The Escape-key close is the 4th close path — it must route through the gate too,

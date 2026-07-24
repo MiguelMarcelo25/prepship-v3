@@ -4205,7 +4205,7 @@ export default function OrdersView({
 
   // PS-286: in-flight applied-rate persists keyed by orderId. The Rate Browser close
   // awaits the relevant one (closeRateBrowserAfterPersist) so the operator can never
-  // Send/Print-Queue a row whose just-applied rate hasn't persisted + refetched yet.
+  // Send/Print-Queue a row whose just-applied rate hasn't reached the backend yet.
   const appliedRatePersistsRef = useRef(new Map<number, Promise<unknown>>())
 
   async function closeRateBrowserAfterPersist(): Promise<void> {
@@ -4223,6 +4223,7 @@ export default function OrdersView({
       fallbackDims?: { length: number; width: number; height: number } | null
       fallbackWeightOz?: number | null
       refetch?: boolean
+      reconcileInBackground?: boolean
       request?: NonNullable<ReturnType<typeof getAutoBestRateRequest>>
       metadata?: Record<string, unknown>
     } = {},
@@ -4255,11 +4256,25 @@ export default function OrdersView({
       weightOz: weightOz != null && weightOz > 0 ? weightOz : null,
     })
     if (options.refetch) {
-      await refetchOrders()
-      // Per user override unlock shipped data on 2026-06-26: PS-328 only
-      // refreshes the active order-detail packageFacts after backend rate
-      // persistence; shipped/cancelled locks and read-only gates stay unchanged.
-      await queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', orderId] })
+      const reconcileAppliedRateReadModels = async () => {
+        await refetchOrders()
+        // Per user override unlock shipped data on 2026-06-26: PS-328 only
+        // refreshes the active order-detail packageFacts after backend rate
+        // persistence; shipped/cancelled locks and read-only gates stay unchanged.
+        await queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', orderId] })
+      }
+
+      if (options.reconcileInBackground) {
+        // Rate Browser close must wait for the authoritative Apply command above,
+        // but a stalled orders read-model request must not trap the operator in the
+        // modal after that command succeeds. Local panel/table state is already
+        // updated; the normal sync flow can also reconcile a delayed refresh.
+        void reconcileAppliedRateReadModels().catch((error) => {
+          console.warn('Applied rate saved, but order read-model reconciliation failed', error)
+        })
+      } else {
+        await reconcileAppliedRateReadModels()
+      }
     }
   }
 
@@ -4812,6 +4827,7 @@ export default function OrdersView({
             }
             : {}),
           refetch: true,
+          reconcileInBackground: true,
         }))
         .catch((error) => {
         showToast(error instanceof Error ? error.message : 'Failed to save selected rate', 'error')
@@ -7243,6 +7259,7 @@ export default function OrdersView({
                       }
                     : {}),
                   refetch: true,
+                  reconcileInBackground: true,
                 }))
                   .catch((error) => {
                     showToast(error instanceof Error ? error.message : 'Failed to save best rate', 'error')
