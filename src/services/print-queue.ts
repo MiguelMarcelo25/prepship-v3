@@ -2248,7 +2248,9 @@ export async function startPrintJob(input: {
     progress: 0,
     total: entries.length,
     current: 0,
-    message: `Starting merge of ${entries.length} label${entries.length === 1 ? '' : 's'}â€¦`,
+    // Per user override unlock shipped data on 2026-05-23: operator-facing
+    // status text only; this does not change PDF, label, postage, or order state.
+    message: `Starting merge of ${entries.length} label${entries.length === 1 ? '' : 's'}…`,
     createdAt: Date.now(),
     labelErrors: [],
     chunks: [],

@@ -16,6 +16,7 @@ import {
   heartbeatPrintMergeJobRecord,
   listRecoverablePrintMergeJobIds,
   requestPrintMergeJobCancellation,
+  type PrintMergeJobClaim,
 } from './print-queue/merge-job-store';
 import {
   acknowledgeQueueSendJobCancellation,
@@ -78,6 +79,11 @@ export const PRINT_QUEUE_SEND_MAX_PARENT_RECOVERY_ATTEMPTS = QUEUE_SEND_MAX_PARE
 export const PRINT_QUEUE_SEND_HEARTBEAT_INTERVAL_MS = QUEUE_SEND_HEARTBEAT_INTERVAL_MS;
 export const PRINT_QUEUE_SEND_RECOVERY_INTERVAL_MS = 60_000;
 export const PRINT_QUEUE_MERGE_JOB_NAME = 'prepship.print-queue.merge';
+// Per user override unlock shipped data on 2026-05-23: bound only the
+// durable merge-claim handshake. If Supavisor leaves that promise unsettled,
+// the supervisor restarts this worker and the generation-fenced record is
+// recovered; no label purchase, postage, or order mutation occurs here.
+export const PRINT_QUEUE_MERGE_CLAIM_TIMEOUT_MS = 15_000;
 
 const scopeSchema = z.object({
   scopeClientIds: z.array(z.number().int().positive()).optional(),
@@ -894,13 +900,32 @@ export async function startPrintQueueWorker(): Promise<void> {
       async ([job]) => {
         const payload = mergePayloadSchema.parse(job?.data);
         const workerStatusStartedAt = Date.now();
-        await recordWorkerJobStart(PRINT_QUEUE_MERGE_JOB_NAME);
-        const claim = await claimPrintMergeJobRecord(payload.jobId, {
-          staleAfterMs: PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
-        });
+        console.log(`[print-queue-worker] merge started ${payload.jobId}`);
+        let claim: PrintMergeJobClaim | null;
+        try {
+          await recordWorkerJobStart(PRINT_QUEUE_MERGE_JOB_NAME);
+          claim = await withDeadline(
+            () => claimPrintMergeJobRecord(payload.jobId, {
+              staleAfterMs: PRINT_QUEUE_MERGE_HEARTBEAT_STALE_MS,
+            }),
+            PRINT_QUEUE_MERGE_CLAIM_TIMEOUT_MS,
+            `${PRINT_QUEUE_MERGE_JOB_NAME}:${payload.jobId}:claim`,
+          );
+        } catch (error) {
+          if (error instanceof DeadlineExceededError) {
+            requestFatalWorkerRestart('merge_claim_timeout');
+          }
+          await recordWorkerJobFailure(
+            PRINT_QUEUE_MERGE_JOB_NAME,
+            workerStatusStartedAt,
+            error,
+          ).catch(() => undefined);
+          throw error;
+        }
         if (!claim) {
           const result = { skipped: true, reason: 'active_generation_exists_or_job_terminal' };
           await recordWorkerJobSuccess(PRINT_QUEUE_MERGE_JOB_NAME, workerStatusStartedAt, result);
+          console.log(`[print-queue-worker] merge skipped ${payload.jobId} reason=${result.reason}`);
           return result;
         }
         try {
@@ -921,6 +946,10 @@ export async function startPrintQueueWorker(): Promise<void> {
           });
           const result = { ...attempt.value, cancellationAcknowledged: attempt.timedOut };
           await recordWorkerJobSuccess(PRINT_QUEUE_MERGE_JOB_NAME, workerStatusStartedAt, result);
+          console.log(
+            `[print-queue-worker] merge completed ${payload.jobId} ` +
+            `generation=${claim.generation} merged=${result.merged}`,
+          );
           return result;
         } catch (error) {
           await recordWorkerJobFailure(
