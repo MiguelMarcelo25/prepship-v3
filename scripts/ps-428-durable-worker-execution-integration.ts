@@ -1,9 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
-import { runDurableWorkerAttempt } from '../src/services/durable-worker-attempt.js';
 
 async function main(): Promise<void> {
+  // Keep this integration self-contained in clean CI and prevent local credentials
+  // from becoming an accidental database/provider boundary for its dynamic imports.
+  process.env.NODE_ENV = 'test';
+  process.env.DATABASE_URL = 'postgres://ps428:offline@127.0.0.1:1/ps428';
+  process.env.SUPABASE_URL = 'https://example.test';
+  process.env.SUPABASE_ANON_KEY = 'offline';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'offline';
+  process.env.SUPABASE_JWT_SECRET = 'offline';
+
+  const { runDurableWorkerAttempt } = await import(
+    '../src/services/durable-worker-attempt.js'
+  );
+
   const db = new PGlite();
   await db.exec(`
     CREATE TABLE rate_browse_jobs (
