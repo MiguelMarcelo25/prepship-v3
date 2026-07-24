@@ -436,7 +436,7 @@ async function ensureRateRecalculateBatchScope(c: Context, orderIds: number[]) {
 
 app.post(
   '/browse/workflow/batch',
-  requireBusinessRoutePolicy('rates.browse.workflow.start'),
+  requireBusinessRoutePolicy('rates.browse.workflow.batch.start'),
   zValidator('json', rateRecalculateBatchBody),
   async (c) => {
     const { items } = c.req.valid('json');
@@ -531,7 +531,7 @@ app.get('/browse/workflow/batch/:batchId', requirePermission('rates:quote'), asy
 
 app.post(
   '/browse/workflow/batch/:batchId/retry',
-  requireBusinessRoutePolicy('rates.browse.workflow.start'),
+  requireBusinessRoutePolicy('rates.browse.workflow.batch.retry'),
   zValidator('json', rateRecalculateBatchRetryBody),
   async (c) => {
     const batchId = c.req.param('batchId');

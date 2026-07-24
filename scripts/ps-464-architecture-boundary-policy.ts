@@ -278,6 +278,7 @@ export const FRONTEND_SEMANTIC_EXCEPTIONS: readonly FrontendSemanticException[] 
   })),
   ...[
     ['OrdersView', 'label-provider-selection', 'PS-444', 'Reduce the main Orders view to label intent and backend-issued provider routing.'],
+    ['batchReasonLabel', 'provider-capability-routing', 'PS-443', 'Format backend-issued durable rate-batch reason codes for display without choosing provider eligibility, retryability, or workflow routing.'],
     ['savePanelSkuDefaults', 'inventory-authority', 'PS-462', 'Move SKU default inventory mutation facts to the canonical backend inventory owner.'],
     ['buildQueueSendOrderPayload', 'provider-capability-routing', 'PS-408', 'Remove residual Print Queue provider routing from the frontend payload builder.'],
     ['createOrQueueLabel', 'label-provider-selection', 'PS-444', 'Delegate label creation versus queue routing to the backend Print Queue owner.'],
