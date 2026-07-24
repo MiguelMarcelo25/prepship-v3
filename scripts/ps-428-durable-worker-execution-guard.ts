@@ -44,7 +44,11 @@ assert.match(rateWorker, /produceRateBrowsePayload/);
 assert.match(rateWorker, /listRecoverableRateBrowseJobIds/);
 assert.match(rateWorker, /supervise: consumerRole/);
 assert.match(rateWorker, /maintenanceIntervalSeconds: 60/);
+assert.match(rateWorker, /priority: rateBrowseWorkerQueuePriority\(recovery\)/);
 assert.match(rateWorker, /execute:\s*async \(signal\)/);
+assert.match(rateStore, /generation < \$\{RATE_BROWSE_MAX_EXECUTION_GENERATIONS\}/);
+assert.match(rateStore, /status = 'queued' AND updated_at < \$\{staleBefore\}/);
+assert.match(rateStore, /SET status = 'error',[\s\S]*generation = generation \+ 1/);
 assert.match(
   rateWorker,
   /produceRateBrowsePayload\(\{[\s\S]*?signal,[\s\S]*?\}\)/,

@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 import { armRateBrowseWorkerHardDeadline } from '../src/services/rate-browse-worker.js';
+import {
+  RATE_BROWSE_INTERACTIVE_QUEUE_PRIORITY,
+  RATE_BROWSE_MAX_EXECUTION_GENERATIONS,
+  RATE_BROWSE_RECOVERY_QUEUE_PRIORITY,
+  rateBrowseWorkerQueuePriority,
+} from '../src/services/rate-browse-worker-policy.js';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -26,5 +32,13 @@ const disarmCompleted = armRateBrowseWorkerHardDeadline({
 disarmCompleted();
 await delay(35);
 assert.equal(canceledTermination, 0, 'a completed generation must disarm the hard deadline');
+
+assert.equal(RATE_BROWSE_MAX_EXECUTION_GENERATIONS, 3);
+assert.equal(rateBrowseWorkerQueuePriority(false), RATE_BROWSE_INTERACTIVE_QUEUE_PRIORITY);
+assert.equal(rateBrowseWorkerQueuePriority(true), RATE_BROWSE_RECOVERY_QUEUE_PRIORITY);
+assert.ok(
+  rateBrowseWorkerQueuePriority(false) > rateBrowseWorkerQueuePriority(true),
+  'new operator work must be fetched before stale recovery work',
+);
 
 console.log('PASS Rate Browser worker fail-closed deadline behavior');

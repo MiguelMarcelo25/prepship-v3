@@ -1,5 +1,6 @@
 import { sql as pg } from '../db/client.js';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
+import { RATE_BROWSE_MAX_EXECUTION_GENERATIONS } from './rate-browse-worker-policy.js';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 
 export type RateBrowseJobPriority = 'manual' | 'preflight' | 'backfill';
@@ -379,6 +380,7 @@ export async function claimRateBrowseJobRecord(
         updated_at = ${now.toISOString()}
     WHERE job_id = ${jobId}
       AND active = true
+      AND generation < ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}
       AND (
         status = 'queued'
         OR heartbeat_at IS NULL
@@ -438,15 +440,59 @@ export async function listRecoverableRateBrowseJobIds(input: {
   staleAfterMs: number;
   limit?: number;
 }): Promise<string[]> {
-  const staleBefore = new Date(Date.now() - Math.max(1, input.staleAfterMs)).toISOString();
+  await ensureRateBrowseJobStoreSchema();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const staleBefore = new Date(now.getTime() - Math.max(1, input.staleAfterMs)).toISOString();
+  const exhaustedMessage =
+    `Rate browse stopped after ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS} worker attempts`;
+
+  // A hard-deadline exit deliberately leaves the old generation unresolved.
+  // Fence that writer and make a repeatedly stale job terminal before admitting
+  // more recovery work, so one poisoned request cannot restart the worker forever.
+  await pg`
+    UPDATE rate_browse_jobs
+    SET status = 'error',
+        active = false,
+        generation = generation + 1,
+        message = ${exhaustedMessage},
+        snapshot = COALESCE(snapshot, '{}'::jsonb) || jsonb_build_object(
+          'phase', 'error',
+          'generation', generation + 1,
+          'updatedAt', ${nowIso},
+          'finishedAt', ${nowIso},
+          'message', ${exhaustedMessage},
+          'error', ${exhaustedMessage}
+        ),
+        diagnostics = COALESCE(diagnostics, '{}'::jsonb) || jsonb_build_object(
+          'recoveryExhausted', true,
+          'executionGenerations', generation
+        ),
+        snapshot_updated_at = ${nowIso},
+        updated_at = ${nowIso},
+        finished_at = ${nowIso}
+    WHERE active = true
+      AND generation >= ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}
+      AND (
+        (status = 'queued' AND updated_at < ${staleBefore})
+        OR (
+          status IN ('running', 'partial')
+          AND (heartbeat_at IS NULL OR heartbeat_at < ${staleBefore})
+        )
+      )
+  `;
+
   const rows = await pg<Array<{ jobId: string }>>`
     SELECT job_id AS "jobId"
     FROM rate_browse_jobs
     WHERE active = true
+      AND generation < ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}
       AND (
-        status = 'queued'
-        OR heartbeat_at IS NULL
-        OR heartbeat_at < ${staleBefore}
+        (status = 'queued' AND updated_at < ${staleBefore})
+        OR (
+          status IN ('running', 'partial')
+          AND (heartbeat_at IS NULL OR heartbeat_at < ${staleBefore})
+        )
       )
     ORDER BY created_at ASC
     LIMIT ${Math.max(1, Math.min(100, input.limit ?? 25))}

@@ -15,6 +15,7 @@ import {
   type RateBrowseJobClaim,
 } from './rate-browse-job-store';
 import { produceRateBrowsePayload } from './rate-browse-response-producer';
+import { rateBrowseWorkerQueuePriority } from './rate-browse-worker-policy';
 import { buildRateBrowseResultSnapshot } from './rate-browse-workflow-snapshots';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 import { sanitizeRateProviderError } from './rate-browser-timing-diagnostics';
@@ -136,6 +137,7 @@ async function sendRateBrowseJob(
     RATE_BROWSE_JOB_NAME,
     { jobId, recovery },
     {
+      priority: rateBrowseWorkerQueuePriority(recovery),
       singletonKey,
       singletonSeconds,
       retryLimit: 2,

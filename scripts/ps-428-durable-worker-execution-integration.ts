@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
+import { RATE_BROWSE_MAX_EXECUTION_GENERATIONS } from '../src/services/rate-browse-worker-policy.js';
 
 async function main(): Promise<void> {
   // Keep this integration self-contained in clean CI and prevent local credentials
@@ -112,6 +113,85 @@ async function main(): Promise<void> {
     RETURNING generation
   `);
   assert.equal(restartedRateClaim.rows[0]?.generation, 2);
+
+  await db.exec(`
+    INSERT INTO rate_browse_jobs (
+      job_id, request_key, status, active, snapshot, generation, heartbeat_at, created_at, updated_at
+    ) VALUES
+      (
+        'rate-fresh-queued', 'fresh-queued', 'queued', true,
+        '{"jobId":"rate-fresh-queued","phase":"queued"}'::jsonb,
+        0, NULL, now(), now()
+      ),
+      (
+        'rate-stale-queued', 'stale-queued', 'queued', true,
+        '{"jobId":"rate-stale-queued","phase":"queued"}'::jsonb,
+        0, NULL, now() - interval '2 minutes', now() - interval '2 minutes'
+      ),
+      (
+        'rate-exhausted', 'exhausted', 'partial', true,
+        '{"jobId":"rate-exhausted","phase":"partial"}'::jsonb,
+        ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}, now() - interval '2 minutes',
+        now() - interval '5 minutes', now() - interval '2 minutes'
+      );
+  `);
+  const recoveryCandidates = await db.query<{ job_id: string }>(`
+    SELECT job_id
+    FROM rate_browse_jobs
+    WHERE active = true
+      AND generation < ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}
+      AND (
+        (status = 'queued' AND updated_at < now() - interval '1 minute')
+        OR (
+          status IN ('running', 'partial')
+          AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '1 minute')
+        )
+      )
+    ORDER BY job_id
+  `);
+  assert.deepEqual(
+    recoveryCandidates.rows.map((row) => row.job_id),
+    ['rate-stale-queued'],
+    'recovery ignores fresh queued and exhausted jobs',
+  );
+  await db.exec(`
+    UPDATE rate_browse_jobs
+    SET status = 'error',
+        active = false,
+        generation = generation + 1,
+        snapshot = snapshot || jsonb_build_object(
+          'phase', 'error',
+          'generation', generation + 1,
+          'error', 'attempts exhausted'
+        ),
+        updated_at = now(),
+        finished_at = now()
+    WHERE active = true
+      AND generation >= ${RATE_BROWSE_MAX_EXECUTION_GENERATIONS}
+      AND status IN ('running', 'partial')
+      AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '1 minute')
+  `);
+  const exhaustedRate = await db.query<{
+    status: string;
+    active: boolean;
+    generation: number;
+    snapshot: { phase: string; generation: number; error: string };
+  }>(`
+    SELECT status, active, generation, snapshot
+    FROM rate_browse_jobs
+    WHERE job_id = 'rate-exhausted'
+  `);
+  assert.deepEqual(exhaustedRate.rows[0], {
+    status: 'error',
+    active: false,
+    generation: RATE_BROWSE_MAX_EXECUTION_GENERATIONS + 1,
+    snapshot: {
+      jobId: 'rate-exhausted',
+      phase: 'error',
+      generation: RATE_BROWSE_MAX_EXECUTION_GENERATIONS + 1,
+      error: 'attempts exhausted',
+    },
+  });
 
   await db.exec(`
     INSERT INTO print_queue_merge_jobs (
