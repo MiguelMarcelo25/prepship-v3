@@ -12,6 +12,14 @@ import { assertRuntimeSchemaReady } from '../services/runtime-schema-readiness.j
 
 export type LabelPurchaseLock = { release: () => Promise<void> };
 
+type LabelPurchaseLockState = {
+  orderId: number;
+  token: string;
+  released: boolean;
+};
+
+const issuedLabelPurchaseLocks = new WeakMap<LabelPurchaseLock, LabelPurchaseLockState>();
+
 // Per user override unlock shipped data on 2026-07-13 (audit C2 interim): the TTL
 // must outlive every AUTOMATIC retry horizon that can re-enter a purchase for the
 // same order. pg-boss re-delivers a hung print-queue send job after expireInSeconds
@@ -61,11 +69,11 @@ export async function acquireLabelPurchaseLock(orderId: number): Promise<LabelPu
   `;
   if (rows.length === 0) throw new LabelPurchaseInProgressError(orderId);
 
-  let released = false;
-  return {
+  const state: LabelPurchaseLockState = { orderId, token, released: false };
+  const lock: LabelPurchaseLock = {
     release: async () => {
-      if (released) return;
-      released = true;
+      if (state.released) return;
+      state.released = true;
       try {
         await sql`
           DELETE FROM label_purchase_locks
@@ -77,6 +85,29 @@ export async function acquireLabelPurchaseLock(orderId: number): Promise<LabelPu
       }
     },
   };
+  issuedLabelPurchaseLocks.set(lock, state);
+  return lock;
+}
+
+// Per user override unlock shipped data on 2026-07-25: nested canonical work
+// may reuse only this module's opaque, same-order, still-active lease capability.
+export async function assertLabelPurchaseLockHeld(
+  lock: LabelPurchaseLock,
+  orderId: number,
+): Promise<void> {
+  const state = issuedLabelPurchaseLocks.get(lock);
+  if (!state || state.released || state.orderId !== orderId) {
+    throw new LabelPurchaseInProgressError(orderId);
+  }
+  const rows = await sql<{ active: boolean }[]>`
+    SELECT true AS active
+    FROM label_purchase_locks
+    WHERE order_id = ${orderId}
+      AND token = ${state.token}
+      AND expires_at > now()
+    LIMIT 1
+  `;
+  if (rows.length === 0) throw new LabelPurchaseInProgressError(orderId);
 }
 
 export async function isLabelPurchaseLockActive(orderId: number): Promise<boolean> {

@@ -1,4 +1,3 @@
-import { GLOBAL_SCOPE } from '../../lib/client-store-scope.js';
 import {
   getOrderHazmatForShipping,
   saveOrderHazmatDeclaration,
@@ -28,7 +27,7 @@ const productionDependencies: AutomationHazmatDependencies = {
 export function createAutomationHazmatHandler(
   dependencies: AutomationHazmatDependencies = productionDependencies,
 ): AutomationHandler {
-  return async ({ facts, intent, plan, idempotencyKey }) => {
+  return async ({ facts, intent, plan, idempotencyKey, scope, labelPurchaseLock }) => {
     const profileVersionId = String(intent.action.config.profileVersionId ?? '').trim();
     const profile = dependencies.getProfileVersion(profileVersionId);
     if (!profile) {
@@ -68,7 +67,8 @@ export function createAutomationHazmatHandler(
       orderId: facts.order.id,
       expectedRevision: current.revision,
       declaration: profile.declaration,
-      scope: GLOBAL_SCOPE,
+      scope,
+      purchaseLock: labelPurchaseLock,
       actor: {
         actorId: 'automation-engine',
         actorEmail: 'automation@prepship.internal',

@@ -1,4 +1,6 @@
 import { AUTOMATION_ENGINE_VERSION, type AutomationActionType } from './catalog.js';
+import type { ClientStoreScope } from '../../lib/client-store-scope.js';
+import type { LabelPurchaseLock } from '../../lib/label-purchase-lock.js';
 import { automationDocumentHash, type AutomationFacts, type AutomationIntent, type CompiledAutomationRule } from './contracts.js';
 import { reduceAutomationIntents, type ReducedAutomationPlan } from './conflicts.js';
 import { evaluateAutomationBundle } from './evaluator.js';
@@ -77,6 +79,8 @@ export type AutomationHandler = (input: {
   intent: AutomationIntent;
   plan: ReducedAutomationPlan;
   idempotencyKey: string;
+  scope: ClientStoreScope;
+  labelPurchaseLock?: LabelPurchaseLock;
 }) => Promise<AutomationHandlerResult>;
 
 export type AutomationHandlerRegistry = Partial<Record<AutomationActionType, AutomationHandler>>;
@@ -127,6 +131,8 @@ export async function executeAutomationEvaluation(input: {
   store: AutomationExecutionStore;
   handlers: AutomationHandlerRegistry;
   evaluateAllTriggers?: boolean;
+  scope: ClientStoreScope;
+  labelPurchaseLock?: LabelPurchaseLock;
 }): Promise<AutomationExecutionResult> {
   const rulesetDigest = automationRulesetDigest(input.rules);
   const key = executionKey({
@@ -212,7 +218,14 @@ export async function executeAutomationEvaluation(input: {
         break;
       }
       try {
-        const handled = await handler({ facts: input.facts, intent, plan: reduction.plan, idempotencyKey });
+        const handled = await handler({
+          facts: input.facts,
+          intent,
+          plan: reduction.plan,
+          idempotencyKey,
+          scope: input.scope,
+          labelPurchaseLock: input.labelPurchaseLock,
+        });
         await input.store.recordEffect({
           runId,
           ruleId: intent.ruleId,

@@ -120,12 +120,23 @@ const document = {
   actions: [{ type: 'tag.add', schemaVersion: 1, config: { tag: 'AUTOMATED' } }],
 } satisfies contracts.AutomationRuleDocument;
 const rule = contracts.compileAutomationRuleVersion(document, { ruleId: '1', versionId: '1', versionNumber: 1 });
+const restrictedScope = {
+  clientIds: [4],
+  storeIds: [378060],
+  isGlobal: false,
+  isRestricted: true,
+};
 
 const memory = orchestrator.createInMemoryAutomationExecutionStore();
 let handlerCalls = 0;
+let handlerScope: unknown = null;
+let handlerPurchaseLock: unknown = null;
+const heldPurchaseLock = { release: async () => undefined } as never;
 const handlers: orchestrator.AutomationHandlerRegistry = {
-  'tag.add': async ({ idempotencyKey }) => {
+  'tag.add': async ({ idempotencyKey, scope, labelPurchaseLock }) => {
     handlerCalls += 1;
+    handlerScope = scope;
+    handlerPurchaseLock = labelPurchaseLock;
     return { targetType: 'order_tag', targetId: 'AUTOMATED', after: { tag: 'AUTOMATED' }, idempotencyKey };
   },
 };
@@ -137,11 +148,15 @@ const first = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: memory,
   handlers,
+  scope: restrictedScope,
+  labelPurchaseLock: heldPurchaseLock,
 });
 assert.equal(first.status, 'completed');
 assert.equal(handlerCalls, 1);
 assert.equal(memory.effects.length, 1);
 assert.equal(memory.states.get(101)?.status, 'current');
+assert.equal(handlerScope, restrictedScope, 'the orchestrator propagates the canonical tenant scope to handlers');
+assert.equal(handlerPurchaseLock, heldPurchaseLock, 'the orchestrator propagates the existing label lease capability');
 
 const hazmatIntent = {
   intentId: 'hazmat-intent',
@@ -185,10 +200,14 @@ const hazmatEffect = await canonicalHazmatHandler({
   intent: hazmatIntent,
   plan: hazmatPlan,
   idempotencyKey: 'hazmat-effect-key',
+  scope: restrictedScope,
+  labelPurchaseLock: heldPurchaseLock,
 });
 assert.equal(hazmatEffect.targetType, 'order_hazmat_declaration');
 assert.equal(hazmatEffect.after?.profileVersionId, syntheticApprovedProfile.id);
 assert.equal(savedHazmatInput?.expectedRevision, 0, 'automation passes PS-465 optimistic revision evidence');
+assert.equal(savedHazmatInput?.scope, restrictedScope, 'automation preserves the request tenant scope');
+assert.equal(savedHazmatInput?.purchaseLock, heldPurchaseLock, 'label preflight reuses the already-held purchase lease');
 assert.equal(
   (savedHazmatInput?.provenance as { evaluationId?: string } | undefined)?.evaluationId,
   'hazmat-effect-key',
@@ -214,7 +233,7 @@ const conflictingHazmatHandler = hazmatAction.createAutomationHazmatHandler({
   },
 });
 await assert.rejects(
-  conflictingHazmatHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'conflict' }),
+  conflictingHazmatHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'conflict', scope: restrictedScope }),
   /conflicts with the automation profile/,
   'an existing different active declaration requires review instead of an overwrite',
 );
@@ -230,7 +249,7 @@ const missingProfileHandler = hazmatAction.createAutomationHazmatHandler({
   save: async () => { throw new Error('save must remain unreachable'); },
 });
 await assert.rejects(
-  missingProfileHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'missing-profile' }),
+  missingProfileHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'missing-profile', scope: restrictedScope }),
   /not approved/,
   'an unknown profile fails before canonical mutation or provider work',
 );
@@ -243,6 +262,7 @@ const retry = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: memory,
   handlers,
+  scope: restrictedScope,
 });
 assert.equal(retry.runId, first.runId, 'same event/facts/rules digest reuses the completed run');
 assert.equal(handlerCalls, 1, 'retry cannot duplicate an action effect');
@@ -257,8 +277,8 @@ const concurrentHandlers: orchestrator.AutomationHandlerRegistry = {
   },
 };
 const concurrentResults = await Promise.allSettled([
-  orchestrator.executeAutomationEvaluation({ facts, trigger: 'order_imported', sourceEventId: 'concurrent', rules: [rule], store: concurrentMemory, handlers: concurrentHandlers }),
-  orchestrator.executeAutomationEvaluation({ facts, trigger: 'order_imported', sourceEventId: 'concurrent', rules: [rule], store: concurrentMemory, handlers: concurrentHandlers }),
+  orchestrator.executeAutomationEvaluation({ facts, trigger: 'order_imported', sourceEventId: 'concurrent', rules: [rule], store: concurrentMemory, handlers: concurrentHandlers, scope: restrictedScope }),
+  orchestrator.executeAutomationEvaluation({ facts, trigger: 'order_imported', sourceEventId: 'concurrent', rules: [rule], store: concurrentMemory, handlers: concurrentHandlers, scope: restrictedScope }),
 ]);
 assert.equal(concurrentResults.filter((result) => result.status === 'fulfilled').length, 1, 'one concurrent owner completes the effect');
 assert.equal(
@@ -285,6 +305,7 @@ const failedAttempt = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: retryingMemory,
   handlers: retryingHandlers,
+  scope: restrictedScope,
 });
 assert.equal(failedAttempt.status, 'failed');
 assert.equal(retryingHandlerCalls, 1);
@@ -296,6 +317,7 @@ const recoveredAttempt = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: retryingMemory,
   handlers: retryingHandlers,
+  scope: restrictedScope,
 });
 assert.equal(recoveredAttempt.status, 'completed', 'a failed effect is reclaimed instead of cached forever');
 assert.equal(retryingHandlerCalls, 2, 'the canonical handler receives one bounded retry');
@@ -307,6 +329,7 @@ const cachedRecovery = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: retryingMemory,
   handlers: retryingHandlers,
+  scope: restrictedScope,
 });
 assert.equal(cachedRecovery.runId, recoveredAttempt.runId, 'the successful retry becomes the completed idempotent result');
 assert.equal(retryingHandlerCalls, 2, 'completed recovery cannot execute the handler again');
@@ -356,6 +379,7 @@ const terminal = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: terminalMemory,
   handlers,
+  scope: restrictedScope,
 });
 assert.equal(terminal.mode, 'audit_only');
 assert.equal(terminal.status, 'completed');
@@ -376,6 +400,7 @@ const blocked = await orchestrator.executeAutomationEvaluation({
   rules: [rule],
   store: blockedMemory,
   handlers,
+  scope: restrictedScope,
 });
 assert.equal(blocked.status, 'blocked');
 assert.equal(handlerCalls, 1, 'unknown compliance facts block before action handlers');
@@ -410,6 +435,10 @@ const labelPreflight = labelSource.indexOf("stage: 'before_label_purchase'", lab
 const firstProviderDispatch = labelSource.indexOf('dispatchFulfillmentOperation<DirectPurchaseResult>', labelImpl);
 assert.ok(purchaseLock > labelWrapper && purchaseLock < labelImpl, 'ordinary label purchases acquire the lock before entering the implementation');
 assert.ok(labelPreflight > labelImpl && labelPreflight < firstProviderDispatch, 'label automation preflight is ordered before provider dispatch');
+assert.match(labelSource, /createLabelV2Impl\(body, scope, \{ purchaseLock \}\)/, 'ordinary label preflight receives the already-held purchase lease');
+
+const orderHazmatSource = readFileSync(new URL('../src/services/order-hazmat.ts', import.meta.url), 'utf8');
+assert.match(orderHazmatSource, /input\.purchaseLock[\s\S]*assertLabelPurchaseLockHeld\(input\.purchaseLock, input\.orderId\)/, 'PS-465 validates a supplied purchase-lease capability instead of reacquiring it');
 
 const browseSource = readFileSync(new URL('../src/services/rate-browse-response-producer.ts', import.meta.url), 'utf8');
 const browseEntry = browseSource.indexOf('export async function produceRateBrowsePayload');

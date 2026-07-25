@@ -2,6 +2,7 @@ import { and, eq, isNull, lte, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { automationRules, automationRuleVersions, orderAutomationState } from '../../db/schema/automations.js';
 import type { ClientStoreScope } from '../../lib/client-store-scope.js';
+import type { LabelPurchaseLock } from '../../lib/label-purchase-lock.js';
 import type { AutomationTrigger } from './catalog.js';
 import { compileAutomationRuleVersion, type AutomationRuleDocument } from './contracts.js';
 import { loadAutomationFacts } from './facts.js';
@@ -105,6 +106,7 @@ export async function evaluateOrderAutomations(input: {
     rules,
     store: createPostgresAutomationExecutionStore(),
     handlers: automationHandlerRegistry,
+    scope: input.scope,
   });
 }
 
@@ -128,6 +130,7 @@ export async function evaluateOrderAutomationFactEvent(input: {
     store: createPostgresAutomationExecutionStore(),
     handlers: automationHandlerRegistry,
     evaluateAllTriggers: true,
+    scope: input.scope,
   });
 }
 
@@ -135,6 +138,7 @@ export async function reconcileOrderAutomationsForShipping(input: {
   orderId: number;
   stage: 'before_rate' | 'before_label_purchase';
   scope: ClientStoreScope;
+  labelPurchaseLock?: LabelPurchaseLock;
 }) {
   const facts = await loadAutomationFacts(input.orderId, input.scope);
   const rules = await loadActiveAutomationRules({
@@ -164,6 +168,8 @@ export async function reconcileOrderAutomationsForShipping(input: {
         store: createPostgresAutomationExecutionStore(),
         handlers: automationHandlerRegistry,
         evaluateAllTriggers: true,
+        scope: input.scope,
+        labelPurchaseLock: input.labelPurchaseLock,
       });
     } catch (evaluationError) {
       if (evaluationError instanceof AutomationEffectLeaseBusyError) {

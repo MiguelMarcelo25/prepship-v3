@@ -22,6 +22,7 @@ function check(name: string, cond: boolean): void {
 
 const lock = readFileSync('src/lib/label-purchase-lock.ts', 'utf8');
 const labels = readFileSync('src/services/labels.ts', 'utf8');
+const orderHazmat = readFileSync('src/services/order-hazmat.ts', 'utf8');
 const migration = readFileSync('drizzle/0062_runtime_schema_ownership.sql', 'utf8');
 
 // ── the lock helper ──
@@ -46,14 +47,24 @@ check('a second in-flight buy is rejected with LABEL_PURCHASE_IN_PROGRESS',
   /class LabelPurchaseInProgressError/.test(lock) && /code = 'LABEL_PURCHASE_IN_PROGRESS'/.test(lock));
 check('active lock check ignores expired leases',
   /export async function isLabelPurchaseLockActive/.test(lock) && /expires_at > now\(\)/.test(lock));
+check('nested canonical work can validate only an issued same-order active lease',
+  /issuedLabelPurchaseLocks = new WeakMap/.test(lock) &&
+    /export async function assertLabelPurchaseLockHeld/.test(lock) &&
+    /state\.orderId !== orderId/.test(lock) &&
+    /token = \$\{state\.token\}/.test(lock) &&
+    /expires_at > now\(\)/.test(lock));
 
 // ── createLabelV2 wraps the impl with the lock ──
 check('createLabelV2 acquires the per-order purchase lock', /acquireLabelPurchaseLock\(body\.orderId\)/.test(labels));
 check('createLabelV2 delegates the buy to the impl inside the lock',
-  /return await createLabelV2Impl\(body, scope\)/.test(labels));
+  /return await createLabelV2Impl\(body, scope, \{ purchaseLock \}\)/.test(labels));
 check('createLabelV2 ALWAYS releases the lock (finally)',
   /finally \{\s*await purchaseLock\.release\(\)/.test(labels));
 check('the impl (all guards + buy + persist) still exists', /async function createLabelV2Impl\(/.test(labels));
+check('hazmat save reuses a validated outer lease or acquires its own lease',
+  /if \(input\.purchaseLock\) \{\s*await assertLabelPurchaseLockHeld\(input\.purchaseLock, input\.orderId\)/.test(orderHazmat) &&
+    /acquiredPurchaseLock = await acquireLabelPurchaseLock\(input\.orderId\)/.test(orderHazmat) &&
+    /await acquiredPurchaseLock\?\.release\(\)/.test(orderHazmat));
 
 check('package.json wires test:ps-248-label-purchase-lock',
   /test:ps-248-label-purchase-lock/.test(readFileSync('package.json', 'utf8')));

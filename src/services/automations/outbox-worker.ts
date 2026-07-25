@@ -182,6 +182,7 @@ export async function processAutomationOutboxOnce(): Promise<'idle' | 'progress'
         store: createPostgresAutomationExecutionStore(),
         handlers: automationHandlerRegistry,
         evaluateAllTriggers: true,
+        scope: GLOBAL_SCOPE,
       });
       if (result.status !== 'completed') {
         throw new Error(`Automation reprocess order ${orderId} ${result.status}`);

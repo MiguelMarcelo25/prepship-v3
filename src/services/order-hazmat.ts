@@ -7,7 +7,11 @@ import {
 } from '../db/schema/hazmat.js';
 import { orderOverrides, orders } from '../db/schema/orders.js';
 import { shipments } from '../db/schema/shipments.js';
-import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock.js';
+import {
+  acquireLabelPurchaseLock,
+  assertLabelPurchaseLockHeld,
+  type LabelPurchaseLock,
+} from '../lib/label-purchase-lock.js';
 import type { ClientStoreScope } from '../lib/client-store-scope.js';
 import { orderScopePredicate } from '../lib/order-scope.js';
 import {
@@ -552,10 +556,19 @@ export async function saveOrderHazmatDeclaration(input: {
   scope: ClientStoreScope;
   actor: AuditActor;
   provenance?: OrderHazmatAutomationProvenance;
+  purchaseLock?: LabelPurchaseLock;
 }): Promise<SaveOrderHazmatResult> {
   await assertRuntimeSchemaReady();
   await loadOrderRow(input.orderId, input.scope);
-  const purchaseLock = await acquireLabelPurchaseLock(input.orderId);
+  // Per user override unlock shipped data on 2026-07-25: label automation may
+  // reuse only the opaque, still-active lease already held for this same order;
+  // all other saves continue to acquire and release their own canonical lease.
+  let acquiredPurchaseLock: LabelPurchaseLock | null = null;
+  if (input.purchaseLock) {
+    await assertLabelPurchaseLockHeld(input.purchaseLock, input.orderId);
+  } else {
+    acquiredPurchaseLock = await acquireLabelPurchaseLock(input.orderId);
+  }
   try {
     const operation = await getLatestLabelOperationForOrder(input.orderId);
     if (operation && operation.state !== 'consumed') {
@@ -568,7 +581,7 @@ export async function saveOrderHazmatDeclaration(input: {
     }
     return await db.transaction((tx) => saveInTransaction(tx, input));
   } finally {
-    await purchaseLock.release();
+    await acquiredPurchaseLock?.release();
   }
 }
 

@@ -11,7 +11,7 @@ import { orders, orderOverrides } from '../db/schema/orders';
 import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
 // PS-248: per-order purchase lease so concurrent buys can't double-purchase postage for one order.
-import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
+import { acquireLabelPurchaseLock, type LabelPurchaseLock } from '../lib/label-purchase-lock';
 // Audit C2/1.20 (Per user override unlock shipped data on 2026-07-13): durable
 // purchase-intent record — closes the buy->persist crash window for ANY retry horizon.
 import {
@@ -1317,7 +1317,9 @@ export async function createLabelV2(
   if (!body.orderId) return createLabelV2Impl(body, scope);
   const purchaseLock = await acquireLabelPurchaseLock(body.orderId);
   try {
-    return await createLabelV2Impl(body, scope);
+    // Per user override unlock shipped data on 2026-07-25: pass the opaque
+    // lease to nested canonical automation work; the outer owner still releases it.
+    return await createLabelV2Impl(body, scope, { purchaseLock });
   } finally {
     await purchaseLock.release();
   }
@@ -1329,7 +1331,9 @@ export async function createShopifyShippingLabelForOrder(
 ): Promise<CreateShopifyShippingLabelResponseDto> {
   const purchaseLock = await acquireLabelPurchaseLock(body.orderId);
   try {
-    return await createShopifyShippingLabelForOrderImpl(body, scope);
+    // Per user override unlock shipped data on 2026-07-25: Shopify uses the
+    // same non-reentrant lease handoff before any provider-capable work.
+    return await createShopifyShippingLabelForOrderImpl(body, scope, { purchaseLock });
   } finally {
     await purchaseLock.release();
   }
@@ -1337,6 +1341,7 @@ export async function createShopifyShippingLabelForOrder(
 
 type LabelProviderDispatchOptions = {
   allowProviderDispatch?: boolean;
+  purchaseLock?: LabelPurchaseLock;
 };
 
 export async function resumeLabelV2FromDurableReceipt(
@@ -1822,6 +1827,7 @@ async function createShopifyShippingLabelForOrderImpl(
     orderId: order.id,
     stage: 'before_label_purchase',
     scope,
+    labelPurchaseLock: execution.purchaseLock,
   });
   assertAutomationPlanSupportedByProvider(automationWatermark, 'Shopify Shipping');
 
@@ -2127,6 +2133,7 @@ async function createLabelV2Impl(
     orderId: order.id,
     stage: 'before_label_purchase',
     scope,
+    labelPurchaseLock: execution.purchaseLock,
   });
 
   // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
