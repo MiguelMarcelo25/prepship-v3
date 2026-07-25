@@ -74,6 +74,17 @@ try {
     );
   `);
 
+  const decision = await client.query<{ decisionSource: string }>(`
+    SELECT decision_source AS "decisionSource"
+    FROM public.order_hazmat_declarations
+    WHERE order_id = 465
+  `);
+  assert.equal(decision.rows[0]?.decisionSource, 'manual');
+  await assert.rejects(
+    client.exec(`UPDATE public.order_hazmat_declarations SET decision_source = 'provider' WHERE order_id = 465`),
+    /order_hazmat_declarations_decision_source_chk/i,
+  );
+
   await assert.rejects(
     client.exec(`UPDATE public.shipment_hazmat_snapshots SET summary_profile = 'walmart' WHERE shipment_id = 465`),
     /append-only/i,
