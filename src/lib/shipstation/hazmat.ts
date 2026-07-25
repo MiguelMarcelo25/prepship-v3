@@ -18,10 +18,24 @@ function compact<T extends Record<string, unknown>>(value: T): Record<string, un
 function advancedOptions(facts: CanonicalHazmatPurchaseFacts): Record<string, unknown> {
   const declaration = facts.declaration;
   if (facts.profile === 'shipstation_usps') {
-    // Stamps.com documents only the shipment-level dangerous_goods flag for
-    // USPS. Do not infer support for dry-ice, product-DG, or unrelated regulated
-    // content fields from the generic advanced-options schema.
-    return { dangerous_goods: true };
+    const hasContactName = declaration.emergencyContactName != null;
+    const hasContactPhone = declaration.emergencyContactPhone != null;
+    if (hasContactName !== hasContactPhone) {
+      throw new ShipStationHazmatPayloadError(
+        'ShipStation dangerous-goods contact requires both name and phone.',
+      );
+    }
+    // ShipStation's shipment contract accepts the dangerous-goods flag plus an
+    // optional complete contact pair. Carrier eligibility remains policy-owned.
+    return compact({
+      dangerous_goods: true,
+      dangerous_goods_contact: hasContactName && hasContactPhone
+        ? {
+            name: declaration.emergencyContactName,
+            phone: declaration.emergencyContactPhone,
+          }
+        : null,
+    });
   }
   if (facts.profile === 'shipstation_ups_dry_ice') {
     if (!declaration.dryIce || declaration.dryIceWeightValue == null || !declaration.dryIceWeightUnit) {

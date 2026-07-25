@@ -55,6 +55,22 @@ assert.equal(dryIce.validation.valid, true);
 assert.equal(dryIce.declaration.dryIceWeightUnit, 'pound');
 assert.equal(dryIce.declaration.emergencyContactName, 'Dispatch Desk');
 
+const dangerousGoodsContact = normalizeAndValidateHazmatDeclaration({
+  status: 'active',
+  emergencyContactName: '  Dispatch   Desk ',
+  emergencyContactPhone: '+1 (206) 555-0100',
+});
+assert.equal(dangerousGoodsContact.validation.valid, true);
+assert.equal(dangerousGoodsContact.declaration.emergencyContactName, 'Dispatch Desk');
+assert.deepEqual(
+  normalizeAndValidateHazmatDeclaration({
+    status: 'active',
+    emergencyContactName: 'Dispatch Desk',
+  }).validation.issues.map((issue) => issue.code),
+  ['HAZMAT_ACTIVE_FACT_REQUIRED', 'HAZMAT_CONTACT_PHONE_REQUIRED'],
+  'a partial dangerous-goods contact must fail closed',
+);
+
 const missingDryIceWeight = normalizeAndValidateHazmatDeclaration({
   status: 'active',
   dryIce: true,
@@ -208,14 +224,20 @@ assert.strictEqual(
 );
 
 const uspsHazmat = sealHazmatDeclaration({
-  declaration: dryIce.declaration,
+  declaration: dangerousGoodsContact.declaration,
   revision: 3,
   profile: 'shipstation_usps',
 });
 const hazmatLabelBody = buildSsLabelRequestBody({ ...baseLabelInput, hazmat: uspsHazmat });
 assert.deepEqual(
   (hazmatLabelBody.shipment as Record<string, unknown>).advanced_options,
-  { dangerous_goods: true },
+  {
+    dangerous_goods: true,
+    dangerous_goods_contact: {
+      name: 'Dispatch Desk',
+      phone: '+1 (206) 555-0100',
+    },
+  },
 );
 
 const upsDryIce = sealHazmatDeclaration({
@@ -447,20 +469,17 @@ assert.equal(resolveHazmatProfile({
   carrierCode: 'ups_walleted',
   facts: quoteFacts,
 }), 'shipstation_ups_dry_ice');
-const incompleteUspsFacts = quoteHazmatDeclaration({
+const simpleUspsFacts = quoteHazmatDeclaration({
   declaration: normalizeHazmatDeclaration({ status: 'active', limitedQuantity: true }),
   revision: 1,
 });
-assert.throws(
+assert.doesNotThrow(
   () => assertHazmatRatingSupported({
-    facts: incompleteUspsFacts,
+    facts: simpleUspsFacts,
     profile: 'shipstation_usps',
     capabilities: uspsCanary,
   }),
-  (error: unknown) => (
-    error instanceof Error
-    && (error as Error & { code?: string }).code === 'HAZMAT_PROFILE_DECLARATION_INVALID'
-  ),
+  'Stamps.com uses the provider dangerous-goods flag and must not require unmapped USPS fields',
 );
 
 assert.equal(shipStationRateEndpoint(), '/v2/rates/estimate');

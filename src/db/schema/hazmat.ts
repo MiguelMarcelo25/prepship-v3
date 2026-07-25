@@ -24,6 +24,7 @@ export const orderHazmatDeclarations = pgTable(
     schemaVersion: smallint().default(1).notNull(),
     revision: integer().notNull(),
     status: text().$type<'clear' | 'active'>().notNull(),
+    decisionSource: text().$type<'manual' | 'automation'>().default('manual').notNull(),
     limitedQuantity: boolean(),
     containsBattery: boolean(),
     dryIce: boolean(),
@@ -47,6 +48,7 @@ export const orderHazmatDeclarations = pgTable(
     check('order_hazmat_declarations_schema_version_chk', sql`${t.schemaVersion} > 0`),
     check('order_hazmat_declarations_revision_chk', sql`${t.revision} > 0`),
     check('order_hazmat_declarations_status_chk', sql`${t.status} in ('clear', 'active')`),
+    check('order_hazmat_declarations_decision_source_chk', sql`${t.decisionSource} in ('manual', 'automation')`),
     check('order_hazmat_declarations_semantic_hash_chk', sql`${t.semanticHash} ~ '^hz_[a-f0-9]{64}$'`),
     check(
       'order_hazmat_declarations_dry_ice_weight_chk',

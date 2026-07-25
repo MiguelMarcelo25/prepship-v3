@@ -247,8 +247,8 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
           ) : null}
 
           <div className="grid grid-cols-2 gap-1.5">
-            <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Emergency contact" disabled={!editable} value={draft.emergencyContactName ?? ''} onChange={(event) => update('emergencyContactName', event.target.value || null)} />
-            <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Emergency phone" disabled={!editable} value={draft.emergencyContactPhone ?? ''} onChange={(event) => update('emergencyContactPhone', event.target.value || null)} />
+            <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Dangerous-goods contact name" disabled={!editable} value={draft.emergencyContactName ?? ''} onChange={(event) => update('emergencyContactName', event.target.value || null)} />
+            <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Dangerous-goods contact phone" disabled={!editable} value={draft.emergencyContactPhone ?? ''} onChange={(event) => update('emergencyContactPhone', event.target.value || null)} />
             <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="USPS category" disabled={!editable} value={draft.uspsCategory ?? ''} onChange={(event) => update('uspsCategory', event.target.value || null)} />
             <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Other regulated content evidence" disabled={!editable} value={draft.regulatedContentType ?? ''} onChange={(event) => update('regulatedContentType', event.target.value || null)} />
           </div>
