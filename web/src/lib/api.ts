@@ -294,12 +294,12 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
 
 export const api = {
   get: <T,>(path: string, init?: Omit<Init, 'method' | 'body'>) => request<T>(path, init),
-  post: <T,>(path: string, body: unknown) =>
-    request<T>(path, { method: 'POST', body }),
-  put: <T,>(path: string, body: unknown) =>
-    request<T>(path, { method: 'PUT', body }),
-  patch: <T,>(path: string, body: unknown) =>
-    request<T>(path, { method: 'PATCH', body }),
+  post: <T,>(path: string, body: unknown, init?: Omit<Init, 'method' | 'body'>) =>
+    request<T>(path, { ...init, method: 'POST', body }),
+  put: <T,>(path: string, body: unknown, init?: Omit<Init, 'method' | 'body'>) =>
+    request<T>(path, { ...init, method: 'PUT', body }),
+  patch: <T,>(path: string, body: unknown, init?: Omit<Init, 'method' | 'body'>) =>
+    request<T>(path, { ...init, method: 'PATCH', body }),
   delete: <T,>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 

@@ -499,6 +499,20 @@ export function filterEligibleShippingServices<T>(
   return services.filter((service) => evaluateShippingServiceEligibility(context, describe(service), shippingOptions, automationRules).allowed);
 }
 
+export function findDisabledCarrierAutomationRule(
+  context: ShippingServiceEligibilityContext | null | undefined,
+  carrier: ShippingServiceDescriptor | null | undefined,
+  automationRules: ShippingAutomationRule[] | null | undefined,
+): ShippingAutomationRule | null {
+  if (!automationRules?.length || isHugrabCarrierDisableProtected(context, carrier)) return null;
+  return automationRules.find((rule) => (
+    rule.disabled === true &&
+    rule.type === 'carrier' &&
+    matchesContext(rule, context) &&
+    matchesCarrierRule(rule, carrier)
+  )) ?? null;
+}
+
 export function filterCarrierAccountsForAutomation<T>(
   carriers: T[],
   context: ShippingServiceEligibilityContext | null | undefined,
@@ -508,13 +522,6 @@ export function filterCarrierAccountsForAutomation<T>(
   if (!automationRules?.length) return carriers;
   return carriers.filter((carrier) => {
     const descriptor = describe(carrier);
-    const disabledRule = automationRules.find((rule) => (
-      rule.disabled === true &&
-      rule.type === 'carrier' &&
-      matchesContext(rule, context) &&
-      matchesCarrierRule(rule, descriptor) &&
-      !isHugrabCarrierDisableProtected(context, descriptor)
-    ));
-    return !disabledRule;
+    return !findDisabledCarrierAutomationRule(context, descriptor, automationRules);
   });
 }

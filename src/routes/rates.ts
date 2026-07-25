@@ -37,7 +37,7 @@ import {
 // PS-250 (Card 5): the shared order-scope owner — so a rate route can't read/persist
 // against another tenant's order (cross-tenant IDOR on /browse).
 import { scopeFromContext, orderScopePredicate } from '../lib/order-scope';
-import { loadShippingAutomationRules } from '../services/shipping-automation';
+import { loadShippingAutomationControls } from '../services/automations/shipping-controls';
 import {
   buildBestRateWorkflowDto,
   isBestRateComplete,
@@ -56,6 +56,7 @@ import {
   type RateRecalculateBatchStartItem,
 } from '../services/rate-recalculate-batch';
 import { produceRateBrowsePayload } from '../services/rate-browse-response-producer';
+import { dispatchRateAfterAutomationPreflight } from '../services/automations/rate-policy';
 import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display-fields';
 import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
 import { orderOverrides, orders } from '../db/schema/orders';
@@ -283,9 +284,13 @@ app.post(
   const canViewFinancials = canViewRateFinancials(c);
   const { forceRefresh, signature, confirmation, ...input } = body;
   try {
-    const result = await getRates(
+    const result = await dispatchRateAfterAutomationPreflight(
       { ...input, confirmation: confirmation ?? signature ?? null },
-      { forceRefresh, priority: 'interactive' }
+      scopeFromContext(c),
+      (preparedInput) => getRates(
+        preparedInput,
+        { forceRefresh, priority: 'interactive' },
+      ),
     );
     return c.json(publicRatesResult(result, canViewFinancials));
   } catch (error) {
@@ -871,7 +876,7 @@ app.post(
     return rateScopeError(c, scopeDecision, scopedInput);
   }
   const canViewFinancials = canViewRateFinancials(c);
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   // PS-203 (stage 2): one account-table load per request; each item's order
   // context is checked against the REQUIRED carrier universe below.
   const hasVisibleDirectCarriers = await loadDirectCarrierVisibilityEvaluator();

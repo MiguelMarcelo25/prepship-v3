@@ -21,8 +21,8 @@ const INT4_MIN = -(2 ** 31);
 const INT4_MAX = 2 ** 31 - 1;
 
 // ── 1. key helper: deterministic, in signed-int4 range, distinct per name ─────────────────────
-const a = advisoryLockKeyPair('shipping_automation_rules');
-const b = advisoryLockKeyPair('shipping_automation_rules');
+const a = advisoryLockKeyPair('automation_shipping_controls');
+const b = advisoryLockKeyPair('automation_shipping_controls');
 check('returns a [int, int] pair', Array.isArray(a) && a.length === 2 && a.every(Number.isInteger));
 check('deterministic for the same name', a[0] === b[0] && a[1] === b[1]);
 check('both keys are in the signed int4 range',
@@ -31,14 +31,14 @@ const other = advisoryLockKeyPair('marketplace_fee_rules');
 check('different names -> different lock keys', a[0] !== other[0] || a[1] !== other[1]);
 
 // ── 2. the upsert is serialized under a transaction-scoped advisory lock ──────────────────────
-const src = readFileSync('src/services/shipping-automation.ts', 'utf8');
-const fn = src.slice(src.indexOf('export async function upsertShippingAutomationRule'));
+const src = readFileSync('src/services/automations/shipping-controls.ts', 'utf8');
+const fn = src.slice(src.indexOf('export async function upsertShippingAutomationControls'));
 check('imports advisoryLockKeyPair from the shared owner',
-  /import \{ advisoryLockKeyPair \} from '\.\.\/lib\/advisory-lock\.js'/.test(src));
+  /import \{ advisoryLockKeyPair \} from '\.\.\/\.\.\/lib\/advisory-lock\.js'/.test(src));
 check('upsert wraps the work in db.transaction', /db\.transaction\(async \(tx\) =>/.test(fn));
 check('upsert acquires pg_advisory_xact_lock', /pg_advisory_xact_lock\(\$\{classid\}, \$\{objid\}\)/.test(fn));
 check('upsert READS on the tx (lock covers the read)', /await tx\s*\n?\s*\.select\(/.test(fn));
-check('upsert WRITES on the tx (lock covers the write)', /await tx\s*\n?\s*\.insert\(settings\)/.test(fn));
+check('upsert WRITES on the tx (lock covers the write)', /await tx\.insert\(automationShippingControls\)/.test(fn));
 
 check('package.json wires test:ps-253-automation-rule-lock',
   /test:ps-253-automation-rule-lock/.test(readFileSync('package.json', 'utf8')));

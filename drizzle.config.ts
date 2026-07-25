@@ -29,6 +29,7 @@ export default defineConfig({
     './src/db/schema/fulfillment-outbox.ts',
     './src/db/schema/analytics-cache.ts',
     './src/db/schema/shipment-groups.ts',
+    './src/db/schema/automations.ts',
   ],
   out: './drizzle',
   dialect: 'postgresql',

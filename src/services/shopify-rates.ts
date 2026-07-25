@@ -16,6 +16,9 @@ import {
 } from './shopify-shipping-labels';
 import { getAnalyticsCache, setAnalyticsCache } from './analytics-cache';
 import { syntheticStoreIdForCredentialAccount } from './credential-accounts';
+import { GLOBAL_SCOPE } from '../lib/client-store-scope';
+import { reconcileOrderAutomationsForShipping } from './automations/runtime';
+import { assertAutomationPlanSupportedByProvider } from './automations/rate-policy';
 
 const SHOPIFY_RATE_QUOTE_TTL_SECONDS = 24 * 60 * 60;
 const SHOPIFY_RATE_QUOTE_PREFIX = 'shopify_rate_quote';
@@ -762,6 +765,13 @@ export async function getShopifyRatesForOrder(
       orderStatus: order.orderStatus,
     });
   }
+
+  const automationWatermark = await reconcileOrderAutomationsForShipping({
+    orderId: order.id,
+    stage: 'before_rate',
+    scope: GLOBAL_SCOPE,
+  });
+  assertAutomationPlanSupportedByProvider(automationWatermark, 'Shopify Shipping');
 
   const weightOz = finitePositive(input.weightOz) ?? finitePositive(order.weightOz);
   const length = finitePositive(input.dims?.length);

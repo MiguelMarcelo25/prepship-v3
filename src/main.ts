@@ -44,7 +44,7 @@ import oauthRoute from './routes/oauth';
 import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 import observabilityRoute from './routes/observability';
-import automationRoute from './routes/automation';
+import automationsRoute from './routes/automations';
 import storeSourceCutoversRoute from './routes/store-source-cutovers';
 import clientPortalIntegrationsRoute from './routes/client-portal/integrations';
 import { assertRuntimeSchemaReady } from './services/runtime-schema-readiness.js';
@@ -163,7 +163,7 @@ const protectedPrefixes = [
   '/users',
   '/worker',
   '/observability',
-  '/automation',
+  '/automations',
   '/store-source-cutovers',
   '/client-portal',
 ];
@@ -206,7 +206,7 @@ app.route('/store-accounts', storeAccountsRoute);
 app.route('/users', usersRoute);
 app.route('/worker', workerRoute);
 app.route('/observability', observabilityRoute);
-app.route('/automation', automationRoute);
+app.route('/automations', automationsRoute);
 app.route('/store-source-cutovers', storeSourceCutoversRoute);
 app.route('/client-portal', clientPortalIntegrationsRoute);
 

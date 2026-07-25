@@ -47,6 +47,7 @@ const PackagesView = lazy(() => import('./components/Views/PackagesView'))
 const RatesView = lazy(() => import('./components/Views/RatesView'))
 const AnalysisView = lazy(() => import('./components/Views/AnalysisView'))
 const SettingsView = lazy(() => import('./components/Views/SettingsView'))
+const AutomationsView = lazy(() => import('./components/Views/AutomationsView'))
 const BillingView = lazy(() => import('./components/Views/BillingView'))
 const ManifestsView = lazy(() => import('./components/Views/ManifestsView'))
 import {
@@ -232,6 +233,7 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests' | 'locations'
   rates: 'Rates',
   analysis: 'Analysis',
   settings: 'Settings',
+  automations: 'Automations',
   billing: 'Billing',
 }
 
@@ -276,6 +278,17 @@ export default function Home() {
       location.pathname.startsWith('/locations/')
     ) {
       navigate('/settings/locations', { replace: true })
+    }
+  }, [location.pathname, navigate])
+
+  // PS-466: preserve the legacy bookmark while retiring the old Settings
+  // control surface. Carrier/service controls now live beside versioned rules.
+  useEffect(() => {
+    if (
+      location.pathname === '/settings/automation' ||
+      location.pathname.startsWith('/settings/automation/')
+    ) {
+      navigate('/automations', { replace: true })
     }
   }, [location.pathname, navigate])
 
@@ -1419,6 +1432,8 @@ export default function Home() {
               />
             ) : displayView === 'settings' ? (
               <SettingsView />
+            ) : displayView === 'automations' ? (
+              <AutomationsView />
             ) : displayView === 'billing' ? (
               <BillingView />
             ) : (

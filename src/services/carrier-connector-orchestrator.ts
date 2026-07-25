@@ -3,7 +3,7 @@ import { resolveCarrierConnector } from '../connectors/carrier-resolution.js';
 import { readObservedIncomplete } from '../connectors/carrier/shipp-observed-incomplete-marker.js';
 import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility.js';
 import { normalizeShippingOptions } from '../lib/shipping-options.js';
-import { loadShippingAutomationRules } from './shipping-automation.js';
+import { loadShippingAutomationControls } from './automations/shipping-controls.js';
 import {
   isCarrierTestMode,
   resolveCarrierTestStrategy,
@@ -42,7 +42,7 @@ async function assertCarrierLabelServiceEligible(
     : {};
   const serviceCode = row.serviceCode ?? row.service_code ?? shipment.service_code ?? shipment.serviceCode;
   if (serviceCode == null || serviceCode === '') return;
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   assertShippingServiceEligible(
     {
       clientId: row.clientId ?? row.client_id ?? shipment.clientId ?? shipment.client_id ?? null,

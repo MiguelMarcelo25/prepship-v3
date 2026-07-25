@@ -20,6 +20,10 @@ import {
   startRateBrowseWorker,
   stopRateBrowseWorker,
 } from './services/rate-browse-worker';
+import {
+  startAutomationOutboxWorker,
+  stopAutomationOutboxWorker,
+} from './services/automations/outbox-worker';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
 let stopSyncWatchdog: (() => void) | null = null;
@@ -45,6 +49,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[worker] received ${signal}; shutting down`);
   await stopPrintQueueWorker();
   if (env.RUN_SYNC_SCHEDULER) {
+    stopAutomationOutboxWorker();
     await stopRateBrowseWorker();
     await stopQueuedSyncScheduler();
     stopSyncWatchdog?.();
@@ -146,6 +151,7 @@ async function main(): Promise<void> {
     console.log('[worker] starting durable pg-boss sync scheduler');
     await startQueuedSyncScheduler();
     await startRateBrowseWorker();
+    startAutomationOutboxWorker();
     stopSyncWatchdog = startSyncStalenessWatchdog();
   } else {
     if (env.RUN_PRINT_QUEUE_WORKER) {

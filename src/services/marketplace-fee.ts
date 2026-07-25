@@ -1,7 +1,7 @@
 /**
  * marketplace-fee.ts — PS-239 backend owner of the per-store/client marketplace-fee
  * RULES (stored once in the `marketplace_fee_rules` settings KV, modeled on
- * shipping_automation_rules). The fee MATH lives in the pure rate-money module
+ * the former settings-backed shipping controls). The fee MATH lives in the pure rate-money module
  * (computeMarketplaceFee); this module owns rule storage + most-specific-wins
  * resolution + the product-subtotal derivation. The orders route loads the rules
  * once per request and resolves a rule per row; the workflow DTO computes the

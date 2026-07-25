@@ -79,6 +79,8 @@ import {
   type ShippingQuoteAuthorizationContext,
 } from './shipping-workflow/shipping-quote-authorization';
 import { shipStationQuoteAccountAuthorizations } from './shipping-workflow/quote-account-authorization';
+import { GLOBAL_SCOPE } from '../lib/client-store-scope';
+import { prepareAutomationRateIntent } from './automations/rate-policy';
 
 type RateBrowseBody = Record<string, any>;
 
@@ -149,12 +151,17 @@ async function resolveAuthorizedQuoteOrigin(locationId: unknown): Promise<Author
 }
 
 export async function produceRateBrowsePayload({
-  body,
+  body: requestedBody,
   canViewFinancials,
   browseStartedAt = Date.now(),
   signal,
 }: ProduceRateBrowsePayloadInput): Promise<Record<string, unknown>> {
   signal?.throwIfAborted();
+  // PS-466: this service is the common synchronous/worker browse boundary. A
+  // stale, unknown, conflicting, or held automation state fails before carrier
+  // discovery or quote dispatch; the authoritative plan is then sealed into
+  // the rate fingerprint and consumed by every carrier universe.
+  const body = await prepareAutomationRateIntent(requestedBody, GLOBAL_SCOPE);
   const {
     forceRefresh,
     forceLive,

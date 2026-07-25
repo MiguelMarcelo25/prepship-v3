@@ -7,7 +7,11 @@ import {
 } from '../db/schema/hazmat.js';
 import { orderOverrides, orders } from '../db/schema/orders.js';
 import { shipments } from '../db/schema/shipments.js';
-import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock.js';
+import {
+  acquireLabelPurchaseLock,
+  assertLabelPurchaseLockHeld,
+  type LabelPurchaseLock,
+} from '../lib/label-purchase-lock.js';
 import type { ClientStoreScope } from '../lib/client-store-scope.js';
 import { orderScopePredicate } from '../lib/order-scope.js';
 import {
@@ -67,6 +71,13 @@ export type SaveOrderHazmatResult = OrderHazmatState & {
   changed: boolean;
   invalidatedRate: boolean;
 };
+
+export type OrderHazmatAutomationProvenance = Readonly<{
+  source: 'automation';
+  evaluationId: string;
+  ruleId: string;
+  ruleVersionId: string;
+}>;
 
 export class OrderHazmatError extends Error {
   constructor(
@@ -418,6 +429,7 @@ async function saveInTransaction(
     declaration: HazmatDeclarationInput;
     scope: ClientStoreScope;
     actor: AuditActor;
+    provenance?: OrderHazmatAutomationProvenance;
     decisionSource?: 'manual' | 'automation';
   },
 ): Promise<SaveOrderHazmatResult> {
@@ -541,6 +553,9 @@ async function saveInTransaction(
       decisionSource,
       summary: summarizeHazmatDeclaration(declaration),
       invalidatedRate,
+      // Per user override unlock shipped data on 2026-07-25: preserve the
+      // immutable PS-466 decision provenance without weakening terminal guards.
+      ...(input.provenance ? { automation: input.provenance } : {}),
     },
   });
 
@@ -564,11 +579,21 @@ export async function saveOrderHazmatDeclaration(input: {
   declaration: HazmatDeclarationInput;
   scope: ClientStoreScope;
   actor: AuditActor;
+  provenance?: OrderHazmatAutomationProvenance;
+  purchaseLock?: LabelPurchaseLock;
   decisionSource?: 'manual' | 'automation';
 }): Promise<SaveOrderHazmatResult> {
   await assertRuntimeSchemaReady();
   await loadOrderRow(input.orderId, input.scope);
-  const purchaseLock = await acquireLabelPurchaseLock(input.orderId);
+  // Per user override unlock shipped data on 2026-07-25: label automation may
+  // reuse only the opaque, still-active lease already held for this same order;
+  // all other saves continue to acquire and release their own canonical lease.
+  let acquiredPurchaseLock: LabelPurchaseLock | null = null;
+  if (input.purchaseLock) {
+    await assertLabelPurchaseLockHeld(input.purchaseLock, input.orderId);
+  } else {
+    acquiredPurchaseLock = await acquireLabelPurchaseLock(input.orderId);
+  }
   try {
     const operation = await getLatestLabelOperationForOrder(input.orderId);
     if (operation && operation.state !== 'consumed') {
@@ -581,7 +606,7 @@ export async function saveOrderHazmatDeclaration(input: {
     }
     return await db.transaction((tx) => saveInTransaction(tx, input));
   } finally {
-    await purchaseLock.release();
+    await acquiredPurchaseLock?.release();
   }
 }
 

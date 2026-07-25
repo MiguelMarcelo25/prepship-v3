@@ -11,7 +11,7 @@ import { orders, orderOverrides } from '../db/schema/orders';
 import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
 // PS-248: per-order purchase lease so concurrent buys can't double-purchase postage for one order.
-import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
+import { acquireLabelPurchaseLock, type LabelPurchaseLock } from '../lib/label-purchase-lock';
 // Audit C2/1.20 (Per user override unlock shipped data on 2026-07-13): durable
 // purchase-intent record — closes the buy->persist crash window for ANY retry horizon.
 import {
@@ -147,6 +147,11 @@ import {
 
 export { LabelArtifactMissingAfterPurchaseError } from './label-artifact-safety';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
+import { reconcileOrderAutomationsForShipping } from './automations/runtime';
+import {
+  assertAutomationPlanSupportedByProvider,
+  assertAutomationRateProofCurrent,
+} from './automations/rate-policy';
 import { getOrderHazmatForShipping } from './order-hazmat.js';
 import {
   assertHazmatRatingSupported,
@@ -198,7 +203,9 @@ import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost'
 // insuranceProvenance='carrier_declared_value' (we cannot prove the carrier applied declared
 // value), and so the honest certainty state is persisted into selected_rate_json.
 import { resolveInsuranceCertainty, isShippBrokered } from './shipping-workflow/insurance-certainty';
-import { loadShippingAutomationRules } from './shipping-automation';
+// Per user override unlock shipped data on 2026-07-25: label eligibility reads
+// the typed PS-466 control owner; shipped/cancelled guards remain unchanged.
+import { loadShippingAutomationControls } from './automations/shipping-controls';
 // Per user override unlock shipped data on 2026-07-14: read the persisted HUGRAB
 // default-insurance intent before quote-proof validation or any postage side effect.
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
@@ -727,7 +734,7 @@ async function assertLabelServiceEligibleForOrder(
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
   destinationPoBox = false,
 ): Promise<void> {
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   assertShippingServiceEligible(
     {
       clientId: clientId ?? order.clientId ?? null,
@@ -819,7 +826,7 @@ export type CreateFromShipmentInput = {
 // commented-out createLabelBatch). If revived, add the PS-261 preflight gate here too,
 // or a HUGRAB order could buy a real label bypassing the $100-coverage block.
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   assertShippingServiceEligible(
     {
       clientId: input.clientId ?? null,
@@ -1310,7 +1317,9 @@ export async function createLabelV2(
   if (!body.orderId) return createLabelV2Impl(body, scope);
   const purchaseLock = await acquireLabelPurchaseLock(body.orderId);
   try {
-    return await createLabelV2Impl(body, scope);
+    // Per user override unlock shipped data on 2026-07-25: pass the opaque
+    // lease to nested canonical automation work; the outer owner still releases it.
+    return await createLabelV2Impl(body, scope, { purchaseLock });
   } finally {
     await purchaseLock.release();
   }
@@ -1322,7 +1331,9 @@ export async function createShopifyShippingLabelForOrder(
 ): Promise<CreateShopifyShippingLabelResponseDto> {
   const purchaseLock = await acquireLabelPurchaseLock(body.orderId);
   try {
-    return await createShopifyShippingLabelForOrderImpl(body, scope);
+    // Per user override unlock shipped data on 2026-07-25: Shopify uses the
+    // same non-reentrant lease handoff before any provider-capable work.
+    return await createShopifyShippingLabelForOrderImpl(body, scope, { purchaseLock });
   } finally {
     await purchaseLock.release();
   }
@@ -1330,6 +1341,7 @@ export async function createShopifyShippingLabelForOrder(
 
 type LabelProviderDispatchOptions = {
   allowProviderDispatch?: boolean;
+  purchaseLock?: LabelPurchaseLock;
 };
 
 export async function resumeLabelV2FromDurableReceipt(
@@ -1807,6 +1819,18 @@ async function createShopifyShippingLabelForOrderImpl(
   }
   await assertOrderSafeToShip(order, { entryPoint: 'createShopifyShippingLabelForOrder' });
 
+  // Per user override unlock shipped data on 2026-07-25: Shopify purchases
+  // also reconcile under the existing per-order purchase lock. Shopify cannot
+  // consume the generic rate-plan actions, so any such plan fails closed before
+  // account lookup or provider traffic; terminal protections above are intact.
+  const automationWatermark = await reconcileOrderAutomationsForShipping({
+    orderId: order.id,
+    stage: 'before_label_purchase',
+    scope,
+    labelPurchaseLock: execution.purchaseLock,
+  });
+  assertAutomationPlanSupportedByProvider(automationWatermark, 'Shopify Shipping');
+
   const clientId = await resolveShippingClientId(order);
   const currentHazmatState = await timer.task('hazmat declaration load', () =>
     getOrderHazmatForShipping(order.id));
@@ -2099,6 +2123,18 @@ async function createLabelV2Impl(
   // Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129): reads
   // shipped/cancelled signals to block; does not mutate shipped/cancelled rows.
   await assertOrderSafeToShip(order, { entryPoint: 'createLabelV2' });
+
+  // Per user override unlock shipped data on 2026-07-25: PS-466 runs the
+  // backend automation preflight inside the existing per-order purchase lock
+  // and before any quote authorization or provider dispatch. It only reads
+  // terminal shipped/cancelled facts (which remain blocked above) and never
+  // mutates shipment history or weakens the shipped/cancelled guards.
+  const automationWatermark = await reconcileOrderAutomationsForShipping({
+    orderId: order.id,
+    stage: 'before_label_purchase',
+    scope,
+    labelPurchaseLock: execution.purchaseLock,
+  });
 
   // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
   // through the clients.storeIds array (v2 parity for legacy orders whose
@@ -2589,6 +2625,13 @@ async function createLabelV2Impl(
   const purchaseRateProof = purchaseSelection ?? await assertLabelPurchaseRateSelection({
     selectionRef: body.selectionRef,
   });
+  // Per user override unlock shipped data on 2026-07-25: the current ruleset
+  // must be the one sealed into the backend-issued quote. A publish/facts
+  // change therefore forces a re-rate before any postage provider is called.
+  assertAutomationRateProofCurrent(
+    selectedRateRequestFingerprint(purchaseRateProof.selectedRate),
+    automationWatermark,
+  );
   if (!authorizedPurchaseFacts) {
     throw new ShippingQuoteAuthorizationError('canonical label persistence facts');
   }

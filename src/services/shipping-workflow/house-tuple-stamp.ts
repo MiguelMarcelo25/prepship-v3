@@ -9,7 +9,7 @@
 import { rateCostTotal, rateTotal, type CombinableRate } from '../rates-combined.js';
 import { resolveNextBestNonHouseRate } from '../../lib/next-best-non-house-rate.js';
 import { shippingMarginPolicyForClient } from '../house-account-opt-in.js';
-import { loadShippingAutomationRules } from '../shipping-automation.js';
+import { loadShippingAutomationControls } from '../automations/shipping-controls.js';
 import { roundMoney } from '../../lib/money.js';
 
 export async function stampHouseTuple(
@@ -28,7 +28,7 @@ export async function stampHouseTuple(
     const shippingMarginPolicy = await shippingMarginPolicyForClient(houseClientId);
     if (shippingMarginPolicy.mode !== 'next_best_customer_rate') return bestRate;
     const houseStoreId = typeof input.storeId === 'number' ? input.storeId : null;
-    const houseAutomationRules = await loadShippingAutomationRules().catch(() => null);
+    const houseAutomationRules = await loadShippingAutomationControls().catch(() => null);
     const nextBest = resolveNextBestNonHouseRate({
       eligibleRates: input.combinedRates,
       context: { clientId: houseClientId, storeId: houseStoreId },

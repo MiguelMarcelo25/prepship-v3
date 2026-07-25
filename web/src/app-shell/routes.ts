@@ -10,6 +10,7 @@ export type ViewType =
   | 'rates'
   | 'analysis'
   | 'settings'
+  | 'automations'
   | 'billing'
   | 'manifests'
 
@@ -36,6 +37,7 @@ export const VIEW_PATHS: Record<Exclude<ViewType, 'orders' | 'locations'>, strin
   rates: '/rates',
   analysis: '/analysis',
   settings: '/settings',
+  automations: '/automations',
   billing: '/billing',
   manifests: '/manifest',
 }
