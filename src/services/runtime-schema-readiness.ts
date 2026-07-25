@@ -51,9 +51,9 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   automation_rules: ['active_version_id', 'active_from', 'draft_revision', 'system_locked'],
   automation_rule_versions: ['document_hash', 'draft_revision', 'simulation_hash', 'lifecycle'],
   automation_runs: ['execution_key', 'facts_revision', 'ruleset_digest', 'engine_version', 'mode'],
-  automation_action_results: ['idempotency_key', 'status'],
+  automation_action_results: ['idempotency_key', 'status', 'attempt_count', 'lease_token', 'lease_expires_at', 'updated_at'],
   order_automation_state: ['facts_revision', 'ruleset_digest', 'engine_version', 'status', 'plan'],
-  automation_outbox: ['event_key', 'status', 'attempt_count', 'available_at'],
+  automation_outbox: ['event_key', 'status', 'attempt_count', 'available_at', 'lock_token', 'lease_expires_at'],
   billing_config: [
     'house_account_enabled',
     'hugrab_shipping_rate_override_enabled',
@@ -235,7 +235,9 @@ const REQUIRED_INDEXES = [
   'automation_versions_rule_lifecycle_idx',
   'automation_runs_order_trigger_idx',
   'automation_action_results_idempotency_unq',
+  'automation_action_results_reclaim_idx',
   'automation_outbox_ready_idx',
+  'automation_outbox_reclaim_idx',
 ] as const;
 
 // Per user override unlock shipped data on 2026-07-21: these constraints are

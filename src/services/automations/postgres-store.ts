@@ -1,4 +1,5 @@
-import { eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
   automationActionResults,
@@ -12,6 +13,8 @@ import type {
   AutomationExecutionStore,
   AutomationWatermark,
 } from './orchestrator.js';
+
+const EFFECT_LEASE_MS = 5 * 60 * 1_000;
 
 function numericId(value: string | number, label: string): number {
   const parsed = Number(value);
@@ -32,7 +35,7 @@ export function createPostgresAutomationExecutionStore(): AutomationExecutionSto
         .from(automationRuns)
         .where(eq(automationRuns.executionKey, executionKey))
         .limit(1);
-      if (!row || row.status === 'running') return null;
+      if (!row || row.status === 'running' || row.status === 'failed') return null;
       return resultFromTrace(row.trace);
     },
     async begin(input) {
@@ -51,27 +54,91 @@ export function createPostgresAutomationExecutionStore(): AutomationExecutionSto
         traceHash: automationDocumentHash({ pending: input.executionKey }),
       }).onConflictDoNothing({ target: automationRuns.executionKey }).returning({ id: automationRuns.id });
       if (created) return created.id;
-      const [existing] = await db.select({ id: automationRuns.id })
+      const [existing] = await db.select({ id: automationRuns.id, status: automationRuns.status })
         .from(automationRuns)
         .where(eq(automationRuns.executionKey, input.executionKey))
         .limit(1);
       if (!existing) throw new Error('Automation execution admission failed');
+      if (existing.status === 'failed') {
+        await db.update(automationRuns).set({
+          status: 'running',
+          errorCode: null,
+          errorSummary: null,
+          completedAt: null,
+        }).where(and(
+          eq(automationRuns.id, existing.id),
+          eq(automationRuns.status, 'failed'),
+        ));
+      }
       return existing.id;
     },
     async claimEffect(effect) {
-      const [claimed] = await db.insert(automationActionResults).values({
-        runId: numericId(effect.runId, 'Run ID'),
-        ruleVersionId: numericId(effect.versionId, 'Rule version ID'),
-        actionIndex: effect.actionIndex,
-        actionType: effect.actionType,
-        idempotencyKey: effect.idempotencyKey,
-        status: 'planned',
-      }).onConflictDoNothing({ target: automationActionResults.idempotencyKey })
-        .returning({ id: automationActionResults.id });
-      return Boolean(claimed);
+      return db.transaction(async (tx) => {
+        const now = new Date();
+        const claimToken = randomUUID();
+        const leaseExpiresAt = new Date(now.getTime() + EFFECT_LEASE_MS);
+        const [existing] = await tx.select({
+          id: automationActionResults.id,
+          status: automationActionResults.status,
+          attemptCount: automationActionResults.attemptCount,
+          leaseExpiresAt: automationActionResults.leaseExpiresAt,
+        }).from(automationActionResults)
+          .where(eq(automationActionResults.idempotencyKey, effect.idempotencyKey))
+          .limit(1)
+          .for('update');
+
+        if (!existing) {
+          const [created] = await tx.insert(automationActionResults).values({
+            runId: numericId(effect.runId, 'Run ID'),
+            ruleVersionId: numericId(effect.versionId, 'Rule version ID'),
+            actionIndex: effect.actionIndex,
+            actionType: effect.actionType,
+            idempotencyKey: effect.idempotencyKey,
+            status: 'planned',
+            attemptCount: 1,
+            leaseToken: claimToken,
+            leaseExpiresAt,
+            updatedAt: now,
+          }).onConflictDoNothing({ target: automationActionResults.idempotencyKey })
+            .returning({ id: automationActionResults.id });
+          if (created) return { status: 'claimed' as const, claimToken };
+          const [raced] = await tx.select({
+            status: automationActionResults.status,
+            leaseExpiresAt: automationActionResults.leaseExpiresAt,
+          }).from(automationActionResults)
+            .where(eq(automationActionResults.idempotencyKey, effect.idempotencyKey))
+            .limit(1);
+          return raced?.status === 'planned'
+            ? { status: 'busy' as const, retryAt: raced.leaseExpiresAt }
+            : { status: 'complete' as const };
+        }
+
+        const reclaimable = existing.status === 'failed'
+          || (existing.status === 'planned' && (!existing.leaseExpiresAt || existing.leaseExpiresAt <= now));
+        if (!reclaimable) {
+          return existing.status === 'planned'
+            ? { status: 'busy' as const, retryAt: existing.leaseExpiresAt }
+            : { status: 'complete' as const };
+        }
+        const [reclaimed] = await tx.update(automationActionResults).set({
+          runId: numericId(effect.runId, 'Run ID'),
+          ruleVersionId: numericId(effect.versionId, 'Rule version ID'),
+          actionIndex: effect.actionIndex,
+          actionType: effect.actionType,
+          status: 'planned',
+          attemptCount: existing.attemptCount + 1,
+          leaseToken: claimToken,
+          leaseExpiresAt,
+          reason: null,
+          updatedAt: now,
+        }).where(eq(automationActionResults.id, existing.id)).returning({ id: automationActionResults.id });
+        return reclaimed
+          ? { status: 'claimed' as const, claimToken }
+          : { status: 'busy' as const, retryAt: leaseExpiresAt };
+      });
     },
-    async recordEffect(effect: AutomationEffectRecord) {
-      await db.update(automationActionResults).set({
+    async recordEffect(effect: AutomationEffectRecord, claimToken: string) {
+      const [recorded] = await db.update(automationActionResults).set({
         status: effect.status,
         targetType: effect.targetType ?? null,
         targetId: effect.targetId ?? null,
@@ -79,7 +146,14 @@ export function createPostgresAutomationExecutionStore(): AutomationExecutionSto
         afterSummary: effect.after ?? null,
         reason: effect.reason ?? null,
         appliedAt: effect.status === 'applied' ? new Date() : null,
-      }).where(eq(automationActionResults.idempotencyKey, effect.idempotencyKey));
+        leaseToken: null,
+        leaseExpiresAt: null,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(automationActionResults.idempotencyKey, effect.idempotencyKey),
+        eq(automationActionResults.leaseToken, claimToken),
+      )).returning({ id: automationActionResults.id });
+      if (!recorded) throw new Error('Automation effect lease lost before completion');
     },
     async finish(result) {
       const trace = { result } as unknown as Record<string, unknown>;

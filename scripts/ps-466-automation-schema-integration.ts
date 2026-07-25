@@ -27,6 +27,8 @@ await pg.exec(`
 
 const migration = await readFile('drizzle/0079_ps466_automations_engine.sql', 'utf8');
 await pg.exec(migration);
+const recoveryMigration = await readFile('drizzle/0080_ps466_automation_recovery_leases.sql', 'utf8');
+await pg.exec(recoveryMigration);
 
 const required = [
   'automation_rules',
@@ -99,6 +101,46 @@ await assert.rejects(
 );
 
 await pg.exec(`
+  insert into automation_action_results(
+    run_id, rule_version_id, action_index, action_type, idempotency_key, status,
+    attempt_count, lease_token, lease_expires_at
+  ) values
+    (1, 1, 1, 'tag.add', 'effect-stale', 'planned', 1, 'stale-token', now() - interval '1 second'),
+    (1, 1, 2, 'tag.add', 'effect-live', 'planned', 1, 'live-token', now() + interval '5 minutes'),
+    (1, 1, 3, 'tag.add', 'effect-failed', 'failed', 1, null, null);
+`);
+const reclaimableEffects = await pg.query<{ idempotency_key: string }>(`
+  select idempotency_key
+  from automation_action_results
+  where status = 'failed'
+     or (status = 'planned' and (lease_expires_at is null or lease_expires_at <= now()))
+  order by idempotency_key
+`);
+assert.deepEqual(
+  reclaimableEffects.rows.map((row) => row.idempotency_key),
+  ['effect-failed', 'effect-stale'],
+  'failed and expired planned effects are reclaimable while a live lease is fenced',
+);
+await pg.exec(`
+  update automation_action_results
+  set status = 'applied'
+  where idempotency_key = 'effect-stale' and lease_token = 'wrong-token'
+`);
+const [wrongFence] = (await pg.query<{ status: string }>(`
+  select status from automation_action_results where idempotency_key = 'effect-stale'
+`)).rows;
+assert.equal(wrongFence?.status, 'planned', 'a stale effect owner cannot finalize another lease');
+await pg.exec(`
+  update automation_action_results
+  set status = 'applied', lease_token = null, lease_expires_at = null
+  where idempotency_key = 'effect-stale' and lease_token = 'stale-token'
+`);
+const [rightFence] = (await pg.query<{ status: string; lease_token: string | null }>(`
+  select status, lease_token from automation_action_results where idempotency_key = 'effect-stale'
+`)).rows;
+assert.deepEqual(rightFence, { status: 'applied', lease_token: null }, 'the current effect owner can finalize and clear its lease');
+
+await pg.exec(`
   insert into order_automation_state(order_id, facts_revision, ruleset_digest, engine_version, status, last_run_id)
   values (101, 'facts-1', repeat('b', 64), 'ps-466-v1', 'current', 1);
   insert into automation_outbox(event_key, event_type, aggregate_type, aggregate_id, payload)
@@ -112,6 +154,26 @@ await assert.rejects(
   /unique|duplicate/i,
 );
 
+await pg.exec(`
+  insert into automation_outbox(
+    event_key, event_type, aggregate_type, aggregate_id, payload, status,
+    attempt_count, lock_token, lease_expires_at
+  ) values
+    ('lease-stale', 'order_facts_changed', 'order', '101', '{"orderId":101}'::jsonb, 'processing', 1, 'stale', now() - interval '1 second'),
+    ('lease-live', 'order_facts_changed', 'order', '101', '{"orderId":101}'::jsonb, 'processing', 1, 'live', now() + interval '5 minutes');
+`);
+const reclaimableOutbox = await pg.query<{ event_key: string }>(`
+  select event_key
+  from automation_outbox
+  where event_key in ('lease-stale', 'lease-live')
+    and (
+      (status in ('pending', 'failed') and available_at <= now())
+      or (status = 'processing' and (lease_expires_at is null or lease_expires_at <= now()))
+    )
+  order by event_key
+`);
+assert.deepEqual(reclaimableOutbox.rows.map((row) => row.event_key), ['lease-stale'], 'only an expired processing outbox lease is reclaimable');
+
 const indexes = await pg.query<{ indexname: string }>(`
   select indexname from pg_indexes
   where schemaname = 'public' and indexname in (
@@ -120,10 +182,20 @@ const indexes = await pg.query<{ indexname: string }>(`
     'automation_versions_rule_lifecycle_idx',
     'automation_runs_order_trigger_idx',
     'automation_action_results_idempotency_unq',
-    'automation_outbox_ready_idx'
+    'automation_action_results_reclaim_idx',
+    'automation_outbox_ready_idx',
+    'automation_outbox_reclaim_idx'
   )
 `);
-assert.equal(indexes.rows.length, 6, 'runtime-critical scope, activation, run, idempotency, and outbox indexes exist');
+assert.equal(indexes.rows.length, 8, 'runtime-critical scope, activation, idempotency, and recovery indexes exist');
+
+const leaseColumns = await pg.query<{ table_name: string; column_name: string }>(`
+  select table_name, column_name
+  from information_schema.columns
+  where (table_name = 'automation_action_results' and column_name in ('attempt_count', 'lease_token', 'lease_expires_at', 'updated_at'))
+     or (table_name = 'automation_outbox' and column_name in ('lock_token', 'lease_expires_at'))
+`);
+assert.equal(leaseColumns.rows.length, 6, 'effect and outbox recovery lease columns are migrated');
 
 await pg.close();
-console.log('PS-466 PGlite migration/immutability/idempotency proof passed (18 assertions)');
+console.log('PS-466 PGlite migration/immutability/idempotency/recovery proof passed (14 assertions)');

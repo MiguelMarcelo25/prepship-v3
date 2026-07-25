@@ -8,6 +8,7 @@ import { loadAutomationFacts } from './facts.js';
 import { addAutomationWorkflowTag } from './order-workflow-command.js';
 import {
   automationRulesetDigest,
+  AutomationEffectLeaseBusyError,
   AutomationPreflightError,
   ensureAutomationStateCurrent,
   executeAutomationEvaluation,
@@ -151,15 +152,26 @@ export async function reconcileOrderAutomationsForShipping(input: {
     });
   } catch (error) {
     if (!(error instanceof AutomationPreflightError) || error.code !== 'AUTOMATION_EVALUATION_REQUIRED') throw error;
-    const result = await executeAutomationEvaluation({
-      facts,
-      trigger: input.stage,
-      sourceEventId: `${input.stage}:${facts.revision}:${rulesetDigest}`,
-      rules,
-      store: createPostgresAutomationExecutionStore(),
-      handlers: automationHandlerRegistry,
-      evaluateAllTriggers: true,
-    });
+    let result;
+    try {
+      result = await executeAutomationEvaluation({
+        facts,
+        trigger: input.stage,
+        sourceEventId: `${input.stage}:${facts.revision}:${rulesetDigest}`,
+        rules,
+        store: createPostgresAutomationExecutionStore(),
+        handlers: automationHandlerRegistry,
+        evaluateAllTriggers: true,
+      });
+    } catch (evaluationError) {
+      if (evaluationError instanceof AutomationEffectLeaseBusyError) {
+        throw new AutomationPreflightError(
+          'AUTOMATION_EVALUATION_REQUIRED',
+          'Automation evaluation is already in progress; retry before rating or label purchase',
+        );
+      }
+      throw evaluationError;
+    }
     state = {
       orderId: input.orderId,
       factsRevision: facts.revision,

@@ -42,6 +42,11 @@ export type AutomationExecutionResult = {
   reduction: ReturnType<typeof reduceAutomationIntents>;
 };
 
+export type AutomationEffectClaim =
+  | { status: 'claimed'; claimToken: string }
+  | { status: 'complete' }
+  | { status: 'busy'; retryAt: Date | null };
+
 export interface AutomationExecutionStore {
   findCompleted(executionKey: string): Promise<AutomationExecutionResult | null>;
   begin(input: {
@@ -53,8 +58,8 @@ export interface AutomationExecutionStore {
     rulesetDigest: string;
     mode: 'apply' | 'audit_only';
   }): Promise<string | number>;
-  claimEffect(effect: AutomationEffectRecord): Promise<boolean>;
-  recordEffect(effect: AutomationEffectRecord): Promise<void>;
+  claimEffect(effect: AutomationEffectRecord): Promise<AutomationEffectClaim>;
+  recordEffect(effect: AutomationEffectRecord, claimToken: string): Promise<void>;
   finish(result: AutomationExecutionResult): Promise<void>;
   setState(state: AutomationWatermark): Promise<void>;
 }
@@ -75,6 +80,16 @@ export type AutomationHandler = (input: {
 }) => Promise<AutomationHandlerResult>;
 
 export type AutomationHandlerRegistry = Partial<Record<AutomationActionType, AutomationHandler>>;
+
+export class AutomationEffectLeaseBusyError extends Error {
+  readonly code = 'AUTOMATION_EFFECT_BUSY';
+  readonly status = 409;
+
+  constructor(public readonly retryAt: Date | null) {
+    super('Automation action evaluation is already in progress; retry after the active lease expires');
+    this.name = 'AutomationEffectLeaseBusyError';
+  }
+}
 
 export function automationRulesetDigest(rules: CompiledAutomationRule[]): string {
   return automationDocumentHash({
@@ -156,7 +171,7 @@ export async function executeAutomationEvaluation(input: {
   if (status === 'completed') {
     for (const intent of evaluation.intents) {
       const idempotencyKey = effectKey({ executionKey: key, intent });
-      const claimed = await input.store.claimEffect({
+      const claim = await input.store.claimEffect({
         runId,
         ruleId: intent.ruleId,
         versionId: intent.versionId,
@@ -165,7 +180,8 @@ export async function executeAutomationEvaluation(input: {
         idempotencyKey,
         status: 'planned',
       });
-      if (!claimed) continue;
+      if (claim.status === 'complete') continue;
+      if (claim.status === 'busy') throw new AutomationEffectLeaseBusyError(claim.retryAt);
       if (terminal) {
         await input.store.recordEffect({
           runId,
@@ -176,7 +192,7 @@ export async function executeAutomationEvaluation(input: {
           idempotencyKey,
           status: 'audit_only',
           reason: 'Terminal orders are immutable; action recorded as would-differ only',
-        });
+        }, claim.claimToken);
         continue;
       }
       const handler = input.handlers[intent.action.type];
@@ -192,7 +208,7 @@ export async function executeAutomationEvaluation(input: {
           idempotencyKey,
           status: 'failed',
           reason: `No canonical handler is registered for ${intent.action.type}`,
-        });
+        }, claim.claimToken);
         break;
       }
       try {
@@ -209,7 +225,7 @@ export async function executeAutomationEvaluation(input: {
           targetId: handled.targetId,
           before: handled.before,
           after: handled.after,
-        });
+        }, claim.claimToken);
       } catch (error) {
         status = 'failed';
         failureCode = 'AUTOMATION_ACTION_FAILED';
@@ -222,7 +238,7 @@ export async function executeAutomationEvaluation(input: {
           idempotencyKey,
           status: 'failed',
           reason: error instanceof Error ? error.message : 'Canonical action handler failed',
-        });
+        }, claim.claimToken);
         break;
       }
     }
@@ -297,7 +313,9 @@ export function createInMemoryAutomationExecutionStore(): AutomationExecutionSto
   const effects: AutomationEffectRecord[] = [];
   const states = new Map<number, AutomationWatermark>();
   let nextRunId = 1;
+  let nextClaimId = 1;
   const runKeys = new Map<string | number, string>();
+  const claimTokens = new Map<string, string>();
   return {
     effects,
     states,
@@ -308,18 +326,29 @@ export function createInMemoryAutomationExecutionStore(): AutomationExecutionSto
       return runId;
     },
     async claimEffect(effect) {
-      if (effects.some((existing) => existing.idempotencyKey === effect.idempotencyKey)) return false;
-      effects.push(effect);
-      return true;
+      const index = effects.findIndex((existing) => existing.idempotencyKey === effect.idempotencyKey);
+      if (index >= 0 && effects[index]?.status === 'planned') return { status: 'busy', retryAt: null };
+      if (index >= 0 && effects[index]?.status !== 'failed') return { status: 'complete' };
+      const claimToken = `memory-claim-${nextClaimId++}`;
+      if (index >= 0) effects[index] = effect;
+      else effects.push(effect);
+      claimTokens.set(effect.idempotencyKey, claimToken);
+      return { status: 'claimed', claimToken };
     },
-    async recordEffect(effect) {
+    async recordEffect(effect, claimToken) {
+      if (claimTokens.get(effect.idempotencyKey) !== claimToken) {
+        throw new Error('Automation effect lease lost before completion');
+      }
       const index = effects.findIndex((existing) => existing.idempotencyKey === effect.idempotencyKey);
       if (index >= 0) effects[index] = effect;
       else effects.push(effect);
+      claimTokens.delete(effect.idempotencyKey);
     },
     async finish(result) {
       const key = runKeys.get(result.runId);
-      if (key) completed.set(key, result);
+      if (!key) return;
+      if (result.status === 'failed') completed.delete(key);
+      else completed.set(key, result);
     },
     async setState(state) { states.set(state.orderId, state); },
   };

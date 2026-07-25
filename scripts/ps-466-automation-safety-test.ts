@@ -122,12 +122,60 @@ const concurrentHandlers: orchestrator.AutomationHandlerRegistry = {
     return { idempotencyKey };
   },
 };
-await Promise.all([
+const concurrentResults = await Promise.allSettled([
   orchestrator.executeAutomationEvaluation({ facts, trigger: 'order_imported', sourceEventId: 'concurrent', rules: [rule], store: concurrentMemory, handlers: concurrentHandlers }),
   orchestrator.executeAutomationEvaluation({ facts, trigger: 'order_imported', sourceEventId: 'concurrent', rules: [rule], store: concurrentMemory, handlers: concurrentHandlers }),
 ]);
+assert.equal(concurrentResults.filter((result) => result.status === 'fulfilled').length, 1, 'one concurrent owner completes the effect');
+assert.equal(
+  concurrentResults.filter((result) => result.status === 'rejected' && result.reason instanceof orchestrator.AutomationEffectLeaseBusyError).length,
+  1,
+  'the concurrent non-owner fails closed instead of treating a live planned effect as complete',
+);
 assert.equal(concurrentHandlerCalls, 1, 'atomic effect claims prevent duplicate handlers under concurrent retries');
 assert.equal(concurrentMemory.effects.filter((effect) => effect.status === 'applied').length, 1);
+
+const retryingMemory = orchestrator.createInMemoryAutomationExecutionStore();
+let retryingHandlerCalls = 0;
+const retryingHandlers: orchestrator.AutomationHandlerRegistry = {
+  'tag.add': async ({ idempotencyKey }) => {
+    retryingHandlerCalls += 1;
+    if (retryingHandlerCalls === 1) throw new Error('injected crash-safe failure');
+    return { targetType: 'order_tag', targetId: 'AUTOMATED', idempotencyKey };
+  },
+};
+const failedAttempt = await orchestrator.executeAutomationEvaluation({
+  facts,
+  trigger: 'order_imported',
+  sourceEventId: 'retry-after-failure',
+  rules: [rule],
+  store: retryingMemory,
+  handlers: retryingHandlers,
+});
+assert.equal(failedAttempt.status, 'failed');
+assert.equal(retryingHandlerCalls, 1);
+assert.equal(retryingMemory.effects[0]?.status, 'failed');
+const recoveredAttempt = await orchestrator.executeAutomationEvaluation({
+  facts,
+  trigger: 'order_imported',
+  sourceEventId: 'retry-after-failure',
+  rules: [rule],
+  store: retryingMemory,
+  handlers: retryingHandlers,
+});
+assert.equal(recoveredAttempt.status, 'completed', 'a failed effect is reclaimed instead of cached forever');
+assert.equal(retryingHandlerCalls, 2, 'the canonical handler receives one bounded retry');
+assert.equal(retryingMemory.effects[0]?.status, 'applied');
+const cachedRecovery = await orchestrator.executeAutomationEvaluation({
+  facts,
+  trigger: 'order_imported',
+  sourceEventId: 'retry-after-failure',
+  rules: [rule],
+  store: retryingMemory,
+  handlers: retryingHandlers,
+});
+assert.equal(cachedRecovery.runId, recoveredAttempt.runId, 'the successful retry becomes the completed idempotent result');
+assert.equal(retryingHandlerCalls, 2, 'completed recovery cannot execute the handler again');
 
 const providerEvents: string[] = [];
 const automationWatermark = {
@@ -248,5 +296,11 @@ assert.match(automationRuntimeSource, /lte\(automationRules\.activeFrom, input\.
 const outboxWorkerSource = readFileSync(new URL('../src/services/automations/outbox-worker.ts', import.meta.url), 'utf8');
 assert.match(outboxWorkerSource, /const BATCH_SIZE = 10[\s\S]*const MAX_ATTEMPTS = 5/, 'confirmed reprocessing is bounded and retry-capped');
 assert.equal(/createCarrierLabel|dispatchFulfillmentOperation|purchaseShopifyShippingLabel/.test(outboxWorkerSource), false, 'reprocess worker cannot purchase labels or call postage providers');
+assert.match(outboxWorkerSource, /eq\(automationOutbox\.status, 'processing'\)[\s\S]*automationOutbox\.leaseExpiresAt/, 'expired processing claims re-enter the durable outbox');
+assert.match(outboxWorkerSource, /eq\(automationOutbox\.lockToken, claimed\.lockToken\)/, 'outbox completion is fenced to the current lease owner');
+assert.match(outboxWorkerSource, /row\.attemptCount >= MAX_ATTEMPTS[\s\S]*status: 'dead'/, 'repeated worker crashes eventually dead-letter an expired claim');
 
-console.log('PS-466 facts/RBAC/idempotency/terminal/preflight safety tests passed (40 assertions)');
+const postgresStoreSource = readFileSync(new URL('../src/services/automations/postgres-store.ts', import.meta.url), 'utf8');
+assert.match(postgresStoreSource, /existing\.status === 'failed'[\s\S]*existing\.status === 'planned'[\s\S]*existing\.leaseExpiresAt <= now/, 'failed or expired effects are reclaimable under a fresh lease');
+
+console.log('PS-466 facts/RBAC/idempotency/recovery/terminal/preflight safety tests passed (54 assertions)');

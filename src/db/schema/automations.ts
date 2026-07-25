@@ -143,10 +143,15 @@ export const automationActionResults = pgTable('automation_action_results', {
   afterSummary: jsonb().$type<Record<string, unknown> | null>(),
   reason: text(),
   appliedAt: timestamp({ withTimezone: true }),
+  attemptCount: integer().notNull().default(0),
+  leaseToken: text(),
+  leaseExpiresAt: timestamp({ withTimezone: true }),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('automation_action_results_idempotency_unq').on(table.idempotencyKey),
   index('automation_action_results_run_idx').on(table.runId, table.actionIndex),
+  index('automation_action_results_reclaim_idx').on(table.status, table.leaseExpiresAt, table.id),
 ]);
 
 export const orderAutomationState = pgTable('order_automation_state', {
@@ -174,12 +179,15 @@ export const automationOutbox = pgTable('automation_outbox', {
   attemptCount: integer().notNull().default(0),
   lockedAt: timestamp({ withTimezone: true }),
   lockedBy: text(),
+  lockToken: text(),
+  leaseExpiresAt: timestamp({ withTimezone: true }),
   lastError: text(),
   createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp({ withTimezone: true }),
 }, (table) => [
   uniqueIndex('automation_outbox_event_key_unq').on(table.eventKey),
   index('automation_outbox_ready_idx').on(table.status, table.availableAt, table.id),
+  index('automation_outbox_reclaim_idx').on(table.status, table.availableAt, table.leaseExpiresAt, table.id),
 ]);
 
 export const automationReprocessJobs = pgTable('automation_reprocess_jobs', {

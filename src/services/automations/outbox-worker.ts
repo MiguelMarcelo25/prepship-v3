@@ -1,4 +1,5 @@
-import { and, eq, inArray, lte } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
   automationOutbox,
@@ -9,7 +10,7 @@ import {
 import { GLOBAL_SCOPE } from '../../lib/client-store-scope.js';
 import { compileAutomationRuleVersion, type AutomationRuleDocument } from './contracts.js';
 import { loadAutomationFacts } from './facts.js';
-import { executeAutomationEvaluation } from './orchestrator.js';
+import { AutomationEffectLeaseBusyError, executeAutomationEvaluation } from './orchestrator.js';
 import { createPostgresAutomationExecutionStore } from './postgres-store.js';
 import { automationHandlerRegistry, evaluateOrderAutomationFactEvent } from './runtime.js';
 import { AUTOMATION_TRIGGERS, type AutomationTrigger } from './catalog.js';
@@ -17,8 +18,9 @@ import { AUTOMATION_TRIGGERS, type AutomationTrigger } from './catalog.js';
 const BATCH_SIZE = 10;
 const MAX_ATTEMPTS = 5;
 const POLL_MS = 5_000;
+const OUTBOX_LEASE_MS = 5 * 60 * 1_000;
 
-type ClaimedOutbox = typeof automationOutbox.$inferSelect & { attemptCount: number };
+type ClaimedOutbox = typeof automationOutbox.$inferSelect & { attemptCount: number; lockToken: string };
 
 function positiveId(value: unknown): number | null {
   const parsed = Number(value);
@@ -27,25 +29,56 @@ function positiveId(value: unknown): number | null {
 
 async function claimOutbox(): Promise<ClaimedOutbox | null> {
   return db.transaction(async (tx) => {
+    const now = new Date();
     const [row] = await tx.select().from(automationOutbox)
       .where(and(
         inArray(automationOutbox.eventType, ['automation_reprocess_confirmed', 'order_facts_changed']),
-        inArray(automationOutbox.status, ['pending', 'failed']),
-        lte(automationOutbox.availableAt, new Date()),
+        or(
+          and(
+            inArray(automationOutbox.status, ['pending', 'failed']),
+            lte(automationOutbox.availableAt, now),
+          ),
+          and(
+            eq(automationOutbox.status, 'processing'),
+            or(isNull(automationOutbox.leaseExpiresAt), lte(automationOutbox.leaseExpiresAt, now)),
+          ),
+        ),
       ))
       .orderBy(automationOutbox.id)
       .limit(1)
       .for('update', { skipLocked: true });
     if (!row) return null;
+    if (row.attemptCount >= MAX_ATTEMPTS) {
+      await tx.update(automationOutbox).set({
+        status: 'dead',
+        lockedAt: null,
+        lockedBy: null,
+        lockToken: null,
+        leaseExpiresAt: null,
+        lastError: 'Automation outbox lease expired after the maximum claim attempts',
+      }).where(eq(automationOutbox.id, row.id));
+      const exhaustedJobId = positiveId(row.payload.jobId);
+      if (exhaustedJobId) {
+        await tx.update(automationReprocessJobs).set({
+          status: 'failed',
+          failedOrders: 1,
+          completedAt: now,
+        }).where(eq(automationReprocessJobs.id, exhaustedJobId));
+      }
+      return null;
+    }
     const attemptCount = row.attemptCount + 1;
+    const lockToken = randomUUID();
     const [claimed] = await tx.update(automationOutbox).set({
       status: 'processing',
       attemptCount,
-      lockedAt: new Date(),
+      lockedAt: now,
       lockedBy: `automation-worker:${process.pid}`,
+      lockToken,
+      leaseExpiresAt: new Date(now.getTime() + OUTBOX_LEASE_MS),
       lastError: null,
     }).where(eq(automationOutbox.id, row.id)).returning();
-    return claimed ? { ...claimed, attemptCount } : null;
+    return claimed ? { ...claimed, attemptCount, lockToken } : null;
   });
 }
 
@@ -53,15 +86,25 @@ async function markFailure(row: ClaimedOutbox, error: unknown): Promise<void> {
   const dead = row.attemptCount >= MAX_ATTEMPTS;
   const summary = error instanceof Error ? error.message.slice(0, 500) : 'Automation reprocess failed';
   const delaySeconds = Math.min(60, 2 ** Math.max(0, row.attemptCount - 1));
+  const backoffAt = Date.now() + delaySeconds * 1_000;
+  const leaseRetryAt = error instanceof AutomationEffectLeaseBusyError && error.retryAt
+    ? error.retryAt.getTime() + 1_000
+    : 0;
   const jobId = positiveId(row.payload.jobId);
   await db.transaction(async (tx) => {
-    await tx.update(automationOutbox).set({
+    const [released] = await tx.update(automationOutbox).set({
       status: dead ? 'dead' : 'failed',
-      availableAt: new Date(Date.now() + delaySeconds * 1_000),
+      availableAt: new Date(Math.max(backoffAt, leaseRetryAt)),
       lockedAt: null,
       lockedBy: null,
+      lockToken: null,
+      leaseExpiresAt: null,
       lastError: summary,
-    }).where(eq(automationOutbox.id, row.id));
+    }).where(and(
+      eq(automationOutbox.id, row.id),
+      eq(automationOutbox.lockToken, row.lockToken),
+    )).returning({ id: automationOutbox.id });
+    if (!released) return;
     if (dead && jobId) {
       await tx.update(automationReprocessJobs).set({
         status: 'failed',
@@ -89,12 +132,18 @@ export async function processAutomationOutboxOnce(): Promise<'idle' | 'progress'
         scope: GLOBAL_SCOPE,
       });
       if (result.status === 'failed') throw new Error(`Automation fact event ${result.status}`);
-      await db.update(automationOutbox).set({
+      const [completed] = await db.update(automationOutbox).set({
         status: 'completed',
         lockedAt: null,
         lockedBy: null,
+        lockToken: null,
+        leaseExpiresAt: null,
         completedAt: new Date(),
-      }).where(eq(automationOutbox.id, claimed.id));
+      }).where(and(
+        eq(automationOutbox.id, claimed.id),
+        eq(automationOutbox.lockToken, claimed.lockToken),
+      )).returning({ id: automationOutbox.id });
+      if (!completed) throw new Error('Automation outbox lease lost before fact-event completion');
       return 'completed';
     }
     const jobId = positiveId(claimed.payload.jobId);
@@ -142,18 +191,24 @@ export async function processAutomationOutboxOnce(): Promise<'idle' | 'progress'
     const processedOrders = row.job.processedOrders + nextIds.length;
     const completed = processedOrders >= orderIds.length;
     await db.transaction(async (tx) => {
+      const [released] = await tx.update(automationOutbox).set({
+        status: completed ? 'completed' : 'pending',
+        availableAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+        lockToken: null,
+        leaseExpiresAt: null,
+        completedAt: completed ? new Date() : null,
+      }).where(and(
+        eq(automationOutbox.id, claimed.id),
+        eq(automationOutbox.lockToken, claimed.lockToken),
+      )).returning({ id: automationOutbox.id });
+      if (!released) throw new Error('Automation outbox lease lost before reprocess checkpoint');
       await tx.update(automationReprocessJobs).set({
         status: completed ? 'completed' : 'running',
         processedOrders,
         completedAt: completed ? new Date() : null,
       }).where(eq(automationReprocessJobs.id, row.job.id));
-      await tx.update(automationOutbox).set({
-        status: completed ? 'completed' : 'pending',
-        availableAt: new Date(),
-        lockedAt: null,
-        lockedBy: null,
-        completedAt: completed ? new Date() : null,
-      }).where(eq(automationOutbox.id, claimed.id));
     });
     return completed ? 'completed' : 'progress';
   } catch (error) {
