@@ -2497,6 +2497,10 @@ async function createLabelV2Impl(
       trackingNumber: fakeTracking,
       serviceLabel: serviceCodeToLabel(body.serviceCode),
       weightOz: effectiveWeightOz,
+      // Per user override unlock shipped data on 2026-07-25: pass the already
+      // authorized canonical declaration into the offline renderer only; this
+      // does not purchase postage or weaken terminal-order protections.
+      isHazmat: hazmatPurchaseFacts != null,
       shipFrom: {
         name: shipFrom.name ?? 'Ship From',
         street1: shipFrom.street1 ?? '',
