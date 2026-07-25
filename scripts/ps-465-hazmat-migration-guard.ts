@@ -64,6 +64,12 @@ const routes = source('src/routes/order-hazmat.ts');
 assert.match(routes, /requireInternalPermission\('hazmat:write'\)/);
 assert.match(routes, /requireInternalPermission\('rates:quote'\)/);
 assert.match(source('src/main.ts'), /app\.route\('\/orders', orderHazmatRoute\)/);
+const orderHazmat = source('src/services/order-hazmat.ts');
+assert.match(
+  orderHazmat,
+  /query\.for\('update', \{ of: orders \}\)/,
+  'hazmat saves must lock only orders; locking the nullable LEFT JOIN target fails in PostgreSQL',
+);
 const rateRoutes = source('src/routes/rates.ts');
 assert.match(rateRoutes, /error instanceof HazmatShippingError/);
 assert.match(rateRoutes, /rate\.browse\.hazmat_rejected/);

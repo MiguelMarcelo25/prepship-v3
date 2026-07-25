@@ -9,6 +9,10 @@ const snapshotHash = `hz_${'b'.repeat(64)}`;
 try {
   await client.exec(`
     CREATE TABLE public.orders (id serial PRIMARY KEY);
+    CREATE TABLE public.order_overrides (
+      order_id integer PRIMARY KEY REFERENCES public.orders(id) ON DELETE CASCADE,
+      best_rate_json jsonb
+    );
     CREATE TABLE public.shipments (
       id serial PRIMARY KEY,
       order_id integer NOT NULL REFERENCES public.orders(id) ON DELETE RESTRICT
@@ -33,6 +37,15 @@ try {
     INSERT INTO public.orders (id) VALUES (465);
     INSERT INTO public.shipments (id, order_id) VALUES (465, 465);
     INSERT INTO public.external_operations (id) VALUES (465);
+  `);
+  await client.exec(`
+    BEGIN;
+    SELECT o.id, oo.best_rate_json
+    FROM public.orders o
+    LEFT JOIN public.order_overrides oo ON oo.order_id = o.id
+    WHERE o.id = 465
+    FOR UPDATE OF o;
+    ROLLBACK;
   `);
   const before = await client.query<{ orders: number; shipments: number; snapshots: number }>(`
     SELECT
