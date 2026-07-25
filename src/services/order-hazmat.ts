@@ -77,7 +77,6 @@ export type OrderHazmatAutomationProvenance = Readonly<{
   evaluationId: string;
   ruleId: string;
   ruleVersionId: string;
-  profileVersionId: string;
 }>;
 
 export class OrderHazmatError extends Error {

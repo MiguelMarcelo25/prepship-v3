@@ -18,7 +18,7 @@ export type ReducedAutomationPlan = {
   confirmation: ScalarChoice | null;
   preferredCarrier: ScalarChoice | null;
   preferredService: ScalarChoice | null;
-  hazmatProfileVersionId: string | null;
+  hazmatIntentId: string | null;
   excludedCarriers: string[];
   excludedServices: string[];
   invalidatesRateProof: boolean;
@@ -73,27 +73,29 @@ function stableUnion(values: string[]): string[] {
   return result;
 }
 
-function restrictiveHazmatProfile(
+function restrictiveHazmatIntent(
   intents: AutomationIntent[],
   conflicts: AutomationConflict[],
 ): string | null {
   const candidates = intents
     .filter((intent) => intent.action.type === 'hazmat.add_declaration')
     .sort(stableIntentOrder);
-  const distinct = [...new Set(candidates
-    .map((intent) => stringConfig(intent, 'profileVersionId'))
-    .filter(Boolean))];
+  const configKey = (intent: AutomationIntent) => JSON.stringify({
+    contactName: stringConfig(intent, 'contactName'),
+    contactPhone: stringConfig(intent, 'contactPhone'),
+  });
+  const distinct = [...new Set(candidates.map(configKey))];
   if (distinct.length > 1) {
     conflicts.push({
       actionClass: 'restrictive',
       actionType: 'hazmat.add_declaration',
       priority: candidates[0]?.priority ?? 0,
       intentIds: candidates.map((candidate) => candidate.intentId),
-      reason: 'Hazmat declaration intents reference different immutable profile versions',
+      reason: 'Dangerous-goods actions use different contact details',
     });
     return null;
   }
-  return distinct[0] ?? null;
+  return candidates[0]?.intentId ?? null;
 }
 
 export function reduceAutomationIntents(rawIntents: AutomationIntent[]) {
@@ -113,7 +115,7 @@ export function reduceAutomationIntents(rawIntents: AutomationIntent[]) {
   const confirmation = scalar(intents, 'confirmation.set', 'confirmation', conflicts);
   const preferredCarrier = scalar(intents, 'carrier.prefer', 'id', conflicts);
   const preferredService = scalar(intents, 'service.prefer', 'id', conflicts);
-  const hazmatProfileVersionId = restrictiveHazmatProfile(intents, conflicts);
+  const hazmatIntentId = restrictiveHazmatIntent(intents, conflicts);
   const excludedCarriers = stableUnion(intents
     .filter((intent) => intent.action.type === 'carrier.exclude')
     .flatMap((intent) => Array.isArray(intent.action.config.ids) ? intent.action.config.ids.map(String) : []));
@@ -129,7 +131,7 @@ export function reduceAutomationIntents(rawIntents: AutomationIntent[]) {
     confirmation,
     preferredCarrier,
     preferredService,
-    hazmatProfileVersionId,
+    hazmatIntentId,
     excludedCarriers,
     excludedServices,
     invalidatesRateProof: intents.some((intent) => intent.action.type !== 'tag.add'),

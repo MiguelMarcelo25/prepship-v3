@@ -78,6 +78,7 @@ export type AutomationHandler = (input: {
   facts: AutomationFacts;
   intent: AutomationIntent;
   plan: ReducedAutomationPlan;
+  trigger: string;
   idempotencyKey: string;
   scope: ClientStoreScope;
   labelPurchaseLock?: LabelPurchaseLock;
@@ -222,6 +223,7 @@ export async function executeAutomationEvaluation(input: {
           facts: input.facts,
           intent,
           plan: reduction.plan,
+          trigger: input.trigger,
           idempotencyKey,
           scope: input.scope,
           labelPurchaseLock: input.labelPurchaseLock,

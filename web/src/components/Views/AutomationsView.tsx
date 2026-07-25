@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../lib/api";
+import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
 
 type AutomationTab = "rules" | "controls" | "runs" | "templates";
 
@@ -122,6 +123,8 @@ type BuilderAction = {
   type: string;
   value: string;
   provider?: "parcelguard" | "carrier";
+  contactName: string;
+  contactPhone: string;
 };
 
 type SimulationResult = {
@@ -174,11 +177,8 @@ function actionDefault(type: string): string {
   return "";
 }
 
-function actionConfig(
-  type: string,
-  value: string,
-  provider?: "parcelguard" | "carrier",
-): Record<string, unknown> {
+function actionConfig(action: BuilderAction): Record<string, unknown> {
+  const { type, value, provider } = action;
   if (type === "tag.add") return { tag: value };
   if (type === "hold.for_review") return { reason: value };
   if (type === "insurance.require")
@@ -199,7 +199,12 @@ function actionConfig(
   }
   if (type === "carrier.prefer" || type === "service.prefer")
     return { id: value };
-  if (type === "hazmat.add_declaration") return { profileVersionId: value };
+  if (type === "hazmat.add_declaration") {
+    return {
+      contactName: action.contactName,
+      contactPhone: action.contactPhone,
+    };
+  }
   return {};
 }
 
@@ -486,6 +491,8 @@ function Builder({
       type: firstAction?.type ?? "tag.add",
       value: actionDefault(firstAction?.type ?? "tag.add"),
       provider: "parcelguard",
+      contactName: "",
+      contactPhone: "",
     },
   ]);
   const [unknownPolicy, setUnknownPolicy] = useState<"no_match" | "block">(
@@ -517,7 +524,7 @@ function Builder({
       actions: actions.map((action) => ({
         type: action.type,
         schemaVersion: 1,
-        config: actionConfig(action.type, action.value, action.provider),
+        config: actionConfig(action),
       })),
     }),
     [
@@ -913,6 +920,8 @@ function Builder({
                                     type: event.target.value,
                                     value: actionDefault(event.target.value),
                                     provider: "parcelguard",
+                                    contactName: "",
+                                    contactPhone: "",
                                   }
                                 : item,
                             ),
@@ -931,7 +940,19 @@ function Builder({
                           </option>
                         ))}
                       </select>
-                      {action.type === "confirmation.set" ? (
+                      {action.type === "hazmat.add_declaration" ? (
+                        <AutomationDangerousGoodsActionFields
+                          contactName={action.contactName}
+                          contactPhone={action.contactPhone}
+                          onChange={(value) =>
+                            setActions((current) =>
+                              current.map((item) =>
+                                item.id === action.id ? { ...item, ...value } : item,
+                              ),
+                            )
+                          }
+                        />
+                      ) : action.type === "confirmation.set" ? (
                         <select
                           value={action.value}
                           onChange={(event) =>
@@ -1049,6 +1070,8 @@ function Builder({
                           type: next.type,
                           value: actionDefault(next.type),
                           provider: "parcelguard",
+                          contactName: "",
+                          contactPhone: "",
                         },
                       ]);
                   }}

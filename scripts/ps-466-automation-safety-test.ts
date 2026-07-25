@@ -15,7 +15,7 @@ const [
   orchestrator,
   ratePolicy,
   hazmatAction,
-  hazmatProfiles,
+  hazmatDeclaration,
 ] = await Promise.all([
   import('../src/middleware/auth'),
   import('../src/services/automations/facts'),
@@ -24,7 +24,7 @@ const [
   import('../src/services/automations/orchestrator'),
   import('../src/services/automations/rate-policy'),
   import('../src/services/automations/hazmat-action'),
-  import('../src/services/shipping-workflow/hazmat-automation-profile'),
+  import('../src/services/shipping-workflow/hazmat-declaration'),
 ]);
 
 assert.equal(hasAppPermission({ role: 'operator' }, 'automations:write'), true);
@@ -86,24 +86,6 @@ const clearHazmatFacts = buildAutomationFactsSnapshot({
 assert.equal(activeHazmatFacts.workflow.hazmatState, 'active', 'PS-465 active declaration is the canonical automation fact');
 assert.equal(clearHazmatFacts.workflow.hazmatState, 'none', 'PS-465 absence is explicit none, not inferred unknown');
 assert.notEqual(activeHazmatFacts.revision, clearHazmatFacts.revision, 'hazmat revision and semantic state participate in the facts watermark');
-
-assert.throws(
-  () => hazmatProfiles.compileApprovedAutomationHazmatProfileVersion({
-    id: 'invalid-clear-v1',
-    label: 'Invalid clear profile',
-    declaration: { status: 'clear' },
-  }),
-  /must contain an active declaration/,
-  'a clear declaration cannot masquerade as an approved add-declaration profile',
-);
-const syntheticApprovedProfile = hazmatProfiles.compileApprovedAutomationHazmatProfileVersion({
-  id: 'synthetic-test-v1',
-  label: 'Synthetic test-only profile',
-  declaration: { status: 'active', limitedQuantity: true },
-});
-assert.equal(syntheticApprovedProfile.declaration.status, 'active');
-assert.match(syntheticApprovedProfile.semanticHash, /^hz_[a-f0-9]{64}$/);
-assert.equal(hazmatProfiles.getApprovedAutomationHazmatProfileVersion(syntheticApprovedProfile.id), null, 'test-only profiles never enter the production registry');
 
 const document = {
   schemaVersion: 1,
@@ -168,28 +150,35 @@ const hazmatIntent = {
   action: {
     type: 'hazmat.add_declaration' as const,
     schemaVersion: 1 as const,
-    config: { profileVersionId: syntheticApprovedProfile.id },
+    config: { contactName: 'Dispatch Desk', contactPhone: '310-555-0100' },
   },
 };
 const hazmatPlan = {
   ...first.reduction.plan,
-  hazmatProfileVersionId: syntheticApprovedProfile.id,
+  hazmatIntentId: hazmatIntent.intentId,
 };
+const expectedAutomationDeclaration = hazmatDeclaration.normalizeHazmatDeclaration({
+  status: 'active',
+  emergencyContactName: 'Dispatch Desk',
+  emergencyContactPhone: '310-555-0100',
+});
+const expectedAutomationHash = hazmatDeclaration.hazmatSemanticHash(expectedAutomationDeclaration);
 let savedHazmatInput: Record<string, unknown> | null = null;
 const canonicalHazmatHandler = hazmatAction.createAutomationHazmatHandler({
-  getProfileVersion: (id) => id === syntheticApprovedProfile.id ? syntheticApprovedProfile : null,
   getCurrent: async () => ({
     declaration: null,
     revision: 0,
     semanticHash: null,
+    decisionSource: null,
     clientId: 4,
   }) as never,
   save: async (input) => {
     savedHazmatInput = input as unknown as Record<string, unknown>;
     return {
-      declaration: syntheticApprovedProfile.declaration,
+      declaration: expectedAutomationDeclaration,
       revision: 1,
-      semanticHash: syntheticApprovedProfile.semanticHash,
+      semanticHash: expectedAutomationHash,
+      decisionSource: 'automation',
       changed: true,
       invalidatedRate: true,
     } as never;
@@ -199,61 +188,84 @@ const hazmatEffect = await canonicalHazmatHandler({
   facts,
   intent: hazmatIntent,
   plan: hazmatPlan,
+  trigger: 'order_imported',
   idempotencyKey: 'hazmat-effect-key',
   scope: restrictedScope,
   labelPurchaseLock: heldPurchaseLock,
 });
 assert.equal(hazmatEffect.targetType, 'order_hazmat_declaration');
-assert.equal(hazmatEffect.after?.profileVersionId, syntheticApprovedProfile.id);
+assert.equal(hazmatEffect.after?.decisionSource, 'automation');
 assert.equal(savedHazmatInput?.expectedRevision, 0, 'automation passes PS-465 optimistic revision evidence');
 assert.equal(savedHazmatInput?.scope, restrictedScope, 'automation preserves the request tenant scope');
 assert.equal(savedHazmatInput?.purchaseLock, heldPurchaseLock, 'label preflight reuses the already-held purchase lease');
+assert.equal(savedHazmatInput?.decisionSource, 'automation', 'automation records its decision source');
+assert.deepEqual(savedHazmatInput?.declaration, expectedAutomationDeclaration, 'the action delegates the normalized declaration to PS-465');
 assert.equal(
   (savedHazmatInput?.provenance as { evaluationId?: string } | undefined)?.evaluationId,
   'hazmat-effect-key',
   'PS-465 audit provenance receives the immutable effect key',
 );
-assert.equal(
-  (savedHazmatInput?.provenance as { profileVersionId?: string } | undefined)?.profileVersionId,
-  syntheticApprovedProfile.id,
-);
-
-let conflictingSaveCalls = 0;
-const conflictingHazmatHandler = hazmatAction.createAutomationHazmatHandler({
-  getProfileVersion: () => syntheticApprovedProfile,
+let manualOverrideSaveCalls = 0;
+const manualOverrideHandler = hazmatAction.createAutomationHazmatHandler({
   getCurrent: async () => ({
-    declaration: { ...syntheticApprovedProfile.declaration, limitedQuantity: false },
+    declaration: hazmatDeclaration.normalizeHazmatDeclaration({ status: 'clear' }),
     revision: 3,
-    semanticHash: 'different-active-hash',
+    semanticHash: hazmatDeclaration.hazmatSemanticHash(
+      hazmatDeclaration.normalizeHazmatDeclaration({ status: 'clear' }),
+    ),
+    decisionSource: 'manual',
     clientId: 4,
   }) as never,
-  save: async () => {
-    conflictingSaveCalls += 1;
-    throw new Error('save must remain unreachable');
+  save: async (input) => {
+    manualOverrideSaveCalls += 1;
+    return {
+      declaration: input.declaration,
+      revision: 4,
+      semanticHash: expectedAutomationHash,
+      decisionSource: 'automation',
+      changed: true,
+      invalidatedRate: false,
+    } as never;
   },
 });
-await assert.rejects(
-  conflictingHazmatHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'conflict', scope: restrictedScope }),
-  /conflicts with the automation profile/,
-  'an existing different active declaration requires review instead of an overwrite',
-);
-assert.equal(conflictingSaveCalls, 0, 'conflicting declarations stop before the PS-465 command');
+const preservedManual = await manualOverrideHandler({
+  facts,
+  intent: hazmatIntent,
+  plan: hazmatPlan,
+  trigger: 'order_imported',
+  idempotencyKey: 'preserve-manual',
+  scope: restrictedScope,
+});
+assert.equal(preservedManual.after?.preservedManualDecision, true, 'normal triggers preserve a manual hazmat choice');
+assert.equal(manualOverrideSaveCalls, 0);
+await manualOverrideHandler({
+  facts,
+  intent: hazmatIntent,
+  plan: hazmatPlan,
+  trigger: 'manual_reprocess',
+  idempotencyKey: 'confirmed-reprocess',
+  scope: restrictedScope,
+});
+assert.equal(manualOverrideSaveCalls, 1, 'confirmed manual reprocessing may intentionally reapply the rule');
 
-let missingProfileReads = 0;
-const missingProfileHandler = hazmatAction.createAutomationHazmatHandler({
-  getProfileVersion: () => null,
+let duplicateIntentReads = 0;
+const duplicateIntentHandler = hazmatAction.createAutomationHazmatHandler({
   getCurrent: async () => {
-    missingProfileReads += 1;
+    duplicateIntentReads += 1;
     throw new Error('canonical read must remain unreachable');
   },
   save: async () => { throw new Error('save must remain unreachable'); },
 });
-await assert.rejects(
-  missingProfileHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'missing-profile', scope: restrictedScope }),
-  /not approved/,
-  'an unknown profile fails before canonical mutation or provider work',
-);
-assert.equal(missingProfileReads, 0);
+const duplicateIntentEffect = await duplicateIntentHandler({
+  facts,
+  intent: hazmatIntent,
+  plan: { ...hazmatPlan, hazmatIntentId: 'another-identical-intent' },
+  trigger: 'order_imported',
+  idempotencyKey: 'duplicate-intent',
+  scope: restrictedScope,
+});
+assert.equal(duplicateIntentEffect.after?.duplicate, true);
+assert.equal(duplicateIntentReads, 0, 'only the deterministic winning duplicate reaches canonical state');
 
 const retry = await orchestrator.executeAutomationEvaluation({
   facts,

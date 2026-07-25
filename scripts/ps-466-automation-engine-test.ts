@@ -129,15 +129,15 @@ const reducedHazmatConflict = reduceAutomationIntents([
   {
     intentId: 'hazmat-a-intent', ruleId: 'hazmat-a', versionId: 'hazmat-a-v1',
     priority: 10, position: 0, actionIndex: 0,
-    action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: { profileVersionId: 'profile-a-v1' } },
+    action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: { contactName: 'Dispatch A', contactPhone: '310-555-0100' } },
   },
   {
     intentId: 'hazmat-b-intent', ruleId: 'hazmat-b', versionId: 'hazmat-b-v1',
     priority: 20, position: 0, actionIndex: 0,
-    action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: { profileVersionId: 'profile-b-v1' } },
+    action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: { contactName: 'Dispatch B', contactPhone: '310-555-0200' } },
   },
 ]);
-assert.equal(reducedHazmatConflict.conflicts[0]?.actionType, 'hazmat.add_declaration', 'different hazmat profile versions always conflict');
+assert.equal(reducedHazmatConflict.conflicts[0]?.actionType, 'hazmat.add_declaration', 'different dangerous-goods contacts always conflict');
 assert.equal(reducedHazmatConflict.holdRequired, true, 'hazmat disagreement holds even when rule priorities differ');
 
 const reducedSafe = reduceAutomationIntents([
@@ -161,13 +161,29 @@ const reducedSafe = reduceAutomationIntents([
 assert.deepEqual(reducedSafe.plan.tags, ['HAZMAT'], 'tags use a case-insensitive stable union');
 assert.equal(reducedSafe.plan.insurance?.minimumValue, 250, 'insurance takes the highest safe minimum');
 
+const compiledDangerousGoods = compileAutomationRuleVersion({
+  ...hu10Rule,
+  actions: [{
+    type: 'hazmat.add_declaration',
+    schemaVersion: 1,
+    config: { contactName: 'Dispatch Desk', contactPhone: '310-555-0100' },
+  }],
+}, { ruleId: 'hazmat', versionId: 'hazmat-v1', versionNumber: 1 });
+assert.deepEqual(compiledDangerousGoods.document.actions[0]?.config, {
+  contactName: 'Dispatch Desk',
+  contactPhone: '310-555-0100',
+});
 assert.throws(
   () => compileAutomationRuleVersion({
     ...hu10Rule,
-    actions: [{ type: 'hazmat.add_declaration', schemaVersion: 1, config: { profileVersionId: 'ps465-missing' } }],
-  }, { ruleId: 'hazmat', versionId: 'hazmat-v1', versionNumber: 1 }),
-  /no approved immutable Leeds Line hazmat profile is configured/,
-  'hazmat remains unavailable until PS-465 owns an approved immutable Leeds Line profile',
+    actions: [{
+      type: 'hazmat.add_declaration',
+      schemaVersion: 1,
+      config: { contactName: 'Dispatch Desk', contactPhone: 'not-a-phone' },
+    }],
+  }, { ruleId: 'hazmat-invalid', versionId: 'hazmat-invalid-v1', versionNumber: 1 }),
+  /contact phone is invalid/,
+  'invalid dangerous-goods contact details fail before publication',
 );
 
 assert.throws(
@@ -180,7 +196,8 @@ assert.throws(
 );
 
 const catalog = getAutomationCatalog();
-assert.equal(catalog.actions.find((action) => action.type === 'hazmat.add_declaration')?.available, false);
+assert.equal(catalog.actions.find((action) => action.type === 'hazmat.add_declaration')?.available, true);
+assert.equal(catalog.actions.find((action) => action.type === 'hazmat.add_declaration')?.label, 'Set shipment as dangerous goods');
 assert.equal(catalog.actions.find((action) => action.type === 'package.set')?.available, false);
 assert.equal(catalog.actions.find((action) => action.type === 'carrier.prefer')?.available, false);
 assert.equal(catalog.actions.some((action) => action.type === 'label.purchase'), false);
@@ -188,4 +205,4 @@ assert.equal(catalog.actions.some((action) => String(action.type) === 'hazmat.cl
 assert.equal(catalog.limits.maxDepth, 3);
 assert.equal(catalog.limits.maxNodes, 50);
 
-console.log('PS-466 pure evaluator/conflict/action-registry tests passed (22 assertions)');
+console.log('PS-466 pure evaluator/conflict/action-registry tests passed');

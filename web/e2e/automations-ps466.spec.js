@@ -23,7 +23,7 @@ const catalog = {
     { type: 'tag.add', label: 'Add tag', actionClass: 'accumulative', risk: 'low', available: true, invalidatesRateProof: false },
     { type: 'hold.for_review', label: 'Hold for review', actionClass: 'restrictive', risk: 'medium', available: true, invalidatesRateProof: true },
     { type: 'insurance.require', label: 'Require insurance', actionClass: 'minimum', risk: 'high', available: true, invalidatesRateProof: true },
-    { type: 'hazmat.add_declaration', label: 'Apply hazmat declaration profile', actionClass: 'restrictive', risk: 'high', available: false, unavailableReason: 'PS-465 dependency is unavailable on the target branch', invalidatesRateProof: true },
+    { type: 'hazmat.add_declaration', label: 'Set shipment as dangerous goods', actionClass: 'restrictive', risk: 'high', available: true, invalidatesRateProof: true },
   ],
   prohibitedCapabilities: ['label purchase', 'ship/cancel status mutation', 'marketplace notification'],
 }
@@ -62,7 +62,7 @@ function backend() {
   async function route(routeObj) {
     const request = routeObj.request()
     const url = new URL(request.url())
-    captured.push({ method: request.method(), url: request.url(), pathname: url.pathname })
+    captured.push({ method: request.method(), url: request.url(), pathname: url.pathname, postData: request.postData() })
     if (url.origin === baseUrl && !url.pathname.startsWith('/api/')) return routeObj.continue()
     if (url.hostname.endsWith('supabase.co')) return routeObj.fulfill(json({ user: null }))
 
@@ -127,8 +127,20 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await page.locator('input[placeholder="Value"]').fill('4')
   await page.getByRole('button', { name: /Continue/ }).click()
   await expect(page.getByText('Only backend-allowlisted actions appear.')).toBeVisible()
+  await page.getByRole('combobox').selectOption('hazmat.add_declaration')
+  await page.getByLabel('Dangerous-goods contact name').fill('Dispatch Desk')
+  await page.getByLabel('Dangerous-goods contact phone').fill('310-555-0100')
   await page.getByRole('button', { name: /Continue/ }).click()
+  const createRequestPromise = page.waitForRequest((request) => (
+    new URL(request.url()).pathname === '/automations' && request.method() === 'POST'
+  ))
   await page.getByRole('button', { name: 'Save draft' }).click()
+  const createdDocument = (await createRequestPromise).postDataJSON().document
+  expect(createdDocument.actions).toEqual([{
+    type: 'hazmat.add_declaration',
+    schemaVersion: 1,
+    config: { contactName: 'Dispatch Desk', contactPhone: '310-555-0100' },
+  }])
   await page.getByLabel('Simulation order ID').fill('101')
   await page.getByRole('button', { name: 'Simulate' }).click()
   await expect(page.getByText(/Zero writes: true/)).toBeVisible()
@@ -142,7 +154,7 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await page.getByRole('button', { name: 'Run History' }).click()
   await expect(page.getByText('Run #1')).toBeVisible()
   await page.getByRole('button', { name: 'Templates & Actions' }).click()
-  await expect(page.getByText('PS-465 dependency is unavailable on the target branch')).toBeVisible()
+  await expect(page.getByText('Set shipment as dangerous goods')).toBeVisible()
   await page.screenshot({ path: path.join(screenshotDir, 'automations-console.png'), fullPage: true })
 
   expect(mock.captured.some((entry) => /shipstation|shopify|walmartapis|ups\.com/i.test(entry.url))).toBe(false)

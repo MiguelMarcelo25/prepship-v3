@@ -1,8 +1,4 @@
 import { z } from 'zod';
-import {
-  getApprovedAutomationHazmatProfileVersion,
-  hasApprovedAutomationHazmatProfileVersions,
-} from '../shipping-workflow/hazmat-automation-profile.js';
 
 export const AUTOMATION_ENGINE_VERSION = 'ps-466-v1';
 export const AUTOMATION_LIMITS = {
@@ -70,6 +66,8 @@ const shippingMutationTriggers: readonly AutomationTrigger[] = [
 
 const shortText = z.string().trim().min(1).max(AUTOMATION_LIMITS.maxTextLength);
 const nullableProfile = z.string().trim().min(1).max(128).nullable().optional();
+const dangerousGoodsPhone = z.string().trim().min(7).max(30)
+  .regex(/^[+()\-\d\s.]+$/, 'Dangerous-goods contact phone is invalid');
 
 const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
   {
@@ -157,17 +155,16 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
   })),
   {
     type: 'hazmat.add_declaration',
-    label: 'Apply hazmat declaration profile',
+    label: 'Set shipment as dangerous goods',
     actionClass: 'restrictive',
     risk: 'high',
     permission: 'automations:publish',
     allowedTriggers: ['order_imported', 'order_items_changed', 'manual_reprocess'],
     invalidatesRateProof: true,
-    available: hasApprovedAutomationHazmatProfileVersions(),
-    unavailableReason: 'PS-465 is integrated, but no approved immutable Leeds Line hazmat profile is configured',
+    available: true,
     schema: z.object({
-      profileVersionId: z.string().trim().min(1).max(128)
-        .refine((value) => getApprovedAutomationHazmatProfileVersion(value) != null, 'Hazmat profile version is not approved'),
+      contactName: z.string().trim().min(1).max(120),
+      contactPhone: dangerousGoodsPhone,
     }).strict(),
   },
 ];
