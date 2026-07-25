@@ -1060,7 +1060,14 @@ export function startShipmentSyncWatchdog(
       console.warn('[shipment-sync-watchdog] initial tick failed:', err instanceof Error ? err.message : err);
     });
     watchdogTimer = setInterval(
-      () => void runShipmentSyncWatchdogTick({ recover: true, source: 'timer' }),
+      () => {
+        // Per user override unlock shipped data on 2026-07-25: contain a
+        // scheduled watchdog timeout at the timer boundary. The tick remains
+        // observational/recovery-only and all shipped-data guards are unchanged.
+        void runShipmentSyncWatchdogTick({ recover: true, source: 'timer' }).catch((err) => {
+          console.warn('[shipment-sync-watchdog] scheduled tick failed:', err instanceof Error ? err.message : err);
+        });
+      },
       Math.max(30_000, intervalMs),
     );
     if (typeof watchdogTimer.unref === 'function') watchdogTimer.unref();
