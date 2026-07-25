@@ -1480,12 +1480,18 @@ export default function AutomationsView() {
           <span>{catalogQuery.data?.engineVersion ?? "Loading engine…"}</span>
         </div>
       </div>
-      <div className="mb-4 flex gap-1 overflow-x-auto rounded-xl bg-surface p-1 ring-1 ring-line">
+      <div
+        role="tablist"
+        aria-label="Automation workspace sections"
+        className="mb-4 flex shrink-0 gap-1 overflow-x-auto rounded-xl bg-surface p-1 ring-1 ring-line"
+      >
         {TABS.map((item) => {
           const Icon = item.icon;
           return (
             <button
               type="button"
+              role="tab"
+              aria-selected={tab === item.id}
               key={item.id}
               onClick={() => setTab(item.id)}
               className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-small font-bold transition-colors ${tab === item.id ? "bg-brand text-white shadow-sm" : "text-ink-2 hover:bg-surface-2"}`}
