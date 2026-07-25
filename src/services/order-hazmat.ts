@@ -67,6 +67,14 @@ export type SaveOrderHazmatResult = OrderHazmatState & {
   invalidatedRate: boolean;
 };
 
+export type OrderHazmatAutomationProvenance = Readonly<{
+  source: 'automation';
+  evaluationId: string;
+  ruleId: string;
+  ruleVersionId: string;
+  profileVersionId: string;
+}>;
+
 export class OrderHazmatError extends Error {
   constructor(
     message: string,
@@ -400,6 +408,7 @@ async function saveInTransaction(
     declaration: HazmatDeclarationInput;
     scope: ClientStoreScope;
     actor: AuditActor;
+    provenance?: OrderHazmatAutomationProvenance;
   },
 ): Promise<SaveOrderHazmatResult> {
   const order = await loadOrderRow(input.orderId, input.scope, { forUpdate: true, tx });
@@ -517,6 +526,9 @@ async function saveInTransaction(
       semanticHash,
       summary: summarizeHazmatDeclaration(declaration),
       invalidatedRate,
+      // Per user override unlock shipped data on 2026-07-25: preserve the
+      // immutable PS-466 decision provenance without weakening terminal guards.
+      ...(input.provenance ? { automation: input.provenance } : {}),
     },
   });
 
@@ -539,6 +551,7 @@ export async function saveOrderHazmatDeclaration(input: {
   declaration: HazmatDeclarationInput;
   scope: ClientStoreScope;
   actor: AuditActor;
+  provenance?: OrderHazmatAutomationProvenance;
 }): Promise<SaveOrderHazmatResult> {
   await assertRuntimeSchemaReady();
   await loadOrderRow(input.orderId, input.scope);

@@ -7,13 +7,24 @@ process.env.SUPABASE_ANON_KEY ??= 'test-anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
 process.env.SUPABASE_JWT_SECRET ??= 'test-jwt-secret-test-jwt-secret-test';
 
-const [{ hasAppPermission }, { buildAutomationFactsSnapshot }, contracts, evaluator, orchestrator, ratePolicy] = await Promise.all([
+const [
+  { hasAppPermission },
+  { buildAutomationFactsSnapshot },
+  contracts,
+  evaluator,
+  orchestrator,
+  ratePolicy,
+  hazmatAction,
+  hazmatProfiles,
+] = await Promise.all([
   import('../src/middleware/auth'),
   import('../src/services/automations/facts'),
   import('../src/services/automations/contracts'),
   import('../src/services/automations/evaluator'),
   import('../src/services/automations/orchestrator'),
   import('../src/services/automations/rate-policy'),
+  import('../src/services/automations/hazmat-action'),
+  import('../src/services/shipping-workflow/hazmat-automation-profile'),
 ]);
 
 assert.equal(hasAppPermission({ role: 'operator' }, 'automations:write'), true);
@@ -24,7 +35,7 @@ assert.equal(hasAppPermission({ role: 'client_user' }, 'automations:read'), fals
 assert.equal(hasAppPermission({ role: 'read_only_support' }, 'automations:write'), false);
 
 const orderUpdatedAt = new Date('2026-07-25T00:00:00Z');
-const facts = buildAutomationFactsSnapshot({
+const canonicalFactsInput = {
   order: {
     id: 101,
     clientId: 4,
@@ -59,10 +70,40 @@ const facts = buildAutomationFactsSnapshot({
     bestRateJson: null,
     updatedAt: orderUpdatedAt,
   },
-});
+};
+const facts = buildAutomationFactsSnapshot(canonicalFactsInput);
 assert.deepEqual(facts.lines.map((line) => line.sku), ['HU-10'], 'facts use canonical order_items, never orders.items compatibility JSON');
 assert.equal(facts.destination.country, null, 'missing canonical country stays unknown instead of being invented');
-assert.equal(facts.workflow.hazmatState, 'unknown', 'PS-466 does not derive hazmat truth without PS-465');
+assert.equal(facts.workflow.hazmatState, 'unknown', 'callers without PS-465 evidence cannot infer hazmat truth');
+const activeHazmatFacts = buildAutomationFactsSnapshot({
+  ...canonicalFactsInput,
+  hazmat: { declaration: { status: 'active' }, revision: 2, semanticHash: 'active-hash' },
+});
+const clearHazmatFacts = buildAutomationFactsSnapshot({
+  ...canonicalFactsInput,
+  hazmat: { declaration: null, revision: 0, semanticHash: null },
+});
+assert.equal(activeHazmatFacts.workflow.hazmatState, 'active', 'PS-465 active declaration is the canonical automation fact');
+assert.equal(clearHazmatFacts.workflow.hazmatState, 'none', 'PS-465 absence is explicit none, not inferred unknown');
+assert.notEqual(activeHazmatFacts.revision, clearHazmatFacts.revision, 'hazmat revision and semantic state participate in the facts watermark');
+
+assert.throws(
+  () => hazmatProfiles.compileApprovedAutomationHazmatProfileVersion({
+    id: 'invalid-clear-v1',
+    label: 'Invalid clear profile',
+    declaration: { status: 'clear' },
+  }),
+  /must contain an active declaration/,
+  'a clear declaration cannot masquerade as an approved add-declaration profile',
+);
+const syntheticApprovedProfile = hazmatProfiles.compileApprovedAutomationHazmatProfileVersion({
+  id: 'synthetic-test-v1',
+  label: 'Synthetic test-only profile',
+  declaration: { status: 'active', limitedQuantity: true },
+});
+assert.equal(syntheticApprovedProfile.declaration.status, 'active');
+assert.match(syntheticApprovedProfile.semanticHash, /^hz_[a-f0-9]{64}$/);
+assert.equal(hazmatProfiles.getApprovedAutomationHazmatProfileVersion(syntheticApprovedProfile.id), null, 'test-only profiles never enter the production registry');
 
 const document = {
   schemaVersion: 1,
@@ -101,6 +142,99 @@ assert.equal(first.status, 'completed');
 assert.equal(handlerCalls, 1);
 assert.equal(memory.effects.length, 1);
 assert.equal(memory.states.get(101)?.status, 'current');
+
+const hazmatIntent = {
+  intentId: 'hazmat-intent',
+  ruleId: 'hu10-rule',
+  versionId: 'hu10-rule-v1',
+  priority: 10,
+  position: 0,
+  actionIndex: 0,
+  action: {
+    type: 'hazmat.add_declaration' as const,
+    schemaVersion: 1 as const,
+    config: { profileVersionId: syntheticApprovedProfile.id },
+  },
+};
+const hazmatPlan = {
+  ...first.reduction.plan,
+  hazmatProfileVersionId: syntheticApprovedProfile.id,
+};
+let savedHazmatInput: Record<string, unknown> | null = null;
+const canonicalHazmatHandler = hazmatAction.createAutomationHazmatHandler({
+  getProfileVersion: (id) => id === syntheticApprovedProfile.id ? syntheticApprovedProfile : null,
+  getCurrent: async () => ({
+    declaration: null,
+    revision: 0,
+    semanticHash: null,
+    clientId: 4,
+  }) as never,
+  save: async (input) => {
+    savedHazmatInput = input as unknown as Record<string, unknown>;
+    return {
+      declaration: syntheticApprovedProfile.declaration,
+      revision: 1,
+      semanticHash: syntheticApprovedProfile.semanticHash,
+      changed: true,
+      invalidatedRate: true,
+    } as never;
+  },
+});
+const hazmatEffect = await canonicalHazmatHandler({
+  facts,
+  intent: hazmatIntent,
+  plan: hazmatPlan,
+  idempotencyKey: 'hazmat-effect-key',
+});
+assert.equal(hazmatEffect.targetType, 'order_hazmat_declaration');
+assert.equal(hazmatEffect.after?.profileVersionId, syntheticApprovedProfile.id);
+assert.equal(savedHazmatInput?.expectedRevision, 0, 'automation passes PS-465 optimistic revision evidence');
+assert.equal(
+  (savedHazmatInput?.provenance as { evaluationId?: string } | undefined)?.evaluationId,
+  'hazmat-effect-key',
+  'PS-465 audit provenance receives the immutable effect key',
+);
+assert.equal(
+  (savedHazmatInput?.provenance as { profileVersionId?: string } | undefined)?.profileVersionId,
+  syntheticApprovedProfile.id,
+);
+
+let conflictingSaveCalls = 0;
+const conflictingHazmatHandler = hazmatAction.createAutomationHazmatHandler({
+  getProfileVersion: () => syntheticApprovedProfile,
+  getCurrent: async () => ({
+    declaration: { ...syntheticApprovedProfile.declaration, limitedQuantity: false },
+    revision: 3,
+    semanticHash: 'different-active-hash',
+    clientId: 4,
+  }) as never,
+  save: async () => {
+    conflictingSaveCalls += 1;
+    throw new Error('save must remain unreachable');
+  },
+});
+await assert.rejects(
+  conflictingHazmatHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'conflict' }),
+  /conflicts with the automation profile/,
+  'an existing different active declaration requires review instead of an overwrite',
+);
+assert.equal(conflictingSaveCalls, 0, 'conflicting declarations stop before the PS-465 command');
+
+let missingProfileReads = 0;
+const missingProfileHandler = hazmatAction.createAutomationHazmatHandler({
+  getProfileVersion: () => null,
+  getCurrent: async () => {
+    missingProfileReads += 1;
+    throw new Error('canonical read must remain unreachable');
+  },
+  save: async () => { throw new Error('save must remain unreachable'); },
+});
+await assert.rejects(
+  missingProfileHandler({ facts, intent: hazmatIntent, plan: hazmatPlan, idempotencyKey: 'missing-profile' }),
+  /not approved/,
+  'an unknown profile fails before canonical mutation or provider work',
+);
+assert.equal(missingProfileReads, 0);
 
 const retry = await orchestrator.executeAutomationEvaluation({
   facts,
@@ -303,4 +437,4 @@ assert.match(outboxWorkerSource, /row\.attemptCount >= MAX_ATTEMPTS[\s\S]*status
 const postgresStoreSource = readFileSync(new URL('../src/services/automations/postgres-store.ts', import.meta.url), 'utf8');
 assert.match(postgresStoreSource, /existing\.status === 'failed'[\s\S]*existing\.status === 'planned'[\s\S]*existing\.leaseExpiresAt <= now/, 'failed or expired effects are reclaimable under a fresh lease');
 
-console.log('PS-466 facts/RBAC/idempotency/recovery/terminal/preflight safety tests passed (54 assertions)');
+console.log('PS-466 facts/RBAC/hazmat delegation/idempotency/recovery/terminal/preflight safety tests passed');

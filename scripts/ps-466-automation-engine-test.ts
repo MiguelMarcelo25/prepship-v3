@@ -125,6 +125,21 @@ const reducedConflict = reduceAutomationIntents([
 assert.equal(reducedConflict.conflicts.length, 1, 'same-priority scalar disagreement is explicit');
 assert.equal(reducedConflict.holdRequired, true, 'incompatible scalar intents create a compliance hold');
 
+const reducedHazmatConflict = reduceAutomationIntents([
+  {
+    intentId: 'hazmat-a-intent', ruleId: 'hazmat-a', versionId: 'hazmat-a-v1',
+    priority: 10, position: 0, actionIndex: 0,
+    action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: { profileVersionId: 'profile-a-v1' } },
+  },
+  {
+    intentId: 'hazmat-b-intent', ruleId: 'hazmat-b', versionId: 'hazmat-b-v1',
+    priority: 20, position: 0, actionIndex: 0,
+    action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: { profileVersionId: 'profile-b-v1' } },
+  },
+]);
+assert.equal(reducedHazmatConflict.conflicts[0]?.actionType, 'hazmat.add_declaration', 'different hazmat profile versions always conflict');
+assert.equal(reducedHazmatConflict.holdRequired, true, 'hazmat disagreement holds even when rule priorities differ');
+
 const reducedSafe = reduceAutomationIntents([
   ...evaluated.intents,
   {
@@ -151,8 +166,8 @@ assert.throws(
     ...hu10Rule,
     actions: [{ type: 'hazmat.add_declaration', schemaVersion: 1, config: { profileVersionId: 'ps465-missing' } }],
   }, { ruleId: 'hazmat', versionId: 'hazmat-v1', versionNumber: 1 }),
-  /PS-465 dependency is unavailable/,
-  'hazmat remains unavailable until PS-465 is on the target branch',
+  /no approved immutable Leeds Line hazmat profile is configured/,
+  'hazmat remains unavailable until PS-465 owns an approved immutable Leeds Line profile',
 );
 
 assert.throws(
@@ -169,7 +184,8 @@ assert.equal(catalog.actions.find((action) => action.type === 'hazmat.add_declar
 assert.equal(catalog.actions.find((action) => action.type === 'package.set')?.available, false);
 assert.equal(catalog.actions.find((action) => action.type === 'carrier.prefer')?.available, false);
 assert.equal(catalog.actions.some((action) => action.type === 'label.purchase'), false);
+assert.equal(catalog.actions.some((action) => String(action.type) === 'hazmat.clear'), false, 'automation has no hazmat clear action');
 assert.equal(catalog.limits.maxDepth, 3);
 assert.equal(catalog.limits.maxNodes, 50);
 
-console.log('PS-466 pure evaluator/conflict/action-registry tests passed (19 assertions)');
+console.log('PS-466 pure evaluator/conflict/action-registry tests passed (22 assertions)');

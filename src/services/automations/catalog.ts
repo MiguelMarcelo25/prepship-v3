@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  getApprovedAutomationHazmatProfileVersion,
+  hasApprovedAutomationHazmatProfileVersions,
+} from '../shipping-workflow/hazmat-automation-profile.js';
 
 export const AUTOMATION_ENGINE_VERSION = 'ps-466-v1';
 export const AUTOMATION_LIMITS = {
@@ -159,9 +163,12 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
     permission: 'automations:publish',
     allowedTriggers: ['order_imported', 'order_items_changed', 'manual_reprocess'],
     invalidatesRateProof: true,
-    available: false,
-    unavailableReason: 'PS-465 dependency is unavailable on the target branch',
-    schema: z.object({ profileVersionId: z.string().trim().min(1).max(128) }).strict(),
+    available: hasApprovedAutomationHazmatProfileVersions(),
+    unavailableReason: 'PS-465 is integrated, but no approved immutable Leeds Line hazmat profile is configured',
+    schema: z.object({
+      profileVersionId: z.string().trim().min(1).max(128)
+        .refine((value) => getApprovedAutomationHazmatProfileVersion(value) != null, 'Hazmat profile version is not approved'),
+    }).strict(),
   },
 ];
 

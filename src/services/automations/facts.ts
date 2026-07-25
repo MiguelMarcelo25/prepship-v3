@@ -4,6 +4,7 @@ import { orderItems } from '../../db/schema/order-items.js';
 import { orderOverrides, orders } from '../../db/schema/orders.js';
 import type { ClientStoreScope } from '../../lib/client-store-scope.js';
 import { assertResourceInScope } from '../../lib/scope-predicates.js';
+import { getOrderHazmatForShipping } from '../order-hazmat.js';
 import { automationDocumentHash, type AutomationFacts } from './contracts.js';
 
 type CanonicalOrderRow = Pick<typeof orders.$inferSelect,
@@ -45,6 +46,11 @@ export function buildAutomationFactsSnapshot(input: {
   order: CanonicalOrderRow;
   items: CanonicalItemRow[];
   override: CanonicalOverrideRow;
+  hazmat?: {
+    declaration: { status: 'active' | 'clear' } | null;
+    revision: number;
+    semanticHash: string | null;
+  };
 }): AutomationFacts {
   const lines = [...input.items]
     .sort((left, right) => left.lineIndex - right.lineIndex || left.id - right.id)
@@ -94,9 +100,11 @@ export function buildAutomationFactsSnapshot(input: {
     workflow: {
       hasSelectedRate: Boolean(input.override?.bestRateJson || input.override?.selectedPid),
       holdForReview: tags.some((tag) => ['hold', 'hold_for_review', 'review'].includes(tag.toLowerCase())),
-      // PS-465 is not on the target branch. Generic automation must not derive
-      // hazmat truth from tags, text, or provider payloads.
-      hazmatState: 'unknown',
+      // PS-465 is the sole owner. Callers without its canonical declaration
+      // evidence stay unknown; tags, text, and provider payloads never infer it.
+      hazmatState: input.hazmat === undefined
+        ? 'unknown'
+        : input.hazmat.declaration?.status === 'active' ? 'active' : 'none',
     },
     completeness: {
       identity: input.order.clientId != null || input.order.storeId != null,
@@ -111,6 +119,13 @@ export function buildAutomationFactsSnapshot(input: {
     orderUpdatedAt: input.order.updatedAt?.toISOString() ?? null,
     overrideUpdatedAt: input.override?.updatedAt?.toISOString() ?? null,
     latestItemUpdate,
+    hazmat: input.hazmat === undefined
+      ? null
+      : {
+          revision: input.hazmat.revision,
+          semanticHash: input.hazmat.semanticHash,
+          status: input.hazmat.declaration?.status ?? null,
+        },
   });
   return { revision, ...factsWithoutRevision };
 }
@@ -129,7 +144,8 @@ export async function loadAutomationFacts(orderId: number, scope: ClientStoreSco
     .from(orderItems)
     .where(eq(orderItems.orderId, orderId))
     .orderBy(asc(orderItems.lineIndex), asc(orderItems.id));
-  return buildAutomationFactsSnapshot({ order: row.order, items, override: row.override });
+  const hazmat = await getOrderHazmatForShipping(orderId);
+  return buildAutomationFactsSnapshot({ order: row.order, items, override: row.override, hazmat });
 }
 
 export function isTerminalAutomationStatus(status: string): boolean {

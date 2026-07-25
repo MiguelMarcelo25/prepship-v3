@@ -5,6 +5,7 @@ import type { ClientStoreScope } from '../../lib/client-store-scope.js';
 import type { AutomationTrigger } from './catalog.js';
 import { compileAutomationRuleVersion, type AutomationRuleDocument } from './contracts.js';
 import { loadAutomationFacts } from './facts.js';
+import { automationHazmatHandler } from './hazmat-action.js';
 import { addAutomationWorkflowTag } from './order-workflow-command.js';
 import {
   automationRulesetDigest,
@@ -53,6 +54,7 @@ export const automationHandlerRegistry: AutomationHandlerRegistry = {
   'service.exclude': planOwnedAction,
   'carrier.prefer': planOwnedAction,
   'service.prefer': planOwnedAction,
+  'hazmat.add_declaration': automationHazmatHandler,
 };
 
 export async function loadActiveAutomationRules(input: {
