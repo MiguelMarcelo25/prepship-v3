@@ -866,6 +866,8 @@
     "test:sidebar-client-sort": "tsx scripts/sidebar-client-sort-guard.ts",
     "test:manual-orders-awaiting-sidebar": "tsx scripts/manual-orders-awaiting-sidebar-guard.ts",
     "test:test-order-queue-label": "node scripts/test-order-queue-label-guard.mjs",
+    "test:test-data-purge": "tsx scripts/test-data-purge-integration.ts",
+    "migrate:test-data-purge-guards": "tsx scripts/apply-test-data-purge-guards.ts",
     "test:walmart-dual-dedupe": "node scripts/walmart-dual-dedupe-guard.mjs",
     "test:orders-startup-requests": "node scripts/orders-startup-requests-guard.mjs",
     "test:orders-request-pressure": "node scripts/orders-request-pressure-guard.mjs",
