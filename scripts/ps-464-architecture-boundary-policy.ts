@@ -88,11 +88,10 @@ export const FRONTEND_IMPORT_EXCEPTIONS: readonly FrontendImportException[] = [
 export const ROUTE_PERSISTENCE_EXCEPTIONS: readonly RoutePersistenceException[] = [
   {
     sourcePath: 'src/routes/admin.ts',
-    maxDirectWrites: 17,
+    maxDirectWrites: 6,
     routeSites: {
       'PATCH /clients/:id{[0-9]+}/flag-test': 1,
       'POST /cleanup-stale-queue-entries': 1,
-      'POST /purge-test-orders': 11,
       'POST /seed-test-orders': 2,
       'POST /upsert-keyed-client': 2,
     },
