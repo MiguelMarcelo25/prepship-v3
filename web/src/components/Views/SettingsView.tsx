@@ -355,7 +355,7 @@ export default function SettingsView() {
     if (fromUrl) return fromUrl
     try {
       const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
-      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache', 'system', 'automation'].includes(stored)) {
+      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache', 'system'].includes(stored)) {
         return stored
       }
     } catch {
@@ -857,6 +857,7 @@ export default function SettingsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection])
   useEffect(() => {
+    if (activeSection === 'automation') return
     try {
       window.localStorage.setItem(DRAWER_SECTION_KEY, activeSection)
     } catch {
