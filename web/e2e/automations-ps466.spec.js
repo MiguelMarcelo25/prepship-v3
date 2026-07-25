@@ -109,6 +109,20 @@ function backend() {
 
 test.beforeAll(async () => mkdir(screenshotDir, { recursive: true }))
 
+test('Settings ignores the retired Automation section saved in local storage', async ({ page }) => {
+  const mock = backend()
+  await seedAuth(page)
+  await page.addInitScript(() => {
+    window.localStorage.setItem('settings:active-drawer-section', 'automation')
+  })
+  await page.route('**/*', mock.route)
+  await page.goto(`${baseUrl}/automations`)
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+
+  await expect(page).toHaveURL(`${baseUrl}/settings/markups`)
+})
+
 test('PS-466 operations console and guided publish stay backend-driven and offline', async ({ page }) => {
   const mock = backend()
   await seedAuth(page)
