@@ -255,7 +255,11 @@ async function loadOrderRow(
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(orderWhere(orderId, scope))
     .limit(1);
-  const rows = options.forUpdate ? await query.for('update') : await query;
+  // Per user override unlock shipped data on 2026-07-25: lock only the
+  // canonical order row. PostgreSQL rejects an unqualified FOR UPDATE across
+  // the nullable order_overrides side of this LEFT JOIN; terminal-order guards
+  // remain unchanged and still run immediately after the lock is acquired.
+  const rows = options.forUpdate ? await query.for('update', { of: orders }) : await query;
   const row = rows[0];
   if (!row) throw new OrderHazmatError('Order not found', 'ORDER_NOT_FOUND', 404);
   return row;
