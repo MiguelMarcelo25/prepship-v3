@@ -56,6 +56,7 @@ import {
   type RateRecalculateBatchStartItem,
 } from '../services/rate-recalculate-batch';
 import { produceRateBrowsePayload } from '../services/rate-browse-response-producer';
+import { dispatchRateAfterAutomationPreflight } from '../services/automations/rate-policy';
 import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display-fields';
 import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
 import { orderOverrides, orders } from '../db/schema/orders';
@@ -282,9 +283,13 @@ app.post(
   const canViewFinancials = canViewRateFinancials(c);
   const { forceRefresh, signature, confirmation, ...input } = body;
   try {
-    const result = await getRates(
+    const result = await dispatchRateAfterAutomationPreflight(
       { ...input, confirmation: confirmation ?? signature ?? null },
-      { forceRefresh, priority: 'interactive' }
+      scopeFromContext(c),
+      (preparedInput) => getRates(
+        preparedInput,
+        { forceRefresh, priority: 'interactive' },
+      ),
     );
     return c.json(publicRatesResult(result, canViewFinancials));
   } catch (error) {

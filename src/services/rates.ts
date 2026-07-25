@@ -26,6 +26,8 @@ import {
   normalizeProviderKey,
 } from '../lib/direct-carrier-scope';
 import { buildShippingRateRequestFingerprint } from './shipping-workflow/rate-fingerprint';
+import { GLOBAL_SCOPE } from '../lib/client-store-scope';
+import { prepareAutomationRateIntent } from './automations/rate-policy';
 import { normalizeShippingPostalCode } from './shipping-workflow/postal-code';
 import {
   classifyShippingAddress,
@@ -495,6 +497,9 @@ export type RateInput = {
   /** Backend-resolved HUGRAB policy state; null for non-HUGRAB requests. */
   hugrabDefaultInsuranceEnabled?: boolean | null;
   automationRulesVersion?: string | null;
+  /** PS-466 backend plan consumers; routes never derive these values. */
+  automationExcludedCarrierIds?: string[];
+  automationExcludedServiceIds?: string[];
   // Order-backed marketplace context, populated by /rates/browse from the orders row.
   // `sourceProvider` (the marketplace the order came from) gates marketplace-specific carriers —
   // eBay Logistics only prices eBay orders — and `rawOrder` carries the order's stored JSON for
@@ -592,6 +597,12 @@ export async function resolveRateInput(
   opts: { rawManualEstimate?: boolean; priority?: RateFetchPriority } = {},
 ): Promise<RateInput> {
   input.signal?.throwIfAborted();
+  // PS-466: resolveRateInput is the common service boundary used by interactive,
+  // background, and direct-carrier rate work. Internal callers that were not
+  // already sealed by a scoped route reconcile here before carrier discovery.
+  if (input.orderId && !input.automationRulesVersion) {
+    input = await prepareAutomationRateIntent(input, GLOBAL_SCOPE);
+  }
   const context = await resolveRateCredentialContext(input);
   const automationRules = await loadShippingAutomationRules();
   const isHugrab = isHugrabShippingContext({
@@ -611,9 +622,13 @@ export async function resolveRateInput(
     signal: input.signal,
   });
   input.signal?.throwIfAborted();
-  const candidateCarriers = input.carrierIds?.length
+  const excludedAutomationCarriers = new Set((input.automationExcludedCarrierIds ?? []).map((value) => String(value).trim().toLowerCase()));
+  const candidateCarriers = (input.carrierIds?.length
     ? discoveredCarriers.filter((carrier) => input.carrierIds!.includes(carrier.carrier_id))
-    : discoveredCarriers;
+    : discoveredCarriers).filter((carrier) => ![
+      carrier.carrier_id,
+      carrier.carrier_code,
+    ].map((value) => String(value ?? '').trim().toLowerCase()).some((value) => value && excludedAutomationCarriers.has(value)));
   const allowedCarriers = filterCarrierAccountsForAutomation(
     candidateCarriers,
     { clientId: context.clientId, storeId: context.storeId },
@@ -677,7 +692,9 @@ export async function resolveRateInput(
     effectiveInsuredValue: insuredValue,
     effectiveInsuranceSource,
     hugrabDefaultInsuranceEnabled: isHugrab ? hugrabDefaultInsuranceEnabled : null,
-    automationRulesVersion: shippingAutomationRulesFingerprint(automationRules),
+    automationRulesVersion: input.automationRulesVersion
+      ? `${shippingAutomationRulesFingerprint(automationRules)}:${input.automationRulesVersion}`
+      : shippingAutomationRulesFingerprint(automationRules),
     carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
   };
 }
@@ -826,6 +843,22 @@ export function filterRatesForShippingServiceEligibility<T>(
   automationRules?: ShippingAutomationRule[] | null,
 ): T[] {
   return filterEligibleShippingServices(rates, context, rateToShippingServiceDescriptor, shippingOptions, automationRules);
+}
+
+export function filterRatesForAutomationPlan<T>(rates: T[], input: Pick<RateInput, 'automationExcludedCarrierIds' | 'automationExcludedServiceIds'>): T[] {
+  const carriers = new Set((input.automationExcludedCarrierIds ?? []).map((value) => String(value).trim().toLowerCase()));
+  const services = new Set((input.automationExcludedServiceIds ?? []).map((value) => String(value).trim().toLowerCase()));
+  if (carriers.size === 0 && services.size === 0) return rates;
+  return rates.filter((rate) => {
+    const descriptor = rateToShippingServiceDescriptor(rate);
+    const carrierBlocked = [descriptor.carrierId, descriptor.carrierCode]
+      .map((value) => String(value ?? '').trim().toLowerCase())
+      .some((value) => value && carriers.has(value));
+    const serviceBlocked = [descriptor.serviceCode, descriptor.serviceName]
+      .map((value) => String(value ?? '').trim().toLowerCase())
+      .some((value) => value && services.has(value));
+    return !carrierBlocked && !serviceBlocked;
+  });
 }
 
 export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; bestRate?: unknown }>(
@@ -1616,12 +1649,12 @@ export async function fetchLiveRatesWithDiagnostics(
   const eligibilityContext = rateEligibilityContext(input);
   const shippingOptionEligibility = rateShippingOptionEligibilityContext(input);
   const eligible = dedupeRates(
-    filterRatesForShippingServiceEligibility(
+    filterRatesForAutomationPlan(filterRatesForShippingServiceEligibility(
       lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null)),
       eligibilityContext,
       shippingOptionEligibility,
       automationRules,
-    ),
+    ), input),
     'live'
   );
   // PS-108: enrich insured rates with the authoritative ParcelGuard premium BEFORE
@@ -1992,12 +2025,12 @@ export async function getRates(
     const cached = await selectRateCacheByKey(key);
     if (cached) {
       const shippingOptionEligibility = rateShippingOptionEligibilityContext(resolvedInput);
-      let cachedRaw = filterRatesForShippingServiceEligibility(
+      let cachedRaw = filterRatesForAutomationPlan(filterRatesForShippingServiceEligibility(
         dedupeRates(cached.rates as Rate[], 'cached'),
         rateEligibilityContext(resolvedInput),
         shippingOptionEligibility,
         automationRules,
-      );
+      ), resolvedInput);
       // PS-264: cached rates must run the SAME insurance enrichment as the live
       // path (see :1078-1096) BEFORE best-rate selection — otherwise a cached
       // HUGRAB/insured rate carries a stale/zero insurance_amount and the
@@ -2767,11 +2800,11 @@ export async function getDirectCarrierRatesForRateInput(
         signal,
       }), label, executionPolicy.timeoutMs, input.signal);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
-      const eligible = filterRatesForShippingServiceEligibility(
+      const eligible = filterRatesForAutomationPlan(filterRatesForShippingServiceEligibility(
         rawRates,
         directEligibilityContext,
         shippingOptions,
-      ).filter((rate) => evaluateShippingServiceEligibility(
+      ), input).filter((rate) => evaluateShippingServiceEligibility(
         directEligibilityContext,
         directRateServiceDescriptor(rate as Record<string, unknown>, account.provider),
         shippingOptions,

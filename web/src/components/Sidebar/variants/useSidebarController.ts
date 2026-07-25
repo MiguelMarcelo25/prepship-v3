@@ -27,6 +27,7 @@ export type SidebarViewType =
   | 'rates'
   | 'analysis'
   | 'settings'
+  | 'automations'
   | 'billing'
   | 'manifests'
 

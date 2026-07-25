@@ -939,10 +939,10 @@ export default function SettingsView() {
     },
     {
       id: 'automation',
-      label: 'Automation',
-      short: 'Automation',
+      label: 'Automations workspace',
+      short: 'Automations',
       description:
-        'Enable or disable carrier accounts and individual services per client store. These rules gate which carriers Orders and the Rate Browser can use. Client-specific locks like HUGRAB Ground Saver/SurePost stay protected (PS-057).',
+        'Carrier/service controls and versioned workflow rules now live in the top-level Automations workspace.',
       icon: Bot,
       tone: 'emerald',
     },
@@ -1339,26 +1339,25 @@ export default function SettingsView() {
                   HUGRAB carrier-disable protection — isHugrabCarrierDisableProtected is passed in
                   as a prop callback so the decision logic never leaves SettingsView. */}
               {activeSection === 'automation' ? (
-                <AutomationAvailabilityPanel
-                  automationUpdatedAt={automationUpdatedAt}
-                  automationLoading={automationLoading}
-                  automationError={automationError}
-                  automationRows={automationRows}
-                  automationServiceCatalog={automationServiceCatalog}
-                  automationSavingKey={automationSavingKey}
-                  automationQuery={automationQuery}
-                  automationStatusFilter={automationStatusFilter}
-                  automationClientGroups={automationClientGroups}
-                  automationDisabledCount={automationDisabledCount}
-                  automationFilteredGroups={automationFilteredGroups}
-                  setAutomationQuery={setAutomationQuery}
-                  setAutomationStatusFilter={setAutomationStatusFilter}
-                  refreshAutomationAvailability={refreshAutomationAvailability}
-                  toggleAutomationCarrier={toggleAutomationCarrier}
-                  toggleAutomationService={toggleAutomationService}
-                  toggleAutomationStoreCarriers={toggleAutomationStoreCarriers}
-                  isHugrabCarrierDisableProtected={isHugrabCarrierDisableProtected}
-                />
+                <SectionCard
+                  tone="emerald"
+                  icon={<Bot size={18} />}
+                  title="Automations moved"
+                  subtitle="Rules, simulations, history, and carrier/service controls now share one workspace."
+                >
+                  <div className="rounded-lg bg-brand-bg p-4 text-small text-ink-2 ring-1 ring-brand-border">
+                    The legacy <code>/settings/automation</code> URL is retained as a compatibility landing only.
+                    HUGRAB carrier/service protections remain backend-owned and unchanged.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/automations')}
+                    className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white hover:bg-brand-dark"
+                  >
+                    Open Automations workspace
+                    <Sparkles size={14} />
+                  </button>
+                </SectionCard>
               ) : null}
 
               {activeSection === 'sandbox' ? (

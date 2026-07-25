@@ -309,6 +309,14 @@ export function hugrabDefaultInsuranceFromRequestFingerprint(
   return null;
 }
 
+/** Read the backend automation version bound to a quote/cache fingerprint. */
+export function automationRulesVersionFromRequestFingerprint(
+  fingerprint: string | null | undefined,
+): string | null {
+  const fp = comparableRateFactsFingerprint(typeof fingerprint === 'string' ? fingerprint.trim() : '');
+  return fp ? fingerprintPartValue(fp, 'ar') : null;
+}
+
 export function selectedRateRequestFingerprint(rate: unknown): string | null {
   const row = record(rate);
   if (!row) return null;

@@ -36,6 +36,10 @@ export const APP_PERMISSIONS = [
   'users:manage',
   'settings:read',
   'settings:write',
+  'automations:read',
+  'automations:write',
+  'automations:publish',
+  'automations:reprocess',
   'credentials:read',
   'credentials:write',
   'financials:read',
@@ -61,6 +65,10 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
   operator: [
     'settings:read',
     'settings:write',
+    'automations:read',
+    'automations:write',
+    'automations:publish',
+    'automations:reprocess',
     'credentials:read',
     'credentials:write',
     'financials:read',
@@ -73,13 +81,14 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
   ],
   warehouse: [
     'settings:read',
+    'automations:read',
     'credentials:read',
     'inventory:write',
     'rates:quote',
     'print_queue:write',
   ],
   client_user: ['settings:read', 'billing:generate', 'rates:quote'],
-  read_only_support: ['settings:read', 'credentials:read'],
+  read_only_support: ['settings:read', 'automations:read', 'credentials:read'],
 };
 
 // Paths that are served unauthenticated even when they sit under an auth-gated

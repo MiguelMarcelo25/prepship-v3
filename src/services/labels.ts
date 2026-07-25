@@ -146,6 +146,11 @@ import {
 
 export { LabelArtifactMissingAfterPurchaseError } from './label-artifact-safety';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
+import { reconcileOrderAutomationsForShipping } from './automations/runtime';
+import {
+  assertAutomationPlanSupportedByProvider,
+  assertAutomationRateProofCurrent,
+} from './automations/rate-policy';
 // PS-261 (Per user override unlock shipped data on 2026-06-18): backend-owned HUGRAB
 // label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
 // BLOCKS before any postage is bought when the mandatory $100 coverage is not proven
@@ -1797,6 +1802,17 @@ async function createShopifyShippingLabelForOrderImpl(
   }
   await assertOrderSafeToShip(order, { entryPoint: 'createShopifyShippingLabelForOrder' });
 
+  // Per user override unlock shipped data on 2026-07-25: Shopify purchases
+  // also reconcile under the existing per-order purchase lock. Shopify cannot
+  // consume the generic rate-plan actions, so any such plan fails closed before
+  // account lookup or provider traffic; terminal protections above are intact.
+  const automationWatermark = await reconcileOrderAutomationsForShipping({
+    orderId: order.id,
+    stage: 'before_label_purchase',
+    scope,
+  });
+  assertAutomationPlanSupportedByProvider(automationWatermark, 'Shopify Shipping');
+
   const clientId = await resolveShippingClientId(order);
 
   body = {
@@ -2079,6 +2095,17 @@ async function createLabelV2Impl(
   // Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129): reads
   // shipped/cancelled signals to block; does not mutate shipped/cancelled rows.
   await assertOrderSafeToShip(order, { entryPoint: 'createLabelV2' });
+
+  // Per user override unlock shipped data on 2026-07-25: PS-466 runs the
+  // backend automation preflight inside the existing per-order purchase lock
+  // and before any quote authorization or provider dispatch. It only reads
+  // terminal shipped/cancelled facts (which remain blocked above) and never
+  // mutates shipment history or weakens the shipped/cancelled guards.
+  const automationWatermark = await reconcileOrderAutomationsForShipping({
+    orderId: order.id,
+    stage: 'before_label_purchase',
+    scope,
+  });
 
   // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
   // through the clients.storeIds array (v2 parity for legacy orders whose
@@ -2513,6 +2540,13 @@ async function createLabelV2Impl(
   const purchaseRateProof = purchaseSelection ?? await assertLabelPurchaseRateSelection({
     selectionRef: body.selectionRef,
   });
+  // Per user override unlock shipped data on 2026-07-25: the current ruleset
+  // must be the one sealed into the backend-issued quote. A publish/facts
+  // change therefore forces a re-rate before any postage provider is called.
+  assertAutomationRateProofCurrent(
+    selectedRateRequestFingerprint(purchaseRateProof.selectedRate),
+    automationWatermark,
+  );
   if (!authorizedPurchaseFacts) {
     throw new ShippingQuoteAuthorizationError('canonical label persistence facts');
   }
