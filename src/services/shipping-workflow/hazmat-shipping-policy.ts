@@ -69,19 +69,6 @@ function assertProfileDeclarationCompatible(
   facts: CanonicalHazmatQuoteFacts,
   profile: HazmatProfile,
 ): void {
-  if (profile === 'shipstation_usps') {
-    const missing = [
-      !facts.declaration.uspsCategory ? 'uspsCategory' : null,
-      facts.declaration.uspsPackageLevel == null ? 'uspsPackageLevel' : null,
-    ].filter((field): field is string => field != null);
-    if (missing.length > 0) {
-      throw new HazmatShippingError(
-        'The Stamps.com USPS hazmat profile requires its operator category and package-level declaration.',
-        'HAZMAT_PROFILE_DECLARATION_INVALID',
-        { profile, missing },
-      );
-    }
-  }
   if (profile === 'shipstation_ups_dry_ice' && !isPureDryIce(facts.declaration)) {
     throw new HazmatShippingError(
       'The UPS dry-ice profile cannot carry generic dangerous-goods facts.',

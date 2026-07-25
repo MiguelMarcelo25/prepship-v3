@@ -266,6 +266,7 @@ export function validateHazmatDeclaration(
     || declaration.limitedQuantity
     || declaration.containsBattery
     || declaration.dryIce
+    || (declaration.emergencyContactName != null && declaration.emergencyContactPhone != null)
     || declaration.uspsCategory != null
     || declaration.regulatedContentType != null;
   if (!hasActiveFact) {
@@ -282,6 +283,12 @@ export function validateHazmatDeclaration(
     && !/^[+()\-\d\s.]{7,30}$/.test(declaration.emergencyContactPhone)
   ) {
     issues.push(error('emergencyContactPhone', 'HAZMAT_CONTACT_PHONE_INVALID', 'Emergency contact phone is invalid.'));
+  }
+  if (declaration.emergencyContactName != null && declaration.emergencyContactPhone == null) {
+    issues.push(error('emergencyContactPhone', 'HAZMAT_CONTACT_PHONE_REQUIRED', 'Dangerous-goods contact phone is required with a contact name.'));
+  }
+  if (declaration.emergencyContactPhone != null && declaration.emergencyContactName == null) {
+    issues.push(error('emergencyContactName', 'HAZMAT_CONTACT_NAME_REQUIRED', 'Dangerous-goods contact name is required with a contact phone.'));
   }
 
   declaration.materials.forEach((material, index) => {

@@ -21,6 +21,8 @@ assert.match(migration, /BEFORE TRUNCATE ON public\.shipment_hazmat_snapshots/i)
 assert.match(migration, /shipment_hazmat_snapshots is append-only/i);
 assert.match(migration, /ON DELETE RESTRICT/i);
 assert.match(migration, /does not backfill or mutate orders, shipments, or historical labels/i);
+assert.match(migration, /decision_source text NOT NULL DEFAULT 'manual'/i);
+assert.match(migration, /decision_source IN \('manual', 'automation'\)/i);
 
 const env = source('src/lib/env.ts');
 for (const flag of [

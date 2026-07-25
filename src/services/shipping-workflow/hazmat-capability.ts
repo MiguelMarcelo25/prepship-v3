@@ -78,15 +78,15 @@ const COMMON_FIELDS: HazmatCapabilityField[] = [
       { value: 'kilogram', label: 'Kilograms' },
     ],
   },
-  { key: 'emergencyContactName', label: 'Emergency contact', type: 'text', required: false },
-  { key: 'emergencyContactPhone', label: 'Emergency phone', type: 'text', required: false },
+  { key: 'emergencyContactName', label: 'Dangerous-goods contact name', type: 'text', required: false },
+  { key: 'emergencyContactPhone', label: 'Dangerous-goods contact phone', type: 'text', required: false },
   { key: 'materials', label: 'Declared materials', type: 'materials', required: false },
 ];
 
 const USPS_FIELDS: HazmatCapabilityField[] = [
   ...COMMON_FIELDS,
-  { key: 'uspsCategory', label: 'USPS dangerous-goods category', type: 'text', required: true },
-  { key: 'uspsPackageLevel', label: 'USPS package-level declaration', type: 'boolean', required: true },
+  { key: 'uspsCategory', label: 'USPS dangerous-goods category', type: 'text', required: false },
+  { key: 'uspsPackageLevel', label: 'USPS package-level declaration', type: 'boolean', required: false },
   {
     key: 'regulatedContentType',
     label: 'Other regulated content evidence',

@@ -156,6 +156,7 @@ export type OrderHazmatDto = {
   declaration: HazmatDeclarationDraft | null;
   revision: number;
   semanticHash: string | null;
+  decisionSource: 'manual' | 'automation' | null;
   capabilities: {
     featureEnabled: boolean;
     writeEnabled: boolean;

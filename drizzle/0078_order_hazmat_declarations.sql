@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.order_hazmat_declarations (
   schema_version smallint NOT NULL DEFAULT 1,
   revision integer NOT NULL,
   status text NOT NULL,
+  decision_source text NOT NULL DEFAULT 'manual',
   limited_quantity boolean,
   contains_battery boolean,
   dry_ice boolean,
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS public.order_hazmat_declarations (
   CONSTRAINT order_hazmat_declarations_schema_version_chk CHECK (schema_version > 0),
   CONSTRAINT order_hazmat_declarations_revision_chk CHECK (revision > 0),
   CONSTRAINT order_hazmat_declarations_status_chk CHECK (status IN ('clear', 'active')),
+  CONSTRAINT order_hazmat_declarations_decision_source_chk CHECK (decision_source IN ('manual', 'automation')),
   CONSTRAINT order_hazmat_declarations_semantic_hash_chk CHECK (semantic_hash ~ '^hz_[a-f0-9]{64}$'),
   CONSTRAINT order_hazmat_declarations_dry_ice_weight_chk CHECK (
     (dry_ice IS TRUE AND dry_ice_weight_value IS NOT NULL AND dry_ice_weight_value > 0 AND dry_ice_weight_unit IS NOT NULL)

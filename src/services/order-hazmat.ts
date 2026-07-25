@@ -60,6 +60,7 @@ export type OrderHazmatState = {
   declaration: NormalizedHazmatDeclaration | null;
   revision: number;
   semanticHash: string | null;
+  decisionSource: 'manual' | 'automation' | null;
   capabilities: HazmatCapabilities;
   validation: HazmatValidationResult;
   requiresRerate: boolean;
@@ -132,13 +133,20 @@ function materialFromRow(row: typeof orderHazmatMaterials.$inferSelect): Normali
 async function loadDeclaration(
   conn: Pick<typeof db, 'select'>,
   orderId: number,
-): Promise<{ declaration: NormalizedHazmatDeclaration | null; revision: number; semanticHash: string | null }> {
+): Promise<{
+  declaration: NormalizedHazmatDeclaration | null;
+  revision: number;
+  semanticHash: string | null;
+  decisionSource: 'manual' | 'automation' | null;
+}> {
   const [header] = await conn
     .select()
     .from(orderHazmatDeclarations)
     .where(eq(orderHazmatDeclarations.orderId, orderId))
     .limit(1);
-  if (!header) return { declaration: null, revision: 0, semanticHash: null };
+  if (!header) {
+    return { declaration: null, revision: 0, semanticHash: null, decisionSource: null };
+  }
   const materials = await conn
     .select()
     .from(orderHazmatMaterials)
@@ -159,7 +167,12 @@ async function loadDeclaration(
     regulatedContentType: header.regulatedContentType,
     materials: materials.map(materialFromRow),
   };
-  return { declaration, revision: header.revision, semanticHash: header.semanticHash };
+  return {
+    declaration,
+    revision: header.revision,
+    semanticHash: header.semanticHash,
+    decisionSource: header.decisionSource,
+  };
 }
 
 async function loadFrozenPurchaseFacts(orderId: number): Promise<CanonicalHazmatPurchaseFacts | null> {
@@ -254,6 +267,7 @@ function publicState(input: {
   declaration: NormalizedHazmatDeclaration | null;
   revision: number;
   semanticHash: string | null;
+  decisionSource: 'manual' | 'automation' | null;
   frozenPurchaseFacts?: CanonicalHazmatPurchaseFacts | null;
 }): OrderHazmatState {
   const capabilities = resolveHazmatCapabilities({ clientId: input.order.clientId });
@@ -268,6 +282,7 @@ function publicState(input: {
     declaration,
     revision: capabilities.featureEnabled ? input.revision : 0,
     semanticHash: capabilities.featureEnabled ? input.semanticHash : null,
+    decisionSource: capabilities.featureEnabled ? input.decisionSource : null,
     capabilities,
     validation,
     requiresRerate: declaration?.status === 'active' && input.order.bestRateJson == null,
@@ -287,6 +302,7 @@ export async function getOrderHazmat(
       declaration: null,
       revision: 0,
       semanticHash: null,
+      decisionSource: null,
       frozenPurchaseFacts: null,
     });
   }
@@ -302,6 +318,7 @@ export async function getOrderHazmatForShipping(orderId: number): Promise<{
   declaration: NormalizedHazmatDeclaration | null;
   revision: number;
   semanticHash: string | null;
+  decisionSource: 'manual' | 'automation' | null;
   validation: HazmatValidationResult;
   capabilities: HazmatCapabilities;
   clientId: number | null;
@@ -322,6 +339,7 @@ export async function getOrderHazmatForShipping(orderId: number): Promise<{
     declaration: current.declaration,
     revision: current.revision,
     semanticHash: current.semanticHash,
+    decisionSource: current.decisionSource,
     clientId: order.clientId,
     validation: current.declaration
       ? validateHazmatDeclaration(current.declaration)
@@ -413,6 +431,7 @@ async function saveInTransaction(
     scope: ClientStoreScope;
     actor: AuditActor;
     provenance?: OrderHazmatAutomationProvenance;
+    decisionSource?: 'manual' | 'automation';
   },
 ): Promise<SaveOrderHazmatResult> {
   const order = await loadOrderRow(input.orderId, input.scope, { forUpdate: true, tx });
@@ -456,6 +475,7 @@ async function saveInTransaction(
 
   const now = new Date();
   const revision = current.revision + 1;
+  const decisionSource = input.decisionSource ?? 'manual';
   await tx
     .insert(orderHazmatDeclarations)
     .values({
@@ -463,6 +483,7 @@ async function saveInTransaction(
       schemaVersion: declaration.schemaVersion,
       revision,
       status: declaration.status,
+      decisionSource,
       limitedQuantity: declaration.limitedQuantity,
       containsBattery: declaration.containsBattery,
       dryIce: declaration.dryIce,
@@ -487,6 +508,7 @@ async function saveInTransaction(
         schemaVersion: declaration.schemaVersion,
         revision,
         status: declaration.status,
+        decisionSource,
         limitedQuantity: declaration.limitedQuantity,
         containsBattery: declaration.containsBattery,
         dryIce: declaration.dryIce,
@@ -528,6 +550,8 @@ async function saveInTransaction(
       revision,
       previousSemanticHash: current.semanticHash,
       semanticHash,
+      previousDecisionSource: current.decisionSource,
+      decisionSource,
       summary: summarizeHazmatDeclaration(declaration),
       invalidatedRate,
       // Per user override unlock shipped data on 2026-07-25: preserve the
@@ -542,6 +566,7 @@ async function saveInTransaction(
       declaration,
       revision,
       semanticHash,
+      decisionSource,
     }),
     capabilities,
     changed: true,
@@ -557,6 +582,7 @@ export async function saveOrderHazmatDeclaration(input: {
   actor: AuditActor;
   provenance?: OrderHazmatAutomationProvenance;
   purchaseLock?: LabelPurchaseLock;
+  decisionSource?: 'manual' | 'automation';
 }): Promise<SaveOrderHazmatResult> {
   await assertRuntimeSchemaReady();
   await loadOrderRow(input.orderId, input.scope);
