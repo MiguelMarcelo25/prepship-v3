@@ -43,7 +43,7 @@ function seedAuth(page) {
   }, supabaseProjectRef)
 }
 
-function backend() {
+function backend({ controlServiceCount = 1 } = {}) {
   const captured = []
   let created = false
   let published = false
@@ -98,7 +98,9 @@ function backend() {
       return routeObj.fulfill(json({ data: [{
         store: { storeId: 378060, clientId: 4, clientName: 'HUGRAB' },
         carriers: [{ carrierId: 'se-123', carrierCode: 'ups', nickname: 'UPS', friendlyName: 'UPS', disabled: false, disabledReason: null,
-          services: [{ serviceCode: 'ups_ground_saver', name: 'UPS Ground Saver', allowed: false, disabled: true, locked: true, reason: 'HUGRAB protected control' }],
+          services: Array.from({ length: controlServiceCount }, (_, index) => index === 0
+            ? { serviceCode: 'ups_ground_saver', name: 'UPS Ground Saver', allowed: false, disabled: true, locked: true, reason: 'HUGRAB protected control' }
+            : { serviceCode: `service_${index + 1}`, name: `Service ${index + 1}`, allowed: true, disabled: false, locked: false, reason: null }),
         }],
       }] }))
     }
@@ -162,16 +164,41 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await page.getByRole('button', { name: 'Review & publish' }).click()
   await expect(page.getByRole('table').getByText('Browser proof automation')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Carrier & Service Controls' }).click()
+  await page.getByRole('tab', { name: 'Carrier & Service Controls' }).click()
   await expect(page.getByText('UPS Ground Saver')).toBeVisible()
   await expect(page.getByTitle('HUGRAB protected control')).toBeDisabled()
-  await page.getByRole('button', { name: 'Run History' }).click()
+  await page.getByRole('tab', { name: 'Run History' }).click()
   await expect(page.getByText('Run #1')).toBeVisible()
-  await page.getByRole('button', { name: 'Templates & Actions' }).click()
+  await page.getByRole('tab', { name: 'Templates & Actions' }).click()
   await expect(page.getByText('Set shipment as dangerous goods')).toBeVisible()
   await page.screenshot({ path: path.join(screenshotDir, 'automations-console.png'), fullPage: true })
 
   expect(mock.captured.some((entry) => /shipstation|shopify|walmartapis|ups\.com/i.test(entry.url))).toBe(false)
+})
+
+test('automation tabs stay visible above a tall controls panel', async ({ page }) => {
+  const mock = backend({ controlServiceCount: 75 })
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await seedAuth(page)
+  await page.route('**/*', mock.route)
+  await page.goto(`${baseUrl}/automations`)
+
+  const controlsTab = page.getByRole('tab', { name: 'Carrier & Service Controls' })
+  await controlsTab.click()
+  await expect(page.getByText('Service 75')).toBeVisible()
+
+  const tablist = page.getByRole('tablist', { name: 'Automation workspace sections' })
+  const [tablistBox, controlsTabBox] = await Promise.all([
+    tablist.boundingBox(),
+    controlsTab.boundingBox(),
+  ])
+  expect(tablistBox).not.toBeNull()
+  expect(controlsTabBox).not.toBeNull()
+  expect(tablistBox.height).toBeGreaterThanOrEqual(controlsTabBox.height)
+
+  await expect(page.getByRole('tab', { name: 'Rules' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Run History' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Templates & Actions' })).toBeVisible()
 })
 
 test('PS-466 guided builder remains usable at mobile width', async ({ page }) => {
