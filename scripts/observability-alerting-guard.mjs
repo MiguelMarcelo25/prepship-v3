@@ -93,4 +93,9 @@ assert(browserApi.includes("res.headers.get('x-request-id')"), 'browser API read
 assert(browserApi.includes("localStorage.getItem('prepship:apiTiming')"), 'browser API has opt-in timing diagnostics');
 assert(browserApi.includes("'[api:client-timing]'"), 'browser API emits opt-in timing log marker');
 assert(corsHelper.includes('X-Request-Id'), 'shared CORS helper allows request ID header');
+assert(corsHelper.includes("'If-Match'"), 'shared CORS helper allows revision-safe If-Match writes');
+assert(
+  main.includes('allowHeaders: DEFAULT_CORS_ALLOW_HEADERS'),
+  'API CORS middleware delegates to the shared allowed-header owner'
+);
 assert(corsHelper.includes('Access-Control-Expose-Headers'), 'shared CORS helper exposes response request ID header');

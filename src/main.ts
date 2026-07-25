@@ -5,7 +5,7 @@ import { routePath as matchedRoutePath } from 'hono/route';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { env } from './lib/env';
-import { isAllowedCorsOrigin } from './lib/http/cors';
+import { DEFAULT_CORS_ALLOW_HEADERS, isAllowedCorsOrigin } from './lib/http/cors';
 import { observeApiTiming } from './lib/http/api-metrics';
 import { appendServerTiming, elapsedMs, nowMs } from './lib/http/timing';
 import { logStructured, reportError, runWithLogContext } from './lib/structured-log';
@@ -118,7 +118,7 @@ app.use(
   '*',
   cors({
     origin: (origin) => (isAllowedCorsOrigin(origin) ? origin : null),
-    allowHeaders: ['Authorization', 'Content-Type', 'X-Request-Id', 'X-Correlation-Id'],
+    allowHeaders: DEFAULT_CORS_ALLOW_HEADERS,
     exposeHeaders: ['X-Request-Id', 'Server-Timing'],
   })
 );

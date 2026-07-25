@@ -4,6 +4,14 @@ type CorsOptions = {
   maxAge?: string;
 };
 
+export const DEFAULT_CORS_ALLOW_HEADERS = [
+  'Authorization',
+  'Content-Type',
+  'If-Match',
+  'X-Request-Id',
+  'X-Correlation-Id',
+];
+
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://prepship.vercel.app',
   'https://prepship-eta.vercel.app',
@@ -64,7 +72,7 @@ export function corsHeaders(
     'Access-Control-Allow-Methods':
       options.methods ?? 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers':
-      options.headers ?? 'Authorization, Content-Type, X-Request-Id, X-Correlation-Id',
+      options.headers ?? DEFAULT_CORS_ALLOW_HEADERS.join(', '),
     'Access-Control-Expose-Headers': 'X-Request-Id, Server-Timing',
   };
 
