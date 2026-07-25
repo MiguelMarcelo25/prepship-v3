@@ -23,7 +23,8 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { api } from "../../lib/api";
+import { api, qs, type Paginated } from "../../lib/api";
+import Autosuggest, { type AutosuggestOption } from "../Autosuggest";
 import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
 
 type AutomationTab = "rules" | "controls" | "runs" | "templates";
@@ -117,6 +118,12 @@ type AutomationStoreOption = {
   clientId: number;
   clientName: string;
   active: boolean;
+};
+
+type AutomationSkuRow = {
+  sku: string | null;
+  name: string | null;
+  clientId: number | null;
 };
 
 type BuilderCondition = {
@@ -658,6 +665,44 @@ function Builder({
   const [unknownPolicy, setUnknownPolicy] = useState<"no_match" | "block">(
     "no_match",
   );
+  const selectedStoreCondition = conditions.find(
+    (condition) => condition.field === "order.store_id" && condition.value,
+  );
+  const selectedSuggestionStore = stores.find(
+    (store) => String(store.storeId) === selectedStoreCondition?.value,
+  );
+  const suggestionClientId =
+    selectedSuggestionStore?.clientId ??
+    (clientId && Number.isFinite(Number(clientId)) ? Number(clientId) : null);
+  const skuRowsQuery = useQuery({
+    queryKey: ["automations", "sku-suggestions", suggestionClientId ?? "all"],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<AutomationSkuRow>>(
+          `/inventory${qs({
+            clientId: suggestionClientId ?? undefined,
+            pageSize: 2000,
+            active: true,
+          })}`,
+        )
+      ).data,
+    staleTime: 5 * 60_000,
+  });
+  const skuOptions = useMemo<AutosuggestOption[]>(() => {
+    const bySku = new Map<string, AutosuggestOption>();
+    for (const row of skuRowsQuery.data ?? []) {
+      const sku = String(row.sku ?? "").trim();
+      if (!sku || bySku.has(sku.toLowerCase())) continue;
+      bySku.set(sku.toLowerCase(), {
+        value: sku,
+        label: String(row.name ?? ""),
+        hint: selectedSuggestionStore?.clientName,
+      });
+    }
+    return Array.from(bySku.values()).sort((left, right) =>
+      left.value.localeCompare(right.value),
+    );
+  }, [selectedSuggestionStore?.clientName, skuRowsQuery.data]);
   const [draft, setDraft] = useState<{
     ruleId: number;
     revision: number;
@@ -779,6 +824,18 @@ function Builder({
       setBusy(null);
     }
   };
+
+  const publishBlockReason = !activeRule
+    ? "Turn on Active Rule to publish."
+    : !draft
+      ? "Save the draft, enter a test order ID, then run Test rule."
+      : !simulation
+        ? "Enter a test order ID and run Test rule before publishing."
+        : simulation.evaluation.blocked
+          ? "The test is blocked. Review the test result before publishing."
+          : simulation.reduction.conflicts.length > 0
+            ? "Resolve the test conflicts before publishing."
+            : null;
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-stretch justify-end bg-black/30 backdrop-blur-sm">
@@ -1012,6 +1069,32 @@ function Builder({
                             </option>
                           ))}
                         </select>
+                      ) : field?.key === "line.sku" ? (
+                        <Autosuggest
+                          value={condition.value}
+                          options={skuOptions}
+                          ariaLabel={`Condition ${index + 1} value`}
+                          placeholder="Search SKU or product name"
+                          inputClassName="h-10 w-full rounded-lg bg-surface px-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
+                          popoverClassName="left-0 right-0"
+                          maxResults={10}
+                          emptyMessage={
+                            skuRowsQuery.isError
+                              ? "SKU suggestions could not be loaded. You can still type the SKU."
+                              : condition.value.trim()
+                                ? `No SKU matches "${condition.value.trim()}"`
+                                : "Type to search by SKU or product name"
+                          }
+                          onChange={(value) =>
+                            setConditions((current) =>
+                              current.map((item) =>
+                                item.id === condition.id
+                                  ? { ...item, value }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
                       ) : field?.type === "boolean" ? (
                         <select
                           aria-label={`Condition ${index + 1} value`}
@@ -1140,31 +1223,9 @@ function Builder({
                           }
                         />
                       ) : action.type === "confirmation.set" ? (
-                        <select
-                          value={action.value}
-                          onChange={(event) =>
-                            setActions((current) =>
-                              current.map((item) =>
-                                item.id === action.id
-                                  ? { ...item, value: event.target.value }
-                                  : item,
-                              ),
-                            )
-                          }
-                          className="h-10 rounded-lg px-3 ring-1 ring-line"
-                        >
-                          <option value="none">None</option>
-                          <option value="delivery">Delivery</option>
-                          <option value="signature">Signature</option>
-                          <option value="adult_signature">
-                            Adult signature
-                          </option>
-                        </select>
-                      ) : action.type === "insurance.require" ? (
-                        <div className="grid gap-2 sm:grid-cols-[1fr_150px]">
-                          <input
-                            type="number"
-                            min="0"
+                        <label className="text-tiny font-bold text-ink-2">
+                          Confirmation
+                          <select
                             value={action.value}
                             onChange={(event) =>
                               setActions((current) =>
@@ -1175,48 +1236,82 @@ function Builder({
                                 ),
                               )
                             }
-                            placeholder="Minimum value"
-                            className="h-10 rounded-lg px-3 ring-1 ring-line"
-                          />
-                          <select
-                            aria-label="Insurance provider"
-                            value={action.provider ?? "parcelguard"}
+                            className="mt-1.5 h-10 w-full rounded-lg px-3 ring-1 ring-line"
+                          >
+                            <option value="none">None</option>
+                            <option value="delivery">Delivery</option>
+                            <option value="signature">Signature</option>
+                            <option value="adult_signature">
+                              Adult signature
+                            </option>
+                          </select>
+                        </label>
+                      ) : action.type === "insurance.require" ? (
+                        <div className="grid gap-2 sm:grid-cols-[1fr_150px]">
+                          <label className="text-tiny font-bold text-ink-2">
+                            Minimum value
+                            <input
+                              type="number"
+                              min="0"
+                              value={action.value}
+                              onChange={(event) =>
+                                setActions((current) =>
+                                  current.map((item) =>
+                                    item.id === action.id
+                                      ? { ...item, value: event.target.value }
+                                      : item,
+                                  ),
+                                )
+                              }
+                              className="mt-1.5 h-10 w-full rounded-lg px-3 ring-1 ring-line"
+                            />
+                          </label>
+                          <label className="text-tiny font-bold text-ink-2">
+                            Provider
+                            <select
+                              aria-label="Insurance provider"
+                              value={action.provider ?? "parcelguard"}
+                              onChange={(event) =>
+                                setActions((current) =>
+                                  current.map((item) =>
+                                    item.id === action.id
+                                      ? {
+                                          ...item,
+                                          provider: event.target.value as
+                                            | "parcelguard"
+                                            | "carrier",
+                                        }
+                                      : item,
+                                  ),
+                                )
+                              }
+                              className="mt-1.5 h-10 w-full rounded-lg px-3 ring-1 ring-line"
+                            >
+                              <option value="parcelguard">ParcelGuard</option>
+                              <option value="carrier">Carrier</option>
+                            </select>
+                          </label>
+                        </div>
+                      ) : (
+                        <label className="text-tiny font-bold text-ink-2">
+                          Value
+                          <input
+                            type="text"
+                            aria-label={`Action value ${index + 1}`}
+                            value={action.value}
                             onChange={(event) =>
                               setActions((current) =>
                                 current.map((item) =>
                                   item.id === action.id
-                                    ? {
-                                        ...item,
-                                        provider: event.target.value as
-                                          | "parcelguard"
-                                          | "carrier",
-                                      }
+                                    ? { ...item, value: event.target.value }
                                     : item,
                                 ),
                               )
                             }
-                            className="h-10 rounded-lg px-3 ring-1 ring-line"
-                          >
-                            <option value="parcelguard">ParcelGuard</option>
-                            <option value="carrier">Carrier</option>
-                          </select>
-                        </div>
-                      ) : (
-                        <input
-                          type="text"
-                          value={action.value}
-                          onChange={(event) =>
-                            setActions((current) =>
-                              current.map((item) =>
-                                item.id === action.id
-                                  ? { ...item, value: event.target.value }
-                                  : item,
-                              ),
-                            )
-                          }
-                          placeholder="Action value"
-                          className="h-10 rounded-lg px-3 ring-1 ring-line"
-                        />
+                            placeholder="Action value"
+                            className="mt-1.5 h-10 w-full rounded-lg px-3 ring-1 ring-line"
+                          />
+                        </label>
                       )}
                       <button
                         type="button"
@@ -1318,7 +1413,7 @@ function Builder({
                       />
                       <button
                         type="button"
-                        disabled={busy != null || !draft}
+                        disabled={busy != null || !draft || !simulationOrderId}
                         onClick={simulate}
                         className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-4 text-small font-bold text-white disabled:opacity-50"
                       >
@@ -1405,9 +1500,16 @@ function Builder({
             ) : null}
             Save draft
           </button>
-          <div className="flex gap-2">
+          <div className="ml-auto flex max-w-md flex-col items-end gap-1.5">
+            <div
+              id="publish-rule-status"
+              className={`text-right text-tiny font-bold ${publishBlockReason ? "text-amber-700" : "text-emerald-700"}`}
+            >
+              {publishBlockReason ?? "Test passed. Ready to publish."}
+            </div>
             <button
               type="button"
+              aria-describedby="publish-rule-status"
               disabled={
                 !activeRule ||
                 !simulation ||
@@ -1681,7 +1783,10 @@ export default function AutomationsView() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-page p-4 sm:p-6">
+    <div
+      data-testid="automations-scroll"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-page p-4 sm:p-6"
+    >
       <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.14em] text-brand">

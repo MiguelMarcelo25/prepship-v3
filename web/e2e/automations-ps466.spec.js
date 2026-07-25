@@ -73,6 +73,10 @@ function backend({ controlServiceCount = 1 } = {}) {
     if (url.pathname === '/sync/status') return routeObj.fulfill(json({ status: 'idle', queue: { started: false, queues: [] } }))
     if (url.pathname === '/init/stores') return routeObj.fulfill(json({ data: [{ storeId: 378060, clientName: 'HUGRAB', clientId: 4, active: true }] }))
     if (url.pathname === '/init/counts') return routeObj.fulfill(json({ byStatus: {}, byStatusStore: {} }))
+    if (url.pathname === '/inventory') return routeObj.fulfill(json({ data: [
+      { sku: 'HU-10', name: 'Leeds Line V2', clientId: 4 },
+      { sku: 'BOOSTER-GEL-001', name: 'Booster Gel', clientId: 4 },
+    ], pagination: { page: 1, pageSize: 2000, total: 2, totalPages: 1 } }))
     if (url.pathname === '/automations/catalog') return routeObj.fulfill(json({ data: catalog }))
     if (url.pathname === '/automations' && request.method() === 'GET') {
       return routeObj.fulfill(json({ data: created ? [baseRule, createdRule] : [baseRule] }))
@@ -148,7 +152,15 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await expect(page.getByLabel('Summary')).toHaveValue('HUGRAB - HAZMAT')
   await expect(page.getByLabel('Condition 1 field')).toHaveValue('line.sku')
   await expect(page.getByLabel('Condition 1 operator')).toHaveValue('contains')
-  await expect(page.getByLabel('Condition 1 value')).toHaveValue('HU-10')
+  const skuValue = page.getByLabel('Condition 1 value')
+  await expect(skuValue).toHaveValue('HU-10')
+  await skuValue.fill('HU')
+  const skuSuggestion = page.getByRole('option', { name: /HU-10.*Leeds Line V2/ })
+  await expect(skuSuggestion).toBeVisible()
+  await page.screenshot({ path: path.join(screenshotDir, 'automation-sku-autosuggest.png'), fullPage: true })
+  await skuSuggestion.click()
+  await expect(skuValue).toHaveValue('HU-10')
+  expect(mock.captured.some((entry) => entry.pathname === '/inventory' && entry.url.includes('clientId=4'))).toBe(true)
   await expect(page.getByLabel('Condition 2 field')).toHaveValue('order.store_id')
   await expect(page.getByLabel('Condition 2 value')).toHaveValue('378060')
   await expect(page.getByRole('combobox', { name: 'Action type 1' })).toHaveValue('Set shipment as dangerous goods')
@@ -156,6 +168,22 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await expect(page.getByText('Phone Contact')).toBeVisible()
   await expect(page.getByLabel('Dangerous-goods contact name')).toHaveValue('Eddie Kim')
   await expect(page.getByLabel('Dangerous-goods contact phone')).toHaveValue('310-720-1871')
+  await expect(page.getByText('Save the draft, enter a test order ID, then run Test rule.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Publish rule' })).toBeDisabled()
+
+  await page.getByRole('button', { name: 'Add action' }).click()
+  const secondActionType = page.getByRole('combobox', { name: 'Action type 2' })
+  const secondActionValue = page.getByLabel('Action value 2')
+  const [actionTypeBox, actionValueBox] = await Promise.all([
+    secondActionType.boundingBox(),
+    secondActionValue.boundingBox(),
+  ])
+  expect(actionTypeBox).not.toBeNull()
+  expect(actionValueBox).not.toBeNull()
+  expect(Math.abs(actionTypeBox.y - actionValueBox.y)).toBeLessThanOrEqual(1)
+  expect(actionTypeBox.height).toBe(actionValueBox.height)
+  await page.screenshot({ path: path.join(screenshotDir, 'automation-aligned-actions.png'), fullPage: true })
+  await page.getByRole('button', { name: 'Remove action 2' }).click()
   await page.getByLabel('Summary').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(screenshotDir, 'automations-shipstation-builder.png'), fullPage: true })
 
@@ -183,10 +211,13 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
       ] } },
     ],
   })
+  await expect(page.getByText('Enter a test order ID and run Test rule before publishing.')).toBeVisible()
   await page.getByLabel('Test order ID').fill('101')
   await page.getByRole('button', { name: 'Test rule' }).click()
   await expect(page.getByText(/Order unchanged/)).toBeVisible()
   await expect(page.getByText(/No provider calls/)).toBeVisible()
+  await expect(page.getByText('Test passed. Ready to publish.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Publish rule' })).toBeEnabled()
   await page.getByRole('button', { name: 'Publish rule' }).click()
   await expect(page.getByRole('table').getByText('Browser proof automation')).toBeVisible()
 
@@ -219,6 +250,17 @@ test('automation tabs stay visible above a tall controls panel', async ({ page }
   await controlsTab.click()
   await page.getByRole('button', { name: /HUGRAB/ }).click()
   await expect(page.getByText('Service 75')).toBeVisible()
+
+  const scrollArea = page.getByTestId('automations-scroll')
+  const scrollSize = await scrollArea.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(scrollSize.scrollHeight).toBeGreaterThan(scrollSize.clientHeight)
+  await scrollArea.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  expect(await scrollArea.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
 
   const tablist = page.getByRole('tablist', { name: 'Automation workspace sections' })
   const [tablistBox, controlsTabBox] = await Promise.all([
