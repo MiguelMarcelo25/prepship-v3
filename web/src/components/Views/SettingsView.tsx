@@ -749,7 +749,8 @@ export default function SettingsView() {
     if (
       !window.confirm(
         'Delete every order under every test-flagged client?\n\n' +
-          'This also deletes their shipments, billing lines, and inventory ledger entries. ' +
+          'This also deletes their shipments, mock labels, queue jobs, automation runs, ' +
+          'hazmat snapshots, billing data, and inventory history. Test-client settings remain. ' +
           'This cannot be undone.'
       )
     ) {
@@ -763,14 +764,16 @@ export default function SettingsView() {
           shipments: number
           ledger: number
           billing: number
+          relatedRecords: number
         }
+        message: string
       }>('/admin/purge-test-orders', {})
       const d = res.deleted
       setSandboxState({
         kind: 'success',
-        message: `Deleted ${d.orders} order(s), ${d.shipments} shipment(s), ${d.ledger} ledger entries, ${d.billing} billing line(s)`,
+        message: res.message,
       })
-      toastContext?.addToast(`🧹 Purged ${d.orders} test orders`, 'success')
+      toastContext?.addToast(`🧹 Purged ${d.orders} test orders and ${d.relatedRecords} related records`, 'success')
       await refreshTestClients()
     } catch (err) {
       setSandboxState({

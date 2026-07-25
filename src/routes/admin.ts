@@ -4,12 +4,8 @@ import { z } from 'zod';
 import { and, eq, inArray, desc, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
-import { orders, orderOverrides } from '../db/schema/orders';
+import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
-import { inventory, inventoryLedger } from '../db/schema/inventory';
-import { packages } from '../db/schema/packages';
-import { packageLedger } from '../db/schema/package-ledger';
-import { billingLineItems } from '../db/schema/billing';
 import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
 import { backfillMissingOrderItems, getOrderItemsBackfillStatus, syncOrderItemOrderFields } from '../services/order-items';
@@ -32,6 +28,7 @@ import {
   recordFulfillmentOperationReceiptByOperator,
   resolveFulfillmentOperationNoEffect,
 } from '../services/fulfillment-operation-ledger';
+import { purgeAllTestClientData } from '../services/test-data-purge';
 
 const app = new Hono();
 
@@ -236,266 +233,14 @@ app.patch(
   }
 );
 
-// Delete every order (+ dependent shipments / ledger / billing lines /
-// overrides / queue entries) AND every test inventory SKU (+ its ledger
-// entries) that belongs to a test-flagged client. Intended as a one-touch
-// "make sandbox clean again" button — same behavior as the
-// scripts/purge-test-data.ts CLI script, exposed over HTTP so the
-// Inventory page can offer a 🧹 Purge Test Data button.
-//
-// Response keeps the legacy `deleted.{orders,shipments,ledger,billing}`
-// shape (SettingsView reads exactly those keys) and adds new keys for
-// the extra surfaces. Older callers that ignore the new keys keep working.
+// One-touch cleanup for all order/inventory-owned data under test clients.
+// The route is intentionally thin; the service owns scope, dependency
+// ordering, immutable-test-history authorization, and deletion counts.
 app.post('/purge-test-orders', async (c) => {
-  const testClients = await db
-    .select({ id: clients.id, name: clients.name })
-    .from(clients)
-    .where(eq(clients.isTest, true));
-  if (!testClients.length) {
-    // Even when there are no test CLIENTS, there may still be orphan
-    // test ledger rows in package_ledger from a previous incomplete
-    // purge (back when this endpoint didn't clean them). Run the
-    // package-ledger sweep anyway so those orphans + their negative
-    // stock impact get cleaned up.
-    const orphanResult = await db.transaction(async (tx) => {
-      let pkgLedgerDeleted = 0;
-      let pkgStockRestored = 0;
-      let pkgsAffected = 0;
-
-      const orphanRows = await tx
-        .select({ id: packageLedger.id, packageId: packageLedger.packageId, qtyDelta: packageLedger.qtyDelta })
-        .from(packageLedger)
-        .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`);
-
-      if (orphanRows.length) {
-        const restoreByPkg = new Map<number, number>();
-        for (const r of orphanRows) {
-          restoreByPkg.set(r.packageId, (restoreByPkg.get(r.packageId) ?? 0) + r.qtyDelta);
-        }
-        for (const [packageId, sumDelta] of restoreByPkg.entries()) {
-          await tx
-            .update(packages)
-            .set({ stockQty: sql`${packages.stockQty} - ${sumDelta}`, updatedAt: new Date() })
-            .where(eq(packages.id, packageId));
-          pkgStockRestored += Math.abs(sumDelta);
-          pkgsAffected += 1;
-        }
-        const del = await tx
-          .delete(packageLedger)
-          .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`)
-          .returning({ id: packageLedger.id });
-        pkgLedgerDeleted = del.length;
-      }
-
-      return { pkgLedgerDeleted, pkgStockRestored, pkgsAffected };
-    });
-
-    return c.json({
-      deleted: {
-        orders: 0,
-        shipments: 0,
-        ledger: 0,
-        billing: 0,
-        inventory: 0,
-        ledgerByInventory: 0,
-        orderOverrides: 0,
-        printQueue: 0,
-        pkgLedger: orphanResult.pkgLedgerDeleted,
-        pkgStockRestored: orphanResult.pkgStockRestored,
-        pkgsAffected: orphanResult.pkgsAffected,
-      },
-      message:
-        orphanResult.pkgLedgerDeleted > 0
-          ? `No test clients, but cleaned ${orphanResult.pkgLedgerDeleted} orphan test ledger rows and restored ${orphanResult.pkgStockRestored} units across ${orphanResult.pkgsAffected} package(s).`
-          : 'No clients flagged is_test=true — nothing to purge.',
-    });
-  }
-  const ids = testClients.map((c) => c.id);
-
-  // Collect order + inventory IDs upfront so we can cascade cleanly.
-  const orderRows = await db
-    .select({ id: orders.id })
-    .from(orders)
-    .where(inArray(orders.clientId, ids));
-  const orderIds = orderRows.map((r) => r.id);
-
-  const inventoryRows = await db
-    .select({ id: inventory.id })
-    .from(inventory)
-    .where(inArray(inventory.clientId, ids));
-  const inventoryIds = inventoryRows.map((r) => r.id);
-
-  // Per user override unlock shipped data on 2026-07-21: fail before an admin
-  // purge could cascade through immutable shipped inventory movements.
-  const [orderLedgerCount] = orderIds.length
-    ? await db.select({ count: sql<number>`count(*)::int` }).from(inventoryLedger).where(inArray(inventoryLedger.orderId, orderIds))
-    : [{ count: 0 }];
-  const [inventoryLedgerCount] = inventoryIds.length
-    ? await db.select({ count: sql<number>`count(*)::int` }).from(inventoryLedger).where(inArray(inventoryLedger.inventoryId, inventoryIds))
-    : [{ count: 0 }];
-  if (Number(orderLedgerCount?.count ?? 0) + Number(inventoryLedgerCount?.count ?? 0) > 0) {
-    return c.json({
-      error: 'Test-client purge cannot delete immutable inventory history. Use a fresh isolated test client/database.',
-      code: 'PS462_INVENTORY_LEDGER_IMMUTABLE',
-    }, 409);
-  }
-
-  // Wrap all deletes in a single transaction so a mid-run failure
-  // rolls everything back. Order respects FK constraints (children first).
-  const result = await db.transaction(async (tx) => {
-    let billing = 0;
-    let ledgerByOrder = 0;
-    let ledgerByInventory = 0;
-    let overridesDeleted = 0;
-    let shipmentsDeleted = 0;
-    let queueEntries = 0;
-    let ordersDeleted = 0;
-    let inventoryDeleted = 0;
-    let pkgLedgerDeleted = 0;
-    let pkgStockRestored = 0; // sum of |qtyDelta| added back
-    let pkgsAffected = 0;
-
-    if (orderIds.length) {
-      const billingDel = await tx
-        .delete(billingLineItems)
-        .where(inArray(billingLineItems.orderId, orderIds))
-        .returning({ id: billingLineItems.id });
-      billing = billingDel.length;
-
-      const overridesDel = await tx
-        .delete(orderOverrides)
-        .where(inArray(orderOverrides.orderId, orderIds))
-        .returning({ orderId: orderOverrides.orderId });
-      overridesDeleted = overridesDel.length;
-
-      const shipmentsDel = await tx
-        .delete(shipments)
-        .where(inArray(shipments.orderId, orderIds))
-        .returning({ id: shipments.id });
-      shipmentsDeleted = shipmentsDel.length;
-
-      // print_queue_orders.orderId is text(stringified order id)
-      const queueByOrderDel = await tx
-        .delete(printQueue)
-        .where(inArray(printQueue.orderId, orderIds.map(String)))
-        .returning({ id: printQueue.id });
-      queueEntries += queueByOrderDel.length;
-    }
-
-    // Belt-and-suspenders: nuke any queue rows whose client_id IS the
-    // test client (in case a queue row was added via a different code
-    // path that didn't set order_id correctly).
-    const queueByClientDel = await tx
-      .delete(printQueue)
-      .where(inArray(printQueue.clientId, ids))
-      .returning({ id: printQueue.id });
-    queueEntries += queueByClientDel.length;
-
-    if (orderIds.length) {
-      const ordersDel = await tx
-        .delete(orders)
-        .where(inArray(orders.clientId, ids))
-        .returning({ id: orders.id });
-      ordersDeleted = ordersDel.length;
-    }
-
-    if (inventoryIds.length) {
-      const inventoryDel = await tx
-        .delete(inventory)
-        .where(inArray(inventory.clientId, ids))
-        .returning({ id: inventory.id });
-      inventoryDeleted = inventoryDel.length;
-    }
-
-    // Package-ledger purge — the package_ledger table references orders
-    // ONLY via free-text in the `note` column ("Shipment XXX for order
-    // TESTING-XXX-XXX"). It has no client_id of its own.
-    //
-    // Test orders ALWAYS use orderNumber prefix `TESTING-` (set by
-    // /admin/seed-test-orders, line ~376) — that prefix is unique to
-    // PrepShip's test seeder; no real marketplace order ever starts
-    // with `TESTING-`. So `note ILIKE '%for order TESTING-%'` is a
-    // safe, unambiguous match — no risk of wiping a real customer's
-    // ledger entry by accident.
-    //
-    // Two-step: (1) sum the negative qtyDelta per packageId so we can
-    // restore each box's stockQty to its pre-test value, then (2)
-    // delete the rows. Without step 1, deleting alone leaves stockQty
-    // negative on every box that handled a test shipment (visible in
-    // the screenshot — 10x8x4 → -4 stock from 4 test shipments).
-    const testNoteRows = await tx
-      .select({ id: packageLedger.id, packageId: packageLedger.packageId, qtyDelta: packageLedger.qtyDelta })
-      .from(packageLedger)
-      .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`);
-
-    if (testNoteRows.length) {
-      // Group by packageId, sum qtyDelta (these are negative numbers
-      // for shipments → so the sum is also negative).
-      const restoreByPkg = new Map<number, number>();
-      for (const row of testNoteRows) {
-        restoreByPkg.set(row.packageId, (restoreByPkg.get(row.packageId) ?? 0) + row.qtyDelta);
-      }
-
-      // Restore each affected package's stockQty by adding back the
-      // absolute value of the (negative) sum. SQL: stockQty = stockQty - sumDelta
-      // where sumDelta is negative → effectively stockQty += |sumDelta|.
-      for (const [packageId, sumDelta] of restoreByPkg.entries()) {
-        await tx
-          .update(packages)
-          .set({
-            stockQty: sql`${packages.stockQty} - ${sumDelta}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(packages.id, packageId));
-        pkgStockRestored += Math.abs(sumDelta);
-        pkgsAffected += 1;
-      }
-
-      // Now delete the matched ledger rows.
-      const pkgLedgerDel = await tx
-        .delete(packageLedger)
-        .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`)
-        .returning({ id: packageLedger.id });
-      pkgLedgerDeleted = pkgLedgerDel.length;
-    }
-
-    return {
-      billing,
-      ledgerByOrder,
-      ledgerByInventory,
-      overridesDeleted,
-      shipmentsDeleted,
-      queueEntries,
-      ordersDeleted,
-      inventoryDeleted,
-      pkgLedgerDeleted,
-      pkgStockRestored,
-      pkgsAffected,
-    };
-  });
-
-  return c.json({
-    clients: testClients,
-    deleted: {
-      // Legacy keys — SettingsView reads these by name. Don't rename.
-      orders: result.ordersDeleted,
-      shipments: result.shipmentsDeleted,
-      ledger: result.ledgerByOrder,
-      billing: result.billing,
-      // New keys — surfaced on the Inventory page button.
-      inventory: result.inventoryDeleted,
-      ledgerByInventory: result.ledgerByInventory,
-      orderOverrides: result.overridesDeleted,
-      printQueue: result.queueEntries,
-      // New keys — surfaced on the Packages page button. The packages
-      // themselves are NOT deleted (they're global, shared across all
-      // clients) — only their test-order ledger entries get wiped, and
-      // each affected package's stockQty is restored by +|qtyDelta|.
-      pkgLedger: result.pkgLedgerDeleted,
-      pkgStockRestored: result.pkgStockRestored,
-      pkgsAffected: result.pkgsAffected,
-    },
-  });
+  // Per user override unlock shipped data on 2026-07-25: the canonical
+  // service proves clients.is_test=true, removes test-only dependents in
+  // one transaction, and leaves all real order/shipment history untouched.
+  return c.json(await purgeAllTestClientData());
 });
 
 // Seed synthetic mock orders under the first is_test client. These rows use
