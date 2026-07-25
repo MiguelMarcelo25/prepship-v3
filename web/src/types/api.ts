@@ -80,6 +80,9 @@ export type PrintQueueEntryDto = AnyRecord & {
   order_qty: number | null
   primary_sku: string | null
   item_description: string | null
+  hazmat_profile?: string | null
+  hazmat_snapshot_hash?: string | null
+  hazmat_declaration_revision?: number | null
 }
 export type ProductDefaultsDto = AnyRecord & {
   defaultPackageCode?: string | null

@@ -87,6 +87,7 @@ import { TEST_SERVICE_CODE, TEST_SHIPPING_ACCOUNT_LABEL, buildTestMockRate } fro
 import { CALIFORNIA_TZ } from '../../lib/ca-time'
 import { buildEmptyPanel } from './orders-empty-panel'
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
+import { OrdersHazmatDeclaration } from './OrdersHazmatDeclaration'
 import {
   OrdersPanelSaveSkuDefaultsLink,
   OrdersPanelPackageDimsLine,
@@ -762,6 +763,15 @@ export function OrdersDetailSidePanel({
               {/* PS-304 (FE consumption): the backend-owned row package-facts verdict — first
                   consumer of order.packageFacts. Display-only; renders nothing unless locked/stale. */}
               <OrdersPanelPackageFactsLine packageFacts={panelOrder?.packageFacts ?? null} />
+
+              {/* Per user override unlock shipped data on 2026-07-25: shipped
+                  orders render only the immutable hazmat snapshot; edit controls
+                  remain disabled and existing shipped/cancelled gates are unchanged. */}
+              <OrdersHazmatDeclaration
+                orderId={panelOrder.orderId}
+                shipped={shipped}
+                rawOrder={(panelDetail as any)?.raw ?? (panelOrder as any)?.raw}
+              />
 
               {/* User override "unlock shipped data" on 2026-05-15: expose shipped PrepShip label reprint/queue actions while keeping external labels disabled.
                   PS-166 W4d — Per user override unlock shipped data on 2026-06-13: the shipped-label-actions surface moved VERBATIM to

@@ -116,6 +116,19 @@ import {
   shippingQuoteCredentialFingerprint,
   type ShippingQuoteAccountAuthorization,
 } from './shipping-workflow/shipping-quote-authorization';
+import { getOrderHazmatForShipping } from './order-hazmat.js';
+import {
+  assertHazmatRatingSupported,
+  hazmatQuoteFactsForShipping,
+  HazmatShippingError,
+  resolveHazmatProfile,
+} from './shipping-workflow/hazmat-shipping-policy.js';
+import {
+  sealHazmatQuoteFacts,
+  type CanonicalHazmatQuoteFacts,
+} from './shipping-workflow/hazmat-declaration.js';
+import type { HazmatCapabilities } from './shipping-workflow/hazmat-capability.js';
+import { applyShipStationHazmatToShipment } from '../lib/shipstation/hazmat.js';
 
 type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
@@ -505,6 +518,9 @@ export type RateInput = {
   // Whether this is an eBay-marketplace order (sync-path-agnostic; see ebay-order-detection.ts).
   // Gates the eBay Logistics carrier so an eBay order synced via ShipStation still gets eBay rates.
   isEbayMarketplaceOrder?: boolean | null;
+  /** Backend-resolved only. Omitted for clear/disabled declarations. */
+  hazmatQuoteFacts?: CanonicalHazmatQuoteFacts;
+  hazmatCapabilities?: HazmatCapabilities;
 };
 
 function normalizeZip(zip: string): string {
@@ -624,6 +640,36 @@ export async function resolveRateInput(
       carrierName: carrier.nickname,
     }),
   );
+  const hazmatState = input.orderId != null
+    ? await getOrderHazmatForShipping(Number(input.orderId))
+    : null;
+  const hazmatQuoteFacts = hazmatState ? hazmatQuoteFactsForShipping(hazmatState) : null;
+  const hazmatAllowedCarriers = hazmatQuoteFacts && hazmatState
+    ? allowedCarriers.filter((carrier) => {
+        const profile = resolveHazmatProfile({
+          providerFamily: 'shipstation',
+          provider: 'shipstation',
+          carrierCode: carrier.carrier_code,
+          facts: hazmatQuoteFacts,
+        });
+        try {
+          assertHazmatRatingSupported({
+            facts: hazmatQuoteFacts,
+            profile,
+            capabilities: hazmatState.capabilities,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      })
+    : allowedCarriers;
+  if (hazmatQuoteFacts && hazmatAllowedCarriers.length === 0) {
+    throw new HazmatShippingError(
+      'No certified ShipStation carrier is available for this hazmat declaration.',
+      'HAZMAT_RATE_UNAVAILABLE',
+    );
+  }
   // PS-123 / PS-170: the backend owns the effective HUGRAB insurance used for rate
   // shopping, cache fingerprints, saved best-rate proof, and label parity. Frontend
   // callers pass operator intent only. The eligibility module is the SINGLE owner of the
@@ -678,7 +724,10 @@ export async function resolveRateInput(
     effectiveInsuranceSource,
     hugrabDefaultInsuranceEnabled: isHugrab ? hugrabDefaultInsuranceEnabled : null,
     automationRulesVersion: shippingAutomationRulesFingerprint(automationRules),
-    carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
+    carrierIds: hazmatAllowedCarriers.map((carrier) => carrier.carrier_id).sort(),
+    ...(hazmatQuoteFacts && hazmatState
+      ? { hazmatQuoteFacts, hazmatCapabilities: hazmatState.capabilities }
+      : {}),
   };
 }
 
@@ -715,6 +764,7 @@ export function rateCacheKey(input: RateInput): string {
     carrierIds: input.carrierIds,
     automationRulesVersion: input.automationRulesVersion,
     hugrabDefaultInsuranceEnabled: input.hugrabDefaultInsuranceEnabled,
+    hazmatSnapshotHash: input.hazmatQuoteFacts?.declarationHash,
   });
 }
 
@@ -1278,11 +1328,108 @@ function buildShipStationEstimateBody(
   return body;
 }
 
-function stampEstimateRateCarrier(rate: EstimateRate, carrier: CarrierInfo): void {
+export function buildShipStationFullRateBody(
+  carriers: readonly CarrierInfo[],
+  input: RateInput,
+  shipFrom: Address,
+): Record<string, unknown> {
+  if (!input.hazmatQuoteFacts || !input.hazmatCapabilities) {
+    throw new Error('Active hazmat rate requests require backend-sealed declaration facts.');
+  }
+  const profiles = carriers.map((carrier) => {
+    const profile = resolveHazmatProfile({
+      providerFamily: 'shipstation',
+      provider: 'shipstation',
+      carrierCode: carrier.carrier_code,
+      facts: input.hazmatQuoteFacts!,
+    });
+    return assertHazmatRatingSupported({
+      facts: input.hazmatQuoteFacts!,
+      profile,
+      capabilities: input.hazmatCapabilities!,
+    });
+  });
+  const uniqueProfiles = [...new Set(profiles)];
+  if (uniqueProfiles.length !== 1) {
+    throw new Error('Hazmat carriers with different provider profiles must be rated separately.');
+  }
+  const options = normalizeShippingOptions(input);
+  const pkg: Record<string, unknown> = {
+    package_code: 'package',
+    weight: { value: input.weightOz, unit: 'ounce' },
+  };
+  if (input.dimsL && input.dimsW && input.dimsH) {
+    pkg.dimensions = {
+      length: input.dimsL,
+      width: input.dimsW,
+      height: input.dimsH,
+      unit: 'inch',
+    };
+  }
+  if (options.insuranceProvider !== 'none' && options.insuredValue != null) {
+    pkg.insured_value = { amount: options.insuredValue, currency: 'usd' };
+  }
+  const sealed = sealHazmatQuoteFacts(input.hazmatQuoteFacts, uniqueProfiles[0]!);
+  const shipment = applyShipStationHazmatToShipment({
+    ship_date: shipDateIso(),
+    ship_from: shipFrom,
+    ship_to: {
+      name: input.toName ?? 'Recipient',
+      company_name: input.toCompany ?? undefined,
+      phone: '000-000-0000',
+      address_line1: input.toAddress ?? '',
+      address_line2: input.toAddress2 ?? undefined,
+      city_locality: input.toCity ?? '',
+      state_province: input.toState ?? '',
+      postal_code: input.toZip,
+      country_code: (input.toCountry ?? 'US').toUpperCase(),
+      address_residential_indicator:
+        input.residential === true ? 'yes' : input.residential === false ? 'no' : 'unknown',
+    },
+    packages: [pkg],
+    confirmation: options.confirmation,
+    ...(options.insuranceProvider !== 'none'
+      ? { insurance_provider: options.insuranceProvider }
+      : {}),
+  }, sealed);
+  return {
+    rate_options: { carrier_ids: carriers.map((carrier) => carrier.carrier_id) },
+    shipment,
+  };
+}
+
+function buildShipStationRateRequest(
+  carriers: readonly CarrierInfo[],
+  input: RateInput,
+  shipFrom: Address,
+): { body: Record<string, unknown>; rateMode?: 'shipment' } {
+  if (!input.hazmatQuoteFacts) {
+    return { body: buildShipStationEstimateBody(carriers, input, shipFrom) };
+  }
+  return {
+    body: buildShipStationFullRateBody(carriers, input, shipFrom),
+    rateMode: 'shipment',
+  };
+}
+
+function stampEstimateRateCarrier(rate: EstimateRate, carrier: CarrierInfo, input: RateInput): void {
   const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
   if (!rate.carrier_id) rate.carrier_id = carrier.carrier_id;
   rate.carrier_code = override?.carrier_code ?? rate.carrier_code ?? carrier.carrier_code;
   rate.carrier_nickname = override?.nickname ?? rate.carrier_nickname ?? carrier.nickname;
+  if (input.hazmatQuoteFacts && input.hazmatCapabilities) {
+    const profile = resolveHazmatProfile({
+      providerFamily: 'shipstation',
+      provider: 'shipstation',
+      carrierCode: rate.carrier_code ?? carrier.carrier_code,
+      facts: input.hazmatQuoteFacts,
+    });
+    (rate as EstimateRate & { hazmatProfile?: string }).hazmatProfile = assertHazmatRatingSupported({
+      facts: input.hazmatQuoteFacts,
+      profile,
+      capabilities: input.hazmatCapabilities,
+    });
+  }
 }
 
 // Default path: one /v2/rates/estimate call per carrier. Kept intact behind
@@ -1295,13 +1442,14 @@ async function fetchEstimateForCarrier(
   priority: RateFetchPriority,
 ): Promise<CarrierEstimateResult> {
   const startedAt = Date.now();
-  const body = buildShipStationEstimateBody([carrier], input, shipFrom);
+  const request = buildShipStationRateRequest([carrier], input, shipFrom);
   const options = normalizeShippingOptions(input);
   try {
     // Audit R-4: abortable — the deadline stops the underlying HTTP work.
     const payload = await withAbortableCarrierQuoteTimeout(
       (signal) => quoteCarrierRates('shipstation', {
-        body,
+        body: request.body,
+        ...(request.rateMode ? { rateMode: request.rateMode } : {}),
         shippingOptions: options,
         apiKeyV2: input.apiKeyV2 ?? undefined,
         dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
@@ -1315,7 +1463,7 @@ async function fetchEstimateForCarrier(
     );
     const rates = payload.rates as EstimateRate[];
     // Single-account responses can safely fill carrier_id when ShipStation omits it.
-    for (const r of rates) stampEstimateRateCarrier(r, carrier);
+    for (const r of rates) stampEstimateRateCarrier(r, carrier, input);
     const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
     return {
       carrier,
@@ -1363,7 +1511,7 @@ async function fetchEstimateForCarriers(
   priority: RateFetchPriority,
 ): Promise<BatchedCarrierEstimateResult> {
   const startedAt = Date.now();
-  const body = buildShipStationEstimateBody(carriers, input, shipFrom);
+  const request = buildShipStationRateRequest(carriers, input, shipFrom);
   const options = normalizeShippingOptions(input);
   const carrierSetHash = createHash('sha256')
     .update(carriers.map((carrier) => carrier.carrier_id).sort().join('\n'))
@@ -1373,7 +1521,8 @@ async function fetchEstimateForCarriers(
   // shadow-retrying while the per-account fallback also runs.
   const payload = await withAbortableCarrierQuoteTimeout(
     (signal) => quoteCarrierRates('shipstation', {
-      body,
+      body: request.body,
+      ...(request.rateMode ? { rateMode: request.rateMode } : {}),
       shippingOptions: options,
       apiKeyV2: input.apiKeyV2 ?? undefined,
       dedupeKey: `rates-estimate:batch:${carrierSetHash}:${rateCacheKey(input)}`,
@@ -1402,7 +1551,7 @@ async function fetchEstimateForCarriers(
     if (carrierRates.length === 0) continue;
     const carrier = carrierById.get(carrierId);
     if (!carrier) continue;
-    for (const rate of carrierRates) stampEstimateRateCarrier(rate, carrier);
+    for (const rate of carrierRates) stampEstimateRateCarrier(rate, carrier, input);
     const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
     results.push({
       carrier,
@@ -1541,7 +1690,7 @@ async function fetchBatchedEstimatesWithFallback(
 // Lift the EstimateRate shape (flat from ShipStation) into v4's Rate shape
 // (used by the cache + route response).
 function toRate(er: EstimateRate): Rate {
-  return {
+  const rate: Rate = {
     rate_id: String(er.rate_id ?? ''),
     rate_type: 'shipment',
     carrier_id: String(er.carrier_id ?? ''),
@@ -1571,6 +1720,9 @@ function toRate(er: EstimateRate): Rate {
     error_messages: er.error_messages,
     package_type: er.package_type ?? undefined,
   };
+  const hazmatProfile = (er as EstimateRate & { hazmatProfile?: string }).hazmatProfile;
+  if (hazmatProfile) (rate as Rate & { hazmatProfile: string }).hazmatProfile = hazmatProfile;
+  return rate;
 }
 
 export type FetchLiveRatesResult = {
@@ -1599,7 +1751,7 @@ export async function fetchLiveRatesWithDiagnostics(
 
   if (!carriers.length) return { rates: [], carrierDiagnostics: [] };
 
-  const batches = shipStationBatchedRateFanoutEnabled() && carriers.length > 1
+  const batches = !input.hazmatQuoteFacts && shipStationBatchedRateFanoutEnabled() && carriers.length > 1
     ? await fetchBatchedEstimatesWithFallback(carriers, input, shipFrom, priority)
     : await mapWithConcurrency(
         carriers,
@@ -2549,6 +2701,15 @@ export async function getDirectCarrierRatesForRateInput(
     if (normalizeProviderKey(account.provider) === 'ebay_shipping' && !input.isEbayMarketplaceOrder) {
       return false;
     }
+    if (input.hazmatQuoteFacts && input.hazmatCapabilities) {
+      const profile = resolveHazmatProfile({
+        providerFamily: 'direct',
+        provider: account.provider,
+        carrierCode: null,
+        facts: input.hazmatQuoteFacts,
+      });
+      return profile != null && input.hazmatCapabilities.profiles[profile].ratingSupported;
+    }
     return true;
   });
   if (!accounts.length) {
@@ -2764,6 +2925,7 @@ export async function getDirectCarrierRatesForRateInput(
         directCarrierSourceTable: account.sourceTable,
         requestKey: requestFingerprint,
         shippingOptions,
+        ...(input.hazmatQuoteFacts ? { hazmatQuoteFacts: input.hazmatQuoteFacts } : {}),
         signal,
       }), label, executionPolicy.timeoutMs, input.signal);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];

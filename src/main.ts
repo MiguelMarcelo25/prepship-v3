@@ -16,6 +16,7 @@ import {
 } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
+import orderHazmatRoute from './routes/order-hazmat';
 import shipmentsRoute from './routes/shipments';
 import packagesRoute from './routes/packages';
 import clientsRoute from './routes/clients';
@@ -180,6 +181,7 @@ app.use('/observability', requireAdmin);
 app.use('/observability/*', requireAdmin);
 
 app.route('/orders', ordersRoute);
+app.route('/orders', orderHazmatRoute);
 app.route('/shipments', shipmentsRoute);
 app.route('/packages', packagesRoute);
 app.route('/clients', clientsRoute);

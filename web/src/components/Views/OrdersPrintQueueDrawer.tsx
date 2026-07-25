@@ -339,6 +339,16 @@ export function OrdersPrintQueueDrawer({
                             ⛔ {(entry.held_reason as string | undefined) || 'On hold'}
                           </span>
                         ) : null}
+                        {/* Per user override unlock shipped data on 2026-07-25:
+                            display-only badge from the immutable backend snapshot. */}
+                        {entry.hazmat_profile ? (
+                          <span
+                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 ring-1 ring-amber-300 text-[9.5px] font-semibold uppercase tracking-wide"
+                            title={`Immutable hazmat snapshot revision ${entry.hazmat_declaration_revision ?? 'unknown'} · ${entry.hazmat_profile}`}
+                          >
+                            ⚠ Hazmat
+                          </span>
+                        ) : null}
                         <span className="pq-order-qty inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-2 text-ink-2 text-[10.5px] font-semibold tabular-nums ring-1 ring-line/70">
                           Qty {entry.order_qty ?? 1}
                         </span>
@@ -403,6 +413,14 @@ export function OrdersPrintQueueDrawer({
                             title="Carrier tracking confirmed delivery — this label left the queue automatically"
                           >
                             Delivered
+                          </span>
+                        ) : null}
+                        {entry.hazmat_profile ? (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200"
+                            title={`Immutable hazmat snapshot · ${entry.hazmat_profile}`}
+                          >
+                            Hazmat
                           </span>
                         ) : null}
                         <span className="pq-order-qty inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-2 text-ink-2 text-[10.5px] font-semibold tabular-nums ring-1 ring-line/70">

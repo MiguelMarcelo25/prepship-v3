@@ -276,6 +276,9 @@ export async function reconcileQueueShipStationOperation(
     },
     shipFrom: authorizedPurchaseFacts.shipFrom,
     orderNumber: order.orderNumber ?? null,
+    // Per user override unlock shipped data on 2026-07-25: reconstruction must
+    // retain the original sealed snapshot; recovery cannot infer or rewrite it.
+    hazmat: authorizedPurchaseFacts.hazmat,
   });
   if (hashFulfillmentOperationRequest(canonicalRequest) !== operation.requestHash) {
     return { status: 'held' };
