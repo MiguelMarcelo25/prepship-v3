@@ -17,6 +17,7 @@ const catalog = {
   ],
   fields: [
     { key: 'order.client_id', label: 'Client', type: 'number', operators: ['eq', 'in'] },
+    { key: 'order.store_id', label: 'Store', type: 'number', operators: ['eq', 'in'] },
     { key: 'line.sku', label: 'Line SKU', type: 'string', operators: ['normalized_eq', 'contains'] },
   ],
   actions: [
@@ -70,7 +71,7 @@ function backend({ controlServiceCount = 1 } = {}) {
     if (url.pathname === '/clients') return routeObj.fulfill(json([{ id: 4, name: 'HUGRAB', active: true, isTest: false, storeId: 378060 }]))
     if (url.pathname === '/users') return routeObj.fulfill(json({ users: [{ id: 'u1', email: 'operator@example.com', isAdmin: true }] }))
     if (url.pathname === '/sync/status') return routeObj.fulfill(json({ status: 'idle', queue: { started: false, queues: [] } }))
-    if (url.pathname === '/init/stores') return routeObj.fulfill(json({ data: [{ id: 378060, storeId: 378060, name: 'HUGRAB', clientId: 4, active: true }] }))
+    if (url.pathname === '/init/stores') return routeObj.fulfill(json({ data: [{ storeId: 378060, clientName: 'HUGRAB', clientId: 4, active: true }] }))
     if (url.pathname === '/init/counts') return routeObj.fulfill(json({ byStatus: {}, byStatusStore: {} }))
     if (url.pathname === '/automations/catalog') return routeObj.fulfill(json({ data: catalog }))
     if (url.pathname === '/automations' && request.method() === 'GET') {
@@ -95,14 +96,15 @@ function backend({ controlServiceCount = 1 } = {}) {
       return routeObj.fulfill(json({ data: [{ id: 1, orderId: 101, ruleId: 466, trigger: 'before_rate', mode: 'apply', status: 'completed', startedAt: '2026-07-25T00:00:00.000Z', completedAt: '2026-07-25T00:00:01.000Z', errorSummary: null }] }))
     }
     if (url.pathname === '/automations/controls') {
-      return routeObj.fulfill(json({ data: [{
-        store: { storeId: 378060, clientId: 4, clientName: 'HUGRAB' },
-        carriers: [{ carrierId: 'se-123', carrierCode: 'ups', nickname: 'UPS', friendlyName: 'UPS', disabled: false, disabledReason: null,
+      const controlCarriers = [{ carrierId: 'se-123', carrierCode: 'ups', nickname: 'UPS', friendlyName: 'UPS', disabled: false, disabledReason: null,
           services: Array.from({ length: controlServiceCount }, (_, index) => index === 0
             ? { serviceCode: 'ups_ground_saver', name: 'UPS Ground Saver', allowed: false, disabled: true, locked: true, reason: 'HUGRAB protected control' }
             : { serviceCode: `service_${index + 1}`, name: `Service ${index + 1}`, allowed: true, disabled: false, locked: false, reason: null }),
-        }],
-      }] }))
+        }]
+      return routeObj.fulfill(json({ data: [
+        { store: { storeId: 356678, clientId: 2, clientName: 'eBay - DJC' }, carriers: [] },
+        { store: { storeId: 378060, clientId: 4, clientName: 'HUGRAB' }, carriers: controlCarriers },
+      ] }))
     }
     return routeObj.fulfill(json({}))
   }
@@ -127,6 +129,7 @@ test('Settings ignores the retired Automation section saved in local storage', a
 
 test('PS-466 operations console and guided publish stay backend-driven and offline', async ({ page }) => {
   const mock = backend()
+  await page.setViewportSize({ width: 1440, height: 1100 })
   await seedAuth(page)
   await page.route('**/*', mock.route)
   await page.goto(`${baseUrl}/automations`)
@@ -137,16 +140,30 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await expect(page.getByText('Exact normalized HU-10 compliance gate').last()).toBeVisible()
 
   await page.getByRole('button', { name: 'New automation' }).click()
-  await page.getByLabel('Name').fill('Browser proof automation')
+  await expect(page.getByRole('combobox', { name: 'Automation trigger' })).toHaveValue('order_imported')
+  await expect(page.getByRole('switch', { name: 'Active rule' })).toBeChecked()
+  await expect(page.getByText('Orders match all of these specific criteria')).toBeVisible()
+  await expect(page.getByText('Automation Complete')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Continue/ })).toHaveCount(0)
+  await expect(page.getByLabel('Summary')).toHaveValue('HUGRAB - HAZMAT')
+  await expect(page.getByLabel('Condition 1 field')).toHaveValue('line.sku')
+  await expect(page.getByLabel('Condition 1 operator')).toHaveValue('contains')
+  await expect(page.getByLabel('Condition 1 value')).toHaveValue('HU-10')
+  await expect(page.getByLabel('Condition 2 field')).toHaveValue('order.store_id')
+  await expect(page.getByLabel('Condition 2 value')).toHaveValue('378060')
+  await expect(page.getByRole('combobox', { name: 'Action type 1' })).toHaveValue('Set shipment as dangerous goods')
+  await expect(page.getByText('Name Contact')).toBeVisible()
+  await expect(page.getByText('Phone Contact')).toBeVisible()
+  await expect(page.getByLabel('Dangerous-goods contact name')).toHaveValue('Eddie Kim')
+  await expect(page.getByLabel('Dangerous-goods contact phone')).toHaveValue('310-720-1871')
+  await page.getByLabel('Summary').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(screenshotDir, 'automations-shipstation-builder.png'), fullPage: true })
+
+  await page.getByLabel('Summary').fill('Browser proof automation')
+  await page.getByText('Advanced options').click()
   await page.getByLabel('Description').fill('Offline browser proof')
-  await page.getByRole('button', { name: /Continue/ }).click()
-  await page.locator('input[placeholder="Value"]').fill('4')
-  await page.getByRole('button', { name: /Continue/ }).click()
-  await expect(page.getByText('Only backend-allowlisted actions appear.')).toBeVisible()
-  await page.getByRole('combobox').selectOption('hazmat.add_declaration')
   await page.getByLabel('Dangerous-goods contact name').fill('Dispatch Desk')
   await page.getByLabel('Dangerous-goods contact phone').fill('310-555-0100')
-  await page.getByRole('button', { name: /Continue/ }).click()
   const createRequestPromise = page.waitForRequest((request) => (
     new URL(request.url()).pathname === '/automations' && request.method() === 'POST'
   ))
@@ -157,16 +174,31 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
     schemaVersion: 1,
     config: { contactName: 'Dispatch Desk', contactPhone: '310-555-0100' },
   }])
-  await page.getByLabel('Simulation order ID').fill('101')
-  await page.getByRole('button', { name: 'Simulate' }).click()
-  await expect(page.getByText(/Zero writes: true/)).toBeVisible()
-  await expect(page.getByText(/Zero provider calls: true/)).toBeVisible()
-  await page.getByRole('button', { name: 'Review & publish' }).click()
+  expect(createdDocument.scope).toEqual({ clientIds: [4], storeIds: [378060] })
+  expect(createdDocument.condition).toEqual({
+    kind: 'group', op: 'all', children: [
+      { kind: 'predicate', field: 'order.store_id', operator: 'eq', value: 378060 },
+      { kind: 'line_any', condition: { kind: 'group', op: 'all', children: [
+        { kind: 'predicate', field: 'line.sku', operator: 'contains', value: 'HU-10' },
+      ] } },
+    ],
+  })
+  await page.getByLabel('Test order ID').fill('101')
+  await page.getByRole('button', { name: 'Test rule' }).click()
+  await expect(page.getByText(/Order unchanged/)).toBeVisible()
+  await expect(page.getByText(/No provider calls/)).toBeVisible()
+  await page.getByRole('button', { name: 'Publish rule' }).click()
   await expect(page.getByRole('table').getByText('Browser proof automation')).toBeVisible()
 
   await page.getByRole('tab', { name: 'Carrier & Service Controls' }).click()
+  await expect(page.getByRole('button', { name: /eBay - DJC/ })).toBeVisible()
+  const hugrabControls = page.getByRole('button', { name: /HUGRAB/ })
+  await expect(hugrabControls).toBeVisible()
+  await expect(page.getByText('UPS Ground Saver')).toHaveCount(0)
+  await hugrabControls.click()
   await expect(page.getByText('UPS Ground Saver')).toBeVisible()
   await expect(page.getByTitle('HUGRAB protected control')).toBeDisabled()
+  await page.screenshot({ path: path.join(screenshotDir, 'automation-client-controls.png'), fullPage: true })
   await page.getByRole('tab', { name: 'Run History' }).click()
   await expect(page.getByText('Run #1')).toBeVisible()
   await page.getByRole('tab', { name: 'Templates & Actions' }).click()
@@ -185,6 +217,7 @@ test('automation tabs stay visible above a tall controls panel', async ({ page }
 
   const controlsTab = page.getByRole('tab', { name: 'Carrier & Service Controls' })
   await controlsTab.click()
+  await page.getByRole('button', { name: /HUGRAB/ }).click()
   await expect(page.getByText('Service 75')).toBeVisible()
 
   const tablist = page.getByRole('tablist', { name: 'Automation workspace sections' })
@@ -209,6 +242,8 @@ test('PS-466 guided builder remains usable at mobile width', async ({ page }) =>
   await page.goto(`${baseUrl}/automations`)
   await page.getByRole('button', { name: 'New automation' }).click()
   await expect(page.getByText('Guided Builder', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: /Continue/ })).toBeVisible()
+  await expect(page.getByLabel('Summary')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Save draft' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Continue/ })).toHaveCount(0)
   await page.screenshot({ path: path.join(screenshotDir, 'automations-mobile-builder.png'), fullPage: true })
 })

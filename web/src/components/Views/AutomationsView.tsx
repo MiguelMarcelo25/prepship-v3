@@ -112,6 +112,13 @@ type AvailabilityRow = {
   carriers: AvailabilityCarrier[];
 };
 
+type AutomationStoreOption = {
+  storeId: number;
+  clientId: number;
+  clientName: string;
+  active: boolean;
+};
+
 type BuilderCondition = {
   id: string;
   field: string;
@@ -167,6 +174,28 @@ function statusTone(status: string): string {
 
 function label(value: string): string {
   return value.replaceAll("_", " ").replaceAll(".", " ");
+}
+
+function operatorLabel(value: string): string {
+  return (
+    {
+      eq: "Is equal to",
+      neq: "Is not equal to",
+      normalized_eq: "Is exactly",
+      contains: "Contains",
+      not_contains: "Does not contain",
+      starts_with: "Starts with",
+      in: "Is one of",
+      gt: "Is greater than",
+      gte: "Is at least",
+      lt: "Is less than",
+      lte: "Is at most",
+    }[value] ?? label(value)
+  );
+}
+
+function fieldLabel(field: CatalogField): string {
+  return field.key === "line.sku" ? "Item SKU" : field.label;
 }
 
 function actionDefault(type: string): string {
@@ -244,6 +273,110 @@ function buildConditionDocument(
     });
   }
   return { kind: "group", op: "all", children };
+}
+
+function ActionTypePicker({
+  value,
+  actions,
+  index,
+  onChange,
+}: {
+  value: string;
+  actions: CatalogAction[];
+  index: number;
+  onChange: (value: string) => void;
+}) {
+  const selected = actions.find((action) => action.type === value);
+  const [query, setQuery] = useState(selected?.label ?? "");
+  const [open, setOpen] = useState(false);
+  const listboxId = `automation-action-options-${index}`;
+  const filtered = actions.filter((action) =>
+    `${action.label} ${action.type}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  );
+  const choose = (action: CatalogAction) => {
+    if (!action.available) return;
+    setQuery(action.label);
+    setOpen(false);
+    onChange(action.type);
+  };
+
+  return (
+    <div className="relative">
+      <label className="block text-tiny font-bold text-ink-2">
+        Action Type
+        <div className="relative mt-1.5">
+          <Search
+            size={14}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3"
+          />
+          <input
+            type="text"
+            role="combobox"
+            aria-label={`Action type ${index + 1}`}
+            aria-expanded={open}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            value={query}
+            onFocus={(event) => {
+              setOpen(true);
+              event.currentTarget.select();
+            }}
+            onBlur={() => setOpen(false)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setOpen(false);
+              if (event.key === "Enter") {
+                const firstAvailable = filtered.find((action) => action.available);
+                if (firstAvailable) {
+                  event.preventDefault();
+                  choose(firstAvailable);
+                }
+              }
+            }}
+            className="h-10 w-full rounded-lg bg-surface pl-9 pr-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
+          />
+        </div>
+      </label>
+      {open ? (
+        <div
+          id={listboxId}
+          role="listbox"
+          className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-lg bg-surface p-1 shadow-xl ring-1 ring-line"
+        >
+          {filtered.length ? (
+            filtered.map((action) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={action.type === value}
+                key={action.type}
+                disabled={!action.available}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => choose(action)}
+                className="flex w-full items-start justify-between gap-3 rounded-md px-3 py-2 text-left text-small text-ink hover:bg-brand-bg disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <span>{action.label}</span>
+                {!action.available ? (
+                  <span className="text-[10px] font-bold uppercase text-ink-3">
+                    Unavailable
+                  </span>
+                ) : null}
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-4 text-center text-small text-ink-3">
+              No matching action
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function RulesPanel({
@@ -461,38 +594,65 @@ function RulesPanel({
 
 function Builder({
   catalog,
+  stores,
   onClose,
   onCreated,
 }: {
   catalog: AutomationCatalog;
+  stores: AutomationStoreOption[];
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
+  const firstField = catalog.fields[0];
+  const skuField = catalog.fields.find((field) => field.key === "line.sku");
+  const storeField = catalog.fields.find(
+    (field) => field.key === "order.store_id",
+  );
+  const hugrabStore = stores.find(
+    (store) => store.clientName.trim().toLowerCase() === "hugrab",
+  );
+  const hazmatAction = catalog.actions.find(
+    (action) => action.type === "hazmat.add_declaration" && action.available,
+  );
+  const [activeRule, setActiveRule] = useState(true);
+  const [name, setName] = useState(
+    hugrabStore ? "HUGRAB - HAZMAT" : "Hazmat automation",
+  );
   const [description, setDescription] = useState("");
   const [trigger, setTrigger] = useState("order_imported");
   const [priority, setPriority] = useState("100");
-  const [clientId, setClientId] = useState("");
-  const [storeId, setStoreId] = useState("");
-  const firstField = catalog.fields[0];
+  const [clientId, setClientId] = useState(
+    hugrabStore ? String(hugrabStore.clientId) : "",
+  );
+  const [storeId, setStoreId] = useState(
+    hugrabStore ? String(hugrabStore.storeId) : "",
+  );
   const [conditions, setConditions] = useState<BuilderCondition[]>([
     {
       id: crypto.randomUUID(),
-      field: firstField?.key ?? "order.client_id",
-      operator: firstField?.operators[0] ?? "eq",
-      value: "",
+      field: skuField?.key ?? firstField?.key ?? "line.sku",
+      operator: skuField?.operators.includes("contains")
+        ? "contains"
+        : (skuField?.operators[0] ?? "contains"),
+      value: "HU-10",
+    },
+    {
+      id: crypto.randomUUID(),
+      field: storeField?.key ?? "order.store_id",
+      operator: storeField?.operators.includes("eq")
+        ? "eq"
+        : (storeField?.operators[0] ?? "eq"),
+      value: hugrabStore ? String(hugrabStore.storeId) : "",
     },
   ]);
-  const firstAction = catalog.actions.find((action) => action.available);
   const [actions, setActions] = useState<BuilderAction[]>([
     {
       id: crypto.randomUUID(),
-      type: firstAction?.type ?? "tag.add",
-      value: actionDefault(firstAction?.type ?? "tag.add"),
+      type: hazmatAction?.type ?? "hazmat.add_declaration",
+      value: actionDefault(hazmatAction?.type ?? "hazmat.add_declaration"),
       provider: "parcelguard",
-      contactName: "",
-      contactPhone: "",
+      contactName: "Eddie Kim",
+      contactPhone: "310-720-1871",
     },
   ]);
   const [unknownPolicy, setUnknownPolicy] = useState<"no_match" | "block">(
@@ -577,7 +737,7 @@ function Builder({
 
   const simulate = async () => {
     if (!draft) {
-      setError("Save the draft before simulation.");
+      setError("Save the draft before testing the rule.");
       return;
     }
     const orderId = Number(simulationOrderId);
@@ -632,7 +792,7 @@ function Builder({
               Guided Builder
             </div>
             <div className="text-tiny text-ink-3">
-              Draft → simulate exact hash → review & publish
+              Build the rule in one screen, then test and publish.
             </div>
           </div>
           <button
@@ -644,67 +804,77 @@ function Builder({
             <X size={20} />
           </button>
         </header>
-        <div className="flex border-b border-line bg-surface px-5 py-3">
-          {["Basics", "Conditions", "Actions", "Review"].map((item, index) => (
-            <button
-              type="button"
-              key={item}
-              onClick={() => setStep(index + 1)}
-              className={`flex flex-1 items-center gap-2 text-left text-small font-bold ${step === index + 1 ? "text-brand" : "text-ink-3"}`}
+        <div className="border-b border-line bg-surface px-5 py-3">
+          <div className="mx-auto flex max-w-xl items-center gap-3 rounded-lg bg-surface px-4 py-3 ring-1 ring-line">
+            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold text-ink-2 ring-1 ring-line">
+              When
+            </span>
+            <select
+              aria-label="Automation trigger"
+              value={trigger}
+              onChange={(event) => setTrigger(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-small font-bold text-ink outline-none"
             >
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] ring-1 ${step === index + 1 ? "bg-brand text-white ring-brand" : "bg-surface-2 ring-line"}`}
-              >
-                {index + 1}
-              </span>
-              <span className="hidden sm:inline">{item}</span>
-            </button>
-          ))}
+              {catalog.triggers.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <CheckCircle2 size={17} className="shrink-0 text-emerald-600" />
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
-          <div className="mx-auto max-w-3xl">
-            {step === 1 ? (
-              <div className="space-y-5">
-                <div>
-                  <h2 className="text-xl font-extrabold text-ink">
-                    Name the automation
-                  </h2>
-                  <p className="mt-1 text-small text-ink-3">
-                    Use a clear outcome-oriented name and immutable client/store
-                    IDs.
-                  </p>
-                </div>
+          <div className="mx-auto max-w-4xl">
+            <section className="overflow-visible rounded-xl bg-surface shadow-sm ring-2 ring-brand/30">
+              <div className="grid gap-4 border-b border-line p-4 sm:grid-cols-[minmax(0,1fr)_180px]">
                 <label className="block text-small font-bold text-ink">
-                  Name
+                  Summary
                   <input
+                    aria-label="Summary"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
+                    placeholder="Name this automation"
                     className="mt-2 h-10 w-full rounded-lg bg-surface px-3 ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
                   />
                 </label>
-                <label className="block text-small font-bold text-ink">
-                  Description
-                  <textarea
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                    rows={3}
-                    className="mt-2 w-full rounded-lg bg-surface p-3 ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
-                  />
-                </label>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="text-small font-bold text-ink">
-                    Trigger
-                    <select
-                      value={trigger}
-                      onChange={(event) => setTrigger(event.target.value)}
-                      className="mt-2 h-10 w-full rounded-lg bg-surface px-3 ring-1 ring-line"
-                    >
-                      {catalog.triggers.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
+                <div>
+                  <div className="text-small font-bold text-ink">
+                    Active Rule
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Active rule"
+                    aria-checked={activeRule}
+                    onClick={() => setActiveRule((value) => !value)}
+                    className={`mt-3 flex h-6 w-11 items-center rounded-full p-0.5 transition-colors ${activeRule ? "bg-brand" : "bg-ink-3/40"}`}
+                  >
+                    <span
+                      className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${activeRule ? "translate-x-5" : "translate-x-0"}`}
+                    />
+                  </button>
+                  <p className="mt-2 text-tiny text-ink-3">
+                    {activeRule
+                      ? "Publishes after the required test passes."
+                      : "Save as draft without publishing."}
+                  </p>
+                </div>
+              </div>
+
+              <details className="border-b border-line px-4 py-3">
+                <summary className="cursor-pointer text-small font-bold text-ink-2">
+                  Advanced options
+                </summary>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <label className="text-small font-bold text-ink sm:col-span-2">
+                    Description
+                    <textarea
+                      value={description}
+                      onChange={(event) => setDescription(event.target.value)}
+                      rows={2}
+                      className="mt-2 w-full rounded-lg bg-surface p-3 ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
+                    />
                   </label>
                   <label className="text-small font-bold text-ink">
                     Priority
@@ -734,19 +904,34 @@ function Builder({
                       className="mt-2 h-10 w-full rounded-lg bg-surface px-3 ring-1 ring-line"
                     />
                   </label>
+                  <label className="text-small font-bold text-ink">
+                    Incomplete facts
+                    <select
+                      value={unknownPolicy}
+                      onChange={(event) =>
+                        setUnknownPolicy(
+                          event.target.value as "no_match" | "block",
+                        )
+                      }
+                      className="mt-2 h-10 w-full rounded-lg bg-surface px-3 ring-1 ring-line"
+                    >
+                      <option value="no_match">Treat unknown as no match</option>
+                      <option value="block">
+                        Block rate/purchase until complete
+                      </option>
+                    </select>
+                  </label>
                 </div>
-              </div>
-            ) : null}
-            {step === 2 ? (
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-xl font-extrabold text-ink">
-                    When all conditions match
-                  </h2>
-                  <p className="mt-1 text-small text-ink-3">
-                    Line fields are automatically grouped into one same-line{" "}
-                    <code>line_any</code> predicate.
-                  </p>
+              </details>
+
+              <div className="space-y-4 border-b border-line p-4">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold text-ink-2 ring-1 ring-line">
+                    If
+                  </span>
+                  <span className="text-small font-bold text-ink">
+                    Orders match all of these specific criteria
+                  </span>
                 </div>
                 {conditions.map((condition, index) => {
                   const field = catalog.fields.find(
@@ -758,6 +943,7 @@ function Builder({
                       className="grid gap-3 rounded-xl bg-surface p-4 ring-1 ring-line sm:grid-cols-[1fr_160px_1fr_auto]"
                     >
                       <select
+                        aria-label={`Condition ${index + 1} field`}
                         value={condition.field}
                         onChange={(event) => {
                           const next = catalog.fields.find(
@@ -780,11 +966,12 @@ function Builder({
                       >
                         {catalog.fields.map((item) => (
                           <option key={item.key} value={item.key}>
-                            {item.label}
+                            {fieldLabel(item)}
                           </option>
                         ))}
                       </select>
                       <select
+                        aria-label={`Condition ${index + 1} operator`}
                         value={condition.operator}
                         onChange={(event) =>
                           setConditions((current) =>
@@ -799,12 +986,35 @@ function Builder({
                       >
                         {field?.operators.map((operator) => (
                           <option key={operator} value={operator}>
-                            {label(operator)}
+                            {operatorLabel(operator)}
                           </option>
                         ))}
                       </select>
-                      {field?.type === "boolean" ? (
+                      {field?.key === "order.store_id" ? (
                         <select
+                          aria-label={`Condition ${index + 1} value`}
+                          value={condition.value}
+                          onChange={(event) =>
+                            setConditions((current) =>
+                              current.map((item) =>
+                                item.id === condition.id
+                                  ? { ...item, value: event.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className="h-10 rounded-lg px-3 ring-1 ring-line"
+                        >
+                          <option value="">Choose a store…</option>
+                          {stores.map((store) => (
+                            <option key={store.storeId} value={store.storeId}>
+                              {store.clientName}
+                            </option>
+                          ))}
+                        </select>
+                      ) : field?.type === "boolean" ? (
+                        <select
+                          aria-label={`Condition ${index + 1} value`}
                           value={condition.value}
                           onChange={(event) =>
                             setConditions((current) =>
@@ -823,6 +1033,7 @@ function Builder({
                         </select>
                       ) : (
                         <input
+                          aria-label={`Condition ${index + 1} value`}
                           type={field?.type === "number" ? "number" : "text"}
                           value={condition.value}
                           onChange={(event) =>
@@ -870,35 +1081,21 @@ function Builder({
                 >
                   <Plus size={14} /> Add condition
                 </button>
-                <label className="block rounded-xl bg-amber-50 p-4 text-small text-amber-900 ring-1 ring-amber-200">
-                  <span className="font-extrabold">Incomplete facts</span>
-                  <select
-                    value={unknownPolicy}
-                    onChange={(event) =>
-                      setUnknownPolicy(
-                        event.target.value as "no_match" | "block",
-                      )
-                    }
-                    className="mt-2 h-10 w-full rounded-lg bg-white px-3 text-ink ring-1 ring-amber-200"
-                  >
-                    <option value="no_match">Treat unknown as no match</option>
-                    <option value="block">
-                      Block rate/purchase until complete
-                    </option>
-                  </select>
-                </label>
               </div>
-            ) : null}
-            {step === 3 ? (
-              <div className="space-y-4">
-                <div>
-                  <h2 className="text-xl font-extrabold text-ink">
-                    Then plan approved actions
-                  </h2>
-                  <p className="mt-1 text-small text-ink-3">
-                    Only backend-allowlisted actions appear. The engine never
-                    purchases labels or calls providers.
-                  </p>
+              <div className="space-y-4 p-4">
+                <div className="flex items-start gap-2">
+                  <span className="mt-0.5 rounded-full px-2 py-0.5 text-[10px] font-bold text-ink-2 ring-1 ring-line">
+                    Then
+                  </span>
+                  <div>
+                    <div className="text-small font-bold text-ink">
+                      Apply the following actions
+                    </div>
+                    <p className="mt-1 text-tiny text-ink-3">
+                      Choose what should happen when the order matches. No
+                      postage is purchased here.
+                    </p>
+                  </div>
                 </div>
                 {actions.map((action, index) => {
                   const definition = catalog.actions.find(
@@ -907,18 +1104,20 @@ function Builder({
                   return (
                     <div
                       key={action.id}
-                      className="grid gap-3 rounded-xl bg-surface p-4 ring-1 ring-line sm:grid-cols-[220px_1fr_auto]"
+                      className="grid gap-3 rounded-lg bg-surface-2/60 p-3 ring-1 ring-line sm:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)_auto]"
                     >
-                      <select
+                      <ActionTypePicker
                         value={action.type}
-                        onChange={(event) =>
+                        actions={catalog.actions}
+                        index={index}
+                        onChange={(type) =>
                           setActions((current) =>
                             current.map((item) =>
                               item.id === action.id
                                 ? {
                                     ...item,
-                                    type: event.target.value,
-                                    value: actionDefault(event.target.value),
+                                    type,
+                                    value: actionDefault(type),
                                     provider: "parcelguard",
                                     contactName: "",
                                     contactPhone: "",
@@ -927,19 +1126,7 @@ function Builder({
                             ),
                           )
                         }
-                        className="h-10 rounded-lg px-3 ring-1 ring-line"
-                      >
-                        {catalog.actions.map((item) => (
-                          <option
-                            key={item.type}
-                            value={item.type}
-                            disabled={!item.available}
-                          >
-                            {item.label}
-                            {item.available ? "" : " — unavailable"}
-                          </option>
-                        ))}
-                      </select>
+                      />
                       {action.type === "hazmat.add_declaration" ? (
                         <AutomationDangerousGoodsActionFields
                           contactName={action.contactName}
@@ -1047,11 +1234,13 @@ function Builder({
                         <span
                           className={`rounded-full px-2 py-1 ring-1 ${definition?.risk === "high" ? "bg-amber-50 text-amber-700 ring-amber-200" : "bg-surface-2 text-ink-2 ring-line"}`}
                         >
-                          {definition?.risk} risk
+                          {definition?.risk === "high"
+                            ? "Safety-sensitive action"
+                            : `${definition?.risk} risk`}
                         </span>
                         {definition?.invalidatesRateProof ? (
                           <span className="rounded-full bg-brand-bg px-2 py-1 text-brand ring-1 ring-brand-border">
-                            invalidates rate proof
+                            Shipping rate will be rechecked
                           </span>
                         ) : null}
                       </div>
@@ -1080,16 +1269,18 @@ function Builder({
                   <Plus size={14} /> Add action
                 </button>
               </div>
-            ) : null}
-            {step === 4 ? (
-              <div className="space-y-5">
+            </section>
+
+            <div className="mx-auto h-7 w-px bg-line" />
+
+            <section className="space-y-5 rounded-xl bg-surface p-5 shadow-sm ring-1 ring-line">
                 <div>
                   <h2 className="text-xl font-extrabold text-ink">
-                    Review, simulate, publish
+                    Test before publishing
                   </h2>
                   <p className="mt-1 text-small text-ink-3">
-                    Simulation evaluates canonical backend facts with zero
-                    writes and zero provider calls.
+                    Use a test order. This checks the rule without buying
+                    postage or changing the order.
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface p-5 ring-1 ring-line">
@@ -1115,7 +1306,7 @@ function Builder({
                 </div>
                 <div className="rounded-xl bg-surface p-5 ring-1 ring-line">
                   <label className="text-small font-bold text-ink">
-                    Simulation order ID
+                    Test order ID
                     <div className="mt-2 flex gap-2">
                       <input
                         type="number"
@@ -1136,13 +1327,13 @@ function Builder({
                         ) : (
                           <Play size={14} />
                         )}{" "}
-                        Simulate
+                        Test rule
                       </button>
                     </div>
                   </label>
                   {!draft ? (
                     <p className="mt-2 text-tiny text-amber-700">
-                      Save the draft before simulation.
+                      Save the draft before testing the rule.
                     </p>
                   ) : null}
                 </div>
@@ -1156,7 +1347,7 @@ function Builder({
                       ) : (
                         <CheckCircle2 size={17} />
                       )}{" "}
-                      Simulation result
+                      Test result
                     </div>
                     <div className="mt-2 text-small">
                       {simulation.evaluation.matches
@@ -1169,8 +1360,13 @@ function Builder({
                       Draft hash {simulation.draftHash}
                     </div>
                     <div className="mt-2 text-[11px] font-bold">
-                      Zero writes: {String(simulation.zeroWrites)} · Zero
-                      provider calls: {String(simulation.zeroProviderCalls)}
+                      {simulation.zeroWrites
+                        ? "Order unchanged"
+                        : "Order changes detected"}{" "}
+                      ·{" "}
+                      {simulation.zeroProviderCalls
+                        ? "No provider calls"
+                        : "Provider calls detected"}
                       {simulation.terminalAuditOnly
                         ? " · terminal audit-only"
                         : ""}
@@ -1183,8 +1379,13 @@ function Builder({
                   requires a separate preview, confirmation, and bounded worker
                   job. Shipped/cancelled orders remain audit-only.
                 </div>
-              </div>
-            ) : null}
+            </section>
+
+            <div className="mx-auto h-7 w-px bg-line" />
+            <div className="mx-auto flex max-w-xl items-center justify-between rounded-lg bg-surface px-4 py-3 text-small font-bold text-ink-2 ring-1 ring-line">
+              <span>Automation Complete</span>
+              <CheckCircle2 size={17} className="text-emerald-600" />
+            </div>
             {error ? (
               <div className="mt-5 rounded-lg bg-rose-50 p-3 text-small font-bold text-rose-700 ring-1 ring-rose-200">
                 {error}
@@ -1207,40 +1408,23 @@ function Builder({
           <div className="flex gap-2">
             <button
               type="button"
-              disabled={step === 1}
-              onClick={() => setStep((value) => Math.max(1, value - 1))}
-              className="h-10 rounded-lg px-4 text-small font-bold text-ink-2 ring-1 ring-line disabled:opacity-40"
+              disabled={
+                !activeRule ||
+                !simulation ||
+                simulation.evaluation.blocked ||
+                simulation.reduction.conflicts.length > 0 ||
+                busy != null
+              }
+              onClick={publish}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white disabled:opacity-40"
             >
-              Back
+              {busy === "publish" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <ShieldCheck size={15} />
+              )}{" "}
+              Publish rule
             </button>
-            {step < 4 ? (
-              <button
-                type="button"
-                onClick={() => setStep((value) => Math.min(4, value + 1))}
-                className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white"
-              >
-                Continue <ChevronRight size={15} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={
-                  !simulation ||
-                  simulation.evaluation.blocked ||
-                  simulation.reduction.conflicts.length > 0 ||
-                  busy != null
-                }
-                onClick={publish}
-                className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white disabled:opacity-40"
-              >
-                {busy === "publish" ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <ShieldCheck size={15} />
-                )}{" "}
-                Review & publish
-              </button>
-            )}
           </div>
         </footer>
       </div>
@@ -1258,6 +1442,7 @@ function ControlsPanel({
   refresh: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [expandedStoreId, setExpandedStoreId] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const toggle = async (
     row: AvailabilityRow,
@@ -1326,20 +1511,48 @@ function ControlsPanel({
         </div>
       ) : (
         <div className="mt-5 space-y-4">
-          {rows.map((row) => (
+          <p className="text-small text-ink-3">
+            {rows.length} client store{rows.length === 1 ? "" : "s"}. Choose a
+            client to view its carriers and services.
+          </p>
+          {rows.map((row) => {
+            const expanded = expandedStoreId === row.store.storeId;
+            return (
             <div
               key={row.store.storeId}
               className="overflow-hidden rounded-xl ring-1 ring-line"
             >
-              <div className="bg-surface-2 px-4 py-3">
-                <div className="font-extrabold text-ink">
-                  {row.store.clientName}
-                </div>
-                <div className="text-tiny text-ink-3">
-                  Client {row.store.clientId} · Store {row.store.storeId}
-                </div>
-              </div>
-              <div className="divide-y divide-line">
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-controls={`automation-store-controls-${row.store.storeId}`}
+                onClick={() =>
+                  setExpandedStoreId((current) =>
+                    current === row.store.storeId ? null : row.store.storeId,
+                  )
+                }
+                className="flex w-full items-center justify-between gap-4 bg-surface-2 px-4 py-3 text-left hover:bg-brand-bg"
+              >
+                <span>
+                  <span className="block font-extrabold text-ink">
+                    {row.store.clientName}
+                  </span>
+                  <span className="block text-tiny text-ink-3">
+                    Client {row.store.clientId} · Store {row.store.storeId} ·{" "}
+                    {row.carriers.length} carrier
+                    {row.carriers.length === 1 ? "" : "s"}
+                  </span>
+                </span>
+                <ChevronRight
+                  size={17}
+                  className={`shrink-0 text-ink-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+                />
+              </button>
+              {expanded ? (
+              <div
+                id={`automation-store-controls-${row.store.storeId}`}
+                className="divide-y divide-line"
+              >
                 {row.carriers.map((carrier) => {
                   const carrierKey = `${row.store.storeId}:${carrier.carrierId}`;
                   return (
@@ -1405,8 +1618,10 @@ function ControlsPanel({
                   );
                 })}
               </div>
+              ) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
@@ -1424,6 +1639,11 @@ export default function AutomationsView() {
     queryKey: ["automations", "catalog"],
     queryFn: async () =>
       (await api.get<{ data: AutomationCatalog }>("/automations/catalog")).data,
+  });
+  const storesQuery = useQuery({
+    queryKey: ["automations", "stores"],
+    queryFn: async () =>
+      (await api.get<{ data: AutomationStoreOption[] }>("/init/stores")).data,
   });
   const rulesQuery = useQuery({
     queryKey: ["automations", "rules"],
@@ -1614,9 +1834,10 @@ export default function AutomationsView() {
           </div>
         </section>
       ) : null}
-      {builderOpen && catalogQuery.data ? (
+      {builderOpen && catalogQuery.data && storesQuery.data ? (
         <Builder
           catalog={catalogQuery.data}
+          stores={storesQuery.data}
           onClose={() => setBuilderOpen(false)}
           onCreated={() =>
             void queryClient.invalidateQueries({
