@@ -411,6 +411,8 @@ export async function produceRateBrowsePayload({
             effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
             effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
             hugrabDefaultInsuranceEnabled: resolvedForBrowse.hugrabDefaultInsuranceEnabled ?? null,
+            hazmatQuoteFacts: resolvedForBrowse.hazmatQuoteFacts,
+            hazmatCapabilities: resolvedForBrowse.hazmatCapabilities,
           }, { cachedOnly: isCachedOnlyLookup, priority: 'interactive' });
           directCarrierDurationMs = Date.now() - startedAt;
           return r;
@@ -556,6 +558,9 @@ export async function produceRateBrowsePayload({
         confirmation: effectiveOptions.confirmation,
         insuranceProvider: effectiveOptions.insuranceProvider,
         insuredValue: Number(effectiveOptions.insuredValue ?? 0) || 0,
+        ...(resolvedForBrowse.hazmatQuoteFacts
+          ? { hazmat: resolvedForBrowse.hazmatQuoteFacts }
+          : {}),
       },
     };
     const presentProviderIds = new Set(

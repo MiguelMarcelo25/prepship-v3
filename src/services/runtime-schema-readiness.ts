@@ -18,6 +18,8 @@ const REQUIRED_RELATIONS = [
   'label_purchase_locks',
   'order_competitive_rate',
   'order_lifecycle_events',
+  'order_hazmat_declarations',
+  'order_hazmat_materials',
   'order_rate_jobs',
   'package_consumption_reviews',
   'fulfillment_line_claims',
@@ -33,6 +35,7 @@ const REQUIRED_RELATIONS = [
   'shipment_bundle_members',
   'shipment_bundles',
   'shipment_tracking_status',
+  'shipment_hazmat_snapshots',
   'store_source_cutovers',
   'webhook_events',
   'worker_status_events',
@@ -192,6 +195,9 @@ const REQUIRED_INDEXES = [
   'order_lifecycle_events_command_unq',
   'order_lifecycle_events_order_idx',
   'order_lifecycle_events_shipment_idx',
+  'order_hazmat_declarations_status_idx',
+  'order_hazmat_materials_order_idx',
+  'order_hazmat_materials_order_sequence_unq',
   'order_rate_jobs_updated_idx',
   'orders_selling_fee_source_idx',
   'package_consumption_reviews_idempotency_unq',
@@ -222,6 +228,8 @@ const REQUIRED_INDEXES = [
   'shipment_tracking_status_poll_idx',
   'shipments_order_latest_idx',
   'shipments_order_number_latest_idx',
+  'shipment_hazmat_snapshots_operation_idx',
+  'shipment_hazmat_snapshots_profile_idx',
   'store_source_cutovers_active_legacy_idx',
   'store_source_cutovers_client_idx',
   'store_source_cutovers_identity_idx',
@@ -261,6 +269,21 @@ const REQUIRED_CONSTRAINTS = [
   'print_queue_send_jobs_chunk_sequence_positive',
   'print_queue_batch_job_items_attempt_count_nonnegative',
   'print_queue_batch_job_items_generation_nonnegative',
+  'order_hazmat_declarations_schema_version_chk',
+  'order_hazmat_declarations_revision_chk',
+  'order_hazmat_declarations_status_chk',
+  'order_hazmat_declarations_semantic_hash_chk',
+  'order_hazmat_declarations_dry_ice_weight_chk',
+  'order_hazmat_materials_sequence_chk',
+  'order_hazmat_materials_quantity_chk',
+  'order_hazmat_materials_amount_chk',
+  'order_hazmat_materials_packing_group_chk',
+  'shipment_hazmat_snapshots_schema_version_chk',
+  'shipment_hazmat_snapshots_revision_chk',
+  'shipment_hazmat_snapshots_hash_chk',
+  'shipment_hazmat_snapshots_active_chk',
+  'shipment_hazmat_snapshots_profile_chk',
+  'shipment_hazmat_snapshots_capture_kind_chk',
 ] as const;
 
 const REQUIRED_FUNCTIONS = [
@@ -284,6 +307,7 @@ const REQUIRED_FUNCTIONS = [
   'automation_rule_version_immutable',
   'automation_rule_version_child_immutable',
   'enqueue_automation_order_fact_event',
+  'shipment_hazmat_snapshots_block_mutations',
 ] as const;
 
 const REQUIRED_TRIGGERS = [
@@ -311,6 +335,8 @@ const REQUIRED_TRIGGERS = [
   'automation_orders_fact_event',
   'automation_order_items_fact_event',
   'automation_order_overrides_fact_event',
+  'shipment_hazmat_snapshots_no_update_delete',
+  'shipment_hazmat_snapshots_no_truncate',
 ] as const;
 
 let readiness: Promise<void> | null = null;
@@ -412,7 +438,7 @@ async function verifyRuntimeSchema(): Promise<void> {
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
         `the current release frontier (0074_billing_current_period_adjustments.sql, ` +
         `0075_inventory_quantity_sot.sql, 0077_ps462_billing_storage_month.sql, ` +
-        `and 0081_ps466_automation_shipping_controls.sql). ` +
+        `0078_order_hazmat_declarations.sql, and 0081_ps466_automation_shipping_controls.sql). ` +
         `Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }

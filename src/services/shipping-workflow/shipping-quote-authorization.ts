@@ -1,4 +1,10 @@
 import { createHash } from 'node:crypto';
+import {
+  sealHazmatQuoteFacts,
+  type CanonicalHazmatPurchaseFacts,
+  type CanonicalHazmatQuoteFacts,
+  type HazmatProfile,
+} from './hazmat-declaration.js';
 
 export type ShippingQuoteAddress = {
   name: string;
@@ -41,6 +47,8 @@ export type ShippingQuoteAuthorizationContext = {
     confirmation: string;
     insuranceProvider: string;
     insuredValue: number;
+    /** Present only for an active backend-owned declaration. */
+    hazmat?: CanonicalHazmatQuoteFacts;
   };
 };
 
@@ -73,6 +81,7 @@ export type ShippingQuoteAuthorizedPurchaseFacts = {
   insuredValue: number;
   shipFrom: ShippingQuoteAddress;
   shipTo: ShippingQuoteAddress;
+  hazmat: CanonicalHazmatPurchaseFacts | null;
 };
 
 export type ShippingQuotePurchaseIntent = {
@@ -250,6 +259,10 @@ export function assertShippingQuoteContextMatches(input: {
   ) {
     throw new ShippingQuoteAuthorizationError('insurance');
   }
+  if (canonicalKey(input.authorized.shipment.hazmat ?? null)
+    !== canonicalKey(input.current.shipment.hazmat ?? null)) {
+    throw new ShippingQuoteAuthorizationError('hazmat declaration');
+  }
 }
 
 function completeAccountIdentity(value: ShippingQuoteAccountAuthorization | null | undefined): boolean {
@@ -334,6 +347,21 @@ export function shippingQuoteAuthorizedPurchaseFacts(input: {
     throw new ShippingQuoteAuthorizationError('selected carrier service');
   }
   const shipment = input.authorizationContext.shipment;
+  const selectedRate = rateRecord(input.selectedRate);
+  const profileValue = normalizedText(selectedRate.hazmatProfile);
+  const allowedProfiles: HazmatProfile[] = [
+    'shipstation_usps',
+    'shipstation_ups_dry_ice',
+    'shipstation_ups_dangerous_goods',
+    'ups_direct',
+    'walmart',
+  ];
+  const hazmatProfile = allowedProfiles.includes(profileValue as HazmatProfile)
+    ? profileValue as HazmatProfile
+    : null;
+  if (shipment.hazmat && !hazmatProfile) {
+    throw new ShippingQuoteAuthorizationError('selected carrier hazmat profile');
+  }
   return {
     shippingProviderId: input.accountAuthorization.shippingProviderId,
     carrierCode: shippingCarrierCodeFromAuthorizedRate(input.selectedRate),
@@ -353,6 +381,9 @@ export function shippingQuoteAuthorizedPurchaseFacts(input: {
     insuredValue: shipment.insuredValue,
     shipFrom: shipment.shipFrom,
     shipTo: shipment.shipTo,
+    hazmat: shipment.hazmat
+      ? sealHazmatQuoteFacts(shipment.hazmat, hazmatProfile!)
+      : null,
   };
 }
 

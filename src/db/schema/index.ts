@@ -31,3 +31,4 @@ export * from './shipment-bundles.js';
 export * from './store-source-cutovers.js';
 export * from './order-lifecycle.js';
 export * from './automations.js';
+export * from './hazmat.js';

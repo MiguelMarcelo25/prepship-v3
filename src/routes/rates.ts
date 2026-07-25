@@ -70,6 +70,7 @@ import {
   type RateRequestScopeDecision,
   type RateRequestScopeInput,
 } from '../services/rate-request-authorization';
+import { HazmatShippingError } from '../services/shipping-workflow/hazmat-shipping-policy.js';
 
 const app = new Hono();
 
@@ -760,6 +761,15 @@ app.post(
     );
     return c.json(publicRatesResult(payload, canViewFinancials));
   } catch (error) {
+    if (error instanceof HazmatShippingError) {
+      const status = error.code.includes('INVALID') ? 422 : 409;
+      logStructured('warn', 'rate.browse.hazmat_rejected', {
+        operation: 'rate_browse',
+        orderId: body.orderId ?? null,
+        errorCode: error.code,
+      });
+      return c.json({ error: error.message, code: error.code, ...(error.details ?? {}) }, status);
+    }
     reportError('rate.browse.failed', error, {
       operation: 'rate_browse',
       orderId: body.orderId ?? null,

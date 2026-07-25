@@ -308,6 +308,17 @@ const schema = z.object({
   // once a read-only check (or DJ confirmation) proves the connector applies the insurance.
   EASYPOST_INSURANCE_VERIFIED: booleanFlag(false),
   SHIPP_INSURANCE_VERIFIED: booleanFlag(false),
+  // PS-465: backend-owned hazmat rollout controls. Every capability defaults
+  // off; the browser consumes the effective capability DTO and owns no policy.
+  HAZMAT_READ_ENABLED: booleanFlag(false),
+  HAZMAT_WRITE_ENABLED: booleanFlag(false),
+  HAZMAT_RATE_ENABLED: booleanFlag(false),
+  HAZMAT_PURCHASE_ENABLED: booleanFlag(false),
+  HAZMAT_USPS_ENABLED: booleanFlag(false),
+  HAZMAT_UPS_SHIPSTATION_ENABLED: booleanFlag(false),
+  HAZMAT_UPS_DIRECT_ENABLED: booleanFlag(false),
+  HAZMAT_WALMART_ENABLED: booleanFlag(false),
+  HAZMAT_CANARY_CLIENT_IDS: z.string().default(''),
 });
 
 const parsed = schema.safeParse(process.env);

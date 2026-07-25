@@ -39,6 +39,8 @@ export type ShippingRateRequestFingerprintInput = {
   // fingerprint so an uncertain Shipp rate survives save/purchase and can never
   // round-trip as proven-insured. Absent -> fingerprint is byte-identical to before.
   insuranceCertainty?: string | null;
+  /** Active hazmat declaration hash only; absent keeps legacy identities byte-identical. */
+  hazmatSnapshotHash?: string | null;
 };
 
 export type ShippingRateCurrentFacts = {
@@ -230,6 +232,7 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
   // the fingerprint byte-identical for every legacy/non-Shipp caller (additive).
   const certaintyState = textKey(input.insuranceCertainty);
   if (certaintyState) parts.push(`ic=${certaintyState}`);
+  if (input.hazmatSnapshotHash) parts.push(`hz=${input.hazmatSnapshotHash}`);
   return parts.join('|');
 }
 

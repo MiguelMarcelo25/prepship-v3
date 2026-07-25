@@ -2,6 +2,7 @@ import { and, eq, or, desc, inArray, sql } from 'drizzle-orm';
 import { performance } from 'node:perf_hooks';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
+import { shipmentHazmatSnapshots } from '../db/schema/hazmat.js';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { orders, orderOverrides } from '../db/schema/orders';
 // PS-233 (Per user override unlock shipped data on 2026-06-13): caller-scope
@@ -151,6 +152,15 @@ import {
   assertAutomationPlanSupportedByProvider,
   assertAutomationRateProofCurrent,
 } from './automations/rate-policy';
+import { getOrderHazmatForShipping } from './order-hazmat.js';
+import {
+  assertHazmatRatingSupported,
+  authorizeHazmatPurchase,
+  HazmatShippingError,
+  hazmatQuoteFactsForShipping,
+  resolveHazmatProfile,
+} from './shipping-workflow/hazmat-shipping-policy.js';
+import { sealHazmatQuoteFacts, type CanonicalHazmatPurchaseFacts } from './shipping-workflow/hazmat-declaration.js';
 // PS-261 (Per user override unlock shipped data on 2026-06-18): backend-owned HUGRAB
 // label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
 // BLOCKS before any postage is bought when the mandatory $100 coverage is not proven
@@ -1816,6 +1826,16 @@ async function createShopifyShippingLabelForOrderImpl(
   assertAutomationPlanSupportedByProvider(automationWatermark, 'Shopify Shipping');
 
   const clientId = await resolveShippingClientId(order);
+  const currentHazmatState = await timer.task('hazmat declaration load', () =>
+    getOrderHazmatForShipping(order.id));
+  const currentHazmatQuoteFacts = hazmatQuoteFactsForShipping(currentHazmatState);
+  if (currentHazmatQuoteFacts) {
+    throw new HazmatShippingError(
+      'Shopify Shipping does not have a certified hazmat label profile.',
+      'HAZMAT_PURCHASE_UNAVAILABLE',
+      { profile: 'shopify' },
+    );
+  }
 
   body = {
     ...body,
@@ -2116,6 +2136,9 @@ async function createLabelV2Impl(
   // recovery seal the same canonical tenant identity for legacy store-only
   // orders instead of persisting the nullable raw orders.client_id value.
   const clientId = await resolveShippingClientId(order);
+  const currentHazmatState = await timer.task('hazmat declaration load', () =>
+    getOrderHazmatForShipping(order.id));
+  const currentHazmatQuoteFacts = hazmatQuoteFactsForShipping(currentHazmatState);
   const requestedPurchaseIntent = body;
   // Per user override unlock shipped data on 2026-05-23: PS-422 resolves
   // test-mode authority before the real-postage authorization.
@@ -2164,6 +2187,29 @@ async function createLabelV2Impl(
       selectedRateKey: undefined,
     };
   }
+  let hazmatPurchaseFacts: CanonicalHazmatPurchaseFacts | null = null;
+  if (currentHazmatQuoteFacts && body.testLabel !== true) {
+    if (!authorizedPurchaseFacts?.hazmat) {
+      throw new ShippingQuoteAuthorizationError('selected carrier hazmat profile');
+    }
+    const currentProfile = resolveHazmatProfile({
+      providerFamily: 'shipstation',
+      provider: 'shipstation',
+      carrierCode: authorizedPurchaseFacts.carrierCode,
+      facts: currentHazmatQuoteFacts,
+    });
+    if (currentProfile !== authorizedPurchaseFacts.hazmat.profile) {
+      throw new ShippingQuoteAuthorizationError('selected carrier hazmat profile');
+    }
+    hazmatPurchaseFacts = authorizeHazmatPurchase({
+      facts: currentHazmatQuoteFacts,
+      profile: authorizedPurchaseFacts.hazmat.profile,
+      capabilities: currentHazmatState.capabilities,
+    });
+    if (hazmatPurchaseFacts.snapshotHash !== authorizedPurchaseFacts.hazmat.snapshotHash) {
+      throw new ShippingQuoteAuthorizationError('hazmat declaration seal');
+    }
+  }
   if (!body.serviceCode) {
     throw new Error('serviceCode required');
   }
@@ -2175,6 +2221,20 @@ async function createLabelV2Impl(
     serviceName: body.serviceName ?? body.serviceCode,
     serviceType: body.serviceType ?? null,
   };
+  if (currentHazmatQuoteFacts && body.testLabel === true) {
+    const profile = resolveHazmatProfile({
+      providerFamily: 'shipstation',
+      provider: 'shipstation',
+      carrierCode: body.carrierCode ?? null,
+      facts: currentHazmatQuoteFacts,
+    });
+    const authorizedProfile = assertHazmatRatingSupported({
+      facts: currentHazmatQuoteFacts,
+      profile,
+      capabilities: currentHazmatState.capabilities,
+    });
+    hazmatPurchaseFacts = sealHazmatQuoteFacts(currentHazmatQuoteFacts, authorizedProfile);
+  }
   // Per user override unlock shipped data on 2026-07-14: the persisted setting is
   // operator intent only; this canonical backend boundary still decides effective
   // quote/label insurance and never mutates an existing shipped/cancelled order.
@@ -2496,6 +2556,22 @@ async function createLabelV2Impl(
         })
         .returning({ id: shipments.id });
       if (!persistedShipment) throw new Error('Failed to persist test shipment');
+      if (hazmatPurchaseFacts) {
+        // Per user override unlock shipped data on 2026-07-25: capture an
+        // additive immutable PS-465 test-label snapshot; shipment history and
+        // terminal protections remain unchanged.
+        await tx.insert(shipmentHazmatSnapshots).values({
+          shipmentId: persistedShipment.id,
+          externalOperationId: null,
+          snapshotSchemaVersion: hazmatPurchaseFacts.schemaVersion,
+          orderDeclarationRevision: hazmatPurchaseFacts.revision,
+          snapshotHash: hazmatPurchaseFacts.snapshotHash,
+          summaryIsHazmat: true,
+          summaryProfile: hazmatPurchaseFacts.profile,
+          snapshotJson: hazmatPurchaseFacts,
+          captureKind: 'test_label',
+        });
+      }
       // Per user override unlock shipped data on 2026-07-16: offline labels
       // cannot infer shipment quantities from the mutable order snapshot.
       await timer.task('apply order lifecycle', () =>
@@ -2846,6 +2922,7 @@ async function createLabelV2Impl(
         shipTo: carrierShipTo,
         shipFrom,
         orderNumber: order.orderNumber ?? null,
+        hazmat: hazmatPurchaseFacts,
       }),
     });
     operationId = action.operation.id;
@@ -2868,6 +2945,7 @@ async function createLabelV2Impl(
         || durableFacts.selectedPackageId !== resolvedPackageId
         || durableFacts.insuranceProvider !== options.insuranceProvider
         || durableFacts.insuredValue !== options.insuredValue
+        || (durableFacts.hazmat?.snapshotHash ?? null) !== (hazmatPurchaseFacts?.snapshotHash ?? null)
       ) {
         throw new ShippingQuoteAuthorizationError('durable label receipt persistence facts');
       }
@@ -2905,6 +2983,7 @@ async function createLabelV2Impl(
               externalShipmentId: idempotencyKey,
               signal,
               testLabel: false,
+              hazmat: hazmatPurchaseFacts,
             });
             return label as CreatedExternalLabel;
           }),
@@ -2920,6 +2999,7 @@ async function createLabelV2Impl(
             selectedPackageId: resolvedPackageId,
             insuranceProvider: options.insuranceProvider,
             insuredValue: options.insuredValue,
+            ...(hazmatPurchaseFacts ? { hazmat: hazmatPurchaseFacts } : {}),
           }),
           providerOperationId: label.labelId ?? label.shipmentId,
           providerResultId: label.trackingNumber,
@@ -2993,6 +3073,22 @@ async function createLabelV2Impl(
       insuredValue: options.insuredValue,
       tx,
     }));
+    if (hazmatPurchaseFacts) {
+      // Per user override unlock shipped data on 2026-07-25: the provider ACK
+      // and local shipment commit freeze the same sealed hazmat facts in an
+      // additive append-only sidecar. No shipped row or shipment history is rewritten.
+      await tx.insert(shipmentHazmatSnapshots).values({
+        shipmentId,
+        externalOperationId: operationId,
+        snapshotSchemaVersion: hazmatPurchaseFacts.schemaVersion,
+        orderDeclarationRevision: hazmatPurchaseFacts.revision,
+        snapshotHash: hazmatPurchaseFacts.snapshotHash,
+        summaryIsHazmat: true,
+        summaryProfile: hazmatPurchaseFacts.profile,
+        snapshotJson: hazmatPurchaseFacts,
+        captureKind: 'provider_purchase',
+      });
+    }
     // Per user override unlock shipped data on 2026-07-11: PS-413 makes
     // PrepShip, ShipStation, Shipp, and Walmart package consumption share one
     // atomic owner. Test labels returned above never consume package stock.

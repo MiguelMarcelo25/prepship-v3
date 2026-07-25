@@ -186,6 +186,12 @@ function handleCreateError(c: Context, err: unknown): Response {
   if (typeof e.code === 'string' && e.code.startsWith('AUTOMATION_')) {
     return c.json({ error: message, code: e.code, ...details }, 409);
   }
+  // Per user override unlock shipped data on 2026-07-25: expose only the
+  // backend fail-closed verdict; this route does not bypass terminal guards.
+  if (typeof e.code === 'string' && e.code.startsWith('HAZMAT_')) {
+    const status = e.code === 'HAZMAT_DECLARATION_INVALID' ? 422 : 409;
+    return c.json({ error: message, code: e.code, ...details }, status);
+  }
   // PS-186: a `testLabel: true` request for a NON-test client is rejected by the canonical
   // test-label policy — operator-actionable conflict (the order is real; create a real label).
   if (e.code === 'TEST_LABEL_REJECTED') {

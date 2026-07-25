@@ -1433,6 +1433,9 @@ async function runBackfill(
               confirmation: options.confirmation,
               insuranceProvider: options.insuranceProvider,
               insuredValue: Number(options.insuredValue ?? 0) || 0,
+              ...(resolvedRateInput.hazmatQuoteFacts
+                ? { hazmat: resolvedRateInput.hazmatQuoteFacts }
+                : {}),
             },
           };
           const presentProviderIds = new Set(

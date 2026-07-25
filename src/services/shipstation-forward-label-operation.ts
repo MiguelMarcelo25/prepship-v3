@@ -5,6 +5,11 @@ import {
 } from '../lib/shipstation/label-request-body';
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import { EXACT_SHIPSTATION_RECONCILER_ACTOR } from './fulfillment-operation-provenance';
+import {
+  hazmatSemanticHash,
+  sealHazmatDeclaration,
+  type CanonicalHazmatPurchaseFacts,
+} from './shipping-workflow/hazmat-declaration.js';
 
 // Per user override unlock shipped data on 2026-07-22: these versioned facts
 // bind post-purchase recovery to backend-authorized shipment/package truth.
@@ -29,6 +34,9 @@ export type ShipStationForwardLabelPersistenceFacts = {
   selectedPackageId: number | null;
   insuranceProvider: string;
   insuredValue: number | null;
+  // Per user override unlock shipped data on 2026-07-25: durable recovery
+  // carries the immutable seal and rejects drift; it never edits shipment history.
+  hazmat?: CanonicalHazmatPurchaseFacts;
 };
 
 type PersistenceFactsInput = Omit<
@@ -77,6 +85,7 @@ export function buildShipStationForwardLabelOperationRequest(input: {
   shipTo: ShipstationAddressInput;
   shipFrom: ShipstationAddressInput;
   orderNumber: string | null;
+  hazmat?: CanonicalHazmatPurchaseFacts | null;
 }): Record<string, unknown> {
   const providerRequest = buildSsLabelRequestBody({
     carrierId: `se-${input.shippingProviderId}`,
@@ -93,6 +102,7 @@ export function buildShipStationForwardLabelOperationRequest(input: {
     insuredValue: input.shippingOptions.insuredValue,
     ssOrderId: null,
     orderNumber: input.orderNumber,
+    hazmat: input.hazmat,
   });
   const shipment = providerRequest.shipment as Record<string, unknown>;
   return {
@@ -100,6 +110,7 @@ export function buildShipStationForwardLabelOperationRequest(input: {
     shippingProviderId: input.shippingProviderId,
     carrierCode: input.carrierCode,
     packageId: input.packageId,
+    ...(input.hazmat ? { hazmatSnapshotHash: input.hazmat.snapshotHash } : {}),
     // The date and external shipment id are generated at dispatch. Everything
     // else mirrors the exact ShipStation body, including residential, address,
     // package, confirmation, and insurance fields that can affect postage.
@@ -135,6 +146,7 @@ export function buildShipStationForwardLabelReceipt(
       selectedPackageId: nullablePositiveInteger(input.selectedPackageId, 'selectedPackageId'),
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue,
+      ...(input.hazmat ? { hazmat: input.hazmat } : {}),
     } satisfies ShipStationForwardLabelPersistenceFacts,
   };
 }
@@ -179,6 +191,25 @@ export function readShipStationForwardLabelPersistenceFacts(
   ) {
     throw new Error('ShipStation forward-label receipt insurance facts are invalid');
   }
+  let hazmat: CanonicalHazmatPurchaseFacts | undefined;
+  if (value.hazmat != null) {
+    if (!value.hazmat || typeof value.hazmat !== 'object' || Array.isArray(value.hazmat)) {
+      throw new Error('ShipStation forward-label receipt hazmat facts are invalid');
+    }
+    const candidate = value.hazmat as CanonicalHazmatPurchaseFacts;
+    const resealed = sealHazmatDeclaration({
+      declaration: candidate.declaration,
+      revision: candidate.revision,
+      profile: candidate.profile,
+    });
+    if (
+      candidate.declarationHash !== hazmatSemanticHash(candidate.declaration)
+      || candidate.snapshotHash !== resealed.snapshotHash
+    ) {
+      throw new Error('ShipStation forward-label receipt hazmat seal is invalid');
+    }
+    hazmat = candidate;
+  }
   return {
     version: 1,
     authority: 'canonical_shipping_quote',
@@ -195,6 +226,7 @@ export function readShipStationForwardLabelPersistenceFacts(
     selectedPackageId: nullablePositiveInteger(value.selectedPackageId, 'selectedPackageId'),
     insuranceProvider: shippingOptions.insuranceProvider,
     insuredValue: shippingOptions.insuredValue,
+    ...(hazmat ? { hazmat } : {}),
   };
 }
 
