@@ -83,6 +83,11 @@ assert.equal(
   1,
   'the canonical timer/cron tick must use one cross-process advisory lock',
 );
+assert.match(
+  watchdog,
+  /watchdogTimer = setInterval\([\s\S]*?runShipmentSyncWatchdogTick\(\{ recover: true, source: 'timer' \}\)\.catch/,
+  'scheduled watchdog ticks must contain rejected promises instead of crashing the API',
+);
 assert.doesNotMatch(read('src/routes/sync.ts'), /nudgeShipmentSyncWatchdogRecovery/,
   'the status read must remain observational and side-effect free');
 assert.match(read('src/routes/cron.ts'),
