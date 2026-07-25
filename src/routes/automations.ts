@@ -2,7 +2,7 @@ import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { getInternalOpsClientStoreScope } from '../lib/client-store-scope.js';
-import { ResourceScopeError } from '../lib/scope-predicates.js';
+import { assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates.js';
 import { requireInternalPermission, type AuthVars } from '../middleware/auth.js';
 import { getAutomationCatalog } from '../services/automations/catalog.js';
 import type { AutomationRuleDocument } from '../services/automations/contracts.js';
@@ -21,6 +21,14 @@ import {
   updateAutomationDraft,
 } from '../services/automations/repository.js';
 import { evaluateOrderAutomations } from '../services/automations/runtime.js';
+import { ShippingControlLockedError } from '../services/automations/shipping-controls.js';
+import {
+  listShippingControlAvailability,
+  setCarrierShippingControl,
+  setServiceShippingControl,
+  setStoreCarrierShippingControls,
+  ShippingControlPolicyError,
+} from '../services/automations/shipping-controls-workflow.js';
 
 const app = new Hono<{ Variables: AuthVars }>();
 
@@ -57,6 +65,30 @@ const manualEvaluationBody = z.object({
   trigger: z.enum(['order_imported', 'order_facts_updated', 'order_items_changed', 'address_changed', 'manual_reprocess']).default('manual_reprocess'),
   sourceEventId: z.string().trim().min(1).max(160),
 }).strict();
+const carrierControlBody = z.object({
+  clientId: z.number().int().positive(),
+  storeId: z.number().int().positive().nullable().optional(),
+  carrierId: z.string().trim().min(1),
+  carrierCode: z.string().trim().nullable().optional(),
+  disabled: z.boolean(),
+  reason: z.string().trim().max(240).nullable().optional(),
+}).strict();
+const serviceControlBody = z.object({
+  clientId: z.number().int().positive(),
+  storeId: z.number().int().positive().nullable().optional(),
+  carrierId: z.string().trim().nullable().optional(),
+  carrierCode: z.string().trim().nullable().optional(),
+  serviceCode: z.union([z.string().trim(), z.number()]).nullable().optional(),
+  serviceName: z.string().trim().nullable().optional(),
+  disabled: z.boolean(),
+  reason: z.string().trim().max(240).nullable().optional(),
+}).strict();
+const storeCarrierControlsBody = z.object({
+  clientId: z.number().int().positive(),
+  storeId: z.number().int().positive(),
+  disabled: z.boolean(),
+  reason: z.string().trim().max(240).nullable().optional(),
+}).strict();
 
 function actor(c: { get(name: 'email'): string | undefined; get(name: 'userId'): string }): string {
   return c.get('email') ?? c.get('userId');
@@ -85,6 +117,12 @@ function expectedRevision(c: { req: { header(name: string): string | undefined }
 }
 
 function errorResponse(c: { json(value: Record<string, unknown>, status: 400 | 404 | 409): Response }, error: unknown) {
+  if (error instanceof ShippingControlPolicyError) {
+    return c.json({ error: error.message, locked: error.locked, reason: error.reason }, 409);
+  }
+  if (error instanceof ShippingControlLockedError) {
+    return c.json({ error: error.message, locked: error.locked, reason: error.reason }, 409);
+  }
   if (error instanceof AutomationConflictError) {
     return c.json({ error: error.message, code: error.code }, 409);
   }
@@ -95,6 +133,41 @@ function errorResponse(c: { json(value: Record<string, unknown>, status: 400 | 4
 }
 
 app.get('/catalog', requireInternalPermission('automations:read'), (c) => c.json({ data: getAutomationCatalog() }));
+
+app.get('/controls', requireInternalPermission('automations:read'), async (c) => {
+  const result = await listShippingControlAvailability(scope(c as never));
+  return c.json(result);
+});
+
+app.patch('/controls/carrier', requireInternalPermission('automations:write'), zValidator('json', carrierControlBody), async (c) => {
+  try {
+    const body = c.req.valid('json');
+    assertResourceInScope(scope(c as never), body, 'Automation control not found');
+    return c.json({ data: { controls: await setCarrierShippingControl(body, actor(c)) } });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.patch('/controls/service', requireInternalPermission('automations:write'), zValidator('json', serviceControlBody), async (c) => {
+  try {
+    const body = c.req.valid('json');
+    assertResourceInScope(scope(c as never), body, 'Automation control not found');
+    return c.json({ data: { controls: await setServiceShippingControl(body, actor(c)) } });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.patch('/controls/store-carriers', requireInternalPermission('automations:write'), zValidator('json', storeCarrierControlsBody), async (c) => {
+  try {
+    const body = c.req.valid('json');
+    assertResourceInScope(scope(c as never), body, 'Automation control not found');
+    return c.json({ data: await setStoreCarrierShippingControls(body, actor(c)) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
 
 app.get('/', requireInternalPermission('automations:read'), async (c) => {
   const data = await listAutomationRules(scope(c as never));

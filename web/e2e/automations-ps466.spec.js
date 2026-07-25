@@ -94,7 +94,7 @@ function backend() {
     if (url.pathname === '/automations/runs') {
       return routeObj.fulfill(json({ data: [{ id: 1, orderId: 101, ruleId: 466, trigger: 'before_rate', mode: 'apply', status: 'completed', startedAt: '2026-07-25T00:00:00.000Z', completedAt: '2026-07-25T00:00:01.000Z', errorSummary: null }] }))
     }
-    if (url.pathname === '/automation/availability') {
+    if (url.pathname === '/automations/controls') {
       return routeObj.fulfill(json({ data: [{
         store: { storeId: 378060, clientId: 4, clientName: 'HUGRAB' },
         carriers: [{ carrierId: 'se-123', carrierCode: 'ups', nickname: 'UPS', friendlyName: 'UPS', disabled: false, disabledReason: null,

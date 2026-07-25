@@ -94,6 +94,37 @@ export const automationRuleActions = pgTable('automation_rule_actions', {
   unique('automation_actions_version_position_unq').on(table.ruleVersionId, table.position),
 ]);
 
+export const automationShippingControls = pgTable('automation_shipping_controls', {
+  id: bigserial({ mode: 'number' }).primaryKey(),
+  controlKey: text().notNull(),
+  controlType: text().notNull(),
+  clientId: integer().references(() => clients.id, { onDelete: 'restrict' }),
+  storeId: integer(),
+  carrierId: text(),
+  carrierCode: text(),
+  serviceCode: text(),
+  serviceName: text(),
+  disabled: boolean().notNull().default(true),
+  reason: text(),
+  systemLocked: boolean().notNull().default(false),
+  provenance: text().notNull().default('operator'),
+  source: text(),
+  position: bigint({ mode: 'number' }).notNull(),
+  sourceUpdatedAt: text(),
+  updatedBy: text().notNull(),
+  createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('automation_shipping_controls_key_unq').on(table.controlKey),
+  index('automation_shipping_controls_scope_idx').on(
+    table.clientId,
+    table.storeId,
+    table.controlType,
+    table.position,
+    table.id,
+  ),
+]);
+
 export const automationRuns = pgTable('automation_runs', {
   id: bigserial({ mode: 'number' }).primaryKey(),
   executionKey: text().notNull(),
@@ -211,3 +242,4 @@ export const automationReprocessJobs = pgTable('automation_reprocess_jobs', {
 export type AutomationRule = typeof automationRules.$inferSelect;
 export type AutomationRuleVersion = typeof automationRuleVersions.$inferSelect;
 export type AutomationRun = typeof automationRuns.$inferSelect;
+export type AutomationShippingControl = typeof automationShippingControls.$inferSelect;

@@ -1247,7 +1247,7 @@ function ControlsPanel({
     setBusy(key);
     try {
       if (service)
-        await api.patch("/automation/service", {
+        await api.patch("/automations/controls/service", {
           clientId: row.store.clientId,
           storeId: row.store.storeId,
           carrierId: carrier.carrierId,
@@ -1260,7 +1260,7 @@ function ControlsPanel({
             : "Service disabled by Automations workspace.",
         });
       else
-        await api.patch("/automation/carrier", {
+        await api.patch("/automations/controls/carrier", {
           clientId: row.store.clientId,
           storeId: row.store.storeId,
           carrierId: carrier.carrierId,
@@ -1285,8 +1285,8 @@ function ControlsPanel({
             Carrier & Service Controls
           </h2>
           <p className="mt-1 text-small text-ink-3">
-            The existing backend authority is rehomed here. HUGRAB protected
-            controls remain locked.
+            Typed backend controls are authoritative here. HUGRAB protected
+            controls remain locked, and legacy settings are no longer read.
           </p>
         </div>
         <button
@@ -1418,7 +1418,7 @@ export default function AutomationsView() {
     enabled: tab === "controls",
     queryFn: async () =>
       (
-        await api.get<{ data: AvailabilityRow[] }>("/automation/availability", {
+        await api.get<{ data: AvailabilityRow[] }>("/automations/controls", {
           timeoutMs: 20_000,
         })
       ).data,

@@ -193,7 +193,9 @@ import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost'
 // insuranceProvenance='carrier_declared_value' (we cannot prove the carrier applied declared
 // value), and so the honest certainty state is persisted into selected_rate_json.
 import { resolveInsuranceCertainty, isShippBrokered } from './shipping-workflow/insurance-certainty';
-import { loadShippingAutomationRules } from './shipping-automation';
+// Per user override unlock shipped data on 2026-07-25: label eligibility reads
+// the typed PS-466 control owner; shipped/cancelled guards remain unchanged.
+import { loadShippingAutomationControls } from './automations/shipping-controls';
 // Per user override unlock shipped data on 2026-07-14: read the persisted HUGRAB
 // default-insurance intent before quote-proof validation or any postage side effect.
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
@@ -722,7 +724,7 @@ async function assertLabelServiceEligibleForOrder(
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
   destinationPoBox = false,
 ): Promise<void> {
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   assertShippingServiceEligible(
     {
       clientId: clientId ?? order.clientId ?? null,
@@ -814,7 +816,7 @@ export type CreateFromShipmentInput = {
 // commented-out createLabelBatch). If revived, add the PS-261 preflight gate here too,
 // or a HUGRAB order could buy a real label bypassing the $100-coverage block.
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   assertShippingServiceEligible(
     {
       clientId: input.clientId ?? null,

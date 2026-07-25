@@ -77,9 +77,9 @@ import {
 import { resolveRateBrowseProviderExecutionPolicy } from './rate-browse-execution-policy';
 import { sanitizeRateProviderError } from './rate-browser-timing-diagnostics';
 import {
-  loadShippingAutomationRules,
-  shippingAutomationRulesFingerprint,
-} from './shipping-automation';
+  loadShippingAutomationControls,
+  shippingAutomationControlsFingerprint,
+} from './automations/shipping-controls';
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
 import {
   easyPostScheduledPremium,
@@ -604,7 +604,7 @@ export async function resolveRateInput(
     input = await prepareAutomationRateIntent(input, GLOBAL_SCOPE);
   }
   const context = await resolveRateCredentialContext(input);
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   const isHugrab = isHugrabShippingContext({
     clientId: context.clientId,
     storeId: context.storeId,
@@ -693,8 +693,8 @@ export async function resolveRateInput(
     effectiveInsuranceSource,
     hugrabDefaultInsuranceEnabled: isHugrab ? hugrabDefaultInsuranceEnabled : null,
     automationRulesVersion: input.automationRulesVersion
-      ? `${shippingAutomationRulesFingerprint(automationRules)}:${input.automationRulesVersion}`
-      : shippingAutomationRulesFingerprint(automationRules),
+      ? `${shippingAutomationControlsFingerprint(automationRules)}:${input.automationRulesVersion}`
+      : shippingAutomationControlsFingerprint(automationRules),
     carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
   };
 }
@@ -1203,7 +1203,7 @@ export async function getCarrierAccountsForRateContext(
     storeId: input.storeId ?? null,
     clientId: input.clientId ?? null,
   });
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
   const carriers = await getAllCarriers(context.apiKeyV2);
   const allowedCarriers = options.includeAutomationDisabled
     ? carriers
@@ -2015,7 +2015,7 @@ export async function getRates(
     };
   }
 
-  const automationRules = await loadShippingAutomationRules();
+  const automationRules = await loadShippingAutomationControls();
 
   // Markups apply at read time so config changes reflect instantly without
   // having to bust the rate cache.

@@ -40,6 +40,7 @@ const REQUIRED_RELATIONS = [
   'automation_rule_versions',
   'automation_rule_conditions',
   'automation_rule_actions',
+  'automation_shipping_controls',
   'automation_runs',
   'automation_action_results',
   'order_automation_state',
@@ -50,6 +51,7 @@ const REQUIRED_RELATIONS = [
 const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   automation_rules: ['active_version_id', 'active_from', 'draft_revision', 'system_locked'],
   automation_rule_versions: ['document_hash', 'draft_revision', 'simulation_hash', 'lifecycle'],
+  automation_shipping_controls: ['control_key', 'control_type', 'client_id', 'store_id', 'system_locked', 'provenance', 'position'],
   automation_runs: ['execution_key', 'facts_revision', 'ruleset_digest', 'engine_version', 'mode'],
   automation_action_results: ['idempotency_key', 'status', 'attempt_count', 'lease_token', 'lease_expires_at', 'updated_at'],
   order_automation_state: ['facts_revision', 'ruleset_digest', 'engine_version', 'status', 'plan'],
@@ -233,6 +235,8 @@ const REQUIRED_INDEXES = [
   'automation_rules_scope_status_idx',
   'automation_rules_activation_idx',
   'automation_versions_rule_lifecycle_idx',
+  'automation_shipping_controls_key_unq',
+  'automation_shipping_controls_scope_idx',
   'automation_runs_order_trigger_idx',
   'automation_action_results_idempotency_unq',
   'automation_action_results_reclaim_idx',
@@ -407,7 +411,8 @@ async function verifyRuntimeSchema(): Promise<void> {
     throw new Error(
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
         `the current release frontier (0074_billing_current_period_adjustments.sql, ` +
-        `0075_inventory_quantity_sot.sql, and 0077_ps462_billing_storage_month.sql). ` +
+        `0075_inventory_quantity_sot.sql, 0077_ps462_billing_storage_month.sql, ` +
+        `and 0081_ps466_automation_shipping_controls.sql). ` +
         `Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }

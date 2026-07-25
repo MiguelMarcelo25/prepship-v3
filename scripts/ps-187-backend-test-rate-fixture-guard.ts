@@ -100,7 +100,7 @@ check('carrier-account browsing also gates test clients before credential/live-a
   // sites in the file; the ordering that matters is inside getRates itself.
   const getRatesAt = ratesService.indexOf('export async function getRates(');
   const gateAt = ratesService.indexOf('buildTestFixtureRates({', getRatesAt);
-  const carrierCallAt = ratesService.indexOf('loadShippingAutomationRules()', getRatesAt);
+  const carrierCallAt = ratesService.indexOf('loadShippingAutomationControls()', getRatesAt);
   check('fixture branch sits BEFORE the live-pipeline setup (no carrier call for test clients)',
     getRatesAt > 0 && gateAt > getRatesAt && carrierCallAt > getRatesAt && gateAt < carrierCallAt);
 }

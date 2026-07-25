@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 const pg = new PGlite();
 await pg.exec(`
   create table clients (id serial primary key);
+  create table settings (key text primary key, value text);
   create table orders (
     id serial primary key,
     client_id integer references clients(id),
@@ -23,12 +24,19 @@ await pg.exec(`
     rate_weight_oz real, rate_dims_l real, rate_dims_w real, rate_dims_h real,
     selected_package_id text, recipient_override jsonb
   );
+  insert into clients(id) values (4), (9);
+  insert into settings(key, value) values (
+    'shipping_automation_rules',
+    '{"version":1,"rules":[{"type":"carrier","clientId":9,"storeId":363392,"carrierId":"se-disabled","carrierCode":"ups","disabled":true,"reason":"Disabled by Automation","locked":false,"source":"settings-automation","updatedAt":"2026-07-24T00:00:00.000Z","updatedBy":"lawrence@example.com"},{"type":"service","clientId":4,"storeId":378060,"carrierId":"se-hugrab-ups","carrierCode":"ups","serviceCode":"ups_ground_saver","serviceName":"UPS Ground Saver","disabled":true,"reason":"PS-057 locked","locked":true,"source":"system","updatedAt":"2026-07-24T01:00:00.000Z","updatedBy":"system"},{"type":"service","clientId":9,"storeId":363392,"serviceCode":"ups_next_day_air","serviceName":"UPS Next Day Air","disabled":true,"reason":"Service disabled for this store","source":"settings-automation","updatedAt":"2026-07-24T02:00:00.000Z","updatedBy":"lawrence@example.com"}]}'
+  );
 `);
 
 const migration = await readFile('drizzle/0079_ps466_automations_engine.sql', 'utf8');
 await pg.exec(migration);
 const recoveryMigration = await readFile('drizzle/0080_ps466_automation_recovery_leases.sql', 'utf8');
 await pg.exec(recoveryMigration);
+const controlsMigration = await readFile('drizzle/0081_ps466_automation_shipping_controls.sql', 'utf8');
+await pg.exec(controlsMigration);
 
 const required = [
   'automation_rules',
@@ -40,6 +48,7 @@ const required = [
   'order_automation_state',
   'automation_outbox',
   'automation_reprocess_jobs',
+  'automation_shipping_controls',
 ];
 const relations = await pg.query<{ table_name: string }>(`
   select table_name
@@ -50,7 +59,6 @@ const relations = await pg.query<{ table_name: string }>(`
 assert.deepEqual(relations.rows.map((row) => row.table_name).sort(), [...required].sort());
 
 await pg.exec(`
-  insert into clients(id) values (4);
   insert into orders(id, client_id, store_id, order_status) values (101, 4, 378060, 'awaiting_shipment');
   insert into automation_rules(id, name, priority, position, trigger, status, client_id, store_id, created_by, updated_by)
   values (1, 'HUGRAB Leeds review', 10, 0, 'order_imported', 'draft', 4, 378060, 'test@example.com', 'test@example.com');
@@ -197,5 +205,54 @@ const leaseColumns = await pg.query<{ table_name: string; column_name: string }>
 `);
 assert.equal(leaseColumns.rows.length, 6, 'effect and outbox recovery lease columns are migrated');
 
+const importedControls = await pg.query<{
+  control_type: string;
+  client_id: number;
+  store_id: number;
+  carrier_id: string;
+  service_code: string | null;
+  system_locked: boolean;
+  provenance: string;
+  source_updated_at: string;
+}>(`
+  select control_type, client_id, store_id, carrier_id, service_code,
+         system_locked, provenance, source_updated_at
+  from automation_shipping_controls
+  order by position
+`);
+assert.deepEqual(importedControls.rows, [
+  {
+    control_type: 'carrier', client_id: 9, store_id: 363392,
+    carrier_id: 'se-disabled', service_code: null, system_locked: false,
+    provenance: 'legacy_import', source_updated_at: '2026-07-24T00:00:00.000Z',
+  },
+  {
+    control_type: 'service', client_id: 4, store_id: 378060,
+    carrier_id: 'se-hugrab-ups', service_code: 'ups_ground_saver', system_locked: true,
+    provenance: 'system', source_updated_at: '2026-07-24T01:00:00.000Z',
+  },
+  {
+    control_type: 'service', client_id: 9, store_id: 363392,
+    carrier_id: null, service_code: 'ups_next_day_air', system_locked: false,
+    provenance: 'legacy_import', source_updated_at: '2026-07-24T02:00:00.000Z',
+  },
+], 'legacy carrier/service exclusions import into ordered typed records with lock provenance');
+
+const legacySettings = await pg.query<{ count: number }>(`
+  select count(*)::int as count from settings where key = 'shipping_automation_rules'
+`);
+assert.equal(legacySettings.rows[0]?.count, 0, 'the imported settings blob is retired atomically');
+
+await assert.rejects(
+  pg.exec(`
+    insert into automation_shipping_controls(
+      control_key, control_type, client_id, carrier_id, disabled, position,
+      provenance, updated_by
+    ) values ('invalid-enabled-control', 'carrier', 9, 'se-invalid', false, 99, 'operator', 'test')
+  `),
+  /check constraint/i,
+  'typed control rows represent exclusions only and cannot become an enabled alternate truth',
+);
+
 await pg.close();
-console.log('PS-466 PGlite migration/immutability/idempotency/recovery proof passed (14 assertions)');
+console.log('PS-466 PGlite migration/immutability/idempotency/recovery/control-import proof passed (17 assertions)');

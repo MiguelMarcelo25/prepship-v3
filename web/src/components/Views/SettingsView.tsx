@@ -528,7 +528,7 @@ export default function SettingsView() {
           carriers: AutomationCarrierRow[]
         }>
         updatedAt?: string
-      }>('/automation/availability', { timeoutMs: 20_000 })
+      }>('/automations/controls', { timeoutMs: 20_000 })
       return {
         rows: (payload.data ?? []).map((row) => ({
           store: row.store,
@@ -593,7 +593,7 @@ export default function SettingsView() {
       carriers.map((c) => (carrierMatches(c, carrierId, carrierCode) ? { ...c, disabled: !enabled } : c)),
     )
     try {
-      await api.patch('/automation/carrier', {
+      await api.patch('/automations/controls/carrier', {
         clientId: row.store.clientId,
         storeId: row.store.storeId,
         carrierId,
@@ -639,7 +639,7 @@ export default function SettingsView() {
       ),
     )
     try {
-      await api.patch('/automation/service', {
+      await api.patch('/automations/controls/service', {
         clientId: row.store.clientId,
         storeId: row.store.storeId,
         carrierId,
@@ -692,7 +692,7 @@ export default function SettingsView() {
     )
     try {
       const res = await api.patch<{ data?: { applied?: number; skipped?: unknown[] } }>(
-        '/automation/store-carriers',
+        '/automations/controls/store-carriers',
         {
           clientId: row.store.clientId,
           storeId: row.store.storeId,

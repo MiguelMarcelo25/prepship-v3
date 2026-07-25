@@ -17,7 +17,7 @@ assert.match(settings, /enabled: settingsQueriesReady && activeSection === 'syst
 assert.match(settings, /enabled: settingsQueriesReady && activeSection === 'automation'/);
 assert.match(settings, /api\.get<\{ data: SettingsTestClient\[\] \}>\('\/admin\/test-clients'\)/);
 assert.match(settings, /api\.get<ObservabilityStatus>\('\/observability\/status'/);
-assert.match(settings, /'\/automation\/availability'/);
+assert.match(settings, /'\/automations\/controls'/);
 assert.doesNotMatch(settings, /setTestClients|setSystemStatus|setAutomationRows/);
 
 assert.match(marketplaceFees, /queryFn: \(\) => apiClient\.fetchMarketplaceFeeRules\(\)/);
