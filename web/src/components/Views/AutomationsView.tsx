@@ -1179,19 +1179,21 @@ function Builder({
   // tag.add) publish in one step, like ShipStation. The backend re-checks this
   // from the saved draft, so this only decides what the operator is asked to do.
   const needsSimulation = draftNeedsSimulation(actions, catalog.actions);
+  // A missing test only blocks gated rules, but a test that was actually run
+  // blocks either way: if the operator tested a low-risk rule and it came back
+  // blocked or conflicting, publishing anyway would ignore evidence they asked
+  // for.
   const publishBlockReason = !activeRule
     ? "Turn on Active Rule to publish."
     : !draft
       ? needsSimulation
         ? "Save the draft, enter a test order ID, then run Test rule."
         : "Save the draft to publish."
-      : !needsSimulation
-        ? null
-        : !simulation
-          ? "Enter a test order ID and run Test rule before publishing."
-          : simulation.evaluation.blocked
+      : needsSimulation && !simulation
+        ? "Enter a test order ID and run Test rule before publishing."
+        : simulation?.evaluation.blocked
           ? "The test is blocked. Review the test result before publishing."
-          : simulation.reduction.conflicts.length > 0
+          : (simulation?.reduction.conflicts.length ?? 0) > 0
             ? "Resolve the test conflicts before publishing."
             : null;
 
@@ -1974,13 +1976,11 @@ function Builder({
             <button
               type="button"
               aria-describedby="publish-rule-status"
-              disabled={
-                !activeRule ||
-                !simulation ||
-                simulation.evaluation.blocked ||
-                simulation.reduction.conflicts.length > 0 ||
-                busy != null
-              }
+              // Derived from publishBlockReason, not re-listed. The two used to
+              // be maintained separately, so relaxing the gate made the status
+              // read "ready to activate" while the button stayed disabled on a
+              // stale !simulation check. One source now decides both.
+              disabled={publishBlockReason != null || busy != null}
               onClick={publish}
               className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white disabled:opacity-40"
             >
