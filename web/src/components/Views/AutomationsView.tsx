@@ -821,9 +821,26 @@ function Builder({
   const selectedSuggestionStore = stores.find(
     (store) => String(store.storeId) === selectedStoreCondition?.value,
   );
+  // A Client condition narrows the SKU list just as much as a Store condition
+  // does. Without this, setting "Client is equal to HUGRAB" still offered every
+  // client's SKUs, so the operator could pick an item HUGRAB does not sell.
+  const selectedClientCondition = conditions.find(
+    (condition) => condition.field === "order.client_id" && condition.value,
+  );
+  const conditionClientId = Number(selectedClientCondition?.value);
+  // Most specific signal wins: store condition, then client condition, then
+  // the rule's own scope.
   const suggestionClientId =
     selectedSuggestionStore?.clientId ??
+    (Number.isFinite(conditionClientId) && conditionClientId > 0
+      ? conditionClientId
+      : null) ??
     (clientId && Number.isFinite(Number(clientId)) ? Number(clientId) : null);
+  /** Name of the client the SKU list is currently narrowed to, if any. */
+  const suggestionClientName =
+    selectedSuggestionStore?.clientName ??
+    stores.find((store) => store.clientId === suggestionClientId)?.clientName ??
+    null;
   const skuRowsQuery = useQuery({
     queryKey: ["automations", "sku-suggestions", suggestionClientId ?? "all"],
     queryFn: async () =>
@@ -850,11 +867,6 @@ function Builder({
     () => buildClientOptions(stores),
     [stores],
   );
-  /** Resolves a stored client id back to its name for display. */
-  const clientNameFor = (value: string): string | null => {
-    const match = clientOptions.find((option) => option.value === value.trim());
-    return match?.primaryText ?? null;
-  };
   const [draft, setDraft] = useState<{
     ruleId: number;
     revision: number;
@@ -1278,47 +1290,52 @@ function Builder({
                           ))}
                         </select>
                       ) : field?.key === "order.client_id" ? (
-                        <div className="flex flex-col gap-1">
-                          <Autosuggest
-                            value={condition.value}
-                            options={clientOptions}
-                            ariaLabel={`Condition ${index + 1} value`}
-                            placeholder="Search client name"
-                            inputClassName="h-10 w-full rounded-lg bg-surface px-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
-                            popoverClassName="left-0 right-0"
-                            maxResults={10}
-                            emptyMessage={
-                              clientOptions.length === 0
-                                ? "No clients available. You can still type the client ID."
-                                : condition.value.trim()
-                                  ? `No client matches "${condition.value.trim()}"`
-                                  : "Type to search by client name"
-                            }
-                            onChange={(value) =>
-                              setConditions((current) =>
-                                current.map((item) =>
-                                  item.id === condition.id
-                                    ? { ...item, value }
-                                    : item,
-                                ),
-                              )
-                            }
-                          />
-                          {/* The rule stores a numeric client id, so echo which
-                              client that id actually is rather than leaving a
-                              bare number on screen. */}
-                          {clientNameFor(condition.value) ? (
-                            <span className="px-1 text-tiny text-ink-3">
-                              {clientNameFor(condition.value)}
-                            </span>
+                        // The rule stores a numeric client id, but the operator
+                        // should never have to read or recognise one. A select
+                        // shows the name while the id stays the stored value --
+                        // same pattern as the Store field above.
+                        <select
+                          aria-label={`Condition ${index + 1} value`}
+                          value={condition.value}
+                          onChange={(event) =>
+                            setConditions((current) =>
+                              current.map((item) =>
+                                item.id === condition.id
+                                  ? { ...item, value: event.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className="h-10 rounded-lg px-3 ring-1 ring-line"
+                        >
+                          <option value="">Choose a client…</option>
+                          {clientOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.primaryText ?? option.label}
+                            </option>
+                          ))}
+                          {/* An id saved before this list loaded (or from a
+                              client no longer listed) must stay selectable, or
+                              reopening the draft would silently clear it. */}
+                          {condition.value &&
+                          !clientOptions.some(
+                            (option) => option.value === condition.value,
+                          ) ? (
+                            <option value={condition.value}>
+                              Client {condition.value}
+                            </option>
                           ) : null}
-                        </div>
+                        </select>
                       ) : field?.key === "line.sku" ? (
                         <Autosuggest
                           value={condition.value}
                           options={skuOptions}
                           ariaLabel={`Condition ${index + 1} value`}
-                          placeholder="Search SKU or product name"
+                          placeholder={
+                            suggestionClientName
+                              ? `Search ${suggestionClientName} SKUs`
+                              : "Search SKU or product name"
+                          }
                           inputClassName="h-10 w-full rounded-lg bg-surface px-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
                           popoverClassName="left-0 right-0"
                           maxResults={10}
@@ -1326,8 +1343,13 @@ function Builder({
                             skuRowsQuery.isError
                               ? "SKU suggestions could not be loaded. You can still type the SKU."
                               : condition.value.trim()
-                                ? `No SKU matches "${condition.value.trim()}"`
-                                : "Type to search by SKU or product name"
+                                ? `No ${suggestionClientName ?? ""} SKU matches "${condition.value.trim()}"`.replace(
+                                    /\s+/g,
+                                    " ",
+                                  )
+                                : suggestionClientName
+                                  ? `Showing ${suggestionClientName} SKUs only`
+                                  : "Type to search by SKU or product name"
                           }
                           onChange={(value) =>
                             setConditions((current) =>
