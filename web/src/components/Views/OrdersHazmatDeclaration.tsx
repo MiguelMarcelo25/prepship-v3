@@ -94,6 +94,7 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
 
   const editable = !shipped && state.capabilities.writeEnabled
   const profiles = Object.values(state.capabilities.profiles).filter((profile) => profile.visible)
+  const supportedProfiles = profiles.filter((profile) => profile.purchaseSupported)
   const issues = shipped ? [] : state.validation.issues
   const update = <K extends keyof HazmatDeclarationDraft>(key: K, value: HazmatDeclarationDraft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }))
@@ -160,19 +161,42 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
         </div>
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10.5px]">
-        {profiles.map((profile) => (
-          <div key={profile.profile} className="rounded border border-amber-200 bg-surface px-2 py-1.5">
-            <div className="font-semibold text-ink-2">{profile.label}</div>
-            <div className={profile.purchaseSupported ? 'text-emerald-700' : 'text-amber-700'}>
-              {profile.purchaseSupported ? 'Rate + purchase enabled' : profile.unavailableReason ?? 'Unavailable'}
-            </div>
-            {profile.warnings.map((warning) => (
-              <div key={warning} className="mt-0.5 text-[9px] leading-snug text-ink-3">{warning}</div>
+      {/* Carrier capability is diagnostic detail, not something the operator
+          fills in. Rendering every provider's certification caveat inline
+          buried the two fields that actually need typing, so it collapses to
+          a one-line summary and opens only when asked -- or automatically
+          when nothing can actually ship hazmat. */}
+      {profiles.length > 0 ? (
+        <details className="mt-2 rounded border border-amber-200 bg-surface" open={supportedProfiles.length === 0}>
+          <summary className="cursor-pointer px-2 py-1.5 text-[10.5px] font-semibold text-ink-2">
+            Carrier support:{' '}
+            {supportedProfiles.length > 0 ? (
+              <span className="text-emerald-700">
+                {supportedProfiles.map((profile) => profile.label).join(', ')}
+              </span>
+            ) : (
+              <span className="text-amber-700">none certified for hazmat yet</span>
+            )}
+            <span className="font-normal text-ink-3">
+              {' '}
+              ({supportedProfiles.length} of {profiles.length})
+            </span>
+          </summary>
+          <div className="grid grid-cols-2 gap-1.5 px-2 pb-2 text-[10.5px]">
+            {profiles.map((profile) => (
+              <div key={profile.profile} className="rounded border border-line bg-surface px-2 py-1.5">
+                <div className="font-semibold text-ink-2">{profile.label}</div>
+                <div className={profile.purchaseSupported ? 'text-emerald-700' : 'text-amber-700'}>
+                  {profile.purchaseSupported ? 'Rate + purchase enabled' : profile.unavailableReason ?? 'Unavailable'}
+                </div>
+                {profile.warnings.map((warning) => (
+                  <div key={warning} className="mt-0.5 text-[9px] leading-snug text-ink-3">{warning}</div>
+                ))}
+              </div>
             ))}
           </div>
-        ))}
-      </div>
+        </details>
+      ) : null}
 
       {evidence ? (
         <details className="mt-2 rounded border border-line bg-surface px-2 py-1.5">
@@ -184,24 +208,58 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
         </details>
       ) : null}
 
-      <label className="mt-2 block text-[10px] font-semibold uppercase tracking-wide text-ink-3">
-        Declaration
-        <select
-          aria-label="Hazmat declaration status"
-          className="mt-1 h-7 w-full rounded border border-line bg-surface px-2 text-[11px] text-ink disabled:opacity-60"
-          value={draft.status}
+      {/* Mirrors ShipStation's Other Shipping Options: one checkbox to declare,
+          then the two contact fields. Everything else is regulatory detail and
+          lives under Advanced. */}
+      <label className="mt-2 flex items-center gap-2 rounded border border-line bg-surface px-2 py-1.5 text-[11px] font-semibold text-ink">
+        <input
+          type="checkbox"
+          aria-label="This shipment contains dangerous goods"
+          checked={draft.status === 'active'}
           disabled={!editable}
-          onChange={(event) => setDraft(event.target.value === 'active'
+          onChange={(event) => setDraft(event.target.checked
             ? { ...draft, status: 'active' }
             : clearDeclaration())}
-        >
-          <option value="clear">No active hazmat declaration</option>
-          <option value="active">Active hazmat declaration</option>
-        </select>
+        />
+        This shipment contains dangerous goods
       </label>
 
       {draft.status === 'active' ? (
         <div className="mt-2 space-y-2">
+          <div className="grid grid-cols-2 gap-1.5">
+            <input
+              className="h-7 rounded border border-line bg-surface px-2 text-[11px]"
+              placeholder="Name contact"
+              aria-label="Dangerous-goods contact name"
+              disabled={!editable}
+              value={draft.emergencyContactName ?? ''}
+              onChange={(event) => update('emergencyContactName', event.target.value || null)}
+            />
+            <input
+              className="h-7 rounded border border-line bg-surface px-2 text-[11px]"
+              placeholder="Phone contact"
+              aria-label="Dangerous-goods contact phone"
+              disabled={!editable}
+              value={draft.emergencyContactPhone ?? ''}
+              onChange={(event) => update('emergencyContactPhone', event.target.value || null)}
+            />
+          </div>
+
+          {/* Opens itself when validation flags something in here, so a
+              required regulatory field can never hide behind a summary. */}
+          <details
+            className="rounded border border-line bg-surface"
+            open={issues.length > 0}
+          >
+            <summary className="cursor-pointer px-2 py-1.5 text-[10.5px] font-semibold text-ink-2">
+              Advanced declaration details
+              {issues.length > 0 ? (
+                <span className="ml-1 font-normal text-amber-700">
+                  ({issues.length} to resolve)
+                </span>
+              ) : null}
+            </summary>
+            <div className="space-y-2 px-2 pb-2">
           <div className="grid grid-cols-2 gap-1.5 text-[10.5px] text-ink-2">
             {[
               ['limitedQuantity', 'Limited quantity'],
@@ -246,9 +304,9 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
             </div>
           ) : null}
 
+          {/* Contact name/phone are promoted above; only the regulatory
+              fields remain here. */}
           <div className="grid grid-cols-2 gap-1.5">
-            <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Dangerous-goods contact name" disabled={!editable} value={draft.emergencyContactName ?? ''} onChange={(event) => update('emergencyContactName', event.target.value || null)} />
-            <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Dangerous-goods contact phone" disabled={!editable} value={draft.emergencyContactPhone ?? ''} onChange={(event) => update('emergencyContactPhone', event.target.value || null)} />
             <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="USPS category" disabled={!editable} value={draft.uspsCategory ?? ''} onChange={(event) => update('uspsCategory', event.target.value || null)} />
             <input className="h-7 rounded border border-line bg-surface px-2 text-[11px]" placeholder="Other regulated content evidence" disabled={!editable} value={draft.regulatedContentType ?? ''} onChange={(event) => update('regulatedContentType', event.target.value || null)} />
           </div>
@@ -297,6 +355,8 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
               </div>
             ))}
           </div>
+            </div>
+          </details>
         </div>
       ) : null}
 
