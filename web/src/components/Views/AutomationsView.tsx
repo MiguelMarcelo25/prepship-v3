@@ -875,6 +875,10 @@ function Builder({
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** JSON of the document as last saved; null means nothing saved yet. */
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  /** Seeds the clean-state baseline: true on first render and after hydration. */
+  const seedSnapshotRef = useRef(true);
 
   // Editing an existing rule: pull its open draft version and refill the form.
   // Without this the builder could only ever create, so any draft that survived
@@ -929,6 +933,10 @@ function Builder({
     if (parsed.conditions.length > 0) setConditions(parsed.conditions);
     if (parsed.actions.length > 0) setActions(parsed.actions);
     setDraft({ ruleId: editRule.id, revision: draftVersion.draftRevision });
+    // Freshly loaded state is unmodified by definition. `document` is a memo
+    // of the state set above, so it is still stale here -- flag it and let the
+    // effect below snapshot once the recomputed document is available.
+    seedSnapshotRef.current = true;
     hydratedRef.current = editRule.id;
   }, [editRule, editRuleQuery.data]);
 
@@ -1014,7 +1022,12 @@ function Builder({
         });
       }
       setSimulation(null);
+      setSavedSnapshot(JSON.stringify(document));
       onCreated();
+      // Saving is a natural stopping point, so the panel gets out of the way.
+      // Publishing needs a Test run against the saved draft, so reopen with
+      // the Edit action on the row when you are ready to publish.
+      onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Draft save failed");
     } finally {
@@ -1067,6 +1080,53 @@ function Builder({
     }
   };
 
+  // Escape closes the panel, matching the backdrop click and the X button.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") requestCloseRef.current();
+    };
+    globalThis.document.addEventListener("keydown", onKeyDown);
+    return () => globalThis.document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Establish the clean baseline once the derived document is current -- on
+  // first open for a new rule, and again after an existing draft hydrates.
+  useEffect(() => {
+    if (seedSnapshotRef.current) {
+      seedSnapshotRef.current = false;
+      setSavedSnapshot(JSON.stringify(document));
+    }
+  }, [document]);
+
+  /**
+   * Snapshot of the document as last persisted. Anything different means the
+   * operator has edits that closing would throw away.
+   */
+  const isDirty =
+    savedSnapshot != null && JSON.stringify(document) !== savedSnapshot;
+
+  /**
+   * Closing routes through here so a stray backdrop click or Escape cannot
+   * silently discard work. A clean panel just closes.
+   */
+  const requestClose = () => {
+    if (busy != null) return;
+    if (
+      isDirty &&
+      !globalThis.confirm(
+        "Close the builder? Unsaved changes to this automation will be lost.",
+      )
+    ) {
+      return;
+    }
+    onClose();
+  };
+
+  // Keeps the Escape listener (registered once) pointed at the latest closure,
+  // so it always sees current dirty/busy state instead of first-render values.
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
+
   const publishBlockReason = !activeRule
     ? "Turn on Active Rule to publish."
     : !draft
@@ -1080,8 +1140,20 @@ function Builder({
             : null;
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-stretch justify-end bg-black/30 backdrop-blur-sm">
-      <div className="flex h-full w-full max-w-[980px] flex-col bg-page shadow-2xl">
+    <div
+      className="fixed inset-0 z-[10000] flex items-stretch justify-end bg-black/30 backdrop-blur-sm"
+      // Clicking the dimmed backdrop closes the panel. The check keeps this
+      // from firing when a click inside the panel bubbles up here.
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) requestClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Automation guided builder"
+        className="flex h-full w-full max-w-[980px] flex-col bg-page shadow-2xl"
+      >
         <header className="flex items-center gap-4 border-b border-line bg-surface px-5 py-4">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-bg text-brand ring-1 ring-brand-border">
             <Workflow size={20} />
@@ -1096,7 +1168,7 @@ function Builder({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close builder"
             className="rounded-lg p-2 text-ink-3 hover:bg-surface-2"
           >
