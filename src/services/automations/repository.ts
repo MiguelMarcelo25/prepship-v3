@@ -405,6 +405,75 @@ export async function deleteAutomationRule(input: {
   });
 }
 
+/**
+ * Reopens a published rule for editing by cloning its live version into a new
+ * draft.
+ *
+ * Publishing flips the draft version to 'published' and leaves none behind, and
+ * updateAutomationDraft requires an open draft. Without this, a rule became
+ * permanently frozen the moment it was published: it could not be edited,
+ * reordered, or reactivated, only paused or archived.
+ *
+ * Published versions stay immutable. This never rewrites one -- it copies the
+ * document into a brand new draft version, so history is untouched and the
+ * live version keeps serving orders until the new draft is simulated and
+ * published in its own right.
+ *
+ * Idempotent: if a draft is already open it is returned as-is, so a double
+ * click cannot create two competing drafts.
+ */
+export async function openAutomationDraft(input: {
+  ruleId: number;
+  actor: string;
+  scope: ClientStoreScope;
+}) {
+  const current = await getAutomationRule(input.ruleId, input.scope);
+  if (current.rule.systemLocked) {
+    throw new Error('System-locked automations cannot be edited by operators');
+  }
+
+  const existingDraft = current.versions.find((version) => version.lifecycle === 'draft');
+  if (existingDraft) {
+    return { rule: current.rule, version: existingDraft, created: false as const };
+  }
+
+  // Prefer the version currently serving orders; fall back to the highest
+  // version number so an archived or paused rule can still be reopened.
+  const sourceVersion = current.versions.find((version) => version.id === current.rule.activeVersionId)
+    ?? [...current.versions].sort((left, right) => right.versionNumber - left.versionNumber)[0];
+  if (!sourceVersion) throw new Error('Automation has no version to copy');
+
+  const nextVersionNumber = current.versions.reduce(
+    (highest, version) => Math.max(highest, version.versionNumber),
+    0,
+  ) + 1;
+  const compiled = compileAutomationRuleVersion(documentOf(sourceVersion.document), {
+    ruleId: String(input.ruleId),
+    versionId: 'pending',
+    versionNumber: nextVersionNumber,
+  });
+
+  return db.transaction(async (tx) => {
+    const [version] = await tx.insert(automationRuleVersions).values({
+      ruleId: input.ruleId,
+      versionNumber: nextVersionNumber,
+      lifecycle: 'draft',
+      document: compiled.document as unknown as Record<string, unknown>,
+      documentHash: compiled.documentHash,
+      draftRevision: 1,
+      createdBy: input.actor,
+    }).returning();
+    if (!version) throw new Error('Failed to open automation draft');
+    await persistVersionChildren(tx, version.id, compiled.document);
+    const [rule] = await tx.update(automationRules).set({
+      draftRevision: 1,
+      updatedBy: input.actor,
+      updatedAt: new Date(),
+    }).where(eq(automationRules.id, input.ruleId)).returning();
+    return { rule: rule ?? current.rule, version, created: true as const };
+  });
+}
+
 export async function setAutomationRuleStatus(input: {
   ruleId: number;
   status: 'paused' | 'archived';

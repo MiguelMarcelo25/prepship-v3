@@ -626,7 +626,9 @@ function RulesPanel({
                           ? "Publish this draft to activate it"
                           : rule.status === "archived"
                             ? "Archived rules cannot be reactivated"
-                            : undefined
+                            : rule.status === "paused"
+                              ? "Opens the rule for testing, then publish to reactivate"
+                              : undefined
                       }
                       disabled={
                         rule.systemLocked ||
@@ -649,11 +651,11 @@ function RulesPanel({
                     <div className="flex justify-end">
                       <AutomationRowActions
                         ruleName={rule.name}
-                        canEdit={!rule.systemLocked && rule.status === "draft"}
+                        canEdit={!rule.systemLocked && rule.status !== "archived"}
                         editDisabledReason={
                           rule.systemLocked
                             ? "System-locked rules cannot be edited"
-                            : "Published versions are immutable. Copy this rule to change it."
+                            : "Archived rules cannot be edited. Copy this rule to revive it."
                         }
                         canDelete={!rule.systemLocked}
                         deleteDisabledReason="System-locked rules cannot be deleted"
@@ -717,21 +719,22 @@ function RulesPanel({
               orders only; reprocessing awaiting orders is a separate reviewed
               workflow.
             </div>
-            {!selected.systemLocked && selected.status === "draft" ? (
+            {!selected.systemLocked && selected.status !== "archived" ? (
               <button
                 type="button"
                 disabled={busy != null}
                 onClick={() => onEdit(selected)}
                 className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-brand text-small font-bold text-white shadow-sm hover:bg-brand-dark"
               >
-                <Pencil size={14} /> Edit &amp; publish draft
+                <Pencil size={14} />{" "}
+                {selected.status === "draft" ? "Edit & publish draft" : "Edit rule"}
               </button>
             ) : null}
-            {!selected.systemLocked && selected.status !== "draft" ? (
-              <div className="mt-4 rounded-lg bg-surface-2 p-3 text-tiny leading-5 text-ink-3 ring-1 ring-line">
-                Published versions are immutable and the backend exposes no
-                endpoint to reopen one as a draft, so this rule can only be
-                paused or archived.
+            {!selected.systemLocked && selected.status !== "draft" && selected.status !== "archived" ? (
+              <div className="mt-2 rounded-lg bg-surface-2 p-3 text-tiny leading-5 text-ink-3 ring-1 ring-line">
+                Editing clones the live version into a new draft. The published
+                version keeps running until the new draft is tested and
+                published.
               </div>
             ) : null}
             {!selected.systemLocked && selected.status === "active" ? (
@@ -2227,6 +2230,36 @@ export default function AutomationsView() {
   };
 
   /**
+   * Opens a rule in the builder. A published rule has no draft to edit, so ask
+   * the backend to clone its live version into one first. The published
+   * version is untouched and keeps serving orders until the new draft is
+   * simulated and published in its own right.
+   */
+  const openRuleForEdit = async (rule: RuleRow) => {
+    if (rule.status === "draft") {
+      setEditRule(rule);
+      setBuilderOpen(true);
+      return;
+    }
+    setBusy(`draft:${rule.id}`);
+    setOrderError(null);
+    try {
+      await api.post(`/automations/${rule.id}/draft`, {});
+      await queryClient.invalidateQueries({
+        queryKey: ["automations", "rules"],
+      });
+      setEditRule(rule);
+      setBuilderOpen(true);
+    } catch (caught) {
+      setOrderError(
+        caught instanceof Error ? caught.message : "Could not open this rule for editing",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
    * Duplicate a rule as a fresh draft. Built from the existing read + create
    * endpoints -- the copy is a new draft document, so it inherits none of the
    * original's published state or history.
@@ -2301,9 +2334,10 @@ export default function AutomationsView() {
       await changeStatus(rule, "pause");
       return;
     }
-    setOrderError(
-      `"${rule.name}" is paused. Reactivating needs a republish, which the backend only exposes through the draft publish flow.`,
-    );
+    // Reactivating a paused rule means republishing it. Open its draft and
+    // hand the operator the builder, where Test then Publish makes it live.
+    setOrderError(null);
+    await openRuleForEdit(rule);
   };
 
   /**
@@ -2322,11 +2356,12 @@ export default function AutomationsView() {
       for (const change of changes) {
         const target = rulesById.get(change.ruleId);
         if (!target || target.systemLocked) continue;
+        if (target.status === "archived") continue;
+        // A published rule has no draft to write priority into, so clone its
+        // live version into one first. Idempotent server-side, so a rule
+        // already holding a draft is unaffected.
         if (target.status !== "draft") {
-          setOrderError(
-            `"${target.name}" is published, and published versions are immutable. Reordering it needs a backend endpoint to reopen a draft.`,
-          );
-          continue;
+          await api.post(`/automations/${change.ruleId}/draft`, {});
         }
         const detail = (
           await api.get<{
@@ -2433,10 +2468,7 @@ export default function AutomationsView() {
             setEditRule(null);
             setBuilderOpen(true);
           }}
-          onEdit={(rule) => {
-            setEditRule(rule);
-            setBuilderOpen(true);
-          }}
+          onEdit={(rule) => void openRuleForEdit(rule)}
           onCopy={(rule) => void copyRule(rule)}
           onDelete={(rule) => void deleteRule(rule)}
           onToggleActive={(rule) => void toggleActive(rule)}

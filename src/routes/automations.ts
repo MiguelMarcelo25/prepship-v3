@@ -16,6 +16,7 @@ import {
   getAutomationRun,
   listAutomationRules,
   listAutomationRuns,
+  openAutomationDraft,
   previewAutomationReprocess,
   publishAutomationDraft,
   setAutomationRuleStatus,
@@ -323,6 +324,23 @@ app.post('/orders/:orderId/evaluate', requireInternalPermission('automations:rep
       orderId,
       trigger: body.trigger,
       sourceEventId: body.sourceEventId,
+      scope: scope(c as never),
+    }) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// Reopens a published rule as an editable draft. Requires publish rights
+// because the resulting draft is the only path back to changing live rule
+// behaviour; the published version itself is never modified.
+app.post('/:id/draft', requireInternalPermission('automations:publish'), async (c) => {
+  const ruleId = positiveId(c.req.param('id'));
+  if (!ruleId) return c.json({ error: 'Automation not found' }, 404);
+  try {
+    return c.json({ data: await openAutomationDraft({
+      ruleId,
+      actor: actor(c),
       scope: scope(c as never),
     }) });
   } catch (error) {
