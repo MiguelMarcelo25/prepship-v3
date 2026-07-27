@@ -114,8 +114,13 @@ function assertCapability(input: {
   purpose: 'rating' | 'purchase';
 }): HazmatProfile {
   if (!input.profile) {
+    // State the way out, not just the fact. Operators hitting this were left
+    // to work out that the block comes from the order's own declaration.
     throw new HazmatShippingError(
-      `The selected carrier does not have a certified hazmat ${input.purpose} profile.`,
+      `The selected carrier is not certified to ${input.purpose === 'rating' ? 'rate' : 'buy labels for'}`
+      + ' dangerous goods, so this order cannot be processed while its hazmat declaration is active.'
+      + ' Clear the dangerous-goods declaration on the order to ship it normally,'
+      + ' or select a carrier with a certified hazmat profile.',
       'HAZMAT_PROFILE_UNSUPPORTED',
     );
   }

@@ -34,6 +34,7 @@ import { filterRules } from "./automations/rule-search";
 import {
   buildClientOptions,
   buildSkuOptions,
+  storeOptionLabel,
 } from "./automations/suggestion-options";
 import { parseRuleDocument } from "./automations/rule-document";
 import {
@@ -1415,9 +1416,13 @@ function Builder({
                           className="h-10 rounded-lg px-3 ring-1 ring-line"
                         >
                           <option value="">Choose a store…</option>
+                          {/* The value is the store id, so the label has to
+                              identify the store. Showing only clientName made
+                              every store of a multi-store client look
+                              identical and unpickable. */}
                           {stores.map((store) => (
                             <option key={store.storeId} value={store.storeId}>
-                              {store.clientName}
+                              {storeOptionLabel(store, stores)}
                             </option>
                           ))}
                         </select>

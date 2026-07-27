@@ -57,6 +57,22 @@ export function buildSkuOptions(
  * The stored value stays the numeric client id, because that is what
  * order.client_id compares against -- the name is only for the operator.
  */
+/**
+ * Label for a store <option>. The stored value is the store id, so the label
+ * must distinguish stores, not clients: a client with three stores otherwise
+ * renders three identical rows the operator cannot choose between.
+ * The store id is appended only when the client name alone is ambiguous.
+ */
+export function storeOptionLabel(
+  store: ClientSuggestionRow,
+  allStores: readonly ClientSuggestionRow[],
+): string {
+  const name = String(store.clientName ?? '').trim() || `Client ${store.clientId}`;
+  const sameClientStores = allStores.filter((row) => row.clientId === store.clientId);
+  if (sameClientStores.length <= 1) return name;
+  return `${name} · Store ${store.storeId}`;
+}
+
 export function buildClientOptions(
   stores: readonly ClientSuggestionRow[],
 ): AutosuggestOption[] {
