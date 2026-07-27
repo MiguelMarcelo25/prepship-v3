@@ -654,6 +654,8 @@ function RulesPanel({
                             ? "System-locked rules cannot be edited"
                             : "Published versions are immutable. Copy this rule to change it."
                         }
+                        canDelete={!rule.systemLocked}
+                        deleteDisabledReason="System-locked rules cannot be deleted"
                         disabled={busy != null}
                         onEdit={() => onEdit(rule)}
                         onCopy={() => onCopy(rule)}
@@ -848,6 +850,11 @@ function Builder({
     () => buildClientOptions(stores),
     [stores],
   );
+  /** Resolves a stored client id back to its name for display. */
+  const clientNameFor = (value: string): string | null => {
+    const match = clientOptions.find((option) => option.value === value.trim());
+    return match?.primaryText ?? null;
+  };
   const [draft, setDraft] = useState<{
     ruleId: number;
     revision: number;
@@ -1271,31 +1278,41 @@ function Builder({
                           ))}
                         </select>
                       ) : field?.key === "order.client_id" ? (
-                        <Autosuggest
-                          value={condition.value}
-                          options={clientOptions}
-                          ariaLabel={`Condition ${index + 1} value`}
-                          placeholder="Search client name"
-                          inputClassName="h-10 w-full rounded-lg bg-surface px-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
-                          popoverClassName="left-0 right-0"
-                          maxResults={10}
-                          emptyMessage={
-                            clientOptions.length === 0
-                              ? "No clients available. You can still type the client ID."
-                              : condition.value.trim()
-                                ? `No client matches "${condition.value.trim()}"`
-                                : "Type to search by client name"
-                          }
-                          onChange={(value) =>
-                            setConditions((current) =>
-                              current.map((item) =>
-                                item.id === condition.id
-                                  ? { ...item, value }
-                                  : item,
-                              ),
-                            )
-                          }
-                        />
+                        <div className="flex flex-col gap-1">
+                          <Autosuggest
+                            value={condition.value}
+                            options={clientOptions}
+                            ariaLabel={`Condition ${index + 1} value`}
+                            placeholder="Search client name"
+                            inputClassName="h-10 w-full rounded-lg bg-surface px-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
+                            popoverClassName="left-0 right-0"
+                            maxResults={10}
+                            emptyMessage={
+                              clientOptions.length === 0
+                                ? "No clients available. You can still type the client ID."
+                                : condition.value.trim()
+                                  ? `No client matches "${condition.value.trim()}"`
+                                  : "Type to search by client name"
+                            }
+                            onChange={(value) =>
+                              setConditions((current) =>
+                                current.map((item) =>
+                                  item.id === condition.id
+                                    ? { ...item, value }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                          {/* The rule stores a numeric client id, so echo which
+                              client that id actually is rather than leaving a
+                              bare number on screen. */}
+                          {clientNameFor(condition.value) ? (
+                            <span className="px-1 text-tiny text-ink-3">
+                              {clientNameFor(condition.value)}
+                            </span>
+                          ) : null}
+                        </div>
                       ) : field?.key === "line.sku" ? (
                         <Autosuggest
                           value={condition.value}

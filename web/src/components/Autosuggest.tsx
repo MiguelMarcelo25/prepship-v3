@@ -48,6 +48,13 @@ export interface AutosuggestOption {
   label: string
   /** Optional tertiary hint (e.g. inventory count, client name). */
   hint?: string
+  /** Optional display override for the bold primary line.
+   *  `value` is still what gets stored on pick and is still searched —
+   *  this only changes what the operator reads. Use it when the stored
+   *  value is an opaque id (e.g. a client id) and the human-meaningful
+   *  text belongs on top. When set, the primary line drops the monospace
+   *  treatment, since it is prose rather than a code. */
+  primaryText?: string
   /** Optional thumbnail URL rendered to the LEFT of the text content.
    *  When present, an empty placeholder square is reserved even if the
    *  image fails to load — keeps row height stable so keyboard
@@ -529,8 +536,10 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
                   ) : null}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[12px] font-bold text-ink truncate">
-                        {option.value}
+                      <span
+                        className={`text-[12px] font-bold text-ink truncate ${option.primaryText ? '' : 'font-mono'}`}
+                      >
+                        {option.primaryText ?? option.value}
                       </span>
                       {option.hint ? (
                         <span className="text-[10.5px] text-ink-3 tabular-nums flex-shrink-0">
@@ -538,7 +547,10 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
                         </span>
                       ) : null}
                     </div>
-                    {option.label ? (
+                    {/* Secondary line is suppressed when it would just repeat
+                        the primary text (happens when primaryText mirrors the
+                        searchable label). */}
+                    {option.label && option.label !== (option.primaryText ?? option.value) ? (
                       <div className="text-[11.5px] text-ink-2 truncate mt-0.5">
                         {option.label}
                       </div>

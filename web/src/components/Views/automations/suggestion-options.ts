@@ -74,10 +74,18 @@ export function buildClientOptions(
     });
   }
   return Array.from(byClient.entries())
-    .map(([clientId, info]) => ({
-      value: String(clientId),
-      label: info.name || `Client ${clientId}`,
-      hint: info.stores > 1 ? `${info.stores} stores` : undefined,
-    }))
+    .map(([clientId, info]) => {
+      const name = info.name || `Client ${clientId}`;
+      return {
+        // Stored + searchable by id, but the operator reads the name.
+        value: String(clientId),
+        label: name,
+        primaryText: name,
+        hint:
+          info.stores > 1
+            ? `Client ${clientId} · ${info.stores} stores`
+            : `Client ${clientId}`,
+      };
+    })
     .sort((left, right) => left.label.localeCompare(right.label));
 }
