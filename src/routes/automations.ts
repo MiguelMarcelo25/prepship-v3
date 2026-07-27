@@ -8,8 +8,10 @@ import { getAutomationCatalog } from '../services/automations/catalog.js';
 import type { AutomationRuleDocument } from '../services/automations/contracts.js';
 import {
   AutomationConflictError,
+  AutomationDeleteBlockedError,
   confirmAutomationReprocess,
   createAutomationDraft,
+  deleteAutomationRule,
   getAutomationRule,
   getAutomationRun,
   listAutomationRules,
@@ -125,6 +127,9 @@ function errorResponse(c: { json(value: Record<string, unknown>, status: 400 | 4
   }
   if (error instanceof AutomationConflictError) {
     return c.json({ error: error.message, code: error.code }, 409);
+  }
+  if (error instanceof AutomationDeleteBlockedError) {
+    return c.json({ error: error.message, code: error.code, reason: error.reason }, 409);
   }
   if (error instanceof ResourceScopeError || (error instanceof Error && /not found/i.test(error.message))) {
     return c.json({ error: 'Automation not found' }, 404);
@@ -320,6 +325,16 @@ app.post('/orders/:orderId/evaluate', requireInternalPermission('automations:rep
       sourceEventId: body.sourceEventId,
       scope: scope(c as never),
     }) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+app.delete('/:id', requireInternalPermission('automations:publish'), async (c) => {
+  const ruleId = positiveId(c.req.param('id'));
+  if (!ruleId) return c.json({ error: 'Automation not found' }, 404);
+  try {
+    return c.json({ data: await deleteAutomationRule({ ruleId, scope: scope(c as never) }) });
   } catch (error) {
     return errorResponse(c, error);
   }

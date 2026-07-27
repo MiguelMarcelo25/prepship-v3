@@ -29,6 +29,7 @@ import {
 import { api, qs, type Paginated } from "../../lib/api";
 import Autosuggest, { type AutosuggestOption } from "../Autosuggest";
 import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
+import { AutomationRowActions } from "./automations/AutomationRowActions";
 import { filterRules } from "./automations/rule-search";
 import {
   buildClientOptions,
@@ -411,9 +412,14 @@ function RulesPanel({
   setSelected,
   onNew,
   onEdit,
+  onCopy,
+  onDelete,
+  onToggleActive,
   onRefresh,
   onStatus,
   onMove,
+  showInactive,
+  setShowInactive,
   busy,
 }: {
   rules: RuleRow[];
@@ -424,16 +430,27 @@ function RulesPanel({
   setSelected: (rule: RuleRow) => void;
   onNew: () => void;
   onEdit: (rule: RuleRow) => void;
+  onCopy: (rule: RuleRow) => void;
+  onDelete: (rule: RuleRow) => void;
+  onToggleActive: (rule: RuleRow) => void;
   onRefresh: () => void;
   onStatus: (rule: RuleRow, status: "pause" | "archive") => void;
   onMove: (rule: RuleRow, direction: "up" | "down") => void;
+  showInactive: boolean;
+  setShowInactive: (value: boolean) => void;
   busy: string | null;
 }) {
   // Display order mirrors the backend ORDER BY, so what the operator sees is
   // the order the engine evaluates in.
   const ordered = sortRulesForDisplay(rules);
-  const filtered = filterRules(ordered, query);
-  const ambiguousOrder = hasAmbiguousOrder(rules);
+  // Archived rules are hidden by default, the way ShipStation hides inactive
+  // rules until you ask for them.
+  const visible = showInactive
+    ? ordered
+    : ordered.filter((rule) => rule.status !== "archived");
+  const filtered = filterRules(visible, query);
+  const ambiguousOrder = hasAmbiguousOrder(visible);
+  const hiddenCount = ordered.length - visible.length;
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="min-w-0 overflow-hidden rounded-xl bg-surface ring-1 ring-line shadow-sm">
@@ -450,6 +467,18 @@ function RulesPanel({
               className="h-9 w-full rounded-lg bg-surface-2 pl-9 pr-3 text-small text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
             />
           </div>
+          <label className="inline-flex shrink-0 items-center gap-2 text-small text-ink-2">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(event) => setShowInactive(event.target.checked)}
+              className="h-4 w-4 rounded ring-1 ring-line"
+            />
+            Show inactive
+            {!showInactive && hiddenCount > 0 ? (
+              <span className="text-ink-3">({hiddenCount})</span>
+            ) : null}
+          </label>
           <button
             type="button"
             onClick={onRefresh}
@@ -484,14 +513,16 @@ function RulesPanel({
                 <th className="px-4 py-3">Rule</th>
                 <th className="px-4 py-3">Scope</th>
                 <th className="px-4 py-3">Trigger</th>
+                <th className="px-4 py-3">Last modified</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Version</th>
+                <th className="px-4 py-3">Active</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-ink-3">
+                  <td colSpan={8} className="px-4 py-12 text-center text-ink-3">
                     <Loader2 className="mx-auto mb-2 animate-spin" /> Loading
                     rules
                   </td>
@@ -499,7 +530,7 @@ function RulesPanel({
               ) : null}
               {!loading && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-ink-3">
+                  <td colSpan={8} className="px-4 py-12 text-center text-ink-3">
                     No automations match this view.
                   </td>
                 </tr>
@@ -570,6 +601,9 @@ function RulesPanel({
                   <td className="px-4 py-3 text-ink-2">
                     {label(rule.trigger)}
                   </td>
+                  <td className="px-4 py-3 text-ink-2">
+                    {new Date(rule.updatedAt).toLocaleDateString()}
+                  </td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-flex rounded-full px-2 py-1 text-[11px] font-bold ring-1 ${statusTone(rule.status)}`}
@@ -580,12 +614,52 @@ function RulesPanel({
                       {rule.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-ink-2">
-                    {rule.activeVersion ? (
-                      `v${rule.activeVersion.versionNumber}`
-                    ) : (
-                      <span className="text-ink-3">&mdash;</span>
-                    )}
+                  <td className="px-4 py-3">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={rule.status === "active"}
+                      aria-label={`${rule.status === "active" ? "Pause" : "Activate"} ${rule.name}`}
+                      title={
+                        rule.status === "draft"
+                          ? "Publish this draft to activate it"
+                          : rule.status === "archived"
+                            ? "Archived rules cannot be reactivated"
+                            : undefined
+                      }
+                      disabled={
+                        rule.systemLocked ||
+                        busy != null ||
+                        rule.status === "draft" ||
+                        rule.status === "archived"
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onToggleActive(rule);
+                      }}
+                      className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-40 ${rule.status === "active" ? "bg-brand" : "bg-surface-3 ring-1 ring-line"}`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${rule.status === "active" ? "left-[18px]" : "left-0.5"}`}
+                      />
+                    </button>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end">
+                      <AutomationRowActions
+                        ruleName={rule.name}
+                        canEdit={!rule.systemLocked && rule.status === "draft"}
+                        editDisabledReason={
+                          rule.systemLocked
+                            ? "System-locked rules cannot be edited"
+                            : "Published versions are immutable. Copy this rule to change it."
+                        }
+                        disabled={busy != null}
+                        onEdit={() => onEdit(rule)}
+                        onCopy={() => onCopy(rule)}
+                        onDelete={() => onDelete(rule)}
+                      />
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1889,6 +1963,7 @@ export default function AutomationsView() {
   const [selected, setSelected] = useState<RuleRow | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editRule, setEditRule] = useState<RuleRow | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -1935,6 +2010,86 @@ export default function AutomationsView() {
     } finally {
       setBusy(null);
     }
+  };
+
+  /**
+   * Duplicate a rule as a fresh draft. Built from the existing read + create
+   * endpoints -- the copy is a new draft document, so it inherits none of the
+   * original's published state or history.
+   */
+  const copyRule = async (rule: RuleRow) => {
+    setBusy(`copy:${rule.id}`);
+    setOrderError(null);
+    try {
+      const detail = (
+        await api.get<{
+          data: {
+            versions: Array<{
+              lifecycle: string;
+              versionNumber: number;
+              document: Record<string, unknown>;
+            }>;
+          };
+        }>(`/automations/${rule.id}`)
+      ).data;
+      // Prefer the live published version; fall back to the open draft.
+      const source =
+        detail.versions.find((version) => version.lifecycle === "published") ??
+        detail.versions.find((version) => version.lifecycle === "draft");
+      if (!source) {
+        setOrderError("This rule has no version to copy.");
+        return;
+      }
+      await api.post("/automations", {
+        document: { ...source.document, name: `${rule.name} (copy)` },
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["automations", "rules"],
+      });
+    } catch (caught) {
+      setOrderError(caught instanceof Error ? caught.message : "Copy failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Delete is refused by the backend for any rule that already took effect --
+   * published versions, run history, and reprocess jobs are protected by
+   * onDelete: 'restrict'. Surface that reason rather than a bare failure.
+   */
+  const deleteRule = async (rule: RuleRow) => {
+    if (
+      !globalThis.confirm(
+        `Delete "${rule.name}"? This cannot be undone. Rules that have already run must be archived instead.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(`delete:${rule.id}`);
+    setOrderError(null);
+    try {
+      await api.delete(`/automations/${rule.id}`);
+      setSelected(null);
+      await queryClient.invalidateQueries({
+        queryKey: ["automations", "rules"],
+      });
+    } catch (caught) {
+      setOrderError(caught instanceof Error ? caught.message : "Delete failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Active toggle maps to pause; reactivating a paused rule republishes it. */
+  const toggleActive = async (rule: RuleRow) => {
+    if (rule.status === "active") {
+      await changeStatus(rule, "pause");
+      return;
+    }
+    setOrderError(
+      `"${rule.name}" is paused. Reactivating needs a republish, which the backend only exposes through the draft publish flow.`,
+    );
   };
 
   /**
@@ -2068,9 +2223,14 @@ export default function AutomationsView() {
             setEditRule(rule);
             setBuilderOpen(true);
           }}
+          onCopy={(rule) => void copyRule(rule)}
+          onDelete={(rule) => void deleteRule(rule)}
+          onToggleActive={(rule) => void toggleActive(rule)}
           onRefresh={() => void rulesQuery.refetch()}
           onStatus={(rule, action) => void changeStatus(rule, action)}
           onMove={(rule, direction) => void moveRule(rule, direction)}
+          showInactive={showInactive}
+          setShowInactive={setShowInactive}
           busy={busy}
         />
       ) : null}

@@ -34,6 +34,22 @@ export class AutomationConflictError extends Error {
   }
 }
 
+/**
+ * Raised when a delete is refused because the rule already took effect.
+ * Carries the specific reason so the UI can tell the operator which kind of
+ * history is protecting the rule, and point them at Archive instead.
+ */
+export class AutomationDeleteBlockedError extends Error {
+  readonly code = 'AUTOMATION_DELETE_BLOCKED';
+  constructor(
+    message: string,
+    readonly reason: 'published_version' | 'run_history' | 'reprocess_jobs',
+  ) {
+    super(message);
+    this.name = 'AutomationDeleteBlockedError';
+  }
+}
+
 function scopePredicate(scope: ClientStoreScope) {
   if (!scope.isRestricted) return undefined;
   const predicates = [];
@@ -319,6 +335,73 @@ export async function publishAutomationDraft(input: {
       updatedAt: new Date(),
     }).where(eq(automationRules.id, input.ruleId)).returning();
     return { rule, version, activation: 'future_orders_only' as const };
+  });
+}
+
+/**
+ * Permanently removes an automation rule.
+ *
+ * Only rules that never took effect can be deleted. The schema deliberately
+ * declares versions, runs, action effects, and reprocess jobs as
+ * onDelete: 'restrict', so anything with execution history is protected at the
+ * database level -- deleting it would destroy the audit trail PS-466 requires
+ * be preserved. Those rules are archived instead, which hides them without
+ * rewriting what already happened.
+ */
+export async function deleteAutomationRule(input: {
+  ruleId: number;
+  scope: ClientStoreScope;
+}) {
+  const rule = await loadRuleForScope(input.ruleId, input.scope);
+  if (rule.systemLocked) throw new Error('System-locked automations cannot be deleted');
+
+  const versions = await db
+    .select({ id: automationRuleVersions.id, lifecycle: automationRuleVersions.lifecycle })
+    .from(automationRuleVersions)
+    .where(eq(automationRuleVersions.ruleId, input.ruleId));
+
+  if (versions.some((version) => version.lifecycle === 'published')) {
+    throw new AutomationDeleteBlockedError(
+      'This rule has a published version and cannot be deleted. Archive it instead so its history stays intact.',
+      'published_version',
+    );
+  }
+
+  const [runCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(automationRuns)
+    .where(eq(automationRuns.ruleId, input.ruleId));
+  if ((runCount?.count ?? 0) > 0) {
+    throw new AutomationDeleteBlockedError(
+      'This rule has run history and cannot be deleted. Archive it instead so its history stays intact.',
+      'run_history',
+    );
+  }
+
+  const [jobCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(automationReprocessJobs)
+    .where(eq(automationReprocessJobs.ruleId, input.ruleId));
+  if ((jobCount?.count ?? 0) > 0) {
+    throw new AutomationDeleteBlockedError(
+      'This rule has reprocess jobs and cannot be deleted. Archive it instead so its history stays intact.',
+      'reprocess_jobs',
+    );
+  }
+
+  const versionIds = versions.map((version) => version.id);
+  return db.transaction(async (tx) => {
+    if (versionIds.length > 0) {
+      // Conditions and actions cascade from versions, but delete them
+      // explicitly so the intent is visible and order is deterministic.
+      await tx.delete(automationRuleConditions).where(inArray(automationRuleConditions.ruleVersionId, versionIds));
+      await tx.delete(automationRuleActions).where(inArray(automationRuleActions.ruleVersionId, versionIds));
+      await tx.delete(automationRuleVersions).where(eq(automationRuleVersions.ruleId, input.ruleId));
+    }
+    // automation_outbox is keyed by aggregate (order events), not by rule, so
+    // there is nothing rule-scoped to remove there.
+    await tx.delete(automationRules).where(eq(automationRules.id, input.ruleId));
+    return { deleted: true as const, ruleId: input.ruleId };
   });
 }
 
