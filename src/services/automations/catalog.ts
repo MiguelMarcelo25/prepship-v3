@@ -227,7 +227,12 @@ export function getAutomationCatalog() {
     limits: AUTOMATION_LIMITS,
     triggers: AUTOMATION_TRIGGERS.map((value) => ({ value, label: value.replaceAll('_', ' ') })),
     fields: AUTOMATION_FIELD_DEFINITIONS,
-    actions: ACTION_DEFINITIONS.map(({ schema: _schema, ...definition }) => definition),
+    // requiresSimulation is sent rather than left for the client to re-derive,
+    // so the publish gate has exactly one owner. See publish-gate.ts.
+    actions: ACTION_DEFINITIONS.map(({ schema: _schema, ...definition }) => ({
+      ...definition,
+      requiresSimulation: definition.risk !== 'low' || definition.invalidatesRateProof,
+    })),
     prohibitedCapabilities: [
       'label purchase',
       'label void/refund',

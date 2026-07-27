@@ -30,6 +30,7 @@ import { api, qs, type Paginated } from "../../lib/api";
 import Autosuggest, { type AutosuggestOption } from "../Autosuggest";
 import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
 import { AutomationRowActions } from "./automations/AutomationRowActions";
+import { draftNeedsSimulation } from "./automations/publish-gate";
 import { filterRules } from "./automations/rule-search";
 import {
   buildClientOptions,
@@ -60,6 +61,8 @@ type CatalogAction = {
   available: boolean;
   unavailableReason?: string;
   invalidatesRateProof: boolean;
+  /** Backend-owned publish gate; false means this action can publish in one step. */
+  requiresSimulation?: boolean;
 };
 
 type AutomationCatalog = {
@@ -1096,13 +1099,16 @@ function Builder({
   };
 
   const publish = async () => {
-    if (!draft || !simulation) return;
+    if (!draft) return;
+    if (needsSimulation && !simulation) return;
     setBusy("publish");
     setError(null);
     try {
       await api.post(
         `/automations/${draft.ruleId}/publish`,
-        { simulationHash: simulation.draftHash },
+        // Omitted entirely when no simulation was required; the backend
+        // decides whether that is acceptable from the saved draft.
+        simulation ? { simulationHash: simulation.draftHash } : {},
         { headers: { "If-Match": String(draft.revision) } },
       );
       onCreated();
@@ -1169,13 +1175,21 @@ function Builder({
   const requestCloseRef = useRef(requestClose);
   requestCloseRef.current = requestClose;
 
+  // Rules whose every action is low risk and rate-proof-neutral (today just
+  // tag.add) publish in one step, like ShipStation. The backend re-checks this
+  // from the saved draft, so this only decides what the operator is asked to do.
+  const needsSimulation = draftNeedsSimulation(actions, catalog.actions);
   const publishBlockReason = !activeRule
     ? "Turn on Active Rule to publish."
     : !draft
-      ? "Save the draft, enter a test order ID, then run Test rule."
-      : !simulation
-        ? "Enter a test order ID and run Test rule before publishing."
-        : simulation.evaluation.blocked
+      ? needsSimulation
+        ? "Save the draft, enter a test order ID, then run Test rule."
+        : "Save the draft to publish."
+      : !needsSimulation
+        ? null
+        : !simulation
+          ? "Enter a test order ID and run Test rule before publishing."
+          : simulation.evaluation.blocked
           ? "The test is blocked. Review the test result before publishing."
           : simulation.reduction.conflicts.length > 0
             ? "Resolve the test conflicts before publishing."
@@ -1969,7 +1983,7 @@ function Builder({
               ) : (
                 <ShieldCheck size={15} />
               )}{" "}
-              Publish rule
+              {needsSimulation ? "Publish rule" : "Save & activate"}
             </button>
           </div>
         </footer>

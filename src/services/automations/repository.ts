@@ -22,6 +22,7 @@ import {
   type AutomationRuleDocument,
   type CompiledAutomationRule,
 } from './contracts.js';
+import { documentRequiresSimulation } from './publish-gate.js';
 import { reduceAutomationIntents } from './conflicts.js';
 import { evaluateAutomationBundle } from './evaluator.js';
 import { isTerminalAutomationStatus, loadAutomationFacts } from './facts.js';
@@ -304,7 +305,8 @@ export async function simulateAutomationDraft(input: {
 export async function publishAutomationDraft(input: {
   ruleId: number;
   expectedRevision: number;
-  simulationHash: string;
+  /** Required only when the draft holds a gated action; see publish-gate.ts. */
+  simulationHash?: string | null;
   actor: string;
   scope: ClientStoreScope;
 }) {
@@ -313,18 +315,31 @@ export async function publishAutomationDraft(input: {
   const draft = current.versions.find((version) => version.lifecycle === 'draft');
   if (!draft) throw new Error('Automation draft not found');
   if (draft.draftRevision !== input.expectedRevision) throw new AutomationConflictError();
-  if (input.simulationHash !== draft.documentHash) throw new Error('Publish requires simulation of the exact draft hash');
+  // The gate is decided from the draft's own actions, never from what the
+  // caller claims. A tag-only rule publishes in one step like ShipStation's;
+  // anything that spends money, blocks a shipment, or invalidates rate proof
+  // still has to be simulated on the exact document being published.
+  const gated = documentRequiresSimulation(documentOf(draft.document).actions ?? []);
+  if (gated && !input.simulationHash) {
+    throw new Error('Publish requires simulation of the exact draft hash');
+  }
+  if (input.simulationHash && input.simulationHash !== draft.documentHash) {
+    throw new Error('Publish requires simulation of the exact draft hash');
+  }
   return db.transaction(async (tx) => {
     const [version] = await tx.update(automationRuleVersions).set({
       lifecycle: 'published',
-      simulationHash: input.simulationHash,
+      simulationHash: input.simulationHash ?? null,
       publishedBy: input.actor,
       publishedAt: new Date(),
     }).where(and(
       eq(automationRuleVersions.id, draft.id),
       eq(automationRuleVersions.lifecycle, 'draft'),
       eq(automationRuleVersions.draftRevision, input.expectedRevision),
-      eq(automationRuleVersions.documentHash, input.simulationHash),
+      // Pin to the draft's own hash rather than the caller's. An ungated
+      // publish carries no simulation hash, but the document must still be
+      // unchanged since it was read, so the concurrency guarantee is intact.
+      eq(automationRuleVersions.documentHash, draft.documentHash),
     )).returning();
     if (!version) throw new AutomationConflictError();
     const [rule] = await tx.update(automationRules).set({

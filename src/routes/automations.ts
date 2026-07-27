@@ -61,7 +61,11 @@ const documentSchema = z.object({
 
 const draftBody = z.object({ document: documentSchema }).strict();
 const simulationBody = z.object({ orderId: z.number().int().positive() }).strict();
-const publishBody = z.object({ simulationHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+// Optional at the wire: the owner decides whether a simulation was required
+// from the draft's own actions, so a client cannot skip the gate by omitting it.
+const publishBody = z.object({
+  simulationHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}).strict();
 const reprocessPreviewBody = z.object({ orderIds: z.array(z.number().int().positive()).min(1).max(100) }).strict();
 const reprocessConfirmBody = reprocessPreviewBody.extend({ previewHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const manualEvaluationBody = z.object({
