@@ -1791,11 +1791,14 @@ function Builder({
             <section className="space-y-5 rounded-xl bg-surface p-5 shadow-sm ring-1 ring-line">
                 <div>
                   <h2 className="text-xl font-extrabold text-ink">
-                    Test before publishing
+                    {needsSimulation
+                      ? "Test before publishing"
+                      : "Test this rule (optional)"}
                   </h2>
                   <p className="mt-1 text-small text-ink-3">
-                    Use a test order. This checks the rule without buying
-                    postage or changing the order.
+                    {needsSimulation
+                      ? "Use a test order. This checks the rule without buying postage or changing the order."
+                      : "This rule only adds tags, so it can be activated without a test. You can still run one to see which orders it matches."}
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface p-5 ring-1 ring-line">
@@ -1963,7 +1966,10 @@ function Builder({
               id="publish-rule-status"
               className={`text-right text-tiny font-bold ${publishBlockReason ? "text-amber-700" : "text-emerald-700"}`}
             >
-              {publishBlockReason ?? "Test passed. Ready to publish."}
+              {publishBlockReason
+                ?? (simulation
+                  ? "Test passed. Ready to publish."
+                  : "Low-risk rule. Ready to activate without a test.")}
             </div>
             <button
               type="button"
