@@ -55,6 +55,12 @@ export const automationRuleVersions = pgTable('automation_rule_versions', {
   documentHash: text().notNull(),
   draftRevision: integer().notNull().default(1),
   simulationHash: text(),
+  /**
+   * Why this version was allowed to publish: 'simulated' (proof present and
+   * matching document_hash) or 'low_risk_exempt' (no simulation was required).
+   * Null on drafts. See src/services/automations/publish-gate.ts.
+   */
+  publishGate: text().$type<'simulated' | 'low_risk_exempt'>(),
   simulationRunId: bigint({ mode: 'number' }),
   createdBy: text().notNull(),
   publishedBy: text(),

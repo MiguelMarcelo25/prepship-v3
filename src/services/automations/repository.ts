@@ -330,6 +330,9 @@ export async function publishAutomationDraft(input: {
     const [version] = await tx.update(automationRuleVersions).set({
       lifecycle: 'published',
       simulationHash: input.simulationHash ?? null,
+      // Records why publishing was allowed. Never claim 'simulated' without a
+      // hash -- the storage invariant treats that as proof a test ran.
+      publishGate: input.simulationHash ? 'simulated' : 'low_risk_exempt',
       publishedBy: input.actor,
       publishedAt: new Date(),
     }).where(and(
