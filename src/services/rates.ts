@@ -659,7 +659,16 @@ export async function resolveRateInput(
     ? await getOrderHazmatForShipping(Number(input.orderId))
     : null;
   const hazmatQuoteFacts = hazmatState ? hazmatQuoteFactsForShipping(hazmatState) : null;
-  const hazmatAllowedCarriers = hazmatQuoteFacts && hazmatState
+  // Test clients never rate through these carriers: buildTestFixtureRates
+  // replaces them wholesale further down. Filtering real ShipStation accounts by
+  // hazmat certification here rejected every one of them (none are certified) and
+  // threw before the fixture branch was ever reached, so an active declaration
+  // produced "5 of 5 carriers checked, 0 with rates" and hazmat could not be
+  // exercised on a test order at all. The prepship_test profile still governs the
+  // fixture path itself, so this skips a filter that cannot apply rather than
+  // relaxing a safety check.
+  const hazmatIsTestClient = await loadClientIsTest(context.clientId);
+  const hazmatAllowedCarriers = hazmatQuoteFacts && hazmatState && !hazmatIsTestClient
     ? allowedCarriers.filter((carrier) => {
         const profile = resolveHazmatProfile({
           providerFamily: 'shipstation',
@@ -679,7 +688,7 @@ export async function resolveRateInput(
         }
       })
     : allowedCarriers;
-  if (hazmatQuoteFacts && hazmatAllowedCarriers.length === 0) {
+  if (hazmatQuoteFacts && !hazmatIsTestClient && hazmatAllowedCarriers.length === 0) {
     throw new HazmatShippingError(
       'No certified ShipStation carrier is available for this hazmat declaration.',
       'HAZMAT_RATE_UNAVAILABLE',
