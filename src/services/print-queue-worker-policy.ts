@@ -3,6 +3,8 @@ export const PRINT_QUEUE_SEND_JOB_NAME = 'prepship.print-queue.batch-send';
 export const PRINT_QUEUE_WORKER_FATAL_WINDOW_MS = 120_000;
 export const PRINT_QUEUE_WORKER_TIMEOUT_FAILURE_LIMIT = 3;
 export const PRINT_QUEUE_WORKER_CLOCK_SKEW_LIMIT = 2;
+/** Consecutive dropped connections inside the window before the worker exits. */
+export const PRINT_QUEUE_WORKER_CONNECTION_LOSS_LIMIT = 2;
 
 export type PrintQueueWorkerConnectionInput = {
   databaseUrl: string;
@@ -38,7 +40,12 @@ export type PrintQueueWorkerHealthVerdict = {
 export type PrintQueueWorkerFatalSignal =
   | 'statement_timeout'
   | 'idle_in_transaction_timeout'
-  | 'timekeeper_skew';
+  | 'timekeeper_skew'
+  // A dropped connection is worse than a timeout: pg-boss stops polling but
+  // the process keeps running, so Render still reports the worker healthy
+  // while it consumes nothing. Observed 2026-07-27 as repeated
+  // "read ECONNABORTED" followed by 17 minutes of total silence.
+  | 'connection_lost';
 
 export type PrintQueueWorkerFatalSignalState = Record<PrintQueueWorkerFatalSignal, number[]>;
 
@@ -163,6 +170,7 @@ export function createPrintQueueWorkerFatalSignalState(): PrintQueueWorkerFatalS
     statement_timeout: [],
     idle_in_transaction_timeout: [],
     timekeeper_skew: [],
+    connection_lost: [],
   };
 }
 
@@ -176,6 +184,7 @@ export function recordPrintQueueWorkerFatalSignal(
     statement_timeout: state.statement_timeout.filter((at) => at >= cutoff),
     idle_in_transaction_timeout: state.idle_in_transaction_timeout.filter((at) => at >= cutoff),
     timekeeper_skew: state.timekeeper_skew.filter((at) => at >= cutoff),
+    connection_lost: state.connection_lost.filter((at) => at >= cutoff),
   };
   next[signal] = [...next[signal], nowMs];
   const timeoutFailures = next.statement_timeout.length + next.idle_in_transaction_timeout.length;
@@ -183,7 +192,11 @@ export function recordPrintQueueWorkerFatalSignal(
     state: next,
     fatal:
       timeoutFailures >= PRINT_QUEUE_WORKER_TIMEOUT_FAILURE_LIMIT ||
-      next.timekeeper_skew.length >= PRINT_QUEUE_WORKER_CLOCK_SKEW_LIMIT,
+      next.timekeeper_skew.length >= PRINT_QUEUE_WORKER_CLOCK_SKEW_LIMIT ||
+      // Lower bar than timeouts on purpose. A timeout means a query failed but
+      // the loop is alive; a dropped connection can mean the loop is already
+      // dead, and every extra second is a queue nobody is draining.
+      next.connection_lost.length >= PRINT_QUEUE_WORKER_CONNECTION_LOSS_LIMIT,
   };
 }
 
@@ -199,5 +212,32 @@ export function classifyPrintQueueWorkerFatalError(
     return 'idle_in_transaction_timeout';
   }
   if (code === '57014' || message.includes('statement timeout')) return 'statement_timeout';
+  // Socket-level drops and server-side disconnects. Previously every one of
+  // these fell through to null, so the worker logged the error and kept
+  // running with a pg-boss loop that had already stopped claiming jobs.
+  if (
+    code === 'ECONNABORTED'
+    || code === 'ECONNRESET'
+    || code === 'EPIPE'
+    || code === 'ETIMEDOUT'
+    || code === 'ENOTFOUND'
+    // 08006 connection_failure, 08003 connection_does_not_exist,
+    // 08001 unable_to_connect, 57P01 admin_shutdown, 57P02 crash_shutdown,
+    // 57P03 cannot_connect_now.
+    || code === '08006'
+    || code === '08003'
+    || code === '08001'
+    || code === '57P01'
+    || code === '57P02'
+    || code === '57P03'
+    || message.includes('econnaborted')
+    || message.includes('econnreset')
+    || message.includes('connection terminated')
+    || message.includes('connection closed')
+    || message.includes('server closed the connection')
+    || message.includes('terminating connection')
+  ) {
+    return 'connection_lost';
+  }
   return null;
 }
