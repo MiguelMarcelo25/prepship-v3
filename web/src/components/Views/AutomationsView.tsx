@@ -30,6 +30,10 @@ import { api, qs, type Paginated } from "../../lib/api";
 import Autosuggest, { type AutosuggestOption } from "../Autosuggest";
 import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
 import { filterRules } from "./automations/rule-search";
+import {
+  buildClientOptions,
+  buildSkuOptions,
+} from "./automations/suggestion-options";
 import { parseRuleDocument } from "./automations/rule-document";
 import {
   hasAmbiguousOrder,
@@ -134,6 +138,8 @@ type AutomationSkuRow = {
   sku: string | null;
   name: string | null;
   clientId: number | null;
+  /** Product thumbnail from the inventory read model, shown in suggestions. */
+  imageUrl: string | null;
 };
 
 type BuilderCondition = {
@@ -756,21 +762,18 @@ function Builder({
       ).data,
     staleTime: 5 * 60_000,
   });
-  const skuOptions = useMemo<AutosuggestOption[]>(() => {
-    const bySku = new Map<string, AutosuggestOption>();
-    for (const row of skuRowsQuery.data ?? []) {
-      const sku = String(row.sku ?? "").trim();
-      if (!sku || bySku.has(sku.toLowerCase())) continue;
-      bySku.set(sku.toLowerCase(), {
-        value: sku,
-        label: String(row.name ?? ""),
-        hint: selectedSuggestionStore?.clientName,
-      });
-    }
-    return Array.from(bySku.values()).sort((left, right) =>
-      left.value.localeCompare(right.value),
-    );
-  }, [selectedSuggestionStore?.clientName, skuRowsQuery.data]);
+  const skuOptions = useMemo<AutosuggestOption[]>(
+    () =>
+      buildSkuOptions(
+        skuRowsQuery.data ?? [],
+        selectedSuggestionStore?.clientName,
+      ),
+    [selectedSuggestionStore?.clientName, skuRowsQuery.data],
+  );
+  const clientOptions = useMemo<AutosuggestOption[]>(
+    () => buildClientOptions(stores),
+    [stores],
+  );
   const [draft, setDraft] = useState<{
     ruleId: number;
     revision: number;
@@ -1193,6 +1196,32 @@ function Builder({
                             </option>
                           ))}
                         </select>
+                      ) : field?.key === "order.client_id" ? (
+                        <Autosuggest
+                          value={condition.value}
+                          options={clientOptions}
+                          ariaLabel={`Condition ${index + 1} value`}
+                          placeholder="Search client name"
+                          inputClassName="h-10 w-full rounded-lg bg-surface px-3 text-small ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
+                          popoverClassName="left-0 right-0"
+                          maxResults={10}
+                          emptyMessage={
+                            clientOptions.length === 0
+                              ? "No clients available. You can still type the client ID."
+                              : condition.value.trim()
+                                ? `No client matches "${condition.value.trim()}"`
+                                : "Type to search by client name"
+                          }
+                          onChange={(value) =>
+                            setConditions((current) =>
+                              current.map((item) =>
+                                item.id === condition.id
+                                  ? { ...item, value }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
                       ) : field?.key === "line.sku" ? (
                         <Autosuggest
                           value={condition.value}
