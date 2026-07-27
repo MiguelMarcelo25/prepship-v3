@@ -698,6 +698,7 @@ app.get('/batch-send/status/:jobId', async (c) => {
   const exactDurableRead = await readDurableStatusWithTimeout(
     () => getQueueSendJobSnapshot(jobId),
     DURABLE_STATUS_TIMEOUT_MS,
+    { label: `snapshot:${jobId}` },
   );
   let durableJob = exactDurableRead.value;
   let durableReadTimedOut = exactDurableRead.timedOut;
@@ -705,6 +706,7 @@ app.get('/batch-send/status/:jobId', async (c) => {
     const latestDurableRead = await readDurableStatusWithTimeout(
       getLatestQueueSendJobSnapshot,
       DURABLE_STATUS_TIMEOUT_MS,
+      { label: `latest-snapshot:${jobId}` },
     );
     durableJob = latestDurableRead.value;
     durableReadTimedOut = latestDurableRead.timedOut;
@@ -712,6 +714,14 @@ app.get('/batch-send/status/:jobId', async (c) => {
   // Per user override unlock shipped data on 2026-07-14 (Audit PQ-10): a
   // slow read is temporary infrastructure failure, not proof the job is absent.
   if (!job && durableReadTimedOut) {
+    // Record the give-up itself. Paired with the abandoned-read outcome that
+    // durable-status-read logs a moment later, this says whether the budget
+    // was marginally missed or the read was genuinely blocked.
+    console.warn(
+      '[print-queue] status read timed out'
+      + ` jobId=${jobId} budgetMs=${DURABLE_STATUS_TIMEOUT_MS}`
+      + ` exactMs=${exactDurableRead.elapsedMs} inMemoryJob=false`,
+    );
     return c.json({
       error: 'Print queue status is temporarily unavailable. Retry shortly.',
       code: 'PRINT_QUEUE_STATUS_UNAVAILABLE',
