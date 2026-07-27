@@ -877,6 +877,36 @@ function Builder({
   const [error, setError] = useState<string | null>(null);
   /** JSON of the document as last saved; null means nothing saved yet. */
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+
+  /**
+   * Recent awaiting orders inside the rule's own scope, offered as test
+   * subjects. Publishing requires a simulation of the exact draft, so the
+   * cost of that gate is really "go find an order id" -- this removes it
+   * without weakening the gate itself.
+   */
+  const testOrdersQuery = useQuery({
+    queryKey: [
+      "automations",
+      "test-orders",
+      suggestionClientId ?? "all",
+      selectedStoreCondition?.value ?? "all",
+    ],
+    staleTime: 60_000,
+    queryFn: async () =>
+      (
+        await api.get<Paginated<{ id: number; orderNumber: string | null }>>(
+          `/orders${qs({
+            status: "awaiting_shipment",
+            clientId: suggestionClientId ?? undefined,
+            storeId: selectedStoreCondition?.value
+              ? Number(selectedStoreCondition.value)
+              : undefined,
+            pageSize: 25,
+          })}`,
+        )
+      ).data,
+  });
+  const testOrderOptions = testOrdersQuery.data ?? [];
   /** Seeds the clean-state baseline: true on first render and after hydration. */
   const seedSnapshotRef = useRef(true);
 
@@ -1079,6 +1109,14 @@ function Builder({
       setBusy(null);
     }
   };
+
+  // Prefill the test order once suggestions arrive, so Test rule is one click
+  // rather than a hunt through Orders. Never overwrites a typed value.
+  useEffect(() => {
+    if (simulationOrderId) return;
+    const first = testOrderOptions[0];
+    if (first) setSimulationOrderId(String(first.id));
+  }, [simulationOrderId, testOrderOptions]);
 
   // Escape closes the panel, matching the backdrop click and the X button.
   useEffect(() => {
@@ -1763,12 +1801,40 @@ function Builder({
                   <label className="text-small font-bold text-ink">
                     Test order ID
                     <div className="mt-2 flex gap-2">
+                      {testOrderOptions.length > 0 ? (
+                        <select
+                          aria-label="Pick a recent order to test against"
+                          value={
+                            testOrderOptions.some(
+                              (order) => String(order.id) === simulationOrderId,
+                            )
+                              ? simulationOrderId
+                              : ""
+                          }
+                          onChange={(event) => {
+                            if (event.target.value) {
+                              setSimulationOrderId(event.target.value);
+                            }
+                          }}
+                          className="h-10 min-w-0 flex-1 rounded-lg px-3 ring-1 ring-line"
+                        >
+                          <option value="">Type an order ID…</option>
+                          {testOrderOptions.map((order) => (
+                            <option key={order.id} value={order.id}>
+                              {order.orderNumber
+                                ? `${order.orderNumber} (#${order.id})`
+                                : `Order #${order.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
                       <input
                         type="number"
                         value={simulationOrderId}
                         onChange={(event) =>
                           setSimulationOrderId(event.target.value)
                         }
+                        placeholder="Order ID"
                         className="h-10 min-w-0 flex-1 rounded-lg px-3 ring-1 ring-line"
                       />
                       <button
@@ -1784,6 +1850,16 @@ function Builder({
                         )}{" "}
                         Test rule
                       </button>
+                    </div>
+                    <div className="mt-1 text-tiny font-normal text-ink-3">
+                      {testOrdersQuery.isPending
+                        ? "Finding a recent order to test with…"
+                        : testOrderOptions.length > 0
+                          ? `Prefilled from recent awaiting ${suggestionClientName ?? ""} orders. Testing writes nothing and buys no postage.`.replace(
+                              /\s+/g,
+                              " ",
+                            )
+                          : "No recent awaiting orders in this scope — enter any order ID. Testing writes nothing and buys no postage."}
                     </div>
                   </label>
                   {!draft ? (
