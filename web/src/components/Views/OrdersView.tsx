@@ -163,6 +163,12 @@ import {
 } from './orders-parity'
 import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
 import { computeReorderedColumns } from './orders/column-reorder'
+import {
+  isRetryableQueueStatusError,
+  sleep,
+  QUEUE_STATUS_RETRY_DELAY_MS,
+  QUEUE_STATUS_RETRY_LIMIT,
+} from './orders/queue-status-retry'
 import { useColumnDrag } from './orders/useColumnDrag'
 import { useColumnResize } from './orders/useColumnResize'
 import { useRecipientEditor, type RecipientDraft } from './orders/useRecipientEditor'
@@ -3070,8 +3076,27 @@ export default function OrdersView({
     progressTotal: number,
   ) {
     let status: any = null
+    let retryableFailures = 0
     while (true) {
-      status = await apiClient.fetchQueueSendJobStatus(backendJobId)
+      try {
+        status = await apiClient.fetchQueueSendJobStatus(backendJobId)
+        retryableFailures = 0
+      } catch (pollError) {
+        // The backend answers a slow durable read with 503 +
+        // PRINT_QUEUE_STATUS_UNAVAILABLE + retryable:true — a temporary
+        // infrastructure failure, explicitly not proof the job is gone.
+        // Rethrowing killed the whole poll loop and surfaced it as a failed
+        // send, even though the job was still running and usually finished.
+        if (!isRetryableQueueStatusError(pollError)) throw pollError
+        retryableFailures += 1
+        if (retryableFailures > QUEUE_STATUS_RETRY_LIMIT) throw pollError
+        setQueueActionProgress((active) => active
+          ? { ...active, label: 'Waiting for queue status…' }
+          : active
+        )
+        await sleep(QUEUE_STATUS_RETRY_DELAY_MS * retryableFailures)
+        continue
+      }
       const current = toNumberValue(status.current) ?? 0
       const skipped = toNumberValue(status.skipped) ?? 0
       const failed = toNumberValue(status.failed) ?? 0
