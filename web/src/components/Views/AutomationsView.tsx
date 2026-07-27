@@ -966,7 +966,29 @@ function Builder({
     ],
   );
 
+  /**
+   * Client-side pre-checks for the few required fields, so the operator gets
+   * a pointed message instead of a backend validation rejection. The backend
+   * still validates everything -- this only avoids a round trip that ends in
+   * a message written for a schema rather than a person.
+   */
+  const draftBlockReason = (): string | null => {
+    if (!name.trim()) return "Give the automation a name before saving.";
+    if (conditions.length === 0) return "Add at least one condition.";
+    const emptyCondition = conditions.findIndex((item) => !item.value.trim());
+    if (emptyCondition !== -1) {
+      return `Condition ${emptyCondition + 1} needs a value.`;
+    }
+    if (actions.length === 0) return "Add at least one action.";
+    return null;
+  };
+
   const saveDraft = async () => {
+    const blocked = draftBlockReason();
+    if (blocked) {
+      setError(blocked);
+      return;
+    }
     setBusy("save");
     setError(null);
     try {

@@ -68,6 +68,51 @@ function withRequestId(message: string, requestId?: string): string {
   return requestId ? `${message} (Request ID: ${requestId})` : message;
 }
 
+/**
+ * Turns whatever a backend put in `error` into something a human can read.
+ *
+ * Most routes return a string. Zod validation middleware returns a ZodError
+ * object instead, and interpolating that yields "[object Object]" -- an error
+ * that tells the operator nothing and tells us nothing in a bug report. Field
+ * paths are included because "name: too small" is only actionable if you know
+ * which field is meant.
+ */
+function readableApiError(error: unknown): string | null {
+  if (!error) return null;
+  if (typeof error === 'string') return error;
+  if (typeof error !== 'object') return String(error);
+
+  const issues = (error as { issues?: unknown }).issues;
+  if (Array.isArray(issues) && issues.length > 0) {
+    const parts = issues
+      .slice(0, 4)
+      .map((issue) => {
+        const path = Array.isArray((issue as { path?: unknown[] }).path)
+          ? (issue as { path: unknown[] }).path.join('.')
+          : '';
+        const message = String((issue as { message?: unknown }).message ?? 'is invalid');
+        return path ? `${path}: ${message}` : message;
+      })
+      .filter(Boolean);
+    if (parts.length > 0) {
+      const more = issues.length > parts.length ? ` (+${issues.length - parts.length} more)` : '';
+      return `${parts.join('; ')}${more}`;
+    }
+  }
+
+  const message = (error as { message?: unknown }).message;
+  if (typeof message === 'string' && message) return message;
+
+  // Last resort: a bounded JSON dump still beats "[object Object]".
+  try {
+    const dump = JSON.stringify(error);
+    if (dump && dump !== '{}') return dump.slice(0, 300);
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 function timeoutError(label: string, timeoutMs: number, requestId?: string): Error {
   return new Error(
     withRequestId(
@@ -267,7 +312,12 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     let retryReason: string | undefined;
     try {
       const err = await res.json();
-      if (err?.error) msg = err.error;
+      // `error` is a string for hand-written backend failures, but validation
+      // middleware (zValidator) returns a ZodError OBJECT here. Assigning that
+      // straight to `msg` produced the literal text "[object Object]", hiding
+      // every field-level validation message behind a useless string.
+      const extracted = readableApiError(err?.error);
+      if (extracted) msg = extracted;
       // PS-190: carry the backend's machine-readable code so callers can
       // branch on it instead of substring-matching the message.
       if (typeof err?.code === 'string' && err.code) code = err.code;
