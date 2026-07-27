@@ -1,4 +1,5 @@
 import type { HazmatCapabilities } from './hazmat-capability.js';
+import { isHazmatTestFixtureCarrier } from './hazmat-test-profile.js';
 import {
   quoteHazmatDeclaration,
   sealHazmatQuoteFacts,
@@ -86,6 +87,10 @@ export function resolveHazmatProfile(input: {
 }): HazmatProfile | null {
   const provider = carrierKey(input.provider);
   const carrier = carrierKey(input.carrierCode);
+  // Checked before the family split: fixture rates carry no provider family and
+  // are only ever generated for clients.is_test. The capability lookup that
+  // follows re-checks that, so a forged code alone resolves to unsupported.
+  if (isHazmatTestFixtureCarrier(carrier)) return 'prepship_test';
   if (input.providerFamily === 'shipstation') {
     if (carrier === 'stamps_com') {
       return 'shipstation_usps';

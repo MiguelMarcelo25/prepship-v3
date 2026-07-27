@@ -98,7 +98,10 @@ export type HazmatProfile =
   | 'shipstation_ups_dry_ice'
   | 'shipstation_ups_dangerous_goods'
   | 'ups_direct'
-  | 'walmart';
+  | 'walmart'
+  // Test-fixture carrier only; see hazmat-test-profile.ts for why this cannot
+  // reach a real client.
+  | 'prepship_test';
 
 export type CanonicalHazmatPurchaseFacts = {
   schemaVersion: typeof HAZMAT_DECLARATION_SCHEMA_VERSION;

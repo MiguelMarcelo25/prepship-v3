@@ -96,15 +96,26 @@ const USPS_FIELDS: HazmatCapabilityField[] = [
   },
 ];
 
+import {
+  HAZMAT_TEST_PROFILE_WARNINGS,
+  hazmatTestProfileUnavailableReason,
+} from './hazmat-test-profile.js';
+
 function profile(input: Omit<HazmatProfileCapability, 'visible'> & { visible?: boolean }): HazmatProfileCapability {
   return { visible: input.visible ?? true, ...input };
 }
 
 export function resolveHazmatCapabilities(input: {
   clientId: number | null;
+  /**
+   * clients.is_test (the PS-186 authority). Defaults to false so the test
+   * profile fails closed for every caller that has not resolved it.
+   */
+  isTestClient?: boolean;
   flags?: HazmatFeatureFlags;
 }): HazmatCapabilities {
   const flags = input.flags ?? currentHazmatFeatureFlags();
+  const isTestClient = input.isTestClient === true;
   const clientAllowed = flags.canaryClientIds.length === 0
     || (input.clientId != null && flags.canaryClientIds.includes(input.clientId));
   const featureEnabled = flags.readEnabled && clientAllowed;
@@ -182,6 +193,24 @@ export function resolveHazmatCapabilities(input: {
           ?? 'Walmart hazmat payload support is not certified.',
         fields: COMMON_FIELDS,
         warnings: ['Active hazmat must never be omitted or sent as false.'],
+      }),
+      // Only reachable for clients.is_test, and only via the prepship_test
+      // fixture carrier. Grants nothing to any real carrier.
+      prepship_test: profile({
+        profile: 'prepship_test',
+        label: 'PrepShip Test (fixture)',
+        visible: featureEnabled && isTestClient,
+        ratingSupported: featureEnabled && isTestClient && flags.rateEnabled,
+        purchaseSupported:
+          featureEnabled && isTestClient && flags.rateEnabled && flags.purchaseEnabled,
+        unavailableReason: hazmatTestProfileUnavailableReason({
+          featureEnabled,
+          isTestClient,
+          rateEnabled: flags.rateEnabled,
+          purchaseEnabled: flags.purchaseEnabled,
+        }),
+        fields: COMMON_FIELDS,
+        warnings: [...HAZMAT_TEST_PROFILE_WARNINGS],
       }),
     },
   };

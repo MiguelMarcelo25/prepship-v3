@@ -355,6 +355,9 @@ export function shippingQuoteAuthorizedPurchaseFacts(input: {
     'shipstation_ups_dangerous_goods',
     'ups_direct',
     'walmart',
+    // Test-fixture carrier only; capability resolution gates it on
+    // clients.is_test, and PS-186 forces mock labels for those clients.
+    'prepship_test',
   ];
   const hazmatProfile = allowedProfiles.includes(profileValue as HazmatProfile)
     ? profileValue as HazmatProfile
