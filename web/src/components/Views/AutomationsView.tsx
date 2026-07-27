@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -6,12 +6,15 @@ import {
   Archive,
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock3,
   History,
   Loader2,
   Lock,
   Pause,
+  Pencil,
   Play,
   Plus,
   RefreshCcw,
@@ -26,6 +29,13 @@ import {
 import { api, qs, type Paginated } from "../../lib/api";
 import Autosuggest, { type AutosuggestOption } from "../Autosuggest";
 import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
+import { filterRules } from "./automations/rule-search";
+import { parseRuleDocument } from "./automations/rule-document";
+import {
+  hasAmbiguousOrder,
+  planRuleMove,
+  sortRulesForDisplay,
+} from "./automations/rule-ordering";
 
 type AutomationTab = "rules" | "controls" | "runs" | "templates";
 
@@ -394,8 +404,10 @@ function RulesPanel({
   selected,
   setSelected,
   onNew,
+  onEdit,
   onRefresh,
   onStatus,
+  onMove,
   busy,
 }: {
   rules: RuleRow[];
@@ -405,15 +417,17 @@ function RulesPanel({
   selected: RuleRow | null;
   setSelected: (rule: RuleRow) => void;
   onNew: () => void;
+  onEdit: (rule: RuleRow) => void;
   onRefresh: () => void;
   onStatus: (rule: RuleRow, status: "pause" | "archive") => void;
+  onMove: (rule: RuleRow, direction: "up" | "down") => void;
   busy: string | null;
 }) {
-  const filtered = rules.filter((rule) =>
-    `${rule.name} ${rule.description ?? ""} ${rule.trigger}`
-      .toLowerCase()
-      .includes(query.toLowerCase()),
-  );
+  // Display order mirrors the backend ORDER BY, so what the operator sees is
+  // the order the engine evaluates in.
+  const ordered = sortRulesForDisplay(rules);
+  const filtered = filterRules(ordered, query);
+  const ambiguousOrder = hasAmbiguousOrder(rules);
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="min-w-0 overflow-hidden rounded-xl bg-surface ring-1 ring-line shadow-sm">
@@ -426,7 +440,7 @@ function RulesPanel({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search rules, triggers, or actions"
+              placeholder="Search rules by name, trigger, status, or scope"
               className="h-9 w-full rounded-lg bg-surface-2 pl-9 pr-3 text-small text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
             />
           </div>
@@ -446,11 +460,21 @@ function RulesPanel({
             <Plus size={15} /> New automation
           </button>
         </div>
+        {ambiguousOrder ? (
+          <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-tiny leading-5 text-amber-800">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              Two or more rules share the same priority, so their relative order
+              is decided by creation order rather than by you. Use the arrows to
+              set an explicit sequence.
+            </span>
+          </div>
+        ) : null}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-collapse text-left text-small">
             <thead className="bg-surface-2 text-[11px] uppercase tracking-wide text-ink-3">
               <tr>
-                <th className="px-4 py-3">Priority</th>
+                <th className="px-4 py-3">Order</th>
                 <th className="px-4 py-3">Rule</th>
                 <th className="px-4 py-3">Scope</th>
                 <th className="px-4 py-3">Trigger</th>
@@ -474,14 +498,58 @@ function RulesPanel({
                   </td>
                 </tr>
               ) : null}
-              {filtered.map((rule) => (
+              {filtered.map((rule, index) => (
                 <tr
                   key={rule.id}
+                  tabIndex={0}
+                  aria-selected={selected?.id === rule.id}
                   onClick={() => setSelected(rule)}
-                  className={`cursor-pointer hover:bg-brand-bg/40 ${selected?.id === rule.id ? "bg-brand-bg/60" : ""}`}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelected(rule);
+                    }
+                  }}
+                  className={`cursor-pointer hover:bg-brand-bg/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${selected?.id === rule.id ? "bg-brand-bg/60" : ""}`}
                 >
-                  <td className="px-4 py-3 font-mono font-bold text-ink">
-                    {rule.priority}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 font-mono font-bold text-ink">
+                        {index + 1}
+                      </span>
+                      <div className="flex flex-col">
+                        <button
+                          type="button"
+                          aria-label={`Move ${rule.name} earlier`}
+                          disabled={
+                            index === 0 || rule.systemLocked || busy != null
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onMove(rule, "up");
+                          }}
+                          className="text-ink-3 hover:text-ink disabled:opacity-30"
+                        >
+                          <ChevronUp size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Move ${rule.name} later`}
+                          disabled={
+                            index === filtered.length - 1 ||
+                            rule.systemLocked ||
+                            busy != null
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onMove(rule, "down");
+                          }}
+                          className="text-ink-3 hover:text-ink disabled:opacity-30"
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="font-bold text-ink">{rule.name}</div>
@@ -507,9 +575,11 @@ function RulesPanel({
                     </span>
                   </td>
                   <td className="px-4 py-3 text-ink-2">
-                    {rule.activeVersion
-                      ? `v${rule.activeVersion.versionNumber}`
-                      : "Draft"}
+                    {rule.activeVersion ? (
+                      `v${rule.activeVersion.versionNumber}`
+                    ) : (
+                      <span className="text-ink-3">&mdash;</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -564,12 +634,29 @@ function RulesPanel({
               orders only; reprocessing awaiting orders is a separate reviewed
               workflow.
             </div>
+            {!selected.systemLocked && selected.status === "draft" ? (
+              <button
+                type="button"
+                disabled={busy != null}
+                onClick={() => onEdit(selected)}
+                className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-brand text-small font-bold text-white shadow-sm hover:bg-brand-dark"
+              >
+                <Pencil size={14} /> Edit &amp; publish draft
+              </button>
+            ) : null}
+            {!selected.systemLocked && selected.status !== "draft" ? (
+              <div className="mt-4 rounded-lg bg-surface-2 p-3 text-tiny leading-5 text-ink-3 ring-1 ring-line">
+                Published versions are immutable and the backend exposes no
+                endpoint to reopen one as a draft, so this rule can only be
+                paused or archived.
+              </div>
+            ) : null}
             {!selected.systemLocked && selected.status === "active" ? (
               <button
                 type="button"
                 disabled={busy != null}
                 onClick={() => onStatus(selected, "pause")}
-                className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg text-small font-bold text-amber-700 ring-1 ring-amber-200 hover:bg-amber-50"
+                className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg text-small font-bold text-amber-700 ring-1 ring-amber-200 hover:bg-amber-50"
               >
                 <Pause size={14} /> Pause rule
               </button>
@@ -602,64 +689,45 @@ function RulesPanel({
 function Builder({
   catalog,
   stores,
+  editRule,
   onClose,
   onCreated,
 }: {
   catalog: AutomationCatalog;
   stores: AutomationStoreOption[];
+  /** When set, the builder edits this rule's existing draft instead of creating one. */
+  editRule: RuleRow | null;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const firstField = catalog.fields[0];
-  const skuField = catalog.fields.find((field) => field.key === "line.sku");
-  const storeField = catalog.fields.find(
-    (field) => field.key === "order.store_id",
-  );
-  const hugrabStore = stores.find(
-    (store) => store.clientName.trim().toLowerCase() === "hugrab",
-  );
-  const hazmatAction = catalog.actions.find(
-    (action) => action.type === "hazmat.add_declaration" && action.available,
-  );
+  const firstAvailableAction = catalog.actions.find((action) => action.available);
+  // A new rule starts blank, the way ShipStation's rule builder does. Seeding a
+  // specific customer's hazmat rule here made every new automation start as a
+  // copy of HUGRAB's.
   const [activeRule, setActiveRule] = useState(true);
-  const [name, setName] = useState(
-    hugrabStore ? "HUGRAB - HAZMAT" : "Hazmat automation",
-  );
+  const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [trigger, setTrigger] = useState("order_imported");
   const [priority, setPriority] = useState("100");
-  const [clientId, setClientId] = useState(
-    hugrabStore ? String(hugrabStore.clientId) : "",
-  );
-  const [storeId, setStoreId] = useState(
-    hugrabStore ? String(hugrabStore.storeId) : "",
-  );
+  const [clientId, setClientId] = useState("");
+  const [storeId, setStoreId] = useState("");
   const [conditions, setConditions] = useState<BuilderCondition[]>([
     {
       id: crypto.randomUUID(),
-      field: skuField?.key ?? firstField?.key ?? "line.sku",
-      operator: skuField?.operators.includes("contains")
-        ? "contains"
-        : (skuField?.operators[0] ?? "contains"),
-      value: "HU-10",
-    },
-    {
-      id: crypto.randomUUID(),
-      field: storeField?.key ?? "order.store_id",
-      operator: storeField?.operators.includes("eq")
-        ? "eq"
-        : (storeField?.operators[0] ?? "eq"),
-      value: hugrabStore ? String(hugrabStore.storeId) : "",
+      field: firstField?.key ?? "order.store_id",
+      operator: firstField?.operators[0] ?? "eq",
+      value: "",
     },
   ]);
   const [actions, setActions] = useState<BuilderAction[]>([
     {
       id: crypto.randomUUID(),
-      type: hazmatAction?.type ?? "hazmat.add_declaration",
-      value: actionDefault(hazmatAction?.type ?? "hazmat.add_declaration"),
+      type: firstAvailableAction?.type ?? "tag.add",
+      value: actionDefault(firstAvailableAction?.type ?? "tag.add"),
       provider: "parcelguard",
-      contactName: "Eddie Kim",
-      contactPhone: "310-720-1871",
+      contactName: "",
+      contactPhone: "",
     },
   ]);
   const [unknownPolicy, setUnknownPolicy] = useState<"no_match" | "block">(
@@ -711,6 +779,62 @@ function Builder({
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Editing an existing rule: pull its open draft version and refill the form.
+  // Without this the builder could only ever create, so any draft that survived
+  // its creation session was unreachable and could never be published.
+  const editRuleQuery = useQuery({
+    queryKey: ["automations", "rule", editRule?.id ?? 0],
+    enabled: editRule != null,
+    queryFn: async () =>
+      (
+        await api.get<{
+          data: {
+            rule: RuleRow;
+            versions: Array<{
+              id: number;
+              lifecycle: string;
+              draftRevision: number;
+              document: unknown;
+            }>;
+          };
+        }>(`/automations/${editRule?.id}`)
+      ).data,
+  });
+
+  const hydratedRef = useRef<number | null>(null);
+  useEffect(() => {
+    const loaded = editRuleQuery.data;
+    if (!editRule || !loaded) return;
+    if (hydratedRef.current === editRule.id) return;
+    const draftVersion = loaded.versions.find(
+      (version) => version.lifecycle === "draft",
+    );
+    if (!draftVersion) {
+      setError(
+        "This rule has no open draft. Published versions are immutable, and the backend has no endpoint to reopen one.",
+      );
+      hydratedRef.current = editRule.id;
+      return;
+    }
+    const parsed = parseRuleDocument(draftVersion.document);
+    if (!parsed) {
+      setError("Could not read this rule's draft document.");
+      hydratedRef.current = editRule.id;
+      return;
+    }
+    setName(parsed.name);
+    setDescription(parsed.description);
+    setTrigger(parsed.trigger);
+    setPriority(parsed.priority);
+    setClientId(parsed.clientId);
+    setStoreId(parsed.storeId);
+    setUnknownPolicy(parsed.unknownPolicy);
+    if (parsed.conditions.length > 0) setConditions(parsed.conditions);
+    if (parsed.actions.length > 0) setActions(parsed.actions);
+    setDraft({ ruleId: editRule.id, revision: draftVersion.draftRevision });
+    hydratedRef.current = editRule.id;
+  }, [editRule, editRuleQuery.data]);
 
   const document = useMemo(
     () => ({
@@ -1735,6 +1859,8 @@ export default function AutomationsView() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<RuleRow | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
+  const [editRule, setEditRule] = useState<RuleRow | null>(null);
+  const [orderError, setOrderError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const catalogQuery = useQuery({
@@ -1777,6 +1903,67 @@ export default function AutomationsView() {
       await queryClient.invalidateQueries({
         queryKey: ["automations", "rules"],
       });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Reorder by rewriting each affected rule's draft priority. The backend only
+   * accepts priority through a draft document (PUT /:id/draft requires an open
+   * draft), so published rules cannot currently be resequenced -- surfaced to
+   * the operator rather than silently skipped.
+   */
+  const moveRule = async (rule: RuleRow, direction: "up" | "down") => {
+    const changes = planRuleMove(rulesQuery.data ?? [], rule.id, direction);
+    if (changes.length === 0) return;
+    const rulesById = new Map((rulesQuery.data ?? []).map((row) => [row.id, row]));
+    setBusy(`move:${rule.id}`);
+    setOrderError(null);
+    try {
+      for (const change of changes) {
+        const target = rulesById.get(change.ruleId);
+        if (!target || target.systemLocked) continue;
+        if (target.status !== "draft") {
+          setOrderError(
+            `"${target.name}" is published, and published versions are immutable. Reordering it needs a backend endpoint to reopen a draft.`,
+          );
+          continue;
+        }
+        const detail = (
+          await api.get<{
+            data: {
+              versions: Array<{
+                lifecycle: string;
+                draftRevision: number;
+                document: Record<string, unknown>;
+              }>;
+            };
+          }>(`/automations/${change.ruleId}`)
+        ).data;
+        const draftVersion = detail.versions.find(
+          (version) => version.lifecycle === "draft",
+        );
+        if (!draftVersion) continue;
+        await api.put(
+          `/automations/${change.ruleId}/draft`,
+          {
+            document: {
+              ...draftVersion.document,
+              priority: change.priority,
+              position: change.position,
+            },
+          },
+          { headers: { "If-Match": String(draftVersion.draftRevision) } },
+        );
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["automations", "rules"],
+      });
+    } catch (caught) {
+      setOrderError(
+        caught instanceof Error ? caught.message : "Reordering failed",
+      );
     } finally {
       setBusy(null);
     }
@@ -1827,6 +2014,15 @@ export default function AutomationsView() {
           );
         })}
       </div>
+      {orderError ? (
+        <div
+          role="alert"
+          className="mb-4 flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-small text-rose-800 ring-1 ring-rose-200"
+        >
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span>{orderError}</span>
+        </div>
+      ) : null}
       {tab === "rules" ? (
         <RulesPanel
           rules={rulesQuery.data ?? []}
@@ -1835,9 +2031,17 @@ export default function AutomationsView() {
           setQuery={setQuery}
           selected={selected}
           setSelected={setSelected}
-          onNew={() => setBuilderOpen(true)}
+          onNew={() => {
+            setEditRule(null);
+            setBuilderOpen(true);
+          }}
+          onEdit={(rule) => {
+            setEditRule(rule);
+            setBuilderOpen(true);
+          }}
           onRefresh={() => void rulesQuery.refetch()}
           onStatus={(rule, action) => void changeStatus(rule, action)}
+          onMove={(rule, direction) => void moveRule(rule, direction)}
           busy={busy}
         />
       ) : null}
@@ -1941,9 +2145,14 @@ export default function AutomationsView() {
       ) : null}
       {builderOpen && catalogQuery.data && storesQuery.data ? (
         <Builder
+          key={editRule?.id ?? "new"}
           catalog={catalogQuery.data}
           stores={storesQuery.data}
-          onClose={() => setBuilderOpen(false)}
+          editRule={editRule}
+          onClose={() => {
+            setBuilderOpen(false);
+            setEditRule(null);
+          }}
           onCreated={() =>
             void queryClient.invalidateQueries({
               queryKey: ["automations", "rules"],
