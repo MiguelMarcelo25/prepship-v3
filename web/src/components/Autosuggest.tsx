@@ -121,14 +121,21 @@ interface ThumbnailPreviewState {
   zoom: number
 }
 
-// Position the preview floating to the RIGHT of the cursor, vertically
-// centered on it, clamped to viewport bounds so it never clips off-
-// screen. Lifted from InventoryView's positionThumbnailPreview helper
-// to keep cross-component visual parity. The body-zoom math is
-// defensive: some operator setups (browser zoom + OS DPR > 1)
-// double-multiply position values; dividing by the resolved zoom
-// keeps the overlay anchored to the actual cursor position.
-function computePreviewPosition(cursorX: number, cursorY: number): {
+// Position the preview directly OVER the thumbnail it belongs to: centred on
+// it horizontally, sitting just above it, flipping below only when there is no
+// room at the top.
+//
+// It used to follow the cursor and float to its right. In a narrow dropdown
+// docked near the right edge of a panel -- the automation builder's SKU field
+// is exactly that -- "right of the cursor" clamps to the viewport edge and the
+// preview lands a long way from the row it describes, reading as an unrelated
+// floating image. Anchoring to the thumbnail keeps the two visually attached
+// at any dropdown position.
+//
+// The body-zoom math is defensive: some operator setups (browser zoom + OS
+// DPR > 1) double-multiply position values; dividing by the resolved zoom
+// keeps the overlay anchored where it was measured.
+function computePreviewPosition(anchor: DOMRect): {
   left: number
   top: number
   zoom: number
@@ -139,11 +146,17 @@ function computePreviewPosition(cursorX: number, cursorY: number): {
     : 1
   const width = 170
   const height = 170
-  const gap = 14
+  const gap = 10
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
-  const rawLeft = Math.max(gap, Math.min(cursorX + gap, viewportWidth - width - gap))
-  const rawTop = Math.max(gap, Math.min(cursorY - height / 2, viewportHeight - height - gap))
+  const centred = anchor.left + anchor.width / 2 - width / 2
+  const rawLeft = Math.max(gap, Math.min(centred, viewportWidth - width - gap))
+  // Above by preference. Near the top of the screen there is nowhere to put it,
+  // so drop below the row rather than overlap it.
+  const above = anchor.top - height - gap
+  const rawTop = above >= gap
+    ? above
+    : Math.min(anchor.bottom + gap, viewportHeight - height - gap)
   return {
     left: rawLeft / zoom,
     top: rawTop / zoom,
@@ -287,7 +300,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
       if (!src) return
       setThumbnailPreview({
         src,
-        ...computePreviewPosition(event.clientX, event.clientY),
+        ...computePreviewPosition(event.currentTarget.getBoundingClientRect()),
       })
     },
     [],
@@ -584,6 +597,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
             shadow-2xl p-1
             pointer-events-none
           "
+          data-testid="autosuggest-thumbnail-preview"
           style={{
             left: `${thumbnailPreview.left}px`,
             top: `${thumbnailPreview.top}px`,

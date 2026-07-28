@@ -48,6 +48,10 @@ function backend({ controlServiceCount = 1 } = {}) {
   const captured = []
   let created = false
   let published = false
+  // The document the builder last saved. Served back when the draft is
+  // reopened, so the round trip through parseRuleDocument is the real one
+  // rather than a hand-written fixture that could drift from what we POST.
+  let savedDocument = null
   const baseRule = {
     id: 466, name: 'HUGRAB HU-10 review', description: 'Exact normalized HU-10 compliance gate',
     clientId: 4, storeId: 378060, priority: 10, position: 0, trigger: 'order_imported',
@@ -83,7 +87,14 @@ function backend({ controlServiceCount = 1 } = {}) {
     }
     if (url.pathname === '/automations' && request.method() === 'POST') {
       created = true
+      savedDocument = JSON.parse(request.postData() ?? '{}').document ?? null
       return routeObj.fulfill(json({ data: { rule: createdRule, version: { id: 9002, draftRevision: 1 } } }, 201, { ETag: '"1"' }))
+    }
+    if (url.pathname === '/automations/467' && request.method() === 'GET') {
+      return routeObj.fulfill(json({ data: {
+        rule: createdRule,
+        versions: [{ id: 9002, lifecycle: 'draft', draftRevision: 1, document: savedDocument }],
+      } }))
     }
     if (url.pathname === '/automations/467/simulate') {
       return routeObj.fulfill(json({ data: {
@@ -147,13 +158,55 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await expect(page.getByRole('combobox', { name: 'Automation trigger' })).toHaveValue('order_imported')
   await expect(page.getByRole('switch', { name: 'Active rule' })).toBeChecked()
   await expect(page.getByText('Orders match all of these specific criteria')).toBeVisible()
-  await expect(page.getByText('Automation Complete')).toBeVisible()
+  // The decorative "Automation Complete" end-cap was removed: it was a bar of
+  // filler at the bottom of the form carrying no information. The section it
+  // marked the end of is asserted directly instead.
+  await expect(page.getByText('Apply the following actions')).toBeVisible()
   await expect(page.getByRole('button', { name: /Continue/ })).toHaveCount(0)
-  await expect(page.getByLabel('Summary')).toHaveValue('HUGRAB - HAZMAT')
-  await expect(page.getByLabel('Condition 1 field')).toHaveValue('line.sku')
-  await expect(page.getByLabel('Condition 1 operator')).toHaveValue('contains')
+  // A new automation opens blank. The builder used to seed HUGRAB's hazmat
+  // rule, so every new automation started as a copy of one customer's rule.
+  // Assert the blank start, then build the rule through the real controls --
+  // which is also what proves those controls work.
+  await expect(page.getByLabel('Summary')).toHaveValue('')
+  await expect(page.getByLabel(/^Condition \d+ field$/)).toHaveCount(1)
+  await expect(page.getByLabel('Condition 1 field')).toHaveValue('order.client_id')
+  await expect(page.getByLabel('Condition 1 operator')).toHaveValue('eq')
+  await expect(page.getByLabel('Condition 1 value')).toHaveValue('')
+  await expect(page.getByRole('combobox', { name: /^Action type \d+$/ })).toHaveCount(1)
+  await expect(page.getByRole('combobox', { name: 'Action type 1' })).toHaveValue('Add tag')
+  await expect(page.getByLabel('Dangerous-goods contact name')).toHaveCount(0)
+
+  // Scope the rule to HUGRAB's store. Advanced options stays open from here --
+  // the Description field below lives in the same disclosure.
+  await page.getByText('Advanced options').click()
+  await page.getByLabel('Client ID (blank = global)').fill('4')
+  await page.getByLabel('Store ID (optional)').fill('378060')
+
+  // Swap the action to the dangerous-goods declaration. Its contact fields
+  // appear on demand, and they arrive empty rather than pre-filled with the
+  // customer's dispatcher.
+  const actionType = page.getByRole('combobox', { name: 'Action type 1' })
+  await actionType.fill('dangerous')
+  await page.getByRole('option', { name: 'Set shipment as dangerous goods' }).click()
+  await expect(actionType).toHaveValue('Set shipment as dangerous goods')
+  await expect(page.getByText('Name Contact')).toBeVisible()
+  await expect(page.getByText('Phone Contact')).toBeVisible()
+  await expect(page.getByLabel('Dangerous-goods contact name')).toHaveValue('')
+  await expect(page.getByLabel('Dangerous-goods contact phone')).toHaveValue('')
+
+  // Condition 1 becomes the SKU match, condition 2 the store.
+  await page.getByLabel('Condition 1 field').selectOption('line.sku')
+  await page.getByLabel('Condition 1 operator').selectOption('contains')
+  await page.getByRole('button', { name: 'Add condition' }).click()
+  await page.getByLabel('Condition 2 field').selectOption('order.store_id')
+  await page.getByLabel('Condition 2 value').selectOption('378060')
+  await expect(page.getByLabel('Condition 2 field')).toHaveValue('order.store_id')
+  await expect(page.getByLabel('Condition 2 value')).toHaveValue('378060')
+
+  // The store condition narrows the SKU list to that store's client, so the
+  // suggestions offered are HUGRAB's only.
   const skuValue = page.getByLabel('Condition 1 value')
-  await expect(skuValue).toHaveValue('HU-10')
+  await expect(skuValue).toHaveValue('')
   await skuValue.fill('HU')
   const skuSuggestion = page.getByRole('option', { name: /HU-10.*Leeds Line V2/ })
   await expect(skuSuggestion).toBeVisible()
@@ -161,13 +214,6 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await skuSuggestion.click()
   await expect(skuValue).toHaveValue('HU-10')
   expect(mock.captured.some((entry) => entry.pathname === '/inventory' && entry.url.includes('clientId=4'))).toBe(true)
-  await expect(page.getByLabel('Condition 2 field')).toHaveValue('order.store_id')
-  await expect(page.getByLabel('Condition 2 value')).toHaveValue('378060')
-  await expect(page.getByRole('combobox', { name: 'Action type 1' })).toHaveValue('Set shipment as dangerous goods')
-  await expect(page.getByText('Name Contact')).toBeVisible()
-  await expect(page.getByText('Phone Contact')).toBeVisible()
-  await expect(page.getByLabel('Dangerous-goods contact name')).toHaveValue('Eddie Kim')
-  await expect(page.getByLabel('Dangerous-goods contact phone')).toHaveValue('310-720-1871')
   await expect(page.getByText('Save the draft, enter a test order ID, then run Test rule.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Publish rule' })).toBeDisabled()
 
@@ -188,7 +234,6 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await page.screenshot({ path: path.join(screenshotDir, 'automations-shipstation-builder.png'), fullPage: true })
 
   await page.getByLabel('Summary').fill('Browser proof automation')
-  await page.getByText('Advanced options').click()
   await page.getByLabel('Description').fill('Offline browser proof')
   await page.getByLabel('Dangerous-goods contact name').fill('Dispatch Desk')
   await page.getByLabel('Dangerous-goods contact phone').fill('310-555-0100')
@@ -211,6 +256,13 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
       ] } },
     ],
   })
+  // Saving is a stopping point: the builder closes and the rule lands in the
+  // list as a draft. Publishing means reopening that draft from its row, which
+  // also proves the saved document hydrates back into the form.
+  await expect(page.getByText('Guided Builder', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Edit Browser proof automation' }).click()
+  await expect(page.getByLabel('Summary')).toHaveValue('Browser proof automation')
+  await expect(page.getByLabel('Dangerous-goods contact name')).toHaveValue('Dispatch Desk')
   await expect(page.getByText('Enter a test order ID and run Test rule before publishing.')).toBeVisible()
   await page.getByLabel('Test order ID').fill('101')
   await page.getByRole('button', { name: 'Test rule' }).click()

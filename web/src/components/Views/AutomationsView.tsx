@@ -1265,6 +1265,10 @@ function Builder({
   // tag.add) publish in one step, like ShipStation. The backend re-checks this
   // from the saved draft, so this only decides what the operator is asked to do.
   const needsSimulation = draftNeedsSimulation(actions, catalog.actions);
+  // null until the operator touches it, so the default can follow
+  // needsSimulation as the actions change instead of freezing on first render.
+  const [testOpen, setTestOpen] = useState<boolean | null>(null);
+  const testExpanded = testOpen ?? needsSimulation;
   // A missing test only blocks gated rules, but a test that was actually run
   // blocks either way: if the operator tested a low-risk rule and it came back
   // blocked or conflicting, publishing anyway would ignore evidence they asked
@@ -1699,8 +1703,7 @@ function Builder({
                       Apply the following actions
                     </div>
                     <p className="mt-1 text-tiny text-ink-3">
-                      Choose what should happen when the order matches. No
-                      postage is purchased here.
+                      What happens when an order matches. No postage is bought.
                     </p>
                   </div>
                 </div>
@@ -1890,43 +1893,52 @@ function Builder({
               </div>
             </section>
 
-            <div className="mx-auto h-7 w-px bg-line" />
+            <div className="h-3" />
 
-            <section className="space-y-5 rounded-xl bg-surface p-5 shadow-sm ring-1 ring-line">
-                <div>
-                  <h2 className="text-xl font-extrabold text-ink">
-                    {needsSimulation
-                      ? "Test before publishing"
-                      : "Test this rule (optional)"}
-                  </h2>
-                  <p className="mt-1 text-small text-ink-3">
-                    {needsSimulation
-                      ? "Use a test order. This checks the rule without buying postage or changing the order."
-                      : "This rule only adds tags, so it can be activated without a test. You can still run one to see which orders it matches."}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-surface p-5 ring-1 ring-line">
-                  <div className="font-extrabold text-ink">
-                    {name || "Untitled automation"}
-                  </div>
-                  <div className="mt-2 text-small text-ink-2">
-                    When {conditions.length} condition
-                    {conditions.length === 1 ? "" : "s"} match on{" "}
-                    {label(trigger)}, plan {actions.length} action
-                    {actions.length === 1 ? "" : "s"}.
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {actions.map((action) => (
-                      <span
-                        key={action.id}
-                        className="rounded-full bg-brand-bg px-2.5 py-1 text-[11px] font-bold text-brand ring-1 ring-brand-border"
-                      >
-                        {label(action.type)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-surface p-5 ring-1 ring-line">
+            <section className="rounded-xl bg-surface shadow-sm ring-1 ring-line">
+                {/* Collapsible. For a low-risk rule the test is optional and
+                    the whole block is noise until asked for; for a gated rule
+                    it is required, so it starts open. The operator's own toggle
+                    wins over both. */}
+                <button
+                  type="button"
+                  aria-expanded={testExpanded}
+                  aria-controls="automation-test-panel"
+                  onClick={() => setTestOpen(!testExpanded)}
+                  className="flex w-full items-center gap-3 p-4 text-left"
+                >
+                  <ChevronRight
+                    size={16}
+                    className={`shrink-0 text-ink-3 transition-transform ${testExpanded ? "rotate-90" : ""}`}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-extrabold text-ink">
+                      {needsSimulation ? "Test before publishing" : "Test this rule"}
+                    </span>
+                    <span className="block text-tiny text-ink-3">
+                      {needsSimulation
+                        ? "Required. Buys no postage and changes nothing."
+                        : "Optional for a tag-only rule."}
+                    </span>
+                  </span>
+                  {simulation ? (
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-bold ring-1 ${
+                        simulation.evaluation.blocked || simulation.reduction.conflicts.length
+                          ? "bg-amber-50 text-amber-800 ring-amber-200"
+                          : "bg-emerald-50 text-emerald-800 ring-emerald-200"
+                      }`}
+                    >
+                      {simulation.evaluation.blocked ? "blocked" : "passed"}
+                    </span>
+                  ) : null}
+                </button>
+                <div
+                  id="automation-test-panel"
+                  hidden={!testExpanded}
+                  className="space-y-3 border-t border-line p-4"
+                >
+                <div className="rounded-xl bg-surface p-4 ring-1 ring-line">
                   <label className="text-small font-bold text-ink">
                     Test order ID
                     <div className="mt-2 flex gap-2">
@@ -1982,13 +1994,13 @@ function Builder({
                     </div>
                     <div className="mt-1 text-tiny font-normal text-ink-3">
                       {testOrdersQuery.isPending
-                        ? "Finding a recent order to test with…"
+                        ? "Finding a recent order…"
                         : testOrderOptions.length > 0
-                          ? `Prefilled from recent awaiting ${suggestionClientName ?? ""} orders. Testing writes nothing and buys no postage.`.replace(
+                          ? `Prefilled from recent ${suggestionClientName ?? ""} orders.`.replace(
                               /\s+/g,
                               " ",
                             )
-                          : "No recent awaiting orders in this scope — enter any order ID. Testing writes nothing and buys no postage."}
+                          : "No recent orders in scope — enter any order ID."}
                     </div>
                   </label>
                   {!draft ? (
@@ -1999,27 +2011,34 @@ function Builder({
                 </div>
                 {simulation ? (
                   <div
-                    className={`rounded-xl p-5 ring-1 ${simulation.evaluation.blocked || simulation.reduction.conflicts.length ? "bg-amber-50 text-amber-900 ring-amber-200" : "bg-emerald-50 text-emerald-900 ring-emerald-200"}`}
+                    className={`rounded-lg p-3 ring-1 ${simulation.evaluation.blocked || simulation.reduction.conflicts.length ? "bg-amber-50 text-amber-900 ring-amber-200" : "bg-emerald-50 text-emerald-900 ring-emerald-200"}`}
                   >
-                    <div className="flex items-center gap-2 font-extrabold">
+                    <div className="flex items-center gap-2 text-small font-extrabold">
                       {simulation.evaluation.blocked ? (
-                        <AlertTriangle size={17} />
+                        <AlertTriangle size={15} />
                       ) : (
-                        <CheckCircle2 size={17} />
+                        <CheckCircle2 size={15} />
                       )}{" "}
                       Test result
                     </div>
-                    <div className="mt-2 text-small">
+                    <div className="mt-1.5 text-tiny">
                       {simulation.evaluation.matches
                         .map((match) => `${match.ruleName}: ${match.result}`)
                         .join(" · ") || "No matching rule"}{" "}
                       · {simulation.evaluation.intents.length} planned actions ·{" "}
                       {simulation.reduction.conflicts.length} conflicts.
                     </div>
-                    <div className="mt-2 font-mono text-[10px]">
-                      Draft hash {simulation.draftHash}
+                    {/* The full 64-char hash was a wall of characters in a
+                        panel this narrow. It is proof the test matched THIS
+                        draft, and the first 12 identify it well enough to
+                        compare by eye; the rest is on the title attribute. */}
+                    <div
+                      className="mt-1.5 font-mono text-[10px]"
+                      title={simulation.draftHash}
+                    >
+                      Draft {simulation.draftHash.slice(0, 12)}…
                     </div>
-                    <div className="mt-2 text-[11px] font-bold">
+                    <div className="mt-1.5 text-[11px] font-bold">
                       {simulation.zeroWrites
                         ? "Order unchanged"
                         : "Order changes detected"}{" "}
@@ -2033,19 +2052,13 @@ function Builder({
                     </div>
                   </div>
                 ) : null}
-                <div className="rounded-xl bg-amber-50 p-4 text-small leading-6 text-amber-900 ring-1 ring-amber-200">
-                  <div className="font-extrabold">Future orders only</div>
-                  Publishing does not reprocess current awaiting orders. That
-                  requires a separate preview, confirmation, and bounded worker
-                  job. Shipped/cancelled orders remain audit-only.
+                <div className="rounded-lg bg-amber-50 p-3 text-tiny leading-5 text-amber-900 ring-1 ring-amber-200">
+                  <span className="font-extrabold">Future orders only.</span>{" "}
+                  Publishing does not reprocess awaiting orders, and
+                  shipped/cancelled stay audit-only.
+                </div>
                 </div>
             </section>
-
-            <div className="mx-auto h-7 w-px bg-line" />
-            <div className="mx-auto flex max-w-xl items-center justify-between rounded-lg bg-surface px-4 py-3 text-small font-bold text-ink-2 ring-1 ring-line">
-              <span>Automation Complete</span>
-              <CheckCircle2 size={17} className="text-emerald-600" />
-            </div>
             {error ? (
               <div className="mt-5 rounded-lg bg-rose-50 p-3 text-small font-bold text-rose-700 ring-1 ring-rose-200">
                 {error}
