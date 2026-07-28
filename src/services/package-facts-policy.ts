@@ -7,21 +7,33 @@
  *
  *   1. 'override'           — explicit current order override / operator edit
  *                             (order_overrides.rate_* / selected_package_id)
- *   2. 'combo_default'      — exact client-scoped SKU+qty combo default
+ *   2. 'automation'         — package.set from this order's automation plan
+ *                             (order_automation_state.plan.package)
+ *   3. 'combo_default'      — exact client-scoped SKU+qty combo default
  *                             (client_combo_package_defaults keyed by
  *                             (clientId, normalized comboKey) — covers BOTH
  *                             multi-SKU combos and single-SKU-with-qty keys)
- *   3. 'single_sku_default' — product/inventory-derived defaults, TRUE
+ *   4. 'single_sku_default' — product/inventory-derived defaults, TRUE
  *                             single-SKU orders only (qty-scoped by the
  *                             existing dims-defaults rules)
- *   4. 'imported'           — orders.weight_oz + raw dimensions, FALLBACK ONLY
+ *   5. 'imported'           — orders.weight_oz + raw dimensions, FALLBACK ONLY
+ *
+ * Why 'automation' sits BELOW override and ABOVE the defaults: a rule is a
+ * standing instruction, so it should beat a generic SKU/combo default that
+ * nobody wrote for this order — but a human who edited THIS order last has
+ * seen something the rule could not, and must not be overwritten by it.
  *
  * Zero imports — offline-testable. IO callers (combo-package-defaults /
  * routes) load each rung and delegate the decision here; they must never
  * re-implement the ordering.
  */
 
-export type PackageFactsSource = 'override' | 'combo_default' | 'single_sku_default' | 'imported';
+export type PackageFactsSource =
+  | 'override'
+  | 'automation'
+  | 'combo_default'
+  | 'single_sku_default'
+  | 'imported';
 
 export type PackageFactsDims = { length: number; width: number; height: number };
 
@@ -96,6 +108,8 @@ export function rungsCarrySameFacts(a: PackageFactsRung | null | undefined, b: P
 
 export type ResolvePackageFactsInput = {
   override: PackageFactsRung | null;
+  /** package.set from this order's automation plan, if any. */
+  automation?: PackageFactsRung | null;
   comboDefault: PackageFactsRung | null;
   /** Only pass for TRUE single-SKU orders (the caller owns the qty-scope rule). */
   singleSkuDefault: PackageFactsRung | null;
@@ -138,6 +152,7 @@ export function resolvePackageFactsFromInputs(input: ResolvePackageFactsInput): 
     const materialized = rungHasFacts(input.comboDefault) && rungsCarrySameFacts(input.override, input.comboDefault);
     return build(materialized ? 'combo_default' : 'override', input.override);
   }
+  if (rungHasFacts(input.automation)) return build('automation', input.automation ?? null);
   if (rungHasFacts(input.comboDefault)) return build('combo_default', input.comboDefault);
   if (rungHasFacts(input.singleSkuDefault)) return build('single_sku_default', input.singleSkuDefault);
   return build('imported', input.imported ?? null);

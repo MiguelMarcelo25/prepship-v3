@@ -81,6 +81,7 @@ import {
   shippingAutomationControlsFingerprint,
 } from './automations/shipping-controls';
 import { loadOrderAutomationExclusionRules } from './automations/order-exclusion-rules';
+import { loadOrderRatePreference, narrowToPreferred, type RatePreference } from './automations/rate-preference';
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
 import {
   easyPostScheduledPremium,
@@ -864,7 +865,7 @@ function dedupeRates(rates: Rate[], source: string): Rate[] {
 
 // Exported for PS-356 and legacy guards: the persisted Best Rate ranks on the
 // marked/customer rate. Internal carrier cost rides separately as Rate Cost.
-export function pickBestRate(rates: Rate[]): Rate | null {
+export function pickBestRate(rates: Rate[], preference?: RatePreference | null): Rate | null {
   // PS-108: never auto-select an insured rate whose ParcelGuard premium could not be
   // proven. Such rates are flagged `insuranceCostUnresolved` by the enricher; excluding
   // them here guarantees the saved bestRate is never a postage-only insured rate.
@@ -873,7 +874,14 @@ export function pickBestRate(rates: Rate[]): Rate | null {
   // lift already drops these, but any other caller of pickBestRate is protected too.
   const selectable = rates.filter((rate) => isRateInsuranceResolved(rate) && isPricedRate(rate));
   if (!selectable.length) return null;
-  return [...selectable].sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)))[0]!;
+  const ranked = [...selectable].sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)));
+  // carrier.prefer / service.prefer narrow the ALREADY-RANKED list, so the
+  // cheapest preferred rate wins and the canonical ordering is untouched. A
+  // preference that matches nothing falls through to the overall cheapest --
+  // it is a tie-break, never a filter, so an automation can never leave an
+  // order unrated. `preference` is null unless AUTOMATION_PREFERENCE_RANKING
+  // is on, so this is a no-op by default.
+  return narrowToPreferred(ranked, preference ?? null)[0]!;
 }
 
 function rateEligibilityContext(
@@ -2315,9 +2323,15 @@ export async function getRates(
   }
 
   const rates = applyMarkups(rawRates, markups);
+  // Ranked on the MARKED customer charge, then narrowed to the order's
+  // preferred carrier/service if it has one. Null unless
+  // AUTOMATION_PREFERENCE_RANKING is on, so this is a no-op by default.
+  const ratePreference = resolvedInput.orderId
+    ? await loadOrderRatePreference(resolvedInput.orderId)
+    : null;
   return {
     rates,
-    bestRate: pickBestRate(rates),
+    bestRate: pickBestRate(rates, ratePreference),
     cached: false,
     cacheKey: key,
     fetchedAt: now.toISOString(),

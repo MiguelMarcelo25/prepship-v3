@@ -18,6 +18,7 @@ import {
   type EffectivePackageFacts,
   type PackageFactsRung,
 } from './package-facts-policy';
+import { loadOrderAutomationPackageRung } from './automations/order-package-plan';
 import { getOrderDimsDefaultsForOrder } from './order-dims-defaults';
 import { orderLifecycleEffectiveStatusSql } from './order-lifecycle-status';
 import {
@@ -624,6 +625,10 @@ export async function resolveOrderPackageFacts(orderId: number): Promise<Effecti
     const importedDims = rawRecord?.dimensions && typeof rawRecord.dimensions === 'object' && !Array.isArray(rawRecord.dimensions)
       ? (rawRecord.dimensions as { length?: unknown; width?: unknown; height?: unknown })
       : null;
+    // package.set from this order's automation plan. Package identity only --
+    // see order-package-plan.ts for why a rule never supplies weight or dims.
+    const automation = await loadOrderAutomationPackageRung(orderId);
+
     return resolvePackageFactsFromInputs({
       override: {
         weightOz: row.curWeightOz,
@@ -632,6 +637,7 @@ export async function resolveOrderPackageFacts(orderId: number): Promise<Effecti
         height: row.curDimsH,
         selectedPackageId: row.curPackageId ?? null,
       },
+      automation,
       comboDefault,
       singleSkuDefault,
       imported: {

@@ -198,8 +198,14 @@ assert.throws(
 const catalog = getAutomationCatalog();
 assert.equal(catalog.actions.find((action) => action.type === 'hazmat.add_declaration')?.available, true);
 assert.equal(catalog.actions.find((action) => action.type === 'hazmat.add_declaration')?.label, 'Set shipment as dangerous goods');
-assert.equal(catalog.actions.find((action) => action.type === 'package.set')?.available, false);
+// package.set is available now that the canonical package resolver consumes
+// plan.package as its 'automation' rung (package-facts-policy.ts).
+assert.equal(catalog.actions.find((action) => action.type === 'package.set')?.available, true);
+// The preference actions follow AUTOMATION_PREFERENCE_RANKING, which is
+// default-OFF -- so unavailable here, and unavailable in production until it
+// is switched on. That is the point: the action and the ranking share a switch.
 assert.equal(catalog.actions.find((action) => action.type === 'carrier.prefer')?.available, false);
+assert.equal(catalog.actions.find((action) => action.type === 'service.prefer')?.available, false);
 assert.equal(catalog.actions.some((action) => action.type === 'label.purchase'), false);
 assert.equal(catalog.actions.some((action) => String(action.type) === 'hazmat.clear'), false, 'automation has no hazmat clear action');
 assert.equal(catalog.limits.maxDepth, 3);

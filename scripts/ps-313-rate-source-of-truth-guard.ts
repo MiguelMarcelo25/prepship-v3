@@ -204,7 +204,12 @@ const ratesService = read('src/services/rates.ts');
 checkPatterns('rates.ts provider-level selector applies markup before pickBestRate', ratesService, [
   /export function pickBestRate/,
   /applyMarkups\(rawRates, markups\)/,
-  /bestRate: pickBestRate\(rates\)/,
+  // `rates` is the MARKED list, and that is what this pin protects: ranking
+  // must never run on raw provider cost. The optional second argument is the
+  // order's carrier/service preference, which narrows an already-ranked list
+  // and cannot change the basis -- so the pattern allows it rather than
+  // pinning the exact call text.
+  /bestRate: pickBestRate\(rates[,)]/,
   /bestRate: pickBestRate\(cachedRates\)/,
 ]);
 

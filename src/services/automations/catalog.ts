@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isAutomationPreferenceRankingEnabled } from './rate-preference.js';
 
 export const AUTOMATION_ENGINE_VERSION = 'ps-466-v1';
 export const AUTOMATION_LIMITS = {
@@ -121,8 +122,10 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
     permission: 'automations:publish',
     allowedTriggers: shippingMutationTriggers,
     invalidatesRateProof: true,
-    available: false,
-    unavailableReason: 'Package preset automation is unavailable until the canonical package resolver consumes automation plans',
+    // The canonical package resolver now consumes plan.package as its
+    // 'automation' rung, below an operator override and above the generic
+    // combo/SKU defaults. See package-facts-policy.ts.
+    available: true,
     schema: z.object({ packagePresetId: z.string().trim().min(1).max(128) }).strict(),
   },
   {
@@ -239,10 +242,26 @@ export function getAutomationCatalog() {
     fields: AUTOMATION_FIELD_DEFINITIONS,
     // requiresSimulation is sent rather than left for the client to re-derive,
     // so the publish gate has exactly one owner. See publish-gate.ts.
-    actions: ACTION_DEFINITIONS.map(({ schema: _schema, ...definition }) => ({
-      ...definition,
-      requiresSimulation: definition.risk !== 'low' || definition.invalidatesRateProof,
-    })),
+    // Preference actions follow AUTOMATION_PREFERENCE_RANKING rather than a
+    // hardcoded flag, so one switch controls both whether the ranking honours a
+    // preference and whether the builder offers the action. Hardcoding
+    // available:true here would let an operator publish a preference rule into
+    // an environment whose ranking ignores it -- the exact "looks like it
+    // works" failure this whole pass exists to remove.
+    actions: ACTION_DEFINITIONS.map(({ schema: _schema, ...definition }) => {
+      const preferenceGated = definition.type === 'carrier.prefer' || definition.type === 'service.prefer';
+      const available = preferenceGated
+        ? isAutomationPreferenceRankingEnabled()
+        : definition.available;
+      return {
+        ...definition,
+        available,
+        ...(preferenceGated && !available
+          ? { unavailableReason: 'Preference ranking is off in this environment (AUTOMATION_PREFERENCE_RANKING)' }
+          : {}),
+        requiresSimulation: definition.risk !== 'low' || definition.invalidatesRateProof,
+      };
+    }),
     prohibitedCapabilities: [
       'label purchase',
       'label void/refund',
