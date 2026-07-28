@@ -82,6 +82,7 @@ import {
 } from './automations/shipping-controls';
 import { loadOrderAutomationExclusionRules } from './automations/order-exclusion-rules';
 import { loadOrderRatePreference, narrowToPreferred, type RatePreference } from './automations/rate-preference';
+import { applyInsuranceFloor, loadOrderRatePlanOverlay } from './automations/order-rate-plan-overlay';
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
 import {
   easyPostScheduledPremium,
@@ -723,9 +724,27 @@ export async function resolveRateInput(
         insuranceEligibilityContext,
         input,
       );
+  // insurance.require / confirmation.set from this order's automation plan.
+  // Both only ever ADD to what the request already asked for -- see
+  // order-rate-plan-overlay.ts.
+  const planOverlay = input.orderId
+    ? await loadOrderRatePlanOverlay(input.orderId)
+    : { insuranceMinimumValue: null, confirmation: null };
+
   const insuranceProvider = requestInsurance.insuranceProvider as string;
-  const insuredValue = requestInsurance.insuredValue;
-  const effectiveInsuranceSource = requestInsurance.source;
+  // A rule can raise cover, never lower it, and never on the deliberately
+  // uninsured manual baseline.
+  const automationInsuredValue = opts.rawManualEstimate
+    ? requestInsurance.insuredValue
+    : applyInsuranceFloor(requestInsurance.insuredValue, planOverlay.insuranceMinimumValue);
+  const insuredValue = automationInsuredValue;
+  const insuranceRaisedByAutomation =
+    planOverlay.insuranceMinimumValue != null
+    && !opts.rawManualEstimate
+    && automationInsuredValue !== requestInsurance.insuredValue;
+  const effectiveInsuranceSource = insuranceRaisedByAutomation
+    ? ('automation' as const)
+    : requestInsurance.source;
 
   // PS-127: the backend owns residential/commercial classification. Stop blindly
   // defaulting every request to residential (`input.residential !== false`). Run the
@@ -745,6 +764,15 @@ export async function resolveRateInput(
 
   return {
     ...input,
+    // confirmation.set fills in ONLY when the request expressed no preference,
+    // so an operator's explicit choice always wins. Set on the resolved input
+    // rather than at the two call sites that read it: rateCacheKey and the
+    // provider request body both derive from this object, and applying it to
+    // one but not the other would let two different confirmations share a
+    // cache entry.
+    confirmation: normalizeRateConfirmation(input.confirmation)
+      ? input.confirmation
+      : planOverlay.confirmation ?? input.confirmation,
     // PS-126: canonical rate path keeps the EXACT postal (US ZIP+4 when present) so
     // ShipStation rate quotes match exactly. Falls back to legacy zip5 only if the
     // helper can't produce an exact value. Direct carriers get zip5 at their boundary.

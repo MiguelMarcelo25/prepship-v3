@@ -106,8 +106,11 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
     // shipment. It was offered as available, which is worse than being locked:
     // an operator builds a rule, sees it "succeed" in run history, and ships
     // uninsured. Unlock when the insurance owner consumes plan.insurance.
-    available: false,
-    unavailableReason: 'Insurance automation is unavailable until the backend insurance owner consumes the automation plan',
+    // The rate path applies plan.insurance.minimumValue as a FLOOR on the
+    // insured value -- it can only raise cover, never lower it. Provider
+    // selection stays with the capability owner (PS-170), because a rule
+    // cannot know whether an account supports carrier declared value.
+    available: true,
     schema: z.object({
       minimumValue: z.number().finite().nonnegative().max(100_000),
       provider: z.enum(['parcelguard', 'carrier']),
@@ -139,8 +142,9 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
     // Same as insurance.require: reduced into plan.confirmation, persisted,
     // read by nobody. Confirmation is a money-path choice, so offering it as
     // working when it is not is the wrong failure.
-    available: false,
-    unavailableReason: 'Confirmation automation is unavailable until the backend label owner consumes the automation plan',
+    // The rate path fills confirmation from plan.confirmation only when the
+    // request expressed none, so an operator's explicit choice always wins.
+    available: true,
     schema: z.object({ confirmation: z.enum(['none', 'delivery', 'signature', 'adult_signature']) }).strict(),
   },
   ...(['carrier.exclude', 'service.exclude'] as const).map((type): ActionDefinition => ({
