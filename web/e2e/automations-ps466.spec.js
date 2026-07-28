@@ -289,3 +289,32 @@ test('PS-466 guided builder remains usable at mobile width', async ({ page }) =>
   await expect(page.getByRole('button', { name: /Continue/ })).toHaveCount(0)
   await page.screenshot({ path: path.join(screenshotDir, 'automations-mobile-builder.png'), fullPage: true })
 })
+
+test('rules list swaps the wide table for cards at phone width', async ({ page }) => {
+  const mock = backend()
+  await seedAuth(page)
+  await page.route('**/*', mock.route)
+
+  // The table carries min-w-[760px] and cannot usefully shrink, so below md it
+  // is replaced rather than squeezed. Assert the swap in both directions --
+  // rendering both at once, or neither, are the two ways this breaks.
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`${baseUrl}/automations`)
+  const card = page.getByTestId('automation-rule-card').first()
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('HUGRAB HU-10 review')
+  await expect(page.locator('table')).toBeHidden()
+
+  // Row actions must be reachable without sideways scrolling, which was the
+  // actual defect: they sat off the right edge of the 760px table.
+  await expect(card.getByRole('button', { name: 'Edit HUGRAB HU-10 review' })).toBeInViewport()
+  await expect(card.getByRole('button', { name: 'Delete HUGRAB HU-10 review' })).toBeInViewport()
+  const scrolls = await page.evaluate(() =>
+    document.documentElement.scrollWidth > document.documentElement.clientWidth)
+  expect(scrolls).toBe(false)
+  await page.screenshot({ path: path.join(screenshotDir, 'automations-mobile-rules.png'), fullPage: true })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(page.locator('table')).toBeVisible()
+  await expect(card).toBeHidden()
+})

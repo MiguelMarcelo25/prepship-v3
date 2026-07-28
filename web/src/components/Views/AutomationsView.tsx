@@ -30,6 +30,9 @@ import { api, qs, type Paginated } from "../../lib/api";
 import Autosuggest, { type AutosuggestOption } from "../Autosuggest";
 import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoodsActionFields";
 import { AutomationRowActions } from "./automations/AutomationRowActions";
+import { AutomationRuleCard } from "./automations/AutomationRuleCard";
+import { ruleAffordances } from "./automations/rule-row-affordances";
+import { useIsMobileViewport } from "./orders/useIsMobileViewport";
 import { draftNeedsSimulation } from "./automations/publish-gate";
 import { filterRules } from "./automations/rule-search";
 import {
@@ -451,6 +454,9 @@ function RulesPanel({
   setShowInactive: (value: boolean) => void;
   busy: string | null;
 }) {
+  // Same 768px breakpoint OrdersView switches on, so the two dense tables in
+  // the app change shape at the same width instead of at their own.
+  const isMobileViewport = useIsMobileViewport();
   // Display order mirrors the backend ORDER BY, so what the operator sees is
   // the order the engine evaluates in.
   const ordered = sortRulesForDisplay(rules);
@@ -478,33 +484,50 @@ function RulesPanel({
               className="h-9 w-full rounded-lg bg-surface-2 pl-9 pr-3 text-small text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
             />
           </div>
-          <label className="inline-flex shrink-0 items-center gap-2 text-small text-ink-2">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(event) => setShowInactive(event.target.checked)}
-              className="h-4 w-4 rounded ring-1 ring-line"
-            />
-            Show inactive
-            {!showInactive && hiddenCount > 0 ? (
-              <span className="text-ink-3">({hiddenCount})</span>
-            ) : null}
-          </label>
-          <button
-            type="button"
-            onClick={onRefresh}
-            aria-label="Refresh rules"
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-small font-bold text-ink-2 ring-1 ring-line hover:bg-surface-2"
-          >
-            <RefreshCcw size={14} /> Refresh
-          </button>
-          <button
-            type="button"
-            onClick={onNew}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white shadow-sm hover:bg-brand-dark"
-          >
-            <Plus size={15} /> New automation
-          </button>
+          {/* On a phone these three would each claim their own row under the
+              search box. Grouped, they read as one control strip: the filter on
+              the left, the two actions on the right. */}
+          <div className="flex items-center justify-between gap-2 sm:contents">
+            <label className="inline-flex shrink-0 items-center gap-2 text-small text-ink-2">
+              <input
+                type="checkbox"
+                checked={showInactive}
+                onChange={(event) => setShowInactive(event.target.checked)}
+                className="h-4 w-4 rounded ring-1 ring-line"
+              />
+              Show inactive
+              {!showInactive && hiddenCount > 0 ? (
+                <span className="text-ink-3">({hiddenCount})</span>
+              ) : null}
+            </label>
+            <div className="flex items-center gap-2 sm:contents">
+              <button
+                type="button"
+                onClick={onRefresh}
+                aria-label="Refresh rules"
+                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-small font-bold text-ink-2 ring-1 ring-line hover:bg-surface-2"
+              >
+                <RefreshCcw size={14} />
+                {/* The icon alone is unambiguous next to a labelled primary
+                    action, and the word is what pushes this strip to wrap. */}
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+              <button
+                type="button"
+                onClick={onNew}
+                // Explicit label because the visible text shortens to "New" on
+                // narrow screens: `hidden` is display:none, which drops that
+                // span out of the accessible name entirely. Without this the
+                // button would be called "New automation" on desktop and "New"
+                // on a phone, breaking assistive tech and every by-name test.
+                aria-label="New automation"
+                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white shadow-sm hover:bg-brand-dark"
+              >
+                <Plus size={15} /> New
+                <span className="hidden sm:inline">automation</span>
+              </button>
+            </div>
+          </div>
         </div>
         {ambiguousOrder ? (
           <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-tiny leading-5 text-amber-800">
@@ -516,6 +539,48 @@ function RulesPanel({
             </span>
           </div>
         ) : null}
+        {/* Cards at phone width, table above it. The table needs eight columns
+            to stay readable and cannot usefully shrink, so on a phone it became
+            a sideways-scrolling strip with the row actions off-screen.
+            Switched in JS rather than with md:hidden/hidden md:block: the CSS
+            pair renders BOTH trees and hides one, which puts every rule name
+            and every row button in the DOM twice. Hidden copies are invisible
+            to assistive tech but not to querySelector, so by-name lookups start
+            matching two nodes. One tree, one decision. */}
+        {isMobileViewport ? (
+        <div className="flex flex-col gap-2 p-3">
+          {loading ? (
+            <div className="px-4 py-12 text-center text-ink-3">
+              <Loader2 className="mx-auto mb-2 animate-spin" /> Loading rules
+            </div>
+          ) : null}
+          {!loading && filtered.length === 0 ? (
+            <div className="px-4 py-12 text-center text-ink-3">
+              No automations match this view.
+            </div>
+          ) : null}
+          {filtered.map((rule, index) => (
+            <AutomationRuleCard
+              key={rule.id}
+              rule={rule}
+              position={index + 1}
+              statusClassName={statusTone(rule.status)}
+              triggerLabel={label(rule.trigger)}
+              scopeLabel={`${rule.clientId ? `Client ${rule.clientId}` : "Global"}${rule.storeId ? ` · Store ${rule.storeId}` : ""}`}
+              selected={selected?.id === rule.id}
+              busy={busy != null}
+              isFirst={index === 0}
+              isLast={index === filtered.length - 1}
+              onSelect={() => setSelected(rule)}
+              onEdit={() => onEdit(rule)}
+              onCopy={() => onCopy(rule)}
+              onDelete={() => onDelete(rule)}
+              onToggleActive={() => onToggleActive(rule)}
+              onMove={(direction) => onMove(rule, direction)}
+            />
+          ))}
+        </div>
+        ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-collapse text-left text-small">
             <thead className="bg-surface-2 text-[11px] uppercase tracking-wide text-ink-3">
@@ -631,21 +696,8 @@ function RulesPanel({
                       role="switch"
                       aria-checked={rule.status === "active"}
                       aria-label={`${rule.status === "active" ? "Pause" : "Activate"} ${rule.name}`}
-                      title={
-                        rule.status === "draft"
-                          ? "Publish this draft to activate it"
-                          : rule.status === "archived"
-                            ? "Archived rules cannot be reactivated"
-                            : rule.status === "paused"
-                              ? `Resume ${rule.name}`
-                              : `Pause ${rule.name}`
-                      }
-                      disabled={
-                        rule.systemLocked ||
-                        busy != null ||
-                        rule.status === "draft" ||
-                        rule.status === "archived"
-                      }
+                      title={ruleAffordances(rule).toggleTitle}
+                      disabled={!ruleAffordances(rule).canToggleActive || busy != null}
                       onClick={(event) => {
                         event.stopPropagation();
                         onToggleActive(rule);
@@ -661,18 +713,10 @@ function RulesPanel({
                     <div className="flex justify-end">
                       <AutomationRowActions
                         ruleName={rule.name}
-                        canEdit={!rule.systemLocked && rule.status !== "archived"}
-                        editDisabledReason={
-                          rule.systemLocked
-                            ? "System-locked rules cannot be edited"
-                            : "Archived rules cannot be edited. Copy this rule to revive it."
-                        }
-                        canDelete={!rule.systemLocked && !rule.hasExecutionHistory}
-                        deleteDisabledReason={
-                          rule.systemLocked
-                            ? "System-locked rules cannot be deleted"
-                            : "This rule has already run on orders. Archive it instead — that hides it while keeping the record of what it did."
-                        }
+                        canEdit={ruleAffordances(rule).canEdit}
+                        editDisabledReason={ruleAffordances(rule).editDisabledReason}
+                        canDelete={ruleAffordances(rule).canDelete}
+                        deleteDisabledReason={ruleAffordances(rule).deleteDisabledReason}
                         disabled={busy != null}
                         onEdit={() => onEdit(rule)}
                         onCopy={() => onCopy(rule)}
@@ -685,8 +729,16 @@ function RulesPanel({
             </tbody>
           </table>
         </div>
+        )}
       </section>
-      <aside className="rounded-xl bg-surface p-5 ring-1 ring-line shadow-sm">
+      {/* Below xl the inspector stacks under the list. Its empty state is a
+          prompt to click something that is already on screen, so it would cost
+          a full phone screen of scrolling to say nothing -- hide it until a
+          rule is actually selected. From xl it is a real sidebar column and the
+          placeholder explains what the empty column is for. */}
+      <aside
+        className={`rounded-xl bg-surface p-5 ring-1 ring-line shadow-sm ${selected ? "" : "hidden xl:block"}`}
+      >
         {selected ? (
           <div>
             <div className="flex items-start justify-between gap-3">
@@ -1255,15 +1307,17 @@ function Builder({
         aria-label="Automation guided builder"
         className="flex h-full w-full max-w-[980px] flex-col bg-page shadow-2xl"
       >
-        <header className="flex items-center gap-4 border-b border-line bg-surface px-5 py-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-bg text-brand ring-1 ring-brand-border">
+        <header className="flex items-center gap-3 border-b border-line bg-surface px-4 py-3 sm:gap-4 sm:px-5 sm:py-4">
+          <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-bg text-brand ring-1 ring-brand-border sm:flex">
             <Workflow size={20} />
           </div>
-          <div className="flex-1">
-            <div className="text-lg font-extrabold text-ink">
+          <div className="min-w-0 flex-1">
+            <div className="text-base font-extrabold text-ink sm:text-lg">
               Guided Builder
             </div>
-            <div className="text-tiny text-ink-3">
+            {/* Orientation copy, not instruction. On a phone the screen it
+                describes is the scarce resource. */}
+            <div className="hidden text-tiny text-ink-3 sm:block">
               Build the rule in one screen, then test and publish.
             </div>
           </div>
@@ -1276,8 +1330,8 @@ function Builder({
             <X size={20} />
           </button>
         </header>
-        <div className="border-b border-line bg-surface px-5 py-3">
-          <div className="mx-auto flex max-w-xl items-center gap-3 rounded-lg bg-surface px-4 py-3 ring-1 ring-line">
+        <div className="border-b border-line bg-surface px-4 py-3 sm:px-5">
+          <div className="mx-auto flex max-w-xl items-center gap-3 rounded-lg bg-surface px-3 py-3 ring-1 ring-line sm:px-4">
             <span className="rounded-full px-2 py-0.5 text-[10px] font-bold text-ink-2 ring-1 ring-line">
               When
             </span>
@@ -1296,7 +1350,7 @@ function Builder({
             <CheckCircle2 size={17} className="shrink-0 text-emerald-600" />
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-7">
           <div className="mx-auto max-w-4xl">
             <section className="overflow-visible rounded-xl bg-surface shadow-sm ring-2 ring-brand/30">
               <div className="grid gap-4 border-b border-line p-4 sm:grid-cols-[minmax(0,1fr)_180px]">
@@ -1994,41 +2048,49 @@ function Builder({
             ) : null}
           </div>
         </div>
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-5 py-4">
-          <button
-            type="button"
-            onClick={saveDraft}
-            disabled={busy != null}
-            className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-small font-bold text-ink ring-1 ring-line hover:bg-surface-2 disabled:opacity-50"
-          >
-            {busy === "save" ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : null}
-            Save draft
-          </button>
-          {/* Only offered once a draft actually exists on the server. Editing a
-              published rule clones it into a draft, so abandoning that edit
-              previously left a stray draft with no way to remove it. */}
-          <button
-            type="button"
-            onClick={discardDraft}
-            disabled={busy != null || !draft}
-            title={draft
-              ? "Delete this draft. Any published version keeps running."
-              : "Nothing saved yet — close the builder to discard."}
-            className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-small font-bold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50 disabled:opacity-40"
-          >
-            {busy === "discard" ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Trash2 size={14} />
-            )}
-            Discard draft
-          </button>
-          <div className="ml-auto flex max-w-md flex-col items-end gap-1.5">
+        {/* Publish is the primary action, so on a phone it goes first (top) and
+            full width, with the two secondary buttons sharing the row below.
+            flex-wrap alone put a half-width Publish in the corner under two
+            equally-weighted greys. */}
+        <footer className="flex flex-col-reverse gap-3 border-t border-line bg-surface px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-5 sm:py-4">
+          {/* sm:contents dissolves this wrapper from the desktop layout, so the
+              two buttons stay direct flex children of the footer there. */}
+          <div className="flex items-center gap-2 sm:contents">
+            <button
+              type="button"
+              onClick={saveDraft}
+              disabled={busy != null}
+              className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg px-4 text-small font-bold text-ink ring-1 ring-line hover:bg-surface-2 disabled:opacity-50 sm:flex-none"
+            >
+              {busy === "save" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : null}
+              Save draft
+            </button>
+            {/* Only offered once a draft actually exists on the server. Editing
+                a published rule clones it into a draft, so abandoning that edit
+                previously left a stray draft with no way to remove it. */}
+            <button
+              type="button"
+              onClick={discardDraft}
+              disabled={busy != null || !draft}
+              title={draft
+                ? "Delete this draft. Any published version keeps running."
+                : "Nothing saved yet — close the builder to discard."}
+              className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg px-4 text-small font-bold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50 disabled:opacity-40 sm:flex-none"
+            >
+              {busy === "discard" ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Trash2 size={14} />
+              )}
+              Discard draft
+            </button>
+          </div>
+          <div className="flex w-full flex-col gap-1.5 sm:ml-auto sm:w-auto sm:max-w-md sm:items-end">
             <div
               id="publish-rule-status"
-              className={`text-right text-tiny font-bold ${publishBlockReason ? "text-amber-700" : "text-emerald-700"}`}
+              className={`text-tiny font-bold sm:text-right ${publishBlockReason ? "text-amber-700" : "text-emerald-700"}`}
             >
               {publishBlockReason
                 ?? (simulation
@@ -2044,7 +2106,7 @@ function Builder({
               // stale !simulation check. One source now decides both.
               disabled={publishBlockReason != null || busy != null}
               onClick={publish}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white disabled:opacity-40"
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white disabled:opacity-40 sm:w-auto"
             >
               {busy === "publish" ? (
                 <Loader2 size={14} className="animate-spin" />
@@ -2121,7 +2183,7 @@ function ControlsPanel({
     }
   };
   return (
-    <section className="rounded-xl bg-surface p-5 ring-1 ring-line shadow-sm">
+    <section className="rounded-xl bg-surface p-4 ring-1 ring-line shadow-sm sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-lg font-extrabold text-ink">
@@ -2510,7 +2572,7 @@ export default function AutomationsView() {
             conflicts, immutable publishing, and explainable history.
           </p>
         </div>
-        <div className="flex items-center gap-2 rounded-lg bg-surface px-3 py-2 text-tiny text-ink-2 ring-1 ring-line">
+        <div className="flex w-fit shrink-0 items-center gap-2 rounded-lg bg-surface px-3 py-2 text-tiny text-ink-2 ring-1 ring-line">
           <Activity size={14} className="text-emerald-600" />
           <span>{catalogQuery.data?.engineVersion ?? "Loading engine…"}</span>
         </div>
@@ -2579,7 +2641,7 @@ export default function AutomationsView() {
       ) : null}
       {tab === "runs" ? (
         <section className="overflow-hidden rounded-xl bg-surface ring-1 ring-line shadow-sm">
-          <div className="border-b border-line p-5">
+          <div className="border-b border-line p-4 sm:p-5">
             <h2 className="text-lg font-extrabold text-ink">Run History</h2>
             <p className="mt-1 text-small text-ink-3">
               Simulation, apply, conflict, and terminal audit-only traces.
@@ -2627,7 +2689,7 @@ export default function AutomationsView() {
         </section>
       ) : null}
       {tab === "templates" ? (
-        <section className="rounded-xl bg-surface p-5 ring-1 ring-line shadow-sm">
+        <section className="rounded-xl bg-surface p-4 ring-1 ring-line shadow-sm sm:p-5">
           <h2 className="text-lg font-extrabold text-ink">Action Registry</h2>
           <p className="mt-1 text-small text-ink-3">
             The backend catalog is authoritative. Unavailable dependencies
