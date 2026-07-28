@@ -438,7 +438,7 @@ function RulesPanel({
   onDelete: (rule: RuleRow) => void;
   onToggleActive: (rule: RuleRow) => void;
   onRefresh: () => void;
-  onStatus: (rule: RuleRow, status: "pause" | "archive") => void;
+  onStatus: (rule: RuleRow, status: "pause" | "archive" | "resume") => void;
   onMove: (rule: RuleRow, direction: "up" | "down") => void;
   showInactive: boolean;
   setShowInactive: (value: boolean) => void;
@@ -630,8 +630,8 @@ function RulesPanel({
                           : rule.status === "archived"
                             ? "Archived rules cannot be reactivated"
                             : rule.status === "paused"
-                              ? "Opens the rule for testing, then publish to reactivate"
-                              : undefined
+                              ? `Resume ${rule.name}`
+                              : `Pause ${rule.name}`
                       }
                       disabled={
                         rule.systemLocked ||
@@ -2236,7 +2236,7 @@ export default function AutomationsView() {
       ).data,
   });
 
-  const changeStatus = async (rule: RuleRow, action: "pause" | "archive") => {
+  const changeStatus = async (rule: RuleRow, action: "pause" | "archive" | "resume") => {
     setBusy(`${action}:${rule.id}`);
     try {
       await api.post(`/automations/${rule.id}/${action}`, {});
@@ -2348,16 +2348,15 @@ export default function AutomationsView() {
     }
   };
 
-  /** Active toggle maps to pause; reactivating a paused rule republishes it. */
+  /**
+   * Straight on/off. Pausing does not withdraw the published version, so
+   * resuming just starts consulting it again -- no republish, no new version,
+   * no simulation. A rule that was never published still has to go through the
+   * builder, and the backend says so.
+   */
   const toggleActive = async (rule: RuleRow) => {
-    if (rule.status === "active") {
-      await changeStatus(rule, "pause");
-      return;
-    }
-    // Reactivating a paused rule means republishing it. Open its draft and
-    // hand the operator the builder, where Test then Publish makes it live.
     setOrderError(null);
-    await openRuleForEdit(rule);
+    await changeStatus(rule, rule.status === "active" ? "pause" : "resume");
   };
 
   /**

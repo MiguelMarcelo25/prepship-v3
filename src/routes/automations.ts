@@ -362,8 +362,16 @@ app.delete('/:id', requireInternalPermission('automations:publish'), async (c) =
   }
 });
 
-for (const status of ['paused', 'archived'] as const) {
-  app.post(`/:id/${status === 'paused' ? 'pause' : 'archive'}`, requireInternalPermission('automations:publish'), async (c) => {
+const STATUS_ROUTES = [
+  { status: 'paused', path: 'pause' },
+  { status: 'archived', path: 'archive' },
+  // Resume is the inverse of pause. The published version was never withdrawn,
+  // so this mints no version and needs no simulation.
+  { status: 'active', path: 'resume' },
+] as const;
+
+for (const { status, path } of STATUS_ROUTES) {
+  app.post(`/:id/${path}`, requireInternalPermission('automations:publish'), async (c) => {
     const ruleId = positiveId(c.req.param('id'));
     if (!ruleId) return c.json({ error: 'Automation not found' }, 404);
     try {

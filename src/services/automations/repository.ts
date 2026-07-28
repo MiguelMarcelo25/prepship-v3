@@ -494,12 +494,23 @@ export async function openAutomationDraft(input: {
 
 export async function setAutomationRuleStatus(input: {
   ruleId: number;
-  status: 'paused' | 'archived';
+  status: 'active' | 'paused' | 'archived';
   actor: string;
   scope: ClientStoreScope;
 }) {
   const rule = await loadRuleForScope(input.ruleId, input.scope);
   if (rule.systemLocked) throw new Error('System-locked automations cannot be changed');
+  if (input.status === 'active') {
+    // Resuming is the exact inverse of pausing: the published version was never
+    // withdrawn, so the rule simply starts being consulted again. It is not a
+    // republish and mints no new version, which is why it needs no simulation.
+    if (rule.status === 'archived') {
+      throw new Error('Archived automations cannot be reactivated; copy the rule instead');
+    }
+    if (rule.activeVersionId == null) {
+      throw new Error('This automation has never been published; publish the draft to activate it');
+    }
+  }
   const [updated] = await db.update(automationRules).set({
     status: input.status,
     archivedAt: input.status === 'archived' ? new Date() : null,
