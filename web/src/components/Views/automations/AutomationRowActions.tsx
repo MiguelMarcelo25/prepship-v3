@@ -13,10 +13,23 @@ import { Copy, Pencil, Trash2 } from "lucide-react";
  * against a backend endpoint. Nothing here decides whether an action is
  * permitted -- the backend re-checks scope, permissions, and delete
  * eligibility regardless of what this row offers.
+ *
+ * Shared by the desktop table row and the mobile card, so a colour or state
+ * change here lands in both.
  */
 
+/**
+ * Each action carries its colour at rest rather than only on hover, so the
+ * destructive one is distinguishable from the safe ones before you touch it --
+ * on a phone there is no hover at all, so a hover-only tint meant three
+ * identical grey glyphs.
+ *
+ * `disabled:text-ink-3` deliberately overrides the per-action colour: a
+ * greyed-out red trash still reads as "delete, armed" at 35% opacity, which is
+ * exactly wrong for a rule that cannot be deleted.
+ */
 const BUTTON_BASE =
-  "inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-35";
+  "inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:text-ink-3 disabled:hover:bg-transparent";
 
 export function AutomationRowActions({
   ruleName,
@@ -54,7 +67,7 @@ export function AutomationRowActions({
         title={canEdit ? `Edit ${ruleName}` : editDisabledReason}
         disabled={disabled || !canEdit}
         onClick={stop(onEdit)}
-        className={`${BUTTON_BASE} text-ink-3 hover:bg-surface-2 hover:text-brand`}
+        className={`${BUTTON_BASE} text-brand hover:bg-brand-bg`}
       >
         <Pencil size={15} />
       </button>
@@ -64,7 +77,10 @@ export function AutomationRowActions({
         title={`Duplicate ${ruleName} as a new draft`}
         disabled={disabled}
         onClick={stop(onCopy)}
-        className={`${BUTTON_BASE} text-ink-3 hover:bg-surface-2 hover:text-ink`}
+        // Violet, the tone ConfirmModal already uses for duplicate-style
+        // actions. Deliberately not another blue -- next to Edit at 15px, two
+        // blues are one blur.
+        className={`${BUTTON_BASE} text-violet-600 hover:bg-violet-50`}
       >
         <Copy size={15} />
       </button>
@@ -74,7 +90,7 @@ export function AutomationRowActions({
         title={canDelete ? `Delete ${ruleName}` : deleteDisabledReason}
         disabled={disabled || !canDelete}
         onClick={stop(onDelete)}
-        className={`${BUTTON_BASE} text-ink-3 hover:bg-rose-50 hover:text-rose-600`}
+        className={`${BUTTON_BASE} text-rose-600 hover:bg-rose-50`}
       >
         <Trash2 size={15} />
       </button>
