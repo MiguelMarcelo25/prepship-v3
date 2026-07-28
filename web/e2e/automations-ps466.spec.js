@@ -157,7 +157,11 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await page.getByRole('button', { name: 'New automation' }).click()
   await expect(page.getByRole('combobox', { name: 'Automation trigger' })).toHaveValue('order_imported')
   await expect(page.getByRole('switch', { name: 'Active rule' })).toBeChecked()
-  await expect(page.getByText('Orders match all of these specific criteria')).toBeVisible()
+  // "Orders match [all|any] of these specific criteria" — the middle is now a
+  // selector, so the sentence is no longer one text node. Assert the control
+  // and its default instead, which is the part that carries meaning.
+  await expect(page.getByText('of these specific criteria')).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Condition match type' })).toHaveValue('all')
   // The decorative "Automation Complete" end-cap was removed: it was a bar of
   // filler at the bottom of the form carrying no information. The section it
   // marked the end of is asserted directly instead.

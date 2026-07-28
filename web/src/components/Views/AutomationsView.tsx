@@ -43,6 +43,7 @@ import {
   storeOptionLabel,
 } from "./automations/suggestion-options";
 import { parseRuleDocument } from "./automations/rule-document";
+import { type ConditionMatchType } from "./automations/condition-match-type";
 import { useConfirm } from "../ui/useConfirm";
 import {
   hasAmbiguousOrder,
@@ -289,6 +290,7 @@ function typedConditionValue(
 function buildConditionDocument(
   conditions: BuilderCondition[],
   fields: CatalogField[],
+  matchType: ConditionMatchType = "all",
 ) {
   const ordinary = conditions.filter(
     (condition) => !condition.field.startsWith("line."),
@@ -309,10 +311,20 @@ function buildConditionDocument(
   if (line.length > 0) {
     children.push({
       kind: "line_any",
-      condition: { kind: "group", op: "all", children: line.map(predicate) },
+      // The INNER op mirrors the outer choice, and it has to.
+      //
+      // line_any asks "is there a line satisfying this?", so with a hardcoded
+      // inner 'all', two SKU conditions under ANY compiled to "one line whose
+      // SKU is HU-10 AND is HU-20" -- impossible, so the rule could never
+      // match. Mirroring makes ANY read "some line is HU-10 or HU-20", which
+      // is what the operator asked for.
+      //
+      // Under ALL the shape is byte-identical to what shipped before, so no
+      // existing rule changes meaning.
+      condition: { kind: "group", op: matchType, children: line.map(predicate) },
     });
   }
-  return { kind: "group", op: "all", children };
+  return { kind: "group", op: matchType, children };
 }
 
 function ActionTypePicker({
@@ -856,6 +868,9 @@ function Builder({
       contactPhone: "",
     },
   ]);
+  // 'all' is the default because every rule written before this selector
+  // existed was an AND, and the stored documents say so.
+  const [matchType, setMatchType] = useState<ConditionMatchType>("all");
   const [unknownPolicy, setUnknownPolicy] = useState<"no_match" | "block">(
     "no_match",
   );
@@ -1015,6 +1030,7 @@ function Builder({
     setClientId(parsed.clientId);
     setStoreId(parsed.storeId);
     setUnknownPolicy(parsed.unknownPolicy);
+    setMatchType(parsed.matchType);
     if (parsed.conditions.length > 0) setConditions(parsed.conditions);
     if (parsed.actions.length > 0) setActions(parsed.actions);
     setDraft({ ruleId: editRule.id, revision: draftVersion.draftRevision });
@@ -1038,7 +1054,7 @@ function Builder({
         clientIds: clientId ? [Number(clientId)] : [],
         storeIds: storeId ? [Number(storeId)] : [],
       },
-      condition: buildConditionDocument(conditions, catalog.fields),
+      condition: buildConditionDocument(conditions, catalog.fields, matchType),
       actions: actions.map((action) => ({
         type: action.type,
         schemaVersion: 1,
@@ -1463,10 +1479,30 @@ function Builder({
                   <span className="rounded-full px-2 py-0.5 text-[10px] font-bold text-ink-2 ring-1 ring-line">
                     If
                   </span>
+                  <span className="text-small font-bold text-ink">Orders match</span>
+                  {/* The engine has always supported group op any/all; only the
+                      builder was hardcoded to 'all', so an OR rule had to be
+                      built as two duplicate rules that then drifted apart. */}
+                  <select
+                    aria-label="Condition match type"
+                    value={matchType}
+                    onChange={(event) =>
+                      setMatchType(event.target.value === "any" ? "any" : "all")
+                    }
+                    className="h-8 rounded-lg bg-surface px-2 text-small font-bold text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
+                  >
+                    <option value="all">all</option>
+                    <option value="any">any</option>
+                  </select>
                   <span className="text-small font-bold text-ink">
-                    Orders match all of these specific criteria
+                    of these specific criteria
                   </span>
                 </div>
+                {matchType === "any" && conditions.length > 1 ? (
+                  <p className="text-tiny text-ink-3">
+                    An order matches when at least one criterion is true.
+                  </p>
+                ) : null}
                 {conditions.map((condition, index) => {
                   const field = catalog.fields.find(
                     (item) => item.key === condition.field,

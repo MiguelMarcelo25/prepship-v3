@@ -11,6 +11,8 @@
  * and the backend rejects malformed documents on save regardless.
  */
 
+import { parseConditionMatchType, type ConditionMatchType } from "./condition-match-type";
+
 export type ParsedCondition = {
   id: string;
   field: string;
@@ -127,6 +129,8 @@ export type ParsedRuleDraft = {
   clientId: string;
   storeId: string;
   unknownPolicy: "no_match" | "block";
+  /** Whether the stored conditions are ANDed or ORed. */
+  matchType: ConditionMatchType;
   conditions: ParsedCondition[];
   actions: ParsedAction[];
 };
@@ -154,6 +158,7 @@ export function parseRuleDocument(document: unknown): ParsedRuleDraft | null {
     clientId: firstScopeId(document.scope, "clientIds"),
     storeId: firstScopeId(document.scope, "storeIds"),
     unknownPolicy: document.unknownPolicy === "block" ? "block" : "no_match",
+    matchType: parseConditionMatchType(document.condition),
     conditions: parseConditionDocument(document.condition),
     actions: parseActionDocument(document.actions),
   };
