@@ -431,7 +431,6 @@ function RulesPanel({
   onCopy,
   onDelete,
   onToggleActive,
-  onRefresh,
   onStatus,
   onMove,
   showInactive,
@@ -449,7 +448,6 @@ function RulesPanel({
   onCopy: (rule: RuleRow) => void;
   onDelete: (rule: RuleRow) => void;
   onToggleActive: (rule: RuleRow) => void;
-  onRefresh: () => void;
   onStatus: (rule: RuleRow, status: "pause" | "archive" | "resume") => void;
   onMove: (rule: RuleRow, direction: "up" | "down") => void;
   showInactive: boolean;
@@ -503,17 +501,6 @@ function RulesPanel({
               ) : null}
             </label>
             <div className="flex items-center gap-2 sm:contents">
-              <button
-                type="button"
-                onClick={onRefresh}
-                aria-label="Refresh rules"
-                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg px-3 text-small font-bold text-ink-2 ring-1 ring-line hover:bg-surface-2"
-              >
-                <RefreshCcw size={14} />
-                {/* The icon alone is unambiguous next to a labelled primary
-                    action, and the word is what pushes this strip to wrap. */}
-                <span className="hidden sm:inline">Refresh</span>
-              </button>
               <button
                 type="button"
                 onClick={onNew}
@@ -2646,7 +2633,6 @@ export default function AutomationsView() {
           onCopy={(rule) => void copyRule(rule)}
           onDelete={(rule) => void deleteRule(rule)}
           onToggleActive={(rule) => void toggleActive(rule)}
-          onRefresh={() => void rulesQuery.refetch()}
           onStatus={(rule, action) => void changeStatus(rule, action)}
           onMove={(rule, direction) => void moveRule(rule, direction)}
           showInactive={showInactive}
@@ -2680,8 +2666,11 @@ export default function AutomationsView() {
                 key={run.id}
                 className="grid gap-2 p-4 text-small sm:grid-cols-[100px_1fr_160px_160px]"
               >
+                {/* py-2 here, unlike the py-1 pills in the rules table. A run
+                    row is two lines tall, and the shorter pill sat visually
+                    high against them. */}
                 <span
-                  className={`w-fit rounded-full px-2 py-1 text-[11px] font-bold ring-1 ${statusTone(run.status)}`}
+                  className={`w-fit rounded-full px-2 py-2 text-[11px] font-bold leading-none ring-1 ${statusTone(run.status)}`}
                 >
                   {run.status}
                 </span>
