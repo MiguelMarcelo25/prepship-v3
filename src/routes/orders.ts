@@ -5,6 +5,7 @@ import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql, type SQL 
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { orderHazmatDeclarations } from '../db/schema/hazmat';
 import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
@@ -1084,6 +1085,12 @@ const orderListSelect = {
   id: orders.id,
   externalOrderId: orders.externalOrderId,
   clientId: orders.clientId,
+  // PS-465: hazmat state for the list badge. LEFT JOINed rather than a
+  // per-row subquery, and safe to join because order_id is the declarations
+  // primary key, so it cannot fan a row out. Null means no declaration was
+  // ever saved; 'clear' means one was saved and then cleared.
+  hazmatStatus: orderHazmatDeclarations.status,
+  hazmatDecisionSource: orderHazmatDeclarations.decisionSource,
   // Joined (not a correlated per-row subquery): the list query LEFT JOINs
   // clients once — same value, one join instead of one subquery per returned row.
   clientName: clients.name,
@@ -1368,6 +1375,7 @@ async function ordersListResponse(
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
       .leftJoin(clients, eq(clients.id, orders.clientId))
+      .leftJoin(orderHazmatDeclarations, eq(orderHazmatDeclarations.orderId, orders.id))
       .where(where)
       .orderBy(...orderByClauses)
       .limit(q.pageSize)

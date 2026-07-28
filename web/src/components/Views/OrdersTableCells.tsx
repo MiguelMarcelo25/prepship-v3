@@ -24,6 +24,7 @@ import { Truck } from 'lucide-react'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
 import type { TableColumn } from './orders-table-columns'
 import { isTestOrder } from './orders-items'
+import { HazmatChip } from './orders/cells/HazmatChip'
 import {
   copyText,
   getCancelledDisplayAccountNickname,
@@ -137,6 +138,13 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
           TEST
         </span>
       )}
+      {/* PS-465: dangerous-goods badge, so a declared order is identifiable
+        while scanning the list rather than only after opening it. Backend
+        owns the state; this never infers hazmat from SKU or item name. */}
+      <HazmatChip
+        status={(order as { hazmatStatus?: 'active' | 'clear' | null }).hazmatStatus}
+        decisionSource={(order as { hazmatDecisionSource?: 'manual' | 'automation' | null }).hazmatDecisionSource}
+      />
       {/* Shipping-in-progress pill — only renders during the 30 s
         fade transition (Create + Print Label flow). Animated truck
         icon + pulsing background give the operator a clear,
