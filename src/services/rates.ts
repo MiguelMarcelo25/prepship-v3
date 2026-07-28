@@ -80,6 +80,7 @@ import {
   loadShippingAutomationControls,
   shippingAutomationControlsFingerprint,
 } from './automations/shipping-controls';
+import { loadOrderAutomationExclusionRules } from './automations/order-exclusion-rules';
 import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
 import {
   easyPostScheduledPremium,
@@ -620,7 +621,21 @@ export async function resolveRateInput(
     input = await prepareAutomationRateIntent(input, GLOBAL_SCOPE);
   }
   const context = await resolveRateCredentialContext(input);
-  const automationRules = await loadShippingAutomationControls();
+  // Store-level Carrier & Service Controls, plus any carrier/service this
+  // specific order's automation plan excluded. Both are the same rule shape and
+  // both go through the same eligibility evaluator -- the per-order ones were
+  // being computed and persisted but never consulted, so carrier.exclude and
+  // service.exclude quoted the excluded carrier anyway.
+  const automationRules = [
+    ...(await loadShippingAutomationControls()),
+    ...(input.orderId
+      ? await loadOrderAutomationExclusionRules({
+          orderId: input.orderId,
+          clientId: context.clientId ?? null,
+          storeId: context.storeId ?? null,
+        })
+      : []),
+  ];
   const isHugrab = isHugrabShippingContext({
     clientId: context.clientId,
     storeId: context.storeId,
