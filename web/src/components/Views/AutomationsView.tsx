@@ -345,7 +345,9 @@ function ActionTypePicker({
   return (
     <div className="relative">
       <label className="block text-tiny font-bold text-ink-2">
-        Action Type
+        {/* h-5 line box, matched by every other label in the action row so the
+            three inputs sit on one line. */}
+        <span className="flex h-5 items-center">Action Type</span>
         <div className="relative mt-1.5">
           <Search
             size={14}
@@ -1755,7 +1757,7 @@ function Builder({
                         />
                       ) : action.type === "confirmation.set" ? (
                         <label className="text-tiny font-bold text-ink-2">
-                          Confirmation
+                          <span className="flex h-5 items-center">Confirmation</span>
                           <select
                             value={action.value}
                             onChange={(event) =>
@@ -1780,7 +1782,7 @@ function Builder({
                       ) : action.type === "insurance.require" ? (
                         <div className="grid gap-2 sm:grid-cols-[1fr_150px]">
                           <label className="text-tiny font-bold text-ink-2">
-                            Minimum value
+                            <span className="flex h-5 items-center">Minimum value</span>
                             <input
                               type="number"
                               min="0"
@@ -1798,7 +1800,7 @@ function Builder({
                             />
                           </label>
                           <label className="text-tiny font-bold text-ink-2">
-                            Provider
+                            <span className="flex h-5 items-center">Provider</span>
                             <select
                               aria-label="Insurance provider"
                               value={action.provider ?? "parcelguard"}
@@ -1825,7 +1827,7 @@ function Builder({
                         </div>
                       ) : (
                         <label className="text-tiny font-bold text-ink-2">
-                          Value
+                          <span className="flex h-5 items-center">Value</span>
                           <input
                             type="text"
                             aria-label={`Action value ${index + 1}`}
@@ -1844,6 +1846,12 @@ function Builder({
                           />
                         </label>
                       )}
+                      {/* The spacer reproduces the h-5 label line every other
+                          column has, so the button lines up with the inputs
+                          rather than the top of the row. Doing it with a
+                          margin would drift the moment a label wraps. */}
+                      <div className="flex flex-col items-center">
+                      <span className="hidden h-5 sm:block" aria-hidden />
                       <button
                         type="button"
                         aria-label={`Remove action ${index + 1}`}
@@ -1852,10 +1860,11 @@ function Builder({
                             current.filter((item) => item.id !== action.id),
                           )
                         }
-                        className="rounded-lg p-2 text-rose-600 hover:bg-rose-50"
+                        className="mt-1.5 inline-flex h-10 w-10 items-center justify-center rounded-lg text-rose-600 hover:bg-rose-50"
                       >
                         <Trash2 size={16} />
                       </button>
+                      </div>
                       <div className="sm:col-span-3 flex flex-wrap gap-2 text-[11px]">
                         <span
                           className={`rounded-full px-2 py-1 ring-1 ${definition?.risk === "high" ? "bg-amber-50 text-amber-700 ring-amber-200" : "bg-surface-2 text-ink-2 ring-line"}`}

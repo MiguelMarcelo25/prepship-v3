@@ -165,6 +165,11 @@ const protectedPrefixes = [
   '/worker',
   '/observability',
   '/automations',
+  // Same trap as /store-accounts above: /hazmat/contacts mounted without being
+  // listed here, so requireAuth never ran, the auth vars were never set, and
+  // requireInternalPermission 403'd every caller with "Permission required"
+  // even for an admin.
+  '/hazmat',
   '/store-source-cutovers',
   '/client-portal',
 ];
