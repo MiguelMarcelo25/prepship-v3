@@ -23,6 +23,8 @@ import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 import { getLatestLabelOperationForOrder } from './fulfillment-operation-ledger.js';
 // clients.is_test — the PS-186 authority that also gates fixture rates and mock labels.
 import { loadClientIsTest } from './fulfillment/test-label-policy.js';
+// Visibility widens with live automations; authority never does.
+import { clientHasHazmatAutomation } from './automations/hazmat-visibility.js';
 import {
   currentHazmatFeatureFlags,
   resolveHazmatCapabilities,
@@ -199,6 +201,10 @@ async function loadFrozenPurchaseFacts(orderId: number): Promise<CanonicalHazmat
     'shipstation_ups_dangerous_goods',
     'ups_direct',
     'walmart',
+    // Test-fixture snapshots are real rows and must read back, not be rejected
+    // as invalid. Omitted when the profile was added, so a test label could be
+    // written but never re-read.
+    'prepship_test',
   ];
   const candidate = row.snapshotJson as Partial<CanonicalHazmatPurchaseFacts> | null;
   if (
@@ -306,7 +312,12 @@ export async function getOrderHazmat(
   await assertRuntimeSchemaReady();
   const order = await loadOrderRow(orderId, scope);
   const readIsTestClient = await loadClientIsTest(order.clientId);
-  if (!resolveHazmatCapabilities({ clientId: order.clientId, isTestClient: readIsTestClient }).featureEnabled) {
+  const readHasAutomation = await clientHasHazmatAutomation(order.clientId);
+  if (!resolveHazmatCapabilities({
+    clientId: order.clientId,
+    isTestClient: readIsTestClient,
+    hasHazmatAutomation: readHasAutomation,
+  }).featureEnabled) {
     return publicState({
       order,
       declaration: null,
@@ -342,7 +353,12 @@ export async function getOrderHazmatForShipping(orderId: number): Promise<{
   if (!order) throw new OrderHazmatError('Order not found', 'ORDER_NOT_FOUND', 404);
   const current = await loadDeclaration(db, orderId);
   const isTestClient = await loadClientIsTest(order.clientId);
-  const capabilities = resolveHazmatCapabilities({ clientId: order.clientId, isTestClient });
+  const hasHazmatAutomation = await clientHasHazmatAutomation(order.clientId);
+  const capabilities = resolveHazmatCapabilities({
+    clientId: order.clientId,
+    isTestClient,
+    hasHazmatAutomation,
+  });
   return {
     // Internal shipping reads deliberately retain a persisted declaration when
     // rollout flags are disabled. The policy layer must see it and fail closed;
@@ -384,7 +400,12 @@ export async function validateOrderHazmatDraft(input: {
   }
   const result = normalizeAndValidateHazmatDeclaration(input.declaration);
   const isTestClient = await loadClientIsTest(order.clientId);
-  const capabilities = resolveHazmatCapabilities({ clientId: order.clientId, isTestClient });
+  const hasHazmatAutomation = await clientHasHazmatAutomation(order.clientId);
+  const capabilities = resolveHazmatCapabilities({
+    clientId: order.clientId,
+    isTestClient,
+    hasHazmatAutomation,
+  });
   if (!capabilities.writeEnabled) {
     throw new OrderHazmatError('Hazmat declaration writes are disabled.', 'HAZMAT_WRITE_DISABLED', 403);
   }

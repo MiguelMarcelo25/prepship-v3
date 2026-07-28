@@ -112,21 +112,34 @@ export function resolveHazmatCapabilities(input: {
    * profile fails closed for every caller that has not resolved it.
    */
   isTestClient?: boolean;
+  /**
+   * A live automation declares dangerous goods for this client. Widens display
+   * only -- never rating, purchase, or write authority.
+   */
+  hasHazmatAutomation?: boolean;
   flags?: HazmatFeatureFlags;
 }): HazmatCapabilities {
   const flags = input.flags ?? currentHazmatFeatureFlags();
   const isTestClient = input.isTestClient === true;
   const clientAllowed = flags.canaryClientIds.length === 0
     || (input.clientId != null && flags.canaryClientIds.includes(input.clientId));
-  const featureEnabled = flags.readEnabled && clientAllowed;
-  const enabledFor = (providerEnabled: boolean) => featureEnabled && flags.rateEnabled && providerEnabled;
+  // Visibility follows the automations; authority does not. If a rule declares
+  // hazmat for this client the block is shown so the operator can see what the
+  // rule did, but every capability below still requires clientAllowed, so a
+  // rule edit can never turn on rating or purchase for a real client.
+  const featureEnabled = flags.readEnabled && (clientAllowed || input.hasHazmatAutomation === true);
+  // Authority is the narrow one. It never consults hasHazmatAutomation, so
+  // widening visibility cannot widen what may be rated, purchased, or written.
+  const authorityEnabled = flags.readEnabled && clientAllowed;
+  const enabledFor = (providerEnabled: boolean) => authorityEnabled && flags.rateEnabled && providerEnabled;
   const purchasableFor = (providerEnabled: boolean) =>
     enabledFor(providerEnabled) && flags.purchaseEnabled;
   const hiddenReason = featureEnabled ? null : 'Hazmat is not enabled for this client.';
 
   return {
     featureEnabled,
-    writeEnabled: featureEnabled && flags.writeEnabled,
+    // Writing a declaration is authority, not display.
+    writeEnabled: authorityEnabled && flags.writeEnabled,
     clientAllowed,
     profiles: {
       shipstation_usps: profile({
@@ -200,9 +213,9 @@ export function resolveHazmatCapabilities(input: {
         profile: 'prepship_test',
         label: 'PrepShip Test (fixture)',
         visible: featureEnabled && isTestClient,
-        ratingSupported: featureEnabled && isTestClient && flags.rateEnabled,
+        ratingSupported: authorityEnabled && isTestClient && flags.rateEnabled,
         purchaseSupported:
-          featureEnabled && isTestClient && flags.rateEnabled && flags.purchaseEnabled,
+          authorityEnabled && isTestClient && flags.rateEnabled && flags.purchaseEnabled,
         unavailableReason: hazmatTestProfileUnavailableReason({
           featureEnabled,
           isTestClient,
