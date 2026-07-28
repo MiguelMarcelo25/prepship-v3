@@ -23,6 +23,7 @@ import {
   type CompiledAutomationRule,
 } from './contracts.js';
 import { documentRequiresSimulation } from './publish-gate.js';
+import { ruleExecutionHistoryExists } from './execution-history.js';
 import { reduceAutomationIntents } from './conflicts.js';
 import { evaluateAutomationBundle } from './evaluator.js';
 import { isTerminalAutomationStatus, loadAutomationFacts } from './facts.js';
@@ -44,7 +45,7 @@ export class AutomationDeleteBlockedError extends Error {
   readonly code = 'AUTOMATION_DELETE_BLOCKED';
   constructor(
     message: string,
-    readonly reason: 'published_version' | 'run_history' | 'reprocess_jobs',
+    readonly reason: 'execution_history',
   ) {
     super(message);
     this.name = 'AutomationDeleteBlockedError';
@@ -96,13 +97,17 @@ export async function listAutomationRules(scope: ClientStoreScope) {
     .select({
       rule: automationRules,
       activeVersion: automationRuleVersions,
+      // Same expression deleteAutomationRule refuses on, so the row's delete
+      // affordance and the backend guard cannot disagree.
+      hasExecutionHistory: ruleExecutionHistoryExists(sql`${automationRules.id}`),
     })
     .from(automationRules)
     .leftJoin(automationRuleVersions, eq(automationRuleVersions.id, automationRules.activeVersionId))
     .orderBy(asc(automationRules.priority), asc(automationRules.position), asc(automationRules.id));
   const rows = predicate ? await query.where(predicate) : await query;
-  return rows.map(({ rule, activeVersion }) => ({
+  return rows.map(({ rule, activeVersion, hasExecutionHistory }) => ({
     ...rule,
+    hasExecutionHistory,
     activeVersion: activeVersion ? {
       id: activeVersion.id,
       versionNumber: activeVersion.versionNumber,
@@ -444,37 +449,33 @@ export async function deleteAutomationRule(input: {
     .from(automationRuleVersions)
     .where(eq(automationRuleVersions.ruleId, input.ruleId));
 
-  if (versions.some((version) => version.lifecycle === 'published')) {
+  // Publication alone no longer blocks deletion. A rule published during
+  // testing that never matched an order produced no audit trail, and treating
+  // "was published once" as "has history" stranded those rules in the list
+  // forever. What blocks deletion is evidence the rule actually took effect --
+  // one shared expression with the rules list, so the button and the guard
+  // cannot disagree.
+  const [history] = await db
+    .select({ used: ruleExecutionHistoryExists(input.ruleId) })
+    .from(automationRules)
+    .where(eq(automationRules.id, input.ruleId));
+  if (history?.used) {
     throw new AutomationDeleteBlockedError(
-      'This rule has a published version and cannot be deleted. Archive it instead so its history stays intact.',
-      'published_version',
-    );
-  }
-
-  const [runCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(automationRuns)
-    .where(eq(automationRuns.ruleId, input.ruleId));
-  if ((runCount?.count ?? 0) > 0) {
-    throw new AutomationDeleteBlockedError(
-      'This rule has run history and cannot be deleted. Archive it instead so its history stays intact.',
-      'run_history',
-    );
-  }
-
-  const [jobCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(automationReprocessJobs)
-    .where(eq(automationReprocessJobs.ruleId, input.ruleId));
-  if ((jobCount?.count ?? 0) > 0) {
-    throw new AutomationDeleteBlockedError(
-      'This rule has reprocess jobs and cannot be deleted. Archive it instead so its history stays intact.',
-      'reprocess_jobs',
+      'This rule has already run on orders, so it cannot be deleted. Archive it instead — that hides it from the list while keeping the record of what it did.',
+      'execution_history',
     );
   }
 
   const versionIds = versions.map((version) => version.id);
   return db.transaction(async (tx) => {
+    // automation_rules.active_version_id is ON DELETE RESTRICT. It was always
+    // null before, because only never-published rules could get this far and
+    // only publishing sets it. An active or paused rule now reaches here with
+    // it set, so it has to be released before its versions can go.
+    await tx
+      .update(automationRules)
+      .set({ activeVersionId: null })
+      .where(eq(automationRules.id, input.ruleId));
     if (versionIds.length > 0) {
       // Conditions and actions cascade from versions, but delete them
       // explicitly so the intent is visible and order is deterministic.

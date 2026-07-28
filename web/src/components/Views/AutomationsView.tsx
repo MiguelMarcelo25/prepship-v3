@@ -87,6 +87,12 @@ type RuleRow = {
   status: "draft" | "active" | "paused" | "archived";
   draftRevision: number;
   systemLocked: boolean;
+  /**
+   * Backend verdict: this rule has runs, action results, or reprocess jobs
+   * against it, so deleting it would destroy an audit trail. Being published is
+   * not enough on its own. Display only -- deleteAutomationRule re-checks it.
+   */
+  hasExecutionHistory: boolean;
   provenance: string;
   updatedAt: string;
   activeVersion: null | {
@@ -661,8 +667,12 @@ function RulesPanel({
                             ? "System-locked rules cannot be edited"
                             : "Archived rules cannot be edited. Copy this rule to revive it."
                         }
-                        canDelete={!rule.systemLocked}
-                        deleteDisabledReason="System-locked rules cannot be deleted"
+                        canDelete={!rule.systemLocked && !rule.hasExecutionHistory}
+                        deleteDisabledReason={
+                          rule.systemLocked
+                            ? "System-locked rules cannot be deleted"
+                            : "This rule has already run on orders. Archive it instead — that hides it while keeping the record of what it did."
+                        }
                         disabled={busy != null}
                         onEdit={() => onEdit(rule)}
                         onCopy={() => onCopy(rule)}
