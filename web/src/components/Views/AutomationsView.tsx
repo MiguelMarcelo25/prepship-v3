@@ -38,6 +38,7 @@ import {
   storeOptionLabel,
 } from "./automations/suggestion-options";
 import { parseRuleDocument } from "./automations/rule-document";
+import { useConfirm } from "../ui/useConfirm";
 import {
   hasAmbiguousOrder,
   planRuleMove,
@@ -789,6 +790,7 @@ function Builder({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { confirm, confirmElement, isConfirmOpen } = useConfirm();
   const firstField = catalog.fields[0];
   const firstAvailableAction = catalog.actions.find((action) => action.available);
   // A new rule starts blank, the way ShipStation's rule builder does. Seeding a
@@ -1078,11 +1080,14 @@ function Builder({
    */
   const discardDraft = async () => {
     if (!draft) return;
-    if (!globalThis.confirm(
-      "Discard this draft? Unsaved and saved draft changes are lost. Any published version keeps running.",
-    )) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: "Discard this draft?",
+      description:
+        "Unsaved and saved draft changes are lost. Any published version of this rule keeps running.",
+      confirmLabel: "Discard draft",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setBusy("discard");
     setError(null);
     try {
@@ -1155,7 +1160,7 @@ function Builder({
   // Escape closes the panel, matching the backdrop click and the X button.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") requestCloseRef.current();
+      if (event.key === "Escape") void requestCloseRef.current();
     };
     globalThis.document.addEventListener("keydown", onKeyDown);
     return () => globalThis.document.removeEventListener("keydown", onKeyDown);
@@ -1181,15 +1186,19 @@ function Builder({
    * Closing routes through here so a stray backdrop click or Escape cannot
    * silently discard work. A clean panel just closes.
    */
-  const requestClose = () => {
+  const requestClose = async () => {
     if (busy != null) return;
-    if (
-      isDirty &&
-      !globalThis.confirm(
-        "Close the builder? Unsaved changes to this automation will be lost.",
-      )
-    ) {
-      return;
+    // Stand down while our own confirm dialog is up, or Escape would both
+    // dismiss that dialog and re-enter here to open another one.
+    if (isConfirmOpen) return;
+    if (isDirty) {
+      const confirmed = await confirm({
+        title: "Close the builder?",
+        description: "Unsaved changes to this automation will be lost.",
+        confirmLabel: "Discard changes",
+        tone: "danger",
+      });
+      if (!confirmed) return;
     }
     onClose();
   };
@@ -1227,7 +1236,7 @@ function Builder({
       // Clicking the dimmed backdrop closes the panel. The check keeps this
       // from firing when a click inside the panel bubbles up here.
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) requestClose();
+        if (event.target === event.currentTarget) void requestClose();
       }}
     >
       <div
@@ -2037,6 +2046,13 @@ function Builder({
           </div>
         </footer>
       </div>
+      {/* Inside the builder root on purpose. This wrapper is z-[10000] and so
+          opens a stacking context; ConfirmModal's z-[60] only outranks its
+          siblings within it. Rendered as a sibling of the builder instead, the
+          dialog would paint behind the panel. Its own backdrop clicks do not
+          reach the builder's close-on-backdrop handler, which fires only when
+          the event target is the root element itself. */}
+      {confirmElement}
     </div>
   );
 }
@@ -2238,6 +2254,7 @@ function ControlsPanel({
 }
 
 export default function AutomationsView() {
+  const { confirm, confirmElement } = useConfirm();
   const [tab, setTab] = useState<AutomationTab>("rules");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<RuleRow | null>(null);
@@ -2369,13 +2386,14 @@ export default function AutomationsView() {
    * onDelete: 'restrict'. Surface that reason rather than a bare failure.
    */
   const deleteRule = async (rule: RuleRow) => {
-    if (
-      !globalThis.confirm(
-        `Delete "${rule.name}"? This cannot be undone. Rules that have already run must be archived instead.`,
-      )
-    ) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: `Delete "${rule.name}"?`,
+      description:
+        "This cannot be undone. Rules that have already run are refused by the backend and must be archived instead.",
+      confirmLabel: "Delete rule",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setBusy(`delete:${rule.id}`);
     setOrderError(null);
     try {
@@ -2657,6 +2675,10 @@ export default function AutomationsView() {
           }
         />
       ) : null}
+      {/* Safe as a plain child here: no ancestor on this page sets a z-index,
+          transform, or filter, so the fixed-position dialog escapes to the
+          viewport. The builder above owns its own instance. */}
+      {confirmElement}
     </div>
   );
 }
