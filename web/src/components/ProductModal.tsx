@@ -15,6 +15,8 @@ type Product = {
   width: number;
   height: number;
   defaultPackageCode: string | null;
+  /** Catalog fact: shipping this SKU is regulated. Declares nothing by itself. */
+  hazmat: boolean;
 };
 
 function numOrNull(v: string) {
@@ -43,6 +45,7 @@ export default function ProductModal({
   const [defaultPackageCode, setDefaultPackageCode] = useState(
     existing?.defaultPackageCode ?? ''
   );
+  const [hazmat, setHazmat] = useState(existing?.hazmat ?? false);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -75,6 +78,7 @@ export default function ProductModal({
       width: numOrNull(width) ?? 0,
       height: numOrNull(height) ?? 0,
       defaultPackageCode: defaultPackageCode.trim() || null,
+      hazmat,
     });
   };
 
@@ -186,6 +190,30 @@ export default function ProductModal({
               placeholder="package, large_flat_rate_box, etc."
             />
           </div>
+
+          {/* Catalog fact, not a declaration. The helper text says so out loud
+              because "hazmat" on a product screen invites the assumption that
+              ticking it declares every order containing the SKU -- it does not,
+              and cannot: order hazmat is written only through the gated
+              declaration path. */}
+          <label className="flex items-start gap-2.5 rounded-lg bg-amber-50 p-3 ring-1 ring-amber-200">
+            <input
+              type="checkbox"
+              checked={hazmat}
+              onChange={(e) => setHazmat(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded ring-1 ring-line"
+            />
+            <span className="min-w-0">
+              <span className="block text-small font-bold text-amber-900">
+                Dangerous good (hazmat SKU)
+              </span>
+              <span className="block text-tiny leading-5 text-amber-800">
+                Flags this SKU as regulated so orders containing it are
+                identifiable. It does not declare any shipment as hazmat on its
+                own — that stays the order's hazmat declaration.
+              </span>
+            </span>
+          </label>
 
           {mutation.isError && (
             <div className="text-danger text-tiny py-1">

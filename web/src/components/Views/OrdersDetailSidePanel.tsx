@@ -22,6 +22,7 @@
 // shipped-label gating / deliveryLine); the derivations that read a stateful
 // OrdersView closure (panelDisplayOrder, serviceOptions, dims, panelHold) arrive
 // as already-computed props so no stateful closure leaks into this leaf.
+import { useMemo } from 'react'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import {
   ChevronLeft,
@@ -253,6 +254,17 @@ export function OrdersDetailSidePanel({
 
   const items = getActiveItems(panelOrder, panelDetail)
   const mergedItems = getMergedItems(panelOrder, panelDetail)
+  // Backend-computed catalog fact (orders detail: hazmatSkus). Normalised once
+  // here so the item rows do a Set lookup instead of re-normalising per render.
+  const hazmatSkus = useMemo(() => {
+    const source = (panelDetail as { hazmatSkus?: unknown } | null)?.hazmatSkus
+    if (!Array.isArray(source)) return new Set<string>()
+    return new Set(
+      source
+        .filter((sku): sku is string => typeof sku === 'string')
+        .map((sku) => sku.trim().toUpperCase()),
+    )
+  }, [panelDetail])
   const shipTo = getShipTo(panelOrder, panelDetail)
   const requestedService = getRequestedService(panelOrder, panelDetail)
   const panelIndex = orderedFilteredOrders.findIndex((order) => order.orderId === panelOrder.orderId)
@@ -1140,6 +1152,7 @@ export function OrdersDetailSidePanel({
             toggleSection={onToggleSection}
             items={items}
             mergedItems={mergedItems}
+            hazmatSkus={hazmatSkus}
           />
 
           {/* ─────────────────────────────────────────────────────────

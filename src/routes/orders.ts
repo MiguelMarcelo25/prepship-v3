@@ -6,6 +6,7 @@ import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { orderHazmatDeclarations } from '../db/schema/hazmat';
+import { loadOrderHazmatSkus } from '../services/hazmat/order-hazmat-skus';
 import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
@@ -3129,6 +3130,11 @@ app.get('/:id{[0-9]+}', async (c) => {
     // side panel ("Delivered Jun 12" / "In transit"). Null until the poller has seen
     // this order; never blocks the payload (the loader swallows its own errors).
     tracking: await loadOrderTrackingSummary(id),
+    // Catalog SKUs on this order flagged as dangerous goods. NOT a declaration
+    // -- an order can carry a hazmat SKU with no declaration at all, and the
+    // panel needs to show exactly that. What the shipment actually declares
+    // still comes from order_hazmat_declarations.
+    hazmatSkus: await loadOrderHazmatSkus(id),
   }, detailCanViewFinancials));
 });
 

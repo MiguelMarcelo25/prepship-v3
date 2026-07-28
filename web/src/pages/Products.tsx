@@ -31,6 +31,8 @@ type Product = {
   width: number;
   height: number;
   defaultPackageCode: string | null;
+  /** Catalog fact: shipping this SKU is regulated. Declares nothing by itself. */
+  hazmat: boolean;
   updatedAt: string;
 };
 

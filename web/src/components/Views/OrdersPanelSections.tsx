@@ -33,11 +33,18 @@ export function OrdersPanelItemsSection({
   toggleSection,
   items,
   mergedItems,
+  hazmatSkus,
 }: {
   collapsedSections: Record<PanelSectionKey, boolean>
   toggleSection: (key: PanelSectionKey) => void
   items: OrderLineItem[]
   mergedItems: OrderLineItem[]
+  /**
+   * Catalog SKUs on this order flagged as dangerous goods, backend-computed and
+   * already normalised to trimmed uppercase. Marketplace payloads are not
+   * consistent about SKU casing, so comparing raw strings would miss matches.
+   */
+  hazmatSkus: Set<string>
 }) {
   return (
     <div className={`panel-section${collapsedSections.items ? ' collapsed' : ''}`} id="sec-items">
@@ -81,8 +88,23 @@ export function OrdersPanelItemsSection({
                 <div className="text-[12px] font-semibold text-ink leading-snug truncate" title={item.name ?? ''}>
                   {item.name ?? 'Unknown Item'}
                 </div>
-                <div className="text-[10.5px] text-ink-3 font-mono tabular-nums truncate">
-                  SKU: {item.sku ?? '—'}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10.5px] text-ink-3 font-mono tabular-nums truncate">
+                    SKU: {item.sku ?? '—'}
+                  </span>
+                  {/* Catalog fact: this SKU is a regulated item. Deliberately
+                      worded "Hazmat SKU" rather than "Hazmat", because the
+                      order may carry no declaration at all -- what the shipment
+                      actually declares is the panel's hazmat section, not this. */}
+                  {item.sku && hazmatSkus.has(item.sku.trim().toUpperCase()) ? (
+                    <span
+                      title="This SKU is flagged as a dangerous good in the product catalog. It does not by itself declare this shipment as hazmat."
+                      className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-900 bg-amber-100 ring-1 ring-amber-300"
+                    >
+                      <AlertTriangle size={9} className="shrink-0" />
+                      Hazmat SKU
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-[10.5px] text-ink-2 mt-0.5 tabular-nums">
                   {formatMoney(item.unitPrice)} × {item.quantity} = <strong className="text-ink">{formatMoney((item.unitPrice ?? 0) * item.quantity)}</strong>

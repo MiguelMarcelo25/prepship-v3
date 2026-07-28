@@ -1,4 +1,5 @@
 import {
+  boolean,
   integer,
   pgTable,
   primaryKey,
@@ -18,6 +19,21 @@ export const products = pgTable('products', {
   width: real().default(0).notNull(),
   height: real().default(0).notNull(),
   defaultPackageCode: text(),
+  /**
+   * This SKU is a dangerous good.
+   *
+   * A CATALOG FACT, not a declaration. It says "shipping this item is regulated";
+   * it does not declare any order hazmat and never writes to
+   * order_hazmat_declarations. That declaration stays the single source of truth
+   * for what a shipment actually declares, keeps its own revision and audit
+   * trail, and remains gated by the canary flags -- a catalog checkbox must not
+   * be able to bypass any of that.
+   *
+   * What it is for: showing the operator which line made an order hazmat, and
+   * giving automation rules a fact to match on instead of hard-coding SKU
+   * strings into every rule.
+   */
+  hazmat: boolean().default(false).notNull(),
   createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 });

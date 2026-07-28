@@ -94,6 +94,9 @@ const body = z.object({
   width: z.number().nonnegative().optional(),
   height: z.number().nonnegative().optional(),
   defaultPackageCode: z.string().nullable().optional(),
+  // Catalog fact only. Setting it declares nothing -- order hazmat still comes
+  // from order_hazmat_declarations via the gated hazmat write path.
+  hazmat: z.boolean().optional(),
 });
 
 app.post('/', requireInternalPermission('settings:write'), zValidator('json', body.required({ sku: true })), async (c) => {
