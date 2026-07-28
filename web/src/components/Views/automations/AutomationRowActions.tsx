@@ -1,4 +1,4 @@
-import { Copy, Pencil, Trash2 } from "lucide-react";
+import { Copy, Loader2, Pencil, Trash2 } from "lucide-react";
 
 /**
  * Per-row actions for the Automations rules table: Edit, Copy, Delete.
@@ -38,6 +38,7 @@ export function AutomationRowActions({
   canDelete,
   deleteDisabledReason,
   disabled,
+  pending,
   onEdit,
   onCopy,
   onDelete,
@@ -50,6 +51,16 @@ export function AutomationRowActions({
   canDelete: boolean;
   deleteDisabledReason: string;
   disabled: boolean;
+  /**
+   * Which of this row's actions is waiting on the server, if any.
+   *
+   * A mutation disables every control in the list so two cannot overlap. That
+   * is correct but indistinguishable from a frozen page: opening a published
+   * rule has to clone it into a draft server-side first, and for that round
+   * trip the whole table greyed out with nothing to say why. The spinner marks
+   * which button is responsible.
+   */
+  pending?: "edit" | "copy" | "delete" | null;
   onEdit: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -69,7 +80,7 @@ export function AutomationRowActions({
         onClick={stop(onEdit)}
         className={`${BUTTON_BASE} text-brand hover:bg-brand-bg`}
       >
-        <Pencil size={15} />
+        {pending === "edit" ? <Loader2 size={15} className="animate-spin" /> : <Pencil size={15} />}
       </button>
       <button
         type="button"
@@ -82,7 +93,7 @@ export function AutomationRowActions({
         // blues are one blur.
         className={`${BUTTON_BASE} text-violet-600 hover:bg-violet-50`}
       >
-        <Copy size={15} />
+        {pending === "copy" ? <Loader2 size={15} className="animate-spin" /> : <Copy size={15} />}
       </button>
       <button
         type="button"
@@ -92,7 +103,7 @@ export function AutomationRowActions({
         onClick={stop(onDelete)}
         className={`${BUTTON_BASE} text-rose-600 hover:bg-rose-50`}
       >
-        <Trash2 size={15} />
+        {pending === "delete" ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
       </button>
     </div>
   );

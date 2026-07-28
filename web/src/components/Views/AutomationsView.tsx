@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
   AlertTriangle,
@@ -32,6 +33,7 @@ import { AutomationDangerousGoodsActionFields } from "./AutomationDangerousGoods
 import { AutomationRowActions } from "./automations/AutomationRowActions";
 import { AutomationRuleCard } from "./automations/AutomationRuleCard";
 import { ruleAffordances } from "./automations/rule-row-affordances";
+import { rowPendingAction, type RowPendingAction } from "./automations/row-pending-action";
 import { useIsMobileViewport } from "./orders/useIsMobileViewport";
 import { draftNeedsSimulation } from "./automations/publish-gate";
 import { filterRules } from "./automations/rule-search";
@@ -569,6 +571,7 @@ function RulesPanel({
               scopeLabel={`${rule.clientId ? `Client ${rule.clientId}` : "Global"}${rule.storeId ? ` · Store ${rule.storeId}` : ""}`}
               selected={selected?.id === rule.id}
               busy={busy != null}
+              pending={rowPendingAction(busy, rule.id)}
               isFirst={index === 0}
               isLast={index === filtered.length - 1}
               onSelect={() => setSelected(rule)}
@@ -718,6 +721,7 @@ function RulesPanel({
                         canDelete={ruleAffordances(rule).canDelete}
                         deleteDisabledReason={ruleAffordances(rule).deleteDisabledReason}
                         disabled={busy != null}
+                        pending={rowPendingAction(busy, rule.id)}
                         onEdit={() => onEdit(rule)}
                         onCopy={() => onCopy(rule)}
                         onDelete={() => onDelete(rule)}
@@ -1293,7 +1297,15 @@ function Builder({
             : null;
 
   return (
-    <div
+    // The panel used to appear instantly, which read as a jump rather than a
+    // transition -- especially after the wait to clone a published rule into a
+    // draft. Same motion language as ConfirmModal: backdrop fades, panel
+    // springs in. Exit is driven by AnimatePresence in AutomationsView.
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
       className="fixed inset-0 z-[10000] flex items-stretch justify-end bg-black/30 backdrop-blur-sm"
       // Clicking the dimmed backdrop closes the panel. The check keeps this
       // from firing when a click inside the panel bubbles up here.
@@ -1301,10 +1313,16 @@ function Builder({
         if (event.target === event.currentTarget) void requestClose();
       }}
     >
-      <div
+      <motion.div
         role="dialog"
         aria-modal="true"
         aria-label="Automation guided builder"
+        // Slides in from the edge it is docked to. `x` in percent keeps it
+        // correct at every width, from a 390px phone to the 980px cap.
+        initial={{ x: "100%" }}
+        animate={{ x: 0 }}
+        exit={{ x: "100%" }}
+        transition={{ type: "spring", stiffness: 360, damping: 34 }}
         className="flex h-full w-full max-w-[980px] flex-col bg-page shadow-2xl"
       >
         <header className="flex items-center gap-3 border-b border-line bg-surface px-4 py-3 sm:gap-4 sm:px-5 sm:py-4">
@@ -2117,7 +2135,7 @@ function Builder({
             </button>
           </div>
         </footer>
-      </div>
+      </motion.div>
       {/* Inside the builder root on purpose. This wrapper is z-[10000] and so
           opens a stacking context; ConfirmModal's z-[60] only outranks its
           siblings within it. Rendered as a sibling of the builder instead, the
@@ -2125,7 +2143,7 @@ function Builder({
           reach the builder's close-on-backdrop handler, which fires only when
           the event target is the root element itself. */}
       {confirmElement}
-    </div>
+    </motion.div>
   );
 }
 
@@ -2397,11 +2415,15 @@ export default function AutomationsView() {
     setOrderError(null);
     try {
       await api.post(`/automations/${rule.id}/draft`, {});
-      await queryClient.invalidateQueries({
-        queryKey: ["automations", "rules"],
-      });
+      // Open as soon as the draft exists. The list refetch is deliberately NOT
+      // awaited: it only repaints the row's status pill behind the panel that
+      // is about to cover it, and awaiting it put a second full round trip
+      // between the click and anything happening on screen.
       setEditRule(rule);
       setBuilderOpen(true);
+      void queryClient.invalidateQueries({
+        queryKey: ["automations", "rules"],
+      });
     } catch (caught) {
       setOrderError(
         caught instanceof Error ? caught.message : "Could not open this rule for editing",
@@ -2730,6 +2752,9 @@ export default function AutomationsView() {
           </div>
         </section>
       ) : null}
+      {/* AnimatePresence keeps the panel mounted through its exit transition,
+          so closing slides out instead of vanishing. */}
+      <AnimatePresence>
       {builderOpen && catalogQuery.data && storesQuery.data ? (
         <Builder
           key={editRule?.id ?? "new"}
@@ -2747,6 +2772,7 @@ export default function AutomationsView() {
           }
         />
       ) : null}
+      </AnimatePresence>
       {/* Safe as a plain child here: no ancestor on this page sets a z-index,
           transform, or filter, so the fixed-position dialog escapes to the
           viewport. The builder above owns its own instance. */}

@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { AutomationRowActions } from "./AutomationRowActions";
 import { ruleAffordances, type RuleAffordanceInput } from "./rule-row-affordances";
+import type { RowPendingAction } from "./row-pending-action";
 
 /**
  * One automation rule as a card, for narrow screens.
@@ -23,6 +24,7 @@ export function AutomationRuleCard({
   scopeLabel,
   selected,
   busy,
+  pending,
   isFirst,
   isLast,
   onSelect,
@@ -44,6 +46,8 @@ export function AutomationRuleCard({
   scopeLabel: string;
   selected: boolean;
   busy: boolean;
+  /** Which of this card's actions is waiting on the server, if any. */
+  pending: RowPendingAction;
   isFirst: boolean;
   isLast: boolean;
   onSelect: () => void;
@@ -155,6 +159,7 @@ export function AutomationRuleCard({
           canDelete={can.canDelete}
           deleteDisabledReason={can.deleteDisabledReason}
           disabled={busy}
+          pending={pending}
           onEdit={onEdit}
           onCopy={onCopy}
           onDelete={onDelete}
