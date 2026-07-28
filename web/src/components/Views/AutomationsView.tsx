@@ -435,8 +435,6 @@ function RulesPanel({
   onToggleActive,
   onStatus,
   onMove,
-  showInactive,
-  setShowInactive,
   busy,
 }: {
   rules: RuleRow[];
@@ -452,8 +450,6 @@ function RulesPanel({
   onToggleActive: (rule: RuleRow) => void;
   onStatus: (rule: RuleRow, status: "pause" | "archive" | "resume") => void;
   onMove: (rule: RuleRow, direction: "up" | "down") => void;
-  showInactive: boolean;
-  setShowInactive: (value: boolean) => void;
   busy: string | null;
 }) {
   // Same 768px breakpoint OrdersView switches on, so the two dense tables in
@@ -462,14 +458,13 @@ function RulesPanel({
   // Display order mirrors the backend ORDER BY, so what the operator sees is
   // the order the engine evaluates in.
   const ordered = sortRulesForDisplay(rules);
-  // Archived rules are hidden by default, the way ShipStation hides inactive
-  // rules until you ask for them.
-  const visible = showInactive
-    ? ordered
-    : ordered.filter((rule) => rule.status !== "archived");
-  const filtered = filterRules(visible, query);
-  const ambiguousOrder = hasAmbiguousOrder(visible);
-  const hiddenCount = ordered.length - visible.length;
+  // Every rule is listed, archived included. The toggle that used to hide them
+  // was a filter over a list that is only ever a handful of rows, and hiding
+  // rows by default is how a rule goes missing -- the operator searches, finds
+  // nothing, and rebuilds a rule that already exists. The STATUS pill already
+  // distinguishes archived at a glance, and search covers status as a term.
+  const filtered = filterRules(ordered, query);
+  const ambiguousOrder = hasAmbiguousOrder(ordered);
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="min-w-0 overflow-hidden rounded-xl bg-surface ring-1 ring-line shadow-sm">
@@ -486,22 +481,7 @@ function RulesPanel({
               className="h-9 w-full rounded-lg bg-surface-2 pl-9 pr-3 text-small text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-brand/30"
             />
           </div>
-          {/* On a phone these three would each claim their own row under the
-              search box. Grouped, they read as one control strip: the filter on
-              the left, the two actions on the right. */}
-          <div className="flex items-center justify-between gap-2 sm:contents">
-            <label className="inline-flex shrink-0 items-center gap-2 text-small text-ink-2">
-              <input
-                type="checkbox"
-                checked={showInactive}
-                onChange={(event) => setShowInactive(event.target.checked)}
-                className="h-4 w-4 rounded ring-1 ring-line"
-              />
-              Show inactive
-              {!showInactive && hiddenCount > 0 ? (
-                <span className="text-ink-3">({hiddenCount})</span>
-              ) : null}
-            </label>
+          <div className="flex items-center justify-end gap-2 sm:contents">
             <div className="flex items-center gap-2 sm:contents">
               <button
                 type="button"
@@ -2384,7 +2364,6 @@ export default function AutomationsView() {
   const [selected, setSelected] = useState<RuleRow | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editRule, setEditRule] = useState<RuleRow | null>(null);
-  const [showInactive, setShowInactive] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -2682,8 +2661,6 @@ export default function AutomationsView() {
           onToggleActive={(rule) => void toggleActive(rule)}
           onStatus={(rule, action) => void changeStatus(rule, action)}
           onMove={(rule, direction) => void moveRule(rule, direction)}
-          showInactive={showInactive}
-          setShowInactive={setShowInactive}
           busy={busy}
         />
       ) : null}
