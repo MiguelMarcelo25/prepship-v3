@@ -996,25 +996,36 @@ function Builder({
       ).data,
   });
 
-  const hydratedRef = useRef<number | null>(null);
+  // Keyed on the DRAFT VERSION, not just the rule id.
+  //
+  // Opening a published rule creates its draft and then reads the rule back.
+  // react-query can answer that read from cache first, and a cache populated
+  // before the draft existed has no draft version in it. Keyed on rule id
+  // alone, the effect marked itself hydrated on that stale answer and the
+  // guard above then rejected the fresh fetch that DID contain the draft --
+  // so `draft` stayed null for the rest of the session, and every control
+  // gated on it (Discard draft, Test rule, Publish) stayed dead with no
+  // explanation. Re-keying means newer data re-hydrates.
+  const hydratedRef = useRef<string | null>(null);
   useEffect(() => {
     const loaded = editRuleQuery.data;
     if (!editRule || !loaded) return;
-    if (hydratedRef.current === editRule.id) return;
     const draftVersion = loaded.versions.find(
       (version) => version.lifecycle === "draft",
     );
+    const loadedKey = `${editRule.id}:${draftVersion?.id ?? "none"}`;
+    if (hydratedRef.current === loadedKey) return;
     if (!draftVersion) {
       setError(
         "This rule has no open draft. Published versions are immutable, and the backend has no endpoint to reopen one.",
       );
-      hydratedRef.current = editRule.id;
+      hydratedRef.current = loadedKey;
       return;
     }
     const parsed = parseRuleDocument(draftVersion.document);
     if (!parsed) {
       setError("Could not read this rule's draft document.");
-      hydratedRef.current = editRule.id;
+      hydratedRef.current = loadedKey;
       return;
     }
     setName(parsed.name);
@@ -1031,7 +1042,7 @@ function Builder({
     // of the state set above, so it is still stale here -- flag it and let the
     // effect below snapshot once the recomputed document is available.
     seedSnapshotRef.current = true;
-    hydratedRef.current = editRule.id;
+    hydratedRef.current = loadedKey;
   }, [editRule, editRuleQuery.data]);
 
   const document = useMemo(
@@ -1134,7 +1145,13 @@ function Builder({
    * running -- this only throws away the pending edit.
    */
   const discardDraft = async () => {
-    if (!draft) return;
+    // Target the rule being edited, not the parsed draft. Whether a draft
+    // exists is the server's question -- DELETE /:id/draft is idempotent and
+    // no-ops when there is none. Gating on the parsed draft meant that any
+    // failure to load or parse it left the operator unable to throw it away,
+    // which is exactly the situation where they most want to.
+    const ruleId = draft?.ruleId ?? editRule?.id;
+    if (!ruleId) return;
     const confirmed = await confirm({
       title: "Discard this draft?",
       description:
@@ -1146,7 +1163,7 @@ function Builder({
     setBusy("discard");
     setError(null);
     try {
-      await api.delete(`/automations/${draft.ruleId}/draft`);
+      await api.delete(`/automations/${ruleId}/draft`);
       onCreated();
       onClose();
     } catch (caught) {
@@ -2104,8 +2121,12 @@ function Builder({
             <button
               type="button"
               onClick={discardDraft}
-              disabled={busy != null || !draft}
-              title={draft
+              // Enabled for any rule being edited, even when its draft failed
+              // to load -- the backend decides whether there is one to remove.
+              // A brand-new unsaved rule has nothing on the server yet, so
+              // there it stays disabled and says so.
+              disabled={busy != null || (!draft && !editRule)}
+              title={draft || editRule
                 ? "Delete this draft. Any published version keeps running."
                 : "Nothing saved yet — close the builder to discard."}
               className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg px-4 text-small font-bold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50 disabled:opacity-40 sm:flex-none"
