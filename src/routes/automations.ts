@@ -11,6 +11,7 @@ import {
   AutomationDeleteBlockedError,
   confirmAutomationReprocess,
   createAutomationDraft,
+  deleteAutomationDraft,
   deleteAutomationRule,
   getAutomationRule,
   getAutomationRun,
@@ -347,6 +348,18 @@ app.post('/:id/draft', requireInternalPermission('automations:publish'), async (
       actor: actor(c),
       scope: scope(c as never),
     }) });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// Discards an open draft without touching published history. Requires publish
+// rights because abandoning a draft changes what the next publish will contain.
+app.delete('/:id/draft', requireInternalPermission('automations:publish'), async (c) => {
+  const ruleId = positiveId(c.req.param('id'));
+  if (!ruleId) return c.json({ error: 'Automation not found' }, 404);
+  try {
+    return c.json({ data: await deleteAutomationDraft({ ruleId, scope: scope(c as never) }) });
   } catch (error) {
     return errorResponse(c, error);
   }

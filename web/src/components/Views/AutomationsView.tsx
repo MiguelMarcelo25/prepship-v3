@@ -1072,6 +1072,30 @@ function Builder({
     }
   };
 
+  /**
+   * Discards the server-side draft. The published version, if any, keeps
+   * running -- this only throws away the pending edit.
+   */
+  const discardDraft = async () => {
+    if (!draft) return;
+    if (!globalThis.confirm(
+      "Discard this draft? Unsaved and saved draft changes are lost. Any published version keeps running.",
+    )) {
+      return;
+    }
+    setBusy("discard");
+    setError(null);
+    try {
+      await api.delete(`/automations/${draft.ruleId}/draft`);
+      onCreated();
+      onClose();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not discard the draft");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const simulate = async () => {
     if (!draft) {
       setError("Save the draft before testing the rule.");
@@ -1962,6 +1986,25 @@ function Builder({
               <Loader2 size={14} className="animate-spin" />
             ) : null}
             Save draft
+          </button>
+          {/* Only offered once a draft actually exists on the server. Editing a
+              published rule clones it into a draft, so abandoning that edit
+              previously left a stray draft with no way to remove it. */}
+          <button
+            type="button"
+            onClick={discardDraft}
+            disabled={busy != null || !draft}
+            title={draft
+              ? "Delete this draft. Any published version keeps running."
+              : "Nothing saved yet — close the builder to discard."}
+            className="inline-flex h-10 items-center gap-2 rounded-lg px-4 text-small font-bold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50 disabled:opacity-40"
+          >
+            {busy === "discard" ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Trash2 size={14} />
+            )}
+            Discard draft
           </button>
           <div className="ml-auto flex max-w-md flex-col items-end gap-1.5">
             <div

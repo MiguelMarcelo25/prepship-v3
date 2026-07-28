@@ -357,6 +357,46 @@ export async function publishAutomationDraft(input: {
 }
 
 /**
+ * Discards a rule's open draft, leaving its published history intact.
+ *
+ * Editing a published rule clones it into a draft, so abandoning that edit used
+ * to leave a stray draft behind with no way to remove it -- DELETE /:id targets
+ * the whole rule and refuses once anything is published. The only remedy was a
+ * direct database delete, which is not something an operator can or should do.
+ *
+ * Only ever touches a draft: the guard rejects a published version, so this
+ * cannot become a route to rewriting history. Rules with no open draft are a
+ * no-op rather than an error, so a double click is harmless.
+ */
+export async function deleteAutomationDraft(input: {
+  ruleId: number;
+  scope: ClientStoreScope;
+}) {
+  const current = await getAutomationRule(input.ruleId, input.scope);
+  if (current.rule.systemLocked) {
+    throw new Error('System-locked automations cannot be edited by operators');
+  }
+  const draft = current.versions.find((version) => version.lifecycle === 'draft');
+  if (!draft) return { deleted: false as const, ruleId: input.ruleId };
+
+  return db.transaction(async (tx) => {
+    await tx.delete(automationRuleConditions).where(eq(automationRuleConditions.ruleVersionId, draft.id));
+    await tx.delete(automationRuleActions).where(eq(automationRuleActions.ruleVersionId, draft.id));
+    // Belt and braces: the lifecycle predicate means a version that became
+    // published between the read and this write is left alone.
+    const [removed] = await tx
+      .delete(automationRuleVersions)
+      .where(and(
+        eq(automationRuleVersions.id, draft.id),
+        eq(automationRuleVersions.lifecycle, 'draft'),
+      ))
+      .returning({ id: automationRuleVersions.id });
+    if (!removed) throw new AutomationConflictError('Draft changed while being discarded');
+    return { deleted: true as const, ruleId: input.ruleId, versionId: draft.id };
+  });
+}
+
+/**
  * Permanently removes an automation rule.
  *
  * Only rules that never took effect can be deleted. The schema deliberately
