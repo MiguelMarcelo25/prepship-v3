@@ -392,7 +392,33 @@ export async function deleteAutomationDraft(input: {
       ))
       .returning({ id: automationRuleVersions.id });
     if (!removed) throw new AutomationConflictError('Draft changed while being discarded');
-    return { deleted: true as const, ruleId: input.ruleId, versionId: draft.id };
+
+    // A rule whose only version was that draft was never published, so nothing
+    // downstream can reference it. Leaving the bare row behind would strand it:
+    // it still lists, but openAutomationDraft has no version to clone and
+    // throws 'Automation has no version to copy'. Discarding the first draft of
+    // a brand-new rule means "I do not want this rule", so remove the row too.
+    // Run and reprocess history is still checked -- if anything ever recorded
+    // against this rule, the row stays and the operator archives it instead.
+    const remaining = current.versions.filter((version) => version.id !== draft.id);
+    if (remaining.length > 0) {
+      return { deleted: true as const, ruleId: input.ruleId, versionId: draft.id, ruleRemoved: false as const };
+    }
+
+    const [runCount] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(automationRuns)
+      .where(eq(automationRuns.ruleId, input.ruleId));
+    const [jobCount] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(automationReprocessJobs)
+      .where(eq(automationReprocessJobs.ruleId, input.ruleId));
+    if ((runCount?.count ?? 0) > 0 || (jobCount?.count ?? 0) > 0) {
+      return { deleted: true as const, ruleId: input.ruleId, versionId: draft.id, ruleRemoved: false as const };
+    }
+
+    await tx.delete(automationRules).where(eq(automationRules.id, input.ruleId));
+    return { deleted: true as const, ruleId: input.ruleId, versionId: draft.id, ruleRemoved: true as const };
   });
 }
 
