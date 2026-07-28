@@ -73,11 +73,19 @@ check('best-rate TOTAL includes shipping + confirmation + insurance + other amou
   /insurance_amount\?\.amount/.test(rates) &&
   /other_amount\?\.amount/.test(rates));
 check('pickBestRate selects the lowest rateTotal',
-  // Repointed (guard rot): ranking gained a deterministic internal-cost tiebreaker.
-  // Primary basis is still rateTotal (canonical customer money via the normalizer);
-  // rateCostTotal breaks ties only.
+  // Repointed twice, both times for the same reason: the RANKING BASIS is what
+  // this pin protects, not the exact call text.
+  //   1. ranking gained a deterministic internal-cost tiebreaker, so rateCostTotal
+  //      joined the comparator;
+  //   2. carrier.prefer / service.prefer narrow the already-ranked list, which
+  //      moved `[0]` off the end of `.sort(...)`.
+  // The comparator is asserted intact -- rateTotal (canonical customer money via
+  // the normalizer) primary, rateCostTotal tie-break only -- and the selection is
+  // still the FIRST element of that ordering. A preference can only pick a
+  // different member of the same ranked list; it cannot change the basis.
   /function pickBestRate/.test(rates) &&
-  /\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)\[0\]/.test(rates));
+  /\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)/.test(rates) &&
+  /narrowToPreferred\(ranked, preference \?\? null\)\[0\]/.test(rates));
 check('getRates returns an explicit bestRate selected via pickBestRate',
   /bestRate: pickBestRate\(/.test(rates));
 check('best rate is selected from ELIGIBILITY-FILTERED rates (filter present before pick)',
