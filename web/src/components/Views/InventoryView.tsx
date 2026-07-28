@@ -242,6 +242,13 @@ interface EditSkuFormState {
   productHeight: string
   packageId: string
   cuFtOverride: string
+  /**
+   * products.hazmat for this SKU. Lives on the global catalog, not on this
+   * per-client inventory row, so saving it goes to its own endpoint.
+   */
+  hazmat: boolean
+  /** What it was when the form opened, so an untouched form issues no write. */
+  hazmatInitial: boolean
   previousParentSkuId: number | null
 }
 
@@ -603,6 +610,8 @@ function createEditSkuFormState(item: InventoryItemDto): EditSkuFormState {
     productHeight: String(item.productHeight ?? 0),
     packageId: item.packageId ? String(item.packageId) : '',
     cuFtOverride: item.cuFtOverride && item.cuFtOverride > 0 ? String(item.cuFtOverride) : '0',
+    hazmat: item.hazmat === true,
+    hazmatInitial: item.hazmat === true,
     previousParentSkuId: item.parentSkuId,
   }
 }
@@ -2475,6 +2484,19 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       }
 
       await apiClient.updateInventoryItem(editSkuForm.invSkuId, updatePayload)
+
+      // Separate call on purpose: hazmat lives on the global products catalog,
+      // not on this per-client inventory row, so it goes to the owner of that
+      // column rather than being smuggled through the inventory update. Only
+      // fired when actually toggled, so opening and saving a form does not
+      // rewrite a catalog flag the operator never touched.
+      if (editSkuForm.hazmat !== editSkuForm.hazmatInitial) {
+        await api.patch(
+          `/products/by-sku/${encodeURIComponent(editSkuForm.sku)}/hazmat`,
+          { hazmat: editSkuForm.hazmat },
+        )
+      }
+
       setEditSkuForm(null)
       toastContext?.addToast('✅ Saved', 'success')
       await refreshInventoryView()
@@ -4804,6 +4826,32 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 Cu Ft Override <span style={{ color: 'var(--text4)', fontWeight: 400, textTransform: 'none' }}>(0 = auto from product dims)</span>
               </label>
               <input type="number" className="ship-select" style={{ width: 130, fontSize: 12 }} value={editSkuForm.cuFtOverride} onChange={(event) => setEditSkuForm((current) => current ? { ...current, cuFtOverride: event.target.value } : current)} />
+            </div>
+            {/* Catalog flag, not an inventory field. It is stored on products,
+                which is keyed by SKU globally, so this applies to every client
+                carrying it -- said out loud because the surrounding fields are
+                all per-client and the difference is invisible otherwise.
+                Ticking it declares nothing; order hazmat still comes only from
+                the order's own declaration. */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 8, background: '#fffbeb', border: '1px solid #fde68a', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={editSkuForm.hazmat}
+                  onChange={(event) => setEditSkuForm((current) => current ? { ...current, hazmat: event.target.checked } : current)}
+                  style={{ marginTop: 2, width: 15, height: 15, flexShrink: 0 }}
+                />
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#78350f' }}>
+                    Dangerous good (hazmat SKU)
+                  </span>
+                  <span style={{ display: 'block', fontSize: 11, lineHeight: 1.45, color: '#92400e' }}>
+                    Applies to this SKU across every client. It flags the item as
+                    regulated so orders containing it are identifiable — it does
+                    not declare any shipment as hazmat on its own.
+                  </span>
+                </span>
+              </label>
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn btn-outline btn-sm" type="button" onClick={() => setEditSkuForm(null)}>Cancel</button>

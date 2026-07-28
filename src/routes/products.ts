@@ -99,6 +99,47 @@ const body = z.object({
   hazmat: z.boolean().optional(),
 });
 
+/**
+ * Sets ONLY the hazmat flag, addressed by SKU.
+ *
+ * The Inventory SKU editor knows a sku, not a product id, and must not be able
+ * to overwrite name, dims or package code as a side effect of ticking a
+ * checkbox -- which is what routing it through the general PATCH would risk.
+ * This endpoint can change exactly one column.
+ *
+ * Upserts, because an inventory row can exist for a SKU that has no catalog row
+ * yet. Creating a bare product to hold the flag is better than refusing and
+ * leaving the operator with a checkbox that silently does nothing.
+ *
+ * products is GLOBAL by sku while inventory rows are per client, so this
+ * affects every client carrying the SKU. The editor says so.
+ */
+app.patch('/by-sku/:sku/hazmat', requireInternalPermission('settings:write'), zValidator('json', z.object({
+  hazmat: z.boolean(),
+}).strict()), async (c) => {
+  const sku = c.req.param('sku').trim();
+  if (!sku) return c.json({ error: 'SKU required' }, 400);
+  const { hazmat } = c.req.valid('json');
+
+  const [existing] = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(sql`upper(btrim(${products.sku})) = upper(btrim(${sku}))`)
+    .limit(1);
+
+  if (existing) {
+    const [row] = await db
+      .update(products)
+      .set({ hazmat, updatedAt: new Date() })
+      .where(eq(products.id, existing.id))
+      .returning();
+    return c.json(row);
+  }
+
+  const [created] = await db.insert(products).values({ sku, hazmat }).returning();
+  return c.json(created, 201);
+});
+
 app.post('/', requireInternalPermission('settings:write'), zValidator('json', body.required({ sku: true })), async (c) => {
   const v = c.req.valid('json');
   const [row] = await db.insert(products).values(v).returning();

@@ -18,6 +18,7 @@ import { resolveReceiveUnits } from '../lib/inventory-receive-units';
 import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
 import { classifyStockStatus } from '../lib/inventory-stock-status';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
+import { products } from '../db/schema/products';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
 import { orders } from '../db/schema/orders';
@@ -229,6 +230,16 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         .select({
           ...getTableColumns(inventory),
           inventoryQuantity: inventoryQuantitySql(inventory.id),
+          // Catalog fact from products, which is global by SKU while inventory
+          // rows are per client. A scalar subquery rather than a leftJoin:
+          // products.sku is unique but only case-sensitively, so 'HU-10' and
+          // 'hu-10' can both exist and a normalised join predicate would fan
+          // this row out into two. LIMIT 1 keeps it one row per inventory row.
+          hazmat: sql<boolean>`coalesce((
+            select p.hazmat from ${products} p
+            where upper(btrim(p.sku)) = upper(btrim(${inventory.sku}))
+            limit 1
+          ), false)`,
         })
         .from(inventory)
         .where(where)
