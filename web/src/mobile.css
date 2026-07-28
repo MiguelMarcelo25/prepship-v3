@@ -309,15 +309,43 @@
   }
 
   .btn,
-  button:not([role='separator']),
+  button:not([role='separator']):not([role='switch']),
   a[role='button'] {
     min-height: 44px;
   }
 
-  button[aria-label],
-  button[title],
+  button[aria-label]:not([role='switch']),
+  button[title]:not([role='switch']),
   .btn-icon {
     min-width: 44px;
+  }
+
+  /* ── Switches keep their pill shape ───────────────────────────────────── *
+   * A toggle is drawn as a 36x20 pill with rounded-full and an absolutely
+   * positioned knob. The blanket tap-target rules above forced it to 44x44,
+   * and rounded-full on a SQUARE renders a circle -- every switch in the app
+   * (Automations rules + builder, Inventory, Settings, the shared
+   * StateToggle) showed up on phones as a solid blob with the knob stranded
+   * near the top edge.
+   *
+   * The tap target is not abandoned, just moved off the drawn box: a
+   * transparent ::after centred on the switch carries it. Kept at 40x32
+   * rather than 44x44 because these sit in a row beside other 44px icon
+   * buttons, and a hit area wider than the gap would steal their taps. */
+  button[role='switch'] {
+    position: relative;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  button[role='switch']::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 40px;
+    height: 32px;
+    transform: translate(-50%, -50%);
   }
 
   input:not([type='checkbox']):not([type='radio']),

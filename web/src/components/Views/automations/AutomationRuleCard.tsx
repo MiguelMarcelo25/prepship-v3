@@ -104,7 +104,11 @@ export function AutomationRuleCard({
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-2.5">
-        <div className="flex items-center gap-1">
+        {/* gap-2, not gap-1: on mobile the switch carries a 40px-wide
+            transparent tap target that overhangs its drawn pill, and the
+            reorder arrows are 44px tap targets of their own. A tighter gap
+            lets those overlap and the wrong control receives the tap. */}
+        <div className="flex items-center gap-2">
           <button
             type="button"
             role="switch"
