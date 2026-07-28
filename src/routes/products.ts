@@ -18,6 +18,7 @@ import {
 } from '../services/shipping-workflow/order-rate-job-status';
 import { enqueueBackfillBestRatesForOrderIds } from '../services/rates-backfill';
 import { findProductDefaultsBySku } from '../services/order-dims-defaults';
+import { setProductHazmatBySku } from '../services/products/set-product-hazmat';
 
 const app = new Hono();
 
@@ -120,24 +121,10 @@ app.patch('/by-sku/:sku/hazmat', requireInternalPermission('settings:write'), zV
   const sku = c.req.param('sku').trim();
   if (!sku) return c.json({ error: 'SKU required' }, 400);
   const { hazmat } = c.req.valid('json');
-
-  const [existing] = await db
-    .select({ id: products.id })
-    .from(products)
-    .where(sql`upper(btrim(${products.sku})) = upper(btrim(${sku}))`)
-    .limit(1);
-
-  if (existing) {
-    const [row] = await db
-      .update(products)
-      .set({ hazmat, updatedAt: new Date() })
-      .where(eq(products.id, existing.id))
-      .returning();
-    return c.json(row);
-  }
-
-  const [created] = await db.insert(products).values({ sku, hazmat }).returning();
-  return c.json(created, 201);
+  // Persistence lives in the product command owner, not here -- see PS-464's
+  // shrinking ratchet on route-local writes.
+  const { product, created } = await setProductHazmatBySku({ sku, hazmat });
+  return created ? c.json(product, 201) : c.json(product);
 });
 
 app.post('/', requireInternalPermission('settings:write'), zValidator('json', body.required({ sku: true })), async (c) => {
