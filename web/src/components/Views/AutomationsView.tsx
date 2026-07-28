@@ -1741,6 +1741,10 @@ function Builder({
                         <AutomationDangerousGoodsActionFields
                           contactName={action.contactName}
                           contactPhone={action.contactPhone}
+                          // Same client the SKU suggestions are scoped to, so
+                          // the contact list and the item list agree on whose
+                          // rule this is.
+                          clientId={suggestionClientId ?? null}
                           onChange={(value) =>
                             setActions((current) =>
                               current.map((item) =>

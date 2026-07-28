@@ -17,6 +17,7 @@ import {
 import health from './routes/health';
 import ordersRoute from './routes/orders';
 import orderHazmatRoute from './routes/order-hazmat';
+import hazmatContactsRoute from './routes/hazmat-contacts';
 import shipmentsRoute from './routes/shipments';
 import packagesRoute from './routes/packages';
 import clientsRoute from './routes/clients';
@@ -207,6 +208,7 @@ app.route('/users', usersRoute);
 app.route('/worker', workerRoute);
 app.route('/observability', observabilityRoute);
 app.route('/automations', automationsRoute);
+app.route('/hazmat/contacts', hazmatContactsRoute);
 app.route('/store-source-cutovers', storeSourceCutoversRoute);
 app.route('/client-portal', clientPortalIntegrationsRoute);
 
