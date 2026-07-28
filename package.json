@@ -896,7 +896,8 @@
     "test:full-workflow-certification": "npm run test:full-site-certification && npm run test:workflow-suites",
     "test:batch-print-via-queue": "tsx scripts/batch-print-via-queue-guard.ts",
     "test:batch-print-via-queue:browser": "playwright test web/e2e/batch-create-print-via-queue.spec.js --reporter=line",
-    "test:print-queue-label-prefetch": "tsx scripts/print-queue-label-prefetch-guard.ts"
+    "test:print-queue-label-prefetch": "tsx scripts/print-queue-label-prefetch-guard.ts",
+    "test:ps-466-hugrab-closure": "tsx scripts/ps-466-hugrab-hu10-closure-packet.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
