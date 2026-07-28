@@ -106,7 +106,6 @@ import { CacheManagementPanel } from './CacheManagementPanel'
 import { SandboxTestOrdersPanel } from './SandboxTestOrdersPanel'
 // PS-155: Automation availability panel extracted (pure presentation; state + handlers + PS-057
 // protection predicate stay here and are passed in as props).
-import { AutomationAvailabilityPanel } from './AutomationAvailabilityPanel'
 
 // Drawer sections — each represents one icon on the rail and one
 // content panel. Order here = rendering order on the rail.
@@ -1338,10 +1337,10 @@ export default function SettingsView() {
               ) : null}
 
               {/* ─── AUTOMATION panel ──────────────────────────── */}
-              {/* PS-155: JSX extracted to <AutomationAvailabilityPanel /> (pure presentation).
-                  This view keeps ALL state, every handler, every derived useMemo, and the PS-057
-                  HUGRAB carrier-disable protection — isHugrabCarrierDisableProtected is passed in
-                  as a prop callback so the decision logic never leaves SettingsView. */}
+              {/* PS-466: the legacy availability panel is gone -- carrier/service controls
+                  moved to the Automations workspace. This section is a compatibility
+                  landing that points there. The HUGRAB carrier-disable protection it
+                  used to hold is backend-owned and unchanged. */}
               {activeSection === 'automation' ? (
                 <SectionCard
                   tone="emerald"

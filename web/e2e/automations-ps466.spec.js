@@ -273,9 +273,13 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await expect(page.getByText(/Order unchanged/)).toBeVisible()
   await expect(page.getByText(/No provider calls/)).toBeVisible()
   await expect(page.getByText('Test passed. Ready to publish.')).toBeVisible()
+  // Simulation result on screen: zero-write / zero-provider, and the publish
+  // gate now satisfied. Captured because the DoD asks for simulation evidence.
+  await page.screenshot({ path: path.join(screenshotDir, 'automation-simulation-result.png'), fullPage: true })
   await expect(page.getByRole('button', { name: 'Publish rule' })).toBeEnabled()
   await page.getByRole('button', { name: 'Publish rule' }).click()
   await expect(page.getByRole('table').getByText('Browser proof automation')).toBeVisible()
+  await page.screenshot({ path: path.join(screenshotDir, 'automation-published-rule.png'), fullPage: true })
 
   await page.getByRole('tab', { name: 'Carrier & Service Controls' }).click()
   await expect(page.getByRole('button', { name: /eBay - DJC/ })).toBeVisible()
@@ -288,6 +292,7 @@ test('PS-466 operations console and guided publish stay backend-driven and offli
   await page.screenshot({ path: path.join(screenshotDir, 'automation-client-controls.png'), fullPage: true })
   await page.getByRole('tab', { name: 'Run History' }).click()
   await expect(page.getByText('Run #1')).toBeVisible()
+  await page.screenshot({ path: path.join(screenshotDir, 'automation-run-history.png'), fullPage: true })
   await page.getByRole('tab', { name: 'Templates & Actions' }).click()
   await expect(page.getByText('Set shipment as dangerous goods')).toBeVisible()
   await page.screenshot({ path: path.join(screenshotDir, 'automations-console.png'), fullPage: true })
