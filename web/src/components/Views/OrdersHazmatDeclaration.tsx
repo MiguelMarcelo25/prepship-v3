@@ -16,6 +16,12 @@ type Props = {
   orderId: number
   shipped: boolean
   rawOrder?: unknown
+  /**
+   * PrepShip's client for this order, used to scope the saved-contact list.
+   * Passed in rather than derived from rawOrder: rawOrder is the raw provider
+   * payload and has the marketplace's shape, not ours.
+   */
+  clientId?: number | null
 }
 
 const clearDeclaration = (): HazmatDeclarationDraft => ({ status: 'clear', materials: [] })
@@ -66,7 +72,7 @@ function materialDraft(): HazmatMaterialDraft {
   }
 }
 
-export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
+export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder, clientId = null }: Props) {
   const [state, setState] = useState<OrderHazmatDto | null>(null)
   const [draft, setDraft] = useState<HazmatDeclarationDraft>(clearDeclaration)
   const [loading, setLoading] = useState(true)
@@ -74,16 +80,6 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const evidence = useMemo(() => importedHazmatEvidence(rawOrder), [rawOrder])
-  /**
-   * Scopes the saved-contact list to this order's client. Null falls back to
-   * shared contacts only, which is the safe read -- a contact belonging to one
-   * client must not surface while declaring hazmat for another.
-   */
-  const clientId = useMemo(() => {
-    const record = rawOrder as { clientId?: unknown; client_id?: unknown } | null | undefined
-    const raw = record?.clientId ?? record?.client_id
-    return typeof raw === 'number' && Number.isInteger(raw) ? raw : null
-  }, [rawOrder])
 
   useEffect(() => {
     let current = true

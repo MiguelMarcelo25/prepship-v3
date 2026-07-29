@@ -783,6 +783,12 @@ export function OrdersDetailSidePanel({
                 orderId={panelOrder.orderId}
                 shipped={shipped}
                 rawOrder={(panelDetail as any)?.raw ?? (panelOrder as any)?.raw}
+                // PrepShip's own client, NOT rawOrder's. rawOrder is the raw
+                // provider payload and carries the marketplace's shape, so it
+                // has no clientId -- deriving it from there silently yielded
+                // null and the saved-contact picker fell back to shared-only,
+                // hiding a contact that existed and was scoped to this client.
+                clientId={panelOrder.clientId ?? null}
               />
 
               {/* User override "unlock shipped data" on 2026-05-15: expose shipped PrepShip label reprint/queue actions while keeping external labels disabled.
