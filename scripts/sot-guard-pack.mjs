@@ -23,6 +23,13 @@ const REQUIRED_GUARDS = [
   'test:ps-465-hazmat',
   'test:mock-hazmat-label',
   'test:ps-465-466-migration-rollout',
+  // PS-467/468 shipment attribution. Both tickets require this in the pack, for
+  // the reason the tickets exist: a shipment that could not be attributed used
+  // to be persisted with a bare NULL order_id and no signal, which is how a
+  // dangerous-goods label became invisible to every order-scoped query. Six of
+  // its twenty checks are CONSUMPTION pins -- an owner nothing calls is not a
+  // fix, and shipment-sync losing those call sites must fail here.
+  'test:ps-467-468-shipment-scope',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
