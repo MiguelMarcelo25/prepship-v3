@@ -148,7 +148,26 @@ const watchdog = read('src/services/shipment-sync-watchdog.ts');
 const runbook = read('docs/runbooks/ps-431-production-self-healing.md');
 const ticket = read('docs/ps-tickets/ps-431-production-self-healing.md');
 
-assert.match(workflow, /cron: '\*\/5 \* \* \* \*'/);
+// 2026-07-29: repointed from the exact `*/5` cadence to "runs on SOME schedule".
+//
+// Stated plainly, this is a deliberate RELAXATION of frequency, not a rewording.
+// PS-431's invariant is that the watchdog runs automatically, escalates to a
+// phone-reachable webhook, keeps cooldown state, and never auto-restarts -- all
+// still pinned below. The five-minute cadence was a choice layered on top, and
+// it turned out to be actively harmful: at */5 this workflow plus sync-cron
+// consumed essentially the whole GitHub Actions allowance, which blocked the
+// deploy gate, so a health CHECK stopped health FIXES from shipping.
+//
+// The fast first-line alarm now lives in an external uptime monitor on
+// /health/ready (stood up 2026-07-29), which is genuinely off-infrastructure --
+// strictly better than a GitHub cron for detecting that production is down.
+// This workflow stays as the deeper hourly check for the two things that
+// monitor cannot see: the Vercel shell and the authenticated sync-freshness
+// probe.
+//
+// What is still enforced: the workflow must be SCHEDULED, not manual-only. A
+// watchdog nobody runs is the failure this guard exists to prevent.
+assert.match(workflow, /schedule:\s*\n\s*- cron: '[^']+'/);
 assert.match(workflow, /actions\/cache\/restore@v4[\s\S]*actions\/cache\/save@v4/);
 assert.match(workflow, /WATCHDOG_ALERT_WEBHOOK_URL[\s\S]*WATCHDOG_CRON_SECRET/);
 assert.match(workflow, /WATCHDOG_ALLOW_RESTARTS:.*false/);

@@ -1,16 +1,26 @@
 name: Production Watchdog
 
 on:
-  # 2026-07-29: slowed from every 5 minutes to every 15. At */5 this fired
-  # ~8,640 times a month and, together with sync-cron, accounted for nearly the
-  # entire GitHub Actions spending limit -- which in turn blocked the deploy
-  # gate, so a health CHECK was preventing health FIXES from shipping.
+  # 2026-07-29: slowed from every 5 minutes to hourly (via */15 the same day).
+  # At */5 this fired ~8,640 times a month and, together with sync-cron, was
+  # essentially the entire GitHub Actions spending limit -- which in turn
+  # blocked the deploy gate, so a health CHECK was preventing health FIXES from
+  # shipping. Hourly is ~720 runs, a 92% cut on this workflow alone.
   #
-  # 15 minutes keeps this a real alarm (a genuine outage is still caught inside
-  # a quarter hour) at a third of the cost. Not slowed further because this is
-  # the only automated signal that production is down.
+  # Hourly is safe now because DJ stood up an external uptime monitor on
+  # /health/ready the same day. That is the fast first-line alarm; this workflow
+  # is the DEEPER hourly check and keeps the two things the uptime monitor
+  # cannot see: the Vercel shell, and the authenticated sync-freshness probe.
+  # A 200 from /health/ready means the API is alive -- it says nothing about
+  # whether sync has stalled, which is a different failure and the one that
+  # actually bit us.
+  #
+  # Do NOT delete this workflow. scripts/ps-431-production-self-healing-guard.ts
+  # reads this file and asserts its contents, and that guard is inside the SOT
+  # pack gating every deploy -- removing the file fails the gate and blocks all
+  # shipping until the guard is updated too.
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 permissions:
