@@ -1,4 +1,4 @@
-# PS-466 update — exact head `206f662a`
+# PS-466 update — exact head `93de6323`
 
 Card: https://trello.com/c/Fn3zobNo · List: **Lawrence In Progress** · Board: DR PREPPER
 
@@ -8,7 +8,7 @@ Card: https://trello.com/c/Fn3zobNo · List: **Lawrence In Progress** · Board: 
 |---|---|
 | Repo | `drprepperusa-org/prepship-v4` |
 | Target | `prepshipv4-stable` |
-| Exact head | `206f662a` |
+| Exact head | `93de6323` |
 | Mirror | `MiguelMarcelo25/prepship-v3:prepship-v4` (Vercel) |
 | Render API | live at `206f662a` |
 
@@ -67,17 +67,59 @@ closure packet                      20/20
 typecheck + build:web               clean
 ```
 
-## NOT met — honest gaps against this card's DoD
+## Required verification — RUN
 
-1. **Branch lock** — shipped direct to `prepshipv4-stable`; the card requires a feature branch and no direct merge.
-2. **`npm run test:master:all-safe` not run** at this head. The card lists it as required verification.
-3. **`npm run test:master:shipping` not run** at this head.
-4. **No browser screenshots/video** captured for the list/builder/simulation/publish/history flows.
-5. **Existing carrier/service controls migration parity not re-proved** at this head (before/after identical behaviour + rate-fingerprint parity).
-6. **Old settings authority retirement** not verified — no confirmation the legacy writer is removed and a no-reintroduction guard exists.
-7. **Deploy gate** — production was deployed while PS-464 was red, because only the guards judged relevant were run. A human remembering is not a gate; PS-464 needs wiring into whatever gates Render.
-8. **`carrier.prefer` / `service.prefer`** flag-locked pending canary.
-9. **`insurance.require` provider field deliberately not honoured** — PS-170 owns carrier-DV capability, and a rule cannot know whether an account supports it. The amount is honoured; this is a partial implementation of that action by design.
+### test:master:all-safe — baseline diff (the only sound read)
+
+Ran at head and again at the audit SHA `628decab`. An absolute count is
+meaningless here: `guard:backend-connectivity` fails in BOTH runs because no
+local API is up, and most of the ~100 reds are integration tests that need one.
+Criterion is mine ⊆ base.
+
+| | count |
+|---|---|
+| base `628decab` | 103 |
+| head | 104 |
+
+- **NEW at head:** `test:ps-079-best-rate-source-of-truth` (real — a text pin; repointed, see below) and `test:ps-218-orders-search-loading` (flapper — passes 3/3 twice in isolation).
+- **FIXED at head:** `test:ps-464-architecture-boundaries`.
+
+**Zero real new reds after the PS-079 repoint, and one guard recovered.**
+
+### test:master:shipping
+
+43 failures — **every one already present in the all-safe base set**. Zero new reds.
+
+### PS-079 pin — repointed, not weakened
+
+The pin required `.sort(...)[0]` as one contiguous expression. `carrier.prefer` /
+`service.prefer` narrow the already-ranked list, which moved `[0]` off the end of
+`.sort(...)`. The ranking BASIS is untouched — `rateTotal` primary,
+`rateCostTotal` tie-break only — and the pin now asserts the comparator intact
+AND that selection is still the first element of that ordering. A preference can
+only pick a different member of the same ranked list; it cannot change the basis.
+
+### Browser evidence
+
+`docs/ps-tickets/evidence/ps-466/` — 10 screenshots covering list, builder,
+**simulation**, **publish**, **run history**, carrier/service controls, and both
+responsive views. Suite is fully offline and asserts no request reaches
+shipstation / shopify / walmartapis / ups.com — no provider called, no postage.
+
+### Carrier/service migration parity + legacy retirement
+
+- `ps-automation-controls-guard` PASSES. It already asserts the canonical owner has **no settings fallback** and that no file may reintroduce the retired `shipping_automation_rules` authority — the DoD's **no-reintroduction guard exists**.
+- `shipping_automation_rules` appears nowhere in `src/` or `web/src/` — only in migration/verification scripts and that guard.
+- Rate-fingerprint parity holds: `shippingAutomationControlsFingerprint` still feeds the rate cache key.
+- Settings renders an "Automations moved" landing card and navigates to `/automations`; the legacy panel has not been rendered since cutover, and its dead import was removed in `7f0ea541`.
+
+## NOT met — remaining gaps
+
+1. **Branch lock** — shipped direct to `prepshipv4-stable`; the card requires a feature branch and no direct merge. Structural, and DJ's call to resolve (amend the card, or land a retroactive branch/PR).
+2. **Deploy gate** — production was deployed while PS-464 was red, because only the guards judged relevant were run. PS-464 needs wiring into whatever gates Render; a human remembering is not a gate.
+3. **`carrier.prefer` / `service.prefer`** flag-locked pending a canary on `AUTOMATION_PREFERENCE_RANKING=true`.
+4. **`insurance.require` provider field deliberately not honoured** — PS-170 owns carrier-DV capability and a rule cannot know whether an account supports it. The amount is honoured; partial by design.
+5. **Pre-existing suite debt** — 103 reds at base, dominated by `guard:backend-connectivity` and the integration tests behind it. Not introduced here, not fixed here.
 
 ## Verdict
 
