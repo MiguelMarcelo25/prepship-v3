@@ -6,6 +6,11 @@ import {
   type HazmatMaterialDraft,
   type OrderHazmatDto,
 } from '../../lib/v2-apiClient'
+// The saved-contact book shipped with the automation builder and was never
+// wired in here, so an operator declaring hazmat by hand had to retype the
+// emergency contact every time -- and leaving it blank fails validation, which
+// reads as "the feature is broken" rather than "a required field is empty".
+import { HazmatContactPicker } from './automations/HazmatContactPicker'
 
 type Props = {
   orderId: number
@@ -69,6 +74,16 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const evidence = useMemo(() => importedHazmatEvidence(rawOrder), [rawOrder])
+  /**
+   * Scopes the saved-contact list to this order's client. Null falls back to
+   * shared contacts only, which is the safe read -- a contact belonging to one
+   * client must not surface while declaring hazmat for another.
+   */
+  const clientId = useMemo(() => {
+    const record = rawOrder as { clientId?: unknown; client_id?: unknown } | null | undefined
+    const raw = record?.clientId ?? record?.client_id
+    return typeof raw === 'number' && Number.isInteger(raw) ? raw : null
+  }, [rawOrder])
 
   useEffect(() => {
     let current = true
@@ -244,6 +259,23 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder }: Props) {
               onChange={(event) => update('emergencyContactPhone', event.target.value || null)}
             />
           </div>
+
+          {/* Same picker the automation builder uses, so a contact saved in one
+              place is available in the other. Picking COPIES the name and phone
+              rather than linking, matching the rule-action behaviour -- editing
+              a contact later must never silently change what a declaration
+              already asserted about a real shipment. */}
+          {editable ? (
+            <div className="flex justify-end">
+              <HazmatContactPicker
+                clientId={clientId}
+                onPick={(contact) => {
+                  update('emergencyContactName', contact.name || null)
+                  update('emergencyContactPhone', contact.phone || null)
+                }}
+              />
+            </div>
+          ) : null}
 
           {/* Opens itself when validation flags something in here, so a
               required regulatory field can never hide behind a summary. */}
