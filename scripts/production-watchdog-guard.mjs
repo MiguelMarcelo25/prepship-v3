@@ -78,11 +78,25 @@ assert(
   `${watchdogPath} requires /health/ready while keeping /health/deep diagnostic`
 );
 
+// 2026-07-29: was pinned to the literal `*/5` cadence. Repointed to "runs on
+// SOME schedule", matching the same change in ps-431-production-self-healing
+// -guard.ts -- this is the SECOND guard that pinned the number, and missing it
+// is what failed the deploy gate after the cron was slowed.
+//
+// Stated plainly: a deliberate relaxation of frequency. At */5 this workflow
+// plus sync-cron consumed essentially the whole GitHub Actions allowance, which
+// blocked the deploy gate -- a health CHECK stopping health FIXES from
+// shipping. It now runs hourly, with an external uptime monitor on
+// /health/ready as the fast first-line alarm.
+//
+// Still enforced, and these are the actual invariants: the workflow is
+// SCHEDULED rather than manual-only, and it keeps cooldown state across runs so
+// a sustained outage does not re-alert every tick.
 assert(
-  /cron: '\*\/5 \* \* \* \*'/.test(workflow) &&
+  /schedule:\s*\n\s*- cron: '[^']+'/.test(workflow) &&
     workflow.includes('actions/cache/restore@v4') &&
     workflow.includes('actions/cache/save@v4'),
-  `${workflowPath} runs every five minutes with persistent cooldown state`
+  `${workflowPath} runs on a schedule with persistent cooldown state`
 );
 
 assert(
