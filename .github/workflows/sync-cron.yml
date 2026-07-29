@@ -4,8 +4,17 @@ on:
   # Safety net for the Render worker. The worker remains the primary 3-minute
   # scheduler, but this direct shipment sync keeps labels backfilled if the
   # pg-boss worker/queue gets wedged and avoids manual deploys as recovery.
+  #
+  # 2026-07-29: slowed from every 5 minutes to every 30. At */5 this fired
+  # ~8,640 times a month and, with the watchdog doing the same, was the whole
+  # GitHub Actions spending limit -- while the deploy gate that actually
+  # protects production runs perhaps ten times a day. This is a BACKUP for a
+  # wedged worker, not the primary scheduler, so catching a wedge within 30
+  # minutes is enough. Kept rather than deleted: nothing proved the primary
+  # worker covers every case, and losing a recovery path to save a few dollars
+  # is the wrong trade.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       mode:

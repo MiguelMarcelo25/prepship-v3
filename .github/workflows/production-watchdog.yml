@@ -1,8 +1,16 @@
 name: Production Watchdog
 
 on:
+  # 2026-07-29: slowed from every 5 minutes to every 15. At */5 this fired
+  # ~8,640 times a month and, together with sync-cron, accounted for nearly the
+  # entire GitHub Actions spending limit -- which in turn blocked the deploy
+  # gate, so a health CHECK was preventing health FIXES from shipping.
+  #
+  # 15 minutes keeps this a real alarm (a genuine outage is still caught inside
+  # a quarter hour) at a third of the cost. Not slowed further because this is
+  # the only automated signal that production is down.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
