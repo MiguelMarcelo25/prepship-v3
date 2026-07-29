@@ -30,6 +30,12 @@ const REQUIRED_GUARDS = [
   // its twenty checks are CONSUMPTION pins -- an owner nothing calls is not a
   // fix, and shipment-sync losing those call sites must fail here.
   'test:ps-467-468-shipment-scope',
+  // PS-469: same facts => one run. The idempotency key used to include the
+  // trigger's sourceEventId, which carries txid_current(), so every write minted
+  // a new key and identical facts were re-evaluated forever -- 322,962 runs over
+  // 294 orders in four days. Pinned here because the regression is silent: it
+  // breaks nothing, it just burns the database.
+  'test:ps-469-automation-idempotency',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

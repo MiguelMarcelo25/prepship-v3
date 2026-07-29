@@ -105,11 +105,37 @@ export function automationRulesetDigest(rules: CompiledAutomationRule[]): string
   });
 }
 
+/**
+ * PS-469: sourceEventId is deliberately NOT part of this key.
+ *
+ * It used to be, and that made the whole key useless. The event id is minted by
+ * the DB trigger in migration 0079 as
+ *   concat('automation-facts:', table, ':', orderId, ':', txid_current(), ':', trigger)
+ * -- it contains txid_current(). So every transaction that touched the order
+ * produced a new event id, a new execution key, a findCompleted miss, and a full
+ * re-evaluation. factsRevision sat inside the key doing nothing, because
+ * sourceEventId varied independently of it.
+ *
+ * Measured cost before this change: 322,962 runs across 294 orders in four days,
+ * 791 MB of automation_runs. One order logged six runs in three minutes with a
+ * byte-identical factsRevision each time. Sync re-upserts rows that have not
+ * changed (the same no-op-UPDATE class as the known 1.2M shipment updates), and
+ * the trigger fires on UPDATE OF <column> whether or not the value differs.
+ *
+ * The key is now (orderId, factsRevision, trigger, rulesetDigest, engineVersion),
+ * which is what the PS-466 spec describes -- it reads "trigger/sourceEventId",
+ * and the implementation took that as both rather than either.
+ *
+ * Safe because the store already distinguishes outcomes: findCompleted returns
+ * null for 'running' and 'failed', and begin() resets a failed row to running.
+ * A repeat event on unchanged facts now returns the completed run instead of
+ * recomputing it; a retry after failure still proceeds. sourceEventId is still
+ * persisted on the run for provenance -- it is just not part of identity.
+ */
 function executionKey(input: {
   orderId: number;
   factsRevision: string;
   trigger: string;
-  sourceEventId: string;
   rulesetDigest: string;
 }): string {
   return automationDocumentHash({ ...input, engineVersion: AUTOMATION_ENGINE_VERSION });
@@ -140,7 +166,6 @@ export async function executeAutomationEvaluation(input: {
     orderId: input.facts.order.id,
     factsRevision: input.facts.revision,
     trigger: input.trigger,
-    sourceEventId: input.sourceEventId,
     rulesetDigest,
   });
   const completed = await input.store.findCompleted(key);

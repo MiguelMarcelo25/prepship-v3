@@ -648,6 +648,7 @@
     "test:ps-464-architecture-boundaries": "tsx scripts/ps-464-architecture-boundary-guard.ts",
     "test:ps-465-hazmat": "tsx scripts/ps-465-hazmat-declaration-guard.ts && tsx scripts/ps-465-hazmat-migration-guard.ts && tsx scripts/ps-465-hazmat-migration-integration.ts",
     "test:ps-467-468-shipment-scope": "tsx scripts/ps-467-468-shipment-scope-guard.ts",
+    "test:ps-469-automation-idempotency": "tsx scripts/ps-469-automation-idempotency-guard.ts",
     "test:mock-hazmat-label": "tsx scripts/mock-hazmat-label-guard.ts",
     "test:ps-465-hazmat:browser": "playwright test web/e2e/orders-ps465-hazmat.spec.js --reporter=line",
     "test:final-review-closure": "node scripts/final-review-closure-fixtures.mjs",
