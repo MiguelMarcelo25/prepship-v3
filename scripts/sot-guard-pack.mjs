@@ -36,6 +36,11 @@ const REQUIRED_GUARDS = [
   // 294 orders in four days. Pinned here because the regression is silent: it
   // breaks nothing, it just burns the database.
   'test:ps-469-automation-idempotency',
+  // PS-470: an unsaved edit must never publish. publish() posts only the
+  // simulation hash, so the backend ships the SAVED draft -- an operator
+  // changed an action, published three times, and got three byte-identical
+  // no-op versions, each reported as success.
+  'test:ps-470-publish-gate-dirty',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

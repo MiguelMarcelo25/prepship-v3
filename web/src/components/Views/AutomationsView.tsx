@@ -35,7 +35,7 @@ import { AutomationRuleCard } from "./automations/AutomationRuleCard";
 import { ruleAffordances } from "./automations/rule-row-affordances";
 import { rowPendingAction, type RowPendingAction } from "./automations/row-pending-action";
 import { useIsMobileViewport } from "./orders/useIsMobileViewport";
-import { draftNeedsSimulation } from "./automations/publish-gate";
+import { draftNeedsSimulation, resolvePublishBlockReason } from "./automations/publish-gate";
 import { filterRules } from "./automations/rule-search";
 import {
   buildClientOptions,
@@ -1251,6 +1251,24 @@ function Builder({
     savedSnapshot != null && JSON.stringify(document) !== savedSnapshot;
 
   /**
+   * A test result belongs to the exact document it ran against.
+   *
+   * simulate() posts only { orderId } -- the backend simulates the SAVED DRAFT,
+   * not what is on screen. So editing after a test leaves a green "Test passed"
+   * describing a rule the operator is no longer looking at, and that stale pass
+   * was enough to satisfy the publish gate. Found live 2026-07-29 on the HAZ
+   * rule: the test passed against tag.add while the screen showed
+   * hazmat.add_declaration.
+   *
+   * Dropping the result the moment the document changes forces save-then-retest,
+   * which is the only order in which the evidence actually describes the rule
+   * being published.
+   */
+  useEffect(() => {
+    if (isDirty) setSimulation(null);
+  }, [isDirty]);
+
+  /**
    * Closing routes through here so a stray backdrop click or Escape cannot
    * silently discard work. A clean panel just closes.
    */
@@ -1288,19 +1306,21 @@ function Builder({
   // blocks either way: if the operator tested a low-risk rule and it came back
   // blocked or conflicting, publishing anyway would ignore evidence they asked
   // for.
-  const publishBlockReason = !activeRule
-    ? "Turn on Active Rule to publish."
-    : !draft
-      ? needsSimulation
-        ? "Save the draft, enter a test order ID, then run Test rule."
-        : "Save the draft to publish."
-      : needsSimulation && !simulation
-        ? "Enter a test order ID and run Test rule before publishing."
-        : simulation?.evaluation.blocked
-          ? "The test is blocked. Review the test result before publishing."
-          : (simulation?.reduction.conflicts.length ?? 0) > 0
-            ? "Resolve the test conflicts before publishing."
-            : null;
+  // Delegates to the pure gate in ./automations/publish-gate so the decision is
+  // testable. It previously lived inline here and omitted isDirty entirely,
+  // which let edited-but-unsaved rules publish their stale saved draft.
+  const publishBlockReason = resolvePublishBlockReason({
+    activeRule,
+    hasDraft: draft != null,
+    isDirty,
+    needsSimulation,
+    simulation: simulation
+      ? {
+          blocked: simulation.evaluation.blocked,
+          conflictCount: simulation.reduction.conflicts.length,
+        }
+      : null,
+  });
 
   return (
     // The panel used to appear instantly, which read as a jump rather than a
