@@ -11,7 +11,8 @@
  * never touches a provider, and never buys postage. The evaluator and reducer
  * are pure; the only IO is SELECT.
  */
-import { loadActiveAutomationRules } from '../src/services/automations/runtime.js';
+import { getAutomationRule, listAutomationRules } from '../src/services/automations/repository.js';
+import { compileAutomationRuleVersion } from '../src/services/automations/contracts.js';
 import { loadAutomationFacts } from '../src/services/automations/facts.js';
 import { evaluateAutomationBundle } from '../src/services/automations/evaluator.js';
 import { reduceAutomationIntents } from '../src/services/automations/conflicts.js';
@@ -44,18 +45,44 @@ const run = (facts: AutomationFacts, rules: unknown[]) =>
 
 async function main() {
   const facts = await loadAutomationFacts(PROOF_ORDER_ID, GLOBAL_SCOPE);
-  const rules = await loadActiveAutomationRules({
-    clientId: facts.order.clientId,
-    storeId: facts.order.storeId,
-    trigger: 'order_imported',
-    orderCreatedAt: new Date(),
-  });
+
+  // Compiles the PUBLISHED version regardless of whether the rule is currently
+  // active. The first cut of this loaded via loadActiveAutomationRules, which
+  // made the whole acceptance proof collapse the moment the rule was paused --
+  // and pausing it was the correct operational call while hazmat writes are
+  // gated. What this packet proves is the RULE'S LOGIC: that it matches HU-10
+  // and rejects the near-misses. Pausing does not change that; it only decides
+  // whether the engine consults it. Activation is reported below as its own
+  // fact instead of being silently required.
+  const listed = await listAutomationRules(GLOBAL_SCOPE);
+  const hazmatOwners = [];
+  for (const row of listed) {
+    if (row.activeVersionId == null) continue;
+    const detail = await getAutomationRule(row.id, GLOBAL_SCOPE);
+    const version = detail.versions.find((v) => v.id === row.activeVersionId);
+    if (!version) continue;
+    const document = version.document as { actions?: { type: string }[] };
+    if (!(document.actions ?? []).some((a) => a.type === 'hazmat.add_declaration')) continue;
+    hazmatOwners.push({
+      status: row.status,
+      compiled: compileAutomationRuleVersion(document as never, {
+        ruleId: String(row.id),
+        versionId: String(version.id),
+        versionNumber: version.versionNumber,
+      }),
+      label: `rule ${row.id} v${version.id} (${row.status})`,
+    });
+  }
+  const rules = hazmatOwners.map((r) => r.compiled);
 
   console.log('=== 1. rule exists and is published in production ===');
-  const hazmatRules = rules.filter((r) =>
-    (r.document.actions ?? []).some((a: { type: string }) => a.type === 'hazmat.add_declaration'));
-  check('a published hazmat rule is active for HUGRAB', hazmatRules.length > 0, true,
-    hazmatRules.map((r) => `rule ${r.ruleId} v${r.versionId}`).join(' | '));
+  check('a hazmat rule is PUBLISHED for HUGRAB', hazmatOwners.length > 0, true,
+    hazmatOwners.map((r) => r.label).join(' | '));
+  // Reported, not asserted. A paused rule is a deliberate operational state --
+  // right now, because hazmat writes are gated pending carrier certification.
+  const live = hazmatOwners.filter((r) => r.status === 'active');
+  console.log(`INFO  currently ACTIVE hazmat rules: ${live.length}`
+    + `${live.length === 0 ? '  [paused — engine will not consult it until resumed]' : ''}`);
 
   console.log('\n=== 2. matches a REAL HUGRAB HU-10 order (#3222, id 1838710) ===');
   check('order is HUGRAB', facts.order.clientId, HUGRAB_CLIENT_ID);
