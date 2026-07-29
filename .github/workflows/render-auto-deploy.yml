@@ -44,6 +44,14 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Runs FIRST and fails fast. This gate previously listed typecheck, PS-421,
+      # the frontend build and the shipping certification -- but NOT the SOT guard
+      # pack, which is where PS-464 (architecture boundaries) and PS-313 (rate
+      # source-of-truth) live. ci.yml ran the pack; this workflow kept its own
+      # shorter list, so a red PS-464 could and did reach production while the
+      # general CI was failing. One list, not two.
+      - name: Source-of-truth guard pack (PS-464 architecture, PS-313 rate SOT, +56)
+        run: npm run test:sot-guard-pack
       - name: Typecheck
         run: npm run typecheck
       - name: PS-421 method/capability/scope matrix

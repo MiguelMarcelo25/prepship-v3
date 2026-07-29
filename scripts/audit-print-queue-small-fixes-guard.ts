@@ -69,13 +69,21 @@ try {
   await pg.close();
 }
 
+// Asserts the two fields this guard is about -- "missing" and "timed out" must
+// stay distinguishable -- rather than deepEqual on the whole object. The reader
+// also returns elapsedMs now (added while diagnosing a print-queue hang, so an
+// over-budget read is measurable rather than merely late), and a whole-object
+// deepEqual turned that diagnostic addition into a red guard.
 const missing = await readDurableStatusWithTimeout(async () => null, 20);
-assert.deepEqual(missing, { value: null, timedOut: false }, 'missing and timeout remain distinct');
+assert.equal(missing.value, null, 'missing durable status has no value');
+assert.equal(missing.timedOut, false, 'missing is NOT reported as a timeout');
 const timedOut = await readDurableStatusWithTimeout(
   () => new Promise<string | null>(() => undefined),
   5,
 );
-assert.deepEqual(timedOut, { value: null, timedOut: true }, 'slow durable read is explicit');
+assert.equal(timedOut.value, null, 'timed-out durable read has no value');
+assert.equal(timedOut.timedOut, true, 'slow durable read is explicit');
+assert.equal(typeof timedOut.elapsedMs, 'number', 'a timed-out read reports how long it took');
 
 const service = read('src/services/print-queue.ts');
 const worker = read('src/services/print-queue-worker.ts');
