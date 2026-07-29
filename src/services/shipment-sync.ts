@@ -32,6 +32,15 @@ import { orderShipmentSyncAccountsByWatermark } from './shipment-sync-fairness';
 // PS-286 (per user override `unlock shipped data` on 2026-06-17): best-effort capture of
 // shipments.label_url after each account's sync — the v1 list payload omits it.
 import { enrichLabelUrls } from './shipment-label-url-enrich';
+// Per user override unlock shipped data on 2026-07-29: PS-468 store scope and
+// PS-467 unattributed-insert reporting. Both owners are pure and live outside
+// this file; only the wiring below is inside the lockdown.
+import { partitionShipmentsByStoreScope } from './shipment-sync-store-scope';
+import {
+  classifyUnattributedShipment,
+  reportUnattributedShipments,
+  type UnattributedShipmentSample,
+} from './shipment-sync-unattributed';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
@@ -191,6 +200,25 @@ async function upsertShipmentsBatch(
     return { inserted: 0, updated: 0, matched: 0, ordersMarkedShipped: 0 };
   }
 
+  // Per user override unlock shipped data on 2026-07-29: PS-468. Order sync
+  // honours EXCLUDED_STORE_IDS and this path did not, so PrepShip refused a
+  // store's ORDERS while ingesting its SHIPMENTS -- every one arriving for an
+  // order configured never to exist, and orphaning by construction. Filtering
+  // here (the single ingest funnel) rather than at read time means no new row
+  // is created at all. Nothing existing is deleted or rewritten; this only
+  // stops future writes for stores DJ confirmed unused on 2026-07-29.
+  const storeScope = partitionShipmentsByStoreScope(pageShipments);
+  if (storeScope.excluded.length) {
+    console.log(
+      `[shipment-sync] skipped ${storeScope.excluded.length} shipment(s) from excluded store(s) `
+      + `${storeScope.excludedStoreIds.join(',')} for "${sourceAccountId}"`,
+    );
+  }
+  pageShipments = storeScope.inScope;
+  if (!pageShipments.length) {
+    return { inserted: 0, updated: 0, matched: 0, ordersMarkedShipped: 0 };
+  }
+
   const sourceIdentities = pageShipments
     .map(shipStationShipmentSourceIdentity)
     .filter((identity): identity is OrderSourceIdentity => identity !== null);
@@ -345,6 +373,11 @@ async function upsertShipmentsBatch(
     order: { id: number; clientId: number | null; status: string } | null;
   }> = [];
   const prepshipTransitions = new Map<number, number>();
+  // Per user override unlock shipped data on 2026-07-29: PS-467. A shipment we
+  // cannot attribute is still persisted (dropping it would lose provider truth),
+  // but it must no longer be persisted SILENTLY. Collected here, reported once
+  // per batch below.
+  const unattributed: UnattributedShipmentSample[] = [];
   let matched = 0;
   let ordersMarkedShipped = 0;
 
@@ -422,6 +455,18 @@ async function upsertShipmentsBatch(
         otherCost: values.otherCost,
         selectedRateJson: null,
       })?.toFixed(2) ?? null;
+      // PS-467: the whole defect is that this branch used to accept
+      // `values.orderId === null` without a word. The UPDATE path above already
+      // carries a "never null a link" guard; INSERT had no equivalent because
+      // there is no prior value to preserve -- so the null read as "no order"
+      // rather than "could not resolve one".
+      if (values.orderId == null) {
+        unattributed.push({
+          shipmentId: s.shipmentId,
+          orderNumber: s.orderNumber ?? null,
+          reason: classifyUnattributedShipment({ orderNumber: s.orderNumber }),
+        });
+      }
       toInsert.push({ values, source: s, order: ord ?? null });
     }
 
@@ -441,6 +486,10 @@ async function upsertShipmentsBatch(
       // The lifecycle command below owns this promotion and its exact claims.
     }
   }
+
+  // PS-467: one summary line per batch, not per row -- a backlog batch can carry
+  // ~130 of these and per-row logging would bury the signal it exists to raise.
+  reportUnattributedShipments(unattributed, { account: sourceAccountId });
 
   // 4a. Single INSERT for all new rows (chunk to 500 to stay below pg param limits)
   // PS-370: ensure the additive selected_rate_cost column exists before the new-row

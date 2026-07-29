@@ -3,14 +3,13 @@
  *
  * Offline/static: pure functions only. No DB, no provider, no postage.
  *
- * NOTE ON SCOPE: this pins the two owners. The assertion that
- * `shipment-sync.ts` actually CONSUMES them is deliberately not here yet --
- * that file writes the `shipments` table and is inside the AGENTS.md/CLAUDE.md
- * lockdown, so its patch needs an explicit `unlock shipped data` override. The
- * consumption pin lands in the same commit as that patch, so this guard is
- * green at every step rather than red while waiting.
+ * Pins the two owners AND that shipment-sync.ts actually consumes them. The
+ * consumption pins landed with the wiring patch (per user override
+ * `unlock shipped data` on 2026-07-29) -- an owner nothing calls is not a fix,
+ * and deleting the call sites must fail here rather than silently restore the
+ * orphan-in-silence behaviour.
  */
-import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { EXCLUDED_STORE_IDS } from '../src/config/prepship';
 import { partitionShipmentsByStoreScope } from '../src/services/shipment-sync-store-scope';
 import {
@@ -96,6 +95,25 @@ try {
   console.log = originalLog;
 }
 check('no unattributed rows emits no log line', logged.length === 0, logged);
+
+// ── Consumption: the owners must actually be wired into the ingest funnel ────
+const sync = readFileSync('src/services/shipment-sync.ts', 'utf8').replace(/\r\n/g, '\n');
+
+check('shipment-sync imports the store-scope owner',
+  /import \{ partitionShipmentsByStoreScope \} from '\.\/shipment-sync-store-scope'/.test(sync));
+check('shipment-sync imports the unattributed owner',
+  /classifyUnattributedShipment/.test(sync) && /reportUnattributedShipments/.test(sync));
+check('store scope is applied to the ingest funnel, not at read time',
+  /partitionShipmentsByStoreScope\(pageShipments\)/.test(sync)
+  && /pageShipments = storeScope\.inScope/.test(sync));
+check('an unresolved order link is recorded instead of inserted silently',
+  /if \(values\.orderId == null\)[\s\S]{0,240}classifyUnattributedShipment/.test(sync));
+check('the batch reports its unattributed rows',
+  /reportUnattributedShipments\(unattributed, \{ account: sourceAccountId \}\)/.test(sync));
+// The existing UPDATE-path guard must survive: it is the sibling rule and the
+// reason the INSERT gap was visible at all.
+check('the UPDATE path still never nulls an existing link',
+  /if \(values\.orderId == null && existing\.orderId != null\)/.test(sync));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-467/468 shipment scope guard (${failures} failing)`);
