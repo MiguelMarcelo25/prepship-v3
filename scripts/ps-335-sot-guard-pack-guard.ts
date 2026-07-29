@@ -14,6 +14,12 @@ const REQUIRED_GUARDS = [
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
   'test:ps-336-task-sot-gates',
+  // PS-465 hazmat compliance guards. Pinned here as well as in the runner so
+  // dropping one from the pack fails this guard instead of silently removing
+  // dangerous-goods coverage from the deploy gate.
+  'test:ps-465-hazmat',
+  'test:mock-hazmat-label',
+  'test:ps-465-466-migration-rollout',
   'test:ps-427-inventory-reconciliation',
   'test:ps-428-durable-worker-execution',
   'test:ps-429-final-review-closure',

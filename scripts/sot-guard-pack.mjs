@@ -13,6 +13,16 @@ const REQUIRED_GUARDS = [
   'test:ps-305-authority-drift',
   'test:rate-source-of-truth',
   'test:ps-466-automation-controls',
+  // PS-465 hazmat. These existed and passed but nothing ran them -- not this
+  // pack, not test:master:shipping -- so the whole dangerous-goods compliance
+  // surface could rot undetected during an unrelated refactor, which is exactly
+  // how non-cert guards have been lost before. They are hermetic: the migration
+  // integration guard uses PGlite in-process, the rest read files and modules,
+  // and all three were verified under this runner's OFFLINE_GUARD_ENV (which
+  // forces an unreachable DATABASE_URL) before being added here.
+  'test:ps-465-hazmat',
+  'test:mock-hazmat-label',
+  'test:ps-465-466-migration-rollout',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
