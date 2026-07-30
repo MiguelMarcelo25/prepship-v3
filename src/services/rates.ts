@@ -16,7 +16,7 @@ import {
   getShipStationV2LimiterSnapshot,
   type ShipStationRequestPriority,
 } from '../lib/shipstation/client';
-import { getDefaultShipFrom } from '../lib/ship-from';
+import { getDefaultShipFrom, withShipFromPhone } from '../lib/ship-from';
 import { loadClientIsTest } from './fulfillment/test-label-policy';
 import { buildTestFixtureCarrierAccounts, buildTestFixtureRates } from './test-rate-fixture';
 import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
@@ -1843,7 +1843,9 @@ export async function fetchLiveRatesWithDiagnostics(
   priority: RateFetchPriority = 'interactive',
 ): Promise<FetchLiveRatesResult> {
   input.signal?.throwIfAborted();
-  const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
+  // PS-474: a caller-supplied origin skips getDefaultShipFrom's phone default,
+  // and an empty origin phone is a hard 400 on the hazmat full-shipment path.
+  const shipFrom = withShipFromPhone(input.shipFrom ?? (await getDefaultShipFrom()));
   input.signal?.throwIfAborted();
 
   // If the caller restricted carriers via input.carrierIds, filter the
@@ -2875,7 +2877,8 @@ export async function getDirectCarrierRatesForRateInput(
   // `input.shipFrom ?? getDefaultShipFrom()`). Direct carriers (incl. Walmart) must quote from
   // the SAME canonical ship-from as ShipStation — not from an absent input that silently
   // defaults inside each connector (the Walmart Carson/90248 default bug).
-  const resolvedShipFrom = input.shipFrom ?? (await getDefaultShipFrom());
+  // PS-474: same phone guarantee for the direct-carrier origin.
+  const resolvedShipFrom = withShipFromPhone(input.shipFrom ?? (await getDefaultShipFrom()));
   const settled = await mapWithConcurrency(
     accounts,
     DIRECT_CARRIER_RATE_FETCH_CONCURRENCY,

@@ -68,6 +68,14 @@ const REQUIRED_GUARDS = [
   // halves: the detail must survive the field-by-field cache read-back, and
   // credentials must never ride along with it.
   'test:ps-473-provider-error-detail',
+  // PS-474: an active hazmat declaration must not lose the ship-from phone.
+  // Hazmat switches the request from /v2/rates/estimate (postal codes, no
+  // addresses) to a full /v2/rates shipment -- so ship_from.phone is suddenly
+  // required, and a Rate-Browser-supplied origin bypassed getDefaultShipFrom's
+  // phone default. ShipStation answered 'phone should not be empty' and three
+  // auto-declared HU-10 orders could not rate. Pinned because the guard covers
+  // BOTH origin resolutions: the bug was one of them being un-normalised.
+  'test:ps-474-hazmat-shipfrom-phone',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

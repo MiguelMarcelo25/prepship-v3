@@ -34,6 +34,32 @@ function fromEnv(): Address {
   };
 }
 
+/**
+ * PS-474: guarantee a non-empty ship-from phone on ANY origin address.
+ *
+ * getDefaultShipFrom always sets one, but a caller-supplied origin skips it
+ * entirely -- rates.ts resolves `input.shipFrom ?? await getDefaultShipFrom()`,
+ * and /rates accepts shipFrom as `z.object({}).catchall(z.unknown())`, so a
+ * Ship From picked in the Rate Browser arrives with whatever fields it happens
+ * to have. Address.phone is optional, so no type error, no validation error --
+ * it just goes out empty.
+ *
+ * That was invisible until hazmat, because the two paths send different bodies:
+ * a normal quote uses /v2/rates/estimate, which carries postal codes and NO
+ * addresses, while an active declaration switches to a full /v2/rates shipment.
+ * Only then does the origin phone reach ShipStation, which answered:
+ *
+ *   HTTP 400 — 'phone' should not be empty.
+ *
+ * Normalising here rather than at the hazmat body keeps one owner for the rule:
+ * every consumer of a ship-from gets a usable phone, not just the caller that
+ * happened to hit the failure.
+ */
+export function withShipFromPhone(address: Address): Address {
+  const phone = String(address.phone ?? '').trim();
+  return phone ? address : { ...address, phone: fallbackPhone() };
+}
+
 export async function getDefaultShipFrom(): Promise<Address> {
   try {
     const loc = await getDefaultLocation();
