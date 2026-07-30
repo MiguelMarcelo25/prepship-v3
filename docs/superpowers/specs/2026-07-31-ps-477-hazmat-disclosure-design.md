@@ -206,8 +206,9 @@ arises when the label was bought elsewhere and swept in by sync.
    tooltip says unsealed. Stub a shipped order detail with an active declaration
    and no `frozenPurchaseFacts`, assert it no longer renders as clear.
 
-**Guard.** New `test:ps-477-hazmat-disclosure` added to
-`scripts/sot-guard-pack.mjs` — currently 70 entries, so 70 → 71. It calls the
+**Guard.** New `test:ps-477-hazmat-disclosure` and
+`test:ps-477-hazmat-disclosure-integration` added to
+`scripts/sot-guard-pack.mjs` — currently 70 entries, so 70 → 72. It calls the
 reducer rather than pattern-matching source, matching PS-472/473/474. Mutation
 checks: making the reducer return `none` for an active declaration must trip the
 fallback tests; restoring `?? clearDeclaration()` must trip the browser test.
