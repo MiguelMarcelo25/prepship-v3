@@ -3,19 +3,27 @@
 // DJ: "if the rules is turn off it must untick and if i turn on it will
 // automatically tick."
 //
-// Ticking already worked. Unticking did not, structurally: when no rule asks for
-// hazmat there is no intent, so no handler runs, so nothing retracts. Orders
-// 3240/3241/3242 kept their HAZMAT badge with all four rules paused.
+// FIRST ATTEMPT FAILED IN PRODUCTION, and the reason is the most important
+// thing in this file. It synthesised a `hazmat.retract` INTENT so the retraction
+// could ride the normal intent pipeline. That is structurally impossible:
 //
-// The engine now synthesises a hazmat.retract intent before reduction, so it
-// inherits conflict handling, the effect lease, the idempotency key and
-// rate-proof invalidation rather than re-implementing them.
+//   automation_action_results.ruleVersionId
+//     integer NOT NULL REFERENCES automation_rule_versions(id)
 //
-// HALF THIS GUARD IS REFUSALS, and that is the point. A feature that can
-// un-declare dangerous goods is only safe while it refuses to do so for a human
-// decision, for a shipped order, or on a guess.
+// Every effect row must be attributable to a persisted rule version, and a
+// retraction has no rule behind it -- the rule is precisely what went away. The
+// sentinel ids threw "Rule version ID must be a persisted numeric ID", retried
+// five times, and went dead, leaving orders 3240/3241 still marked.
+//
+// So the decision is a pure predicate and the ACT is an explicit convergence
+// step in the orchestrator. Nothing is lost: the hazmat tables carry their own
+// audit (revision, decision_source, append-only snapshots).
+//
+// HALF THIS GUARD IS REFUSALS. A feature that can un-declare dangerous goods is
+// only safe while it declines to act on a human decision, a shipped order, or a
+// guess.
 import { readFileSync } from 'node:fs';
-import { withHazmatRetractionIntent } from '../src/services/automations/hazmat-retraction-intent.js';
+import { shouldRetractAutomationHazmat } from '../src/services/automations/hazmat-retraction-intent.js';
 import { AUTOMATION_ACTION_TYPES } from '../src/services/automations/catalog.js';
 
 let failures = 0;
@@ -29,115 +37,96 @@ function check(name: string, condition: boolean): void {
   console.log(`ok   ${name}`);
 }
 
-const catalog = readFileSync('src/services/automations/catalog.ts', 'utf8');
-const hazmatAction = readFileSync('src/services/automations/hazmat-action.ts', 'utf8');
-const runtime = readFileSync('src/services/automations/runtime.ts', 'utf8');
 const orchestrator = readFileSync('src/services/automations/orchestrator.ts', 'utf8');
+const hazmatAction = readFileSync('src/services/automations/hazmat-action.ts', 'utf8');
+const schema = readFileSync('src/db/schema/automations.ts', 'utf8');
 
-function facts(hazmatState: 'active' | 'none' | 'unknown'): never {
-  return { workflow: { hazmatState } } as never;
-}
+const facts = (hazmatState: 'active' | 'none' | 'unknown') =>
+  ({ workflow: { hazmatState } } as never);
 const addIntent = {
   intentId: '24:0', ruleId: '8', versionId: '24', priority: 100, position: 0, actionIndex: 0,
   action: { type: 'hazmat.add_declaration', schemaVersion: 1, config: {} },
 } as never;
-const isRetract = (list: readonly unknown[]) =>
-  list.some((i) => (i as { action: { type: string } }).action.type === 'hazmat.retract');
 
-// --- it retracts when it should -------------------------------------------
+// --- the decision ----------------------------------------------------------
 check(
-  'no rule declares hazmat + order is marked -> retraction is emitted',
-  isRetract(withHazmatRetractionIntent([], facts('active'), false)),
+  'no rule declares hazmat + order is marked -> retract',
+  shouldRetractAutomationHazmat([], facts('active'), false),
 );
 check(
-  'other rules still running does not suppress the retraction',
-  isRetract(withHazmatRetractionIntent(
-    [{ intentId: '21:0', ruleId: '3', versionId: '21', priority: 20, position: 0, actionIndex: 0,
-       action: { type: 'tag.add', schemaVersion: 1, config: { tag: 'AUTOMATED' } } } as never],
-    facts('active'), false,
-  )),
-);
-
-// --- REFUSALS: the safety half --------------------------------------------
-check(
-  'a rule still declaring hazmat -> NO retraction (the rule wins)',
-  !isRetract(withHazmatRetractionIntent([addIntent], facts('active'), false)),
+  'a rule still declaring hazmat -> do NOT retract (the rule wins)',
+  !shouldRetractAutomationHazmat([addIntent], facts('active'), false),
 );
 check(
-  'terminal order -> NO retraction (shipped/cancelled history is untouchable)',
-  !isRetract(withHazmatRetractionIntent([], facts('active'), true)),
+  'terminal order -> do NOT retract (shipped/cancelled history is untouchable)',
+  !shouldRetractAutomationHazmat([], facts('active'), true),
 );
 check(
-  'hazmatState unknown -> NO retraction (never act on a guess)',
-  !isRetract(withHazmatRetractionIntent([], facts('unknown'), false)),
+  'unknown hazmat state -> do NOT retract (never act on a guess)',
+  !shouldRetractAutomationHazmat([], facts('unknown'), false),
 );
 check(
-  'order not marked -> NO retraction (nothing to undo)',
-  !isRetract(withHazmatRetractionIntent([], facts('none'), false)),
+  'order not marked -> do NOT retract (nothing to undo)',
+  !shouldRetractAutomationHazmat([], facts('none'), false),
 );
-// Regression pin. The first cut read facts.workflow.hazmatState directly and
-// crashed on partial facts -- which the PS-469 guard builds -- so it would have
-// thrown on every automation run. A missing workflow block must be inert.
 check(
-  'partial facts with no workflow block -> no crash, NO retraction',
+  'partial facts with no workflow block -> no crash, no retract',
   (() => {
-    try {
-      return !isRetract(withHazmatRetractionIntent([], {} as never, false));
-    } catch {
-      return false;
-    }
+    try { return !shouldRetractAutomationHazmat([], {} as never, false); } catch { return false; }
   })(),
 );
+
+// --- it must NOT be an intent ----------------------------------------------
+// The regression pin for the production failure.
 check(
-  'already emitted -> not duplicated',
-  withHazmatRetractionIntent(
-    withHazmatRetractionIntent([], facts('active'), false), facts('active'), false,
-  ).length === 1,
+  'the effect table still requires a persisted rule version (why intents cannot work)',
+  /ruleVersionId: integer\(\)\.notNull\(\)\.references\(\(\) => automationRuleVersions\.id/.test(schema),
 );
 check(
-  'the original intents are preserved, not replaced',
-  withHazmatRetractionIntent([addIntent], facts('active'), false).length === 1,
+  'hazmat.retract is NOT an action type',
+  !(AUTOMATION_ACTION_TYPES as readonly string[]).includes('hazmat.retract'),
+);
+check(
+  'no synthetic intent is injected into the pipeline',
+  !orchestrator.includes('withHazmatRetractionIntent'),
 );
 
-// --- the retract action must never be operator-authorable ------------------
+// --- it is an explicit convergence step ------------------------------------
 check(
-  'hazmat.retract exists as an action type',
-  (AUTOMATION_ACTION_TYPES as readonly string[]).includes('hazmat.retract'),
+  'the orchestrator decides via the predicate',
+  orchestrator.includes('shouldRetractAutomationHazmat(evaluation.intents, input.facts, terminal)'),
 );
 check(
-  'hazmat.retract is available:false so it cannot be authored in a rule',
-  /type: 'hazmat\.retract',[\s\S]{0,600}?available: false/.test(catalog),
+  'convergence runs ONLY on a clean completed pass',
+  /if \(status === 'completed' && retractHazmat\)/.test(orchestrator),
+);
+check(
+  'a failed retraction fails the run loudly rather than passing silently',
+  orchestrator.includes("failureCode = 'AUTOMATION_HAZMAT_RETRACTION_FAILED'"),
 );
 
-// --- the handler refuses to erase a human decision -------------------------
+// --- the act refuses to erase a human decision -----------------------------
 check(
-  'a retraction handler exists',
-  hazmatAction.includes('createAutomationHazmatRetractionHandler'),
-);
-check(
-  'the handler preserves a MANUAL declaration',
-  /createAutomationHazmatRetractionHandler[\s\S]*?current\.decisionSource === 'manual'[\s\S]*?preservedManualDecision: true/
+  'a MANUAL declaration is preserved',
+  /createAutomationHazmatRetraction[\s\S]*?current\.decisionSource === 'manual'[\s\S]*?preservedManualDecision: true/
     .test(hazmatAction),
 );
 check(
-  'the handler is a no-op when the declaration is not active (converges)',
-  /createAutomationHazmatRetractionHandler[\s\S]*?current\.declaration\?\.status !== 'active'/.test(hazmatAction),
+  'idempotent: a no-op when the declaration is not active',
+  /createAutomationHazmatRetraction[\s\S]*?current\.declaration\?\.status !== 'active'[\s\S]*?alreadyCleared/
+    .test(hazmatAction),
 );
 check(
-  'the handler clears rather than deletes (audit trail survives)',
-  /createAutomationHazmatRetractionHandler[\s\S]*?normalizeHazmatDeclaration\(\{ status: 'clear' \}\)/.test(hazmatAction),
-);
-
-// --- wiring ----------------------------------------------------------------
-check(
-  'the handler is registered (an unregistered one fails the whole run)',
-  /'hazmat\.retract': automationHazmatRetractionHandler/.test(runtime),
+  'it CLEARS rather than deletes (audit trail survives)',
+  /createAutomationHazmatRetraction[\s\S]*?normalizeHazmatDeclaration\(\{ status: 'clear' \}\)/.test(hazmatAction),
 );
 check(
-  'the engine injects the retraction before reduction',
-  orchestrator.includes('withHazmatRetractionIntent(evaluated.intents, input.facts, terminal)')
-    && orchestrator.indexOf('withHazmatRetractionIntent(evaluated.intents')
-      < orchestrator.indexOf('reduceAutomationIntents(evaluation.intents)'),
+  'expectedRevision stands in for the effect lease',
+  /createAutomationHazmatRetraction[\s\S]*?expectedRevision: current\.revision/.test(hazmatAction),
+);
+check(
+  'no fabricated rule ids are written into the audit trail',
+  !/createAutomationHazmatRetraction[\s\S]*?ruleId: 'system/.test(hazmatAction),
 );
 
 if (failures > 0) {

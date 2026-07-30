@@ -6,7 +6,8 @@ import { automationDocumentHash, type AutomationFacts, type AutomationIntent, ty
 import { reduceAutomationIntents, type ReducedAutomationPlan } from './conflicts.js';
 import { evaluateAutomationBundle } from './evaluator.js';
 import { isTerminalAutomationStatus } from './facts.js';
-import { withHazmatRetractionIntent } from './hazmat-retraction-intent.js';
+import { automationHazmatRetraction } from './hazmat-action.js';
+import { shouldRetractAutomationHazmat } from './hazmat-retraction-intent.js';
 
 export type AutomationStateStatus = 'pending' | 'current' | 'blocked' | 'conflict' | 'failed' | 'audit_only';
 
@@ -168,6 +169,8 @@ export async function executeAutomationEvaluation(input: {
   evaluateAllTriggers?: boolean;
   scope: ClientStoreScope;
   labelPurchaseLock?: LabelPurchaseLock;
+  /** PS-475 convergence. Injectable so tests can assert it without a database. */
+  retractHazmat?: typeof automationHazmatRetraction;
 }): Promise<AutomationExecutionResult> {
   const rulesetDigest = automationRulesetDigest(input.rules);
   const key = executionKey({
@@ -190,22 +193,20 @@ export async function executeAutomationEvaluation(input: {
     rulesetDigest,
     mode,
   });
-  const evaluated = evaluateAutomationBundle({
+  const evaluation = evaluateAutomationBundle({
     facts: input.facts,
     trigger: input.trigger,
     rules: input.rules,
     evaluateAllTriggers: input.evaluateAllTriggers,
   });
-  // PS-475: converge the dangerous-goods mark to the plan in BOTH directions.
-  // Ticking already worked via a rule's hazmat.add_declaration; unticking never
-  // did, because no rule means no intent means no handler. The synthetic intent
-  // is added before reduction so it inherits conflict handling, the effect
-  // lease, the idempotency key, and rate-proof invalidation.
-  const evaluation = {
-    ...evaluated,
-    intents: withHazmatRetractionIntent(evaluated.intents, input.facts, terminal),
-  };
   const reduction = reduceAutomationIntents(evaluation.intents);
+  // PS-475: unticking is NOT an intent. Every effect row must reference a
+  // persisted rule version (automation_action_results.ruleVersionId is a NOT
+  // NULL FK), and a retraction has no rule behind it -- the rule is what went
+  // away. Synthesising one threw "Rule version ID must be a persisted numeric
+  // ID" on every attempt. It is an explicit convergence step instead, and the
+  // hazmat tables keep their own audit trail (revision + append-only snapshots).
+  const retractHazmat = shouldRetractAutomationHazmat(evaluation.intents, input.facts, terminal);
 
   let status: AutomationExecutionResult['status'] = 'completed';
   let failureCode: string | null = null;
@@ -297,6 +298,27 @@ export async function executeAutomationEvaluation(input: {
           reason: error instanceof Error ? error.message : 'Canonical action handler failed',
         }, claim.claimToken);
         break;
+      }
+    }
+
+    // PS-475 convergence. Runs only on a clean apply pass, so a blocked,
+    // conflicted or failed evaluation never silently un-declares hazmat. The
+    // retraction itself is idempotent (no-op unless status is 'active') and
+    // guarded by expectedRevision, which stands in for the effect lease.
+    if (status === 'completed' && retractHazmat) {
+      try {
+        await (input.retractHazmat ?? automationHazmatRetraction)({
+          facts: input.facts,
+          scope: input.scope,
+          labelPurchaseLock: input.labelPurchaseLock,
+        });
+      } catch (error) {
+        status = 'failed';
+        failureCode = 'AUTOMATION_HAZMAT_RETRACTION_FAILED';
+        console.error(
+          `[automation] hazmat retraction failed for order ${input.facts.order.id}:`,
+          error instanceof Error ? error.message : error,
+        );
       }
     }
   }

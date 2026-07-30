@@ -16,8 +16,9 @@
 // a rule; it cannot converge away from one. Plain fact events take the normal
 // path (evaluateOrderAutomationFactEvent) which loads every active rule, which
 // is exactly what convergence needs.
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { automationOutbox } from '../../db/schema/automations.js';
+import { orderHazmatDeclarations } from '../../db/schema/hazmat.js';
 import { orders } from '../../db/schema/orders.js';
 import type { AutomationRule } from '../../db/schema/automations.js';
 
@@ -57,12 +58,30 @@ export async function enqueueRuleStatusConvergence(
   tx: Tx,
   rule: Pick<AutomationRule, 'id' | 'clientId' | 'storeId' | 'status' | 'updatedAt'>,
 ): Promise<{ queued: number; capped: boolean }> {
-  const predicates = [eq(orders.orderStatus, 'awaiting_shipment')];
+  // Wake ONLY orders that can actually converge to something different.
+  //
+  // The first cut woke every awaiting order in scope, capped at 500. That was
+  // calibrated against the ~22 shown in the sidebar -- which is DATE-FILTERED.
+  // The real number is 29,258, so a single toggle enqueued 500 mostly-irrelevant
+  // evaluations and two toggles made 1,000. Same shape as PS-469, for the same
+  // reason: a number taken at face value instead of measured.
+  //
+  // Retraction is the only convergence the engine performs -- pausing a tag rule
+  // does not remove tags, pausing a package rule does not unset packages -- so
+  // an order with no active automation-written hazmat declaration has nothing to
+  // converge, and waking it burns a run to reach a guaranteed no-op. Today that
+  // narrows 500 to 2.
+  const predicates = [
+    eq(orders.orderStatus, 'awaiting_shipment'),
+    eq(orderHazmatDeclarations.status, 'active'),
+    eq(orderHazmatDeclarations.decisionSource, 'automation'),
+  ];
   if (rule.clientId != null) predicates.push(eq(orders.clientId, rule.clientId));
   if (rule.storeId != null) predicates.push(eq(orders.storeId, rule.storeId));
 
   const rows = await tx.select({ id: orders.id })
     .from(orders)
+    .innerJoin(orderHazmatDeclarations, eq(orderHazmatDeclarations.orderId, orders.id))
     .where(and(...predicates))
     .orderBy(sql`${orders.id} desc`)
     .limit(RULE_STATUS_CONVERGENCE_CAP + 1);

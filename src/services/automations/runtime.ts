@@ -12,7 +12,7 @@ import type { LabelPurchaseLock } from '../../lib/label-purchase-lock.js';
 import type { AutomationTrigger } from './catalog.js';
 import { compileAutomationRuleVersion, type AutomationRuleDocument } from './contracts.js';
 import { loadAutomationFacts } from './facts.js';
-import { automationHazmatHandler, automationHazmatRetractionHandler } from './hazmat-action.js';
+import { automationHazmatHandler } from './hazmat-action.js';
 import { addAutomationWorkflowTag } from './order-workflow-command.js';
 import {
   automationRulesetDigest,
@@ -62,11 +62,6 @@ export const automationHandlerRegistry: AutomationHandlerRegistry = {
   'carrier.prefer': planOwnedAction,
   'service.prefer': planOwnedAction,
   'hazmat.add_declaration': automationHazmatHandler,
-  // PS-475: the engine emits hazmat.retract when no rule declares hazmat any
-  // more. Without a registered handler the run would fail
-  // AUTOMATION_HANDLER_UNAVAILABLE, which is exactly the class of failure PS-472
-  // was written for -- so this registration is load-bearing.
-  'hazmat.retract': automationHazmatRetractionHandler,
 };
 
 export async function loadActiveAutomationRules(input: {
