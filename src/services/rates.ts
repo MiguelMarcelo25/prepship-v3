@@ -76,6 +76,7 @@ import {
 } from './carrier-estimate-retry';
 import { resolveRateBrowseProviderExecutionPolicy } from './rate-browse-execution-policy';
 import { sanitizeRateProviderError } from './rate-browser-timing-diagnostics';
+import { rateProviderErrorDetail } from './rate-provider-error-detail.js';
 import {
   loadShippingAutomationControls,
   shippingAutomationControlsFingerprint,
@@ -1116,6 +1117,12 @@ export type CarrierRateDiagnostic = {
   retryable?: boolean;
   requestMode?: 'batch' | 'fallback';
   error?: string;
+  // PS-473: the provider's own message, credentials scrubbed and length capped.
+  // `error` above stays the sanitized category; this is the detail that tells
+  // an operator WHY, e.g. whether USPS refused dangerous goods outright or
+  // rejected a field in our hazmat payload. Diagnostic-only -- nothing reads it
+  // to make a rating, ranking, or eligibility decision.
+  providerDetail?: string;
   // PS-271 (Layer 4): true when this direct-carrier pass was an accepted-thin partial (Shipp Layer 1
   // returned a non-empty-but-thin set). Additive + display-only; absent today and for every non-thin
   // pass. combineCarrierUniverses reads it to mark the carrier status / best as thin/unproven.
@@ -1589,6 +1596,13 @@ async function fetchEstimateForCarrier(
         rateCount: 0,
         durationMs: Date.now() - startedAt,
         error: message,
+        // PS-473: `error` is the sanitized category and stays the display
+        // string; this carries the provider's actual words so a hard rejection
+        // is legible without a log dive.
+        ...(() => {
+          const detail = rateProviderErrorDetail(err);
+          return detail && detail !== message ? { providerDetail: detail } : {};
+        })(),
         transient: isTransientCarrierRateError(err),
         retryable: isTransientCarrierRateError(err),
       },
@@ -2030,6 +2044,12 @@ function cachedDiagnosticsFromCache(value: unknown, rates: Rate[]): CarrierRateD
         rateCount: Number.isFinite(rateCount) ? rateCount : 0,
         durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
         error: typeof row.error === 'string' ? publicCarrierRateError(row.error) : undefined,
+        // PS-473: this rebuild is field-by-field, so a new field is dropped
+        // unless it is named here. Re-scrubbed on the way out so a row written
+        // before the redactions existed cannot leak on read.
+        providerDetail: typeof row.providerDetail === 'string'
+          ? rateProviderErrorDetail(row.providerDetail)
+          : undefined,
       };
     })
     .filter((item): item is CarrierRateDiagnostic => Boolean(item));

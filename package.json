@@ -902,7 +902,8 @@
     "test:ps-466-hugrab-closure": "tsx scripts/ps-466-hugrab-hu10-closure-packet.ts",
     "test:ps-470-publish-gate-dirty": "tsx scripts/ps-470-publish-gate-dirty-guard.ts",
     "test:ps-471-advisory-lock-safety": "tsx scripts/ps-471-advisory-lock-safety-guard.ts",
-    "test:ps-472-automation-failure-visibility": "tsx scripts/ps-472-automation-failure-visibility-guard.ts"
+    "test:ps-472-automation-failure-visibility": "tsx scripts/ps-472-automation-failure-visibility-guard.ts",
+    "test:ps-473-provider-error-detail": "tsx scripts/ps-473-provider-error-detail-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

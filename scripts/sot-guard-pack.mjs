@@ -59,6 +59,15 @@ const REQUIRED_GUARDS = [
   // with a visible reason" over "skip and ship", so a later refactor must not
   // quietly turn an unrecordable hazmat declaration into a shippable order.
   'test:ps-472-automation-failure-visibility',
+  // PS-473: the same lesson as PS-472, one layer down at the provider boundary.
+  // A hazmat order was filtered to its one certified carrier and Stamps.com
+  // returned a hard, non-retryable refusal -- which surfaced only as our own
+  // fallthrough string "Carrier rate request failed", so "USPS declines
+  // dangerous goods" and "our payload has a bad field" looked identical.
+  // providerDetail carries the provider's real words. Pinned here for BOTH
+  // halves: the detail must survive the field-by-field cache read-back, and
+  // credentials must never ride along with it.
+  'test:ps-473-provider-error-detail',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
