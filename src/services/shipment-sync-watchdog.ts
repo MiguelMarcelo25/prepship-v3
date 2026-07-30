@@ -1,5 +1,5 @@
 import { sql as pg } from '../db/client.js';
-import { withAdvisoryTransactionLock } from '../lib/advisory-session-lock';
+import { tryAdvisoryTransactionLock } from '../lib/advisory-session-lock';
 import { env } from '../lib/env.js';
 import {
   getSyncStatus,
@@ -1001,7 +1001,14 @@ export async function runShipmentSyncWatchdogTick(
   // Audit SY-4: the process timer plus the cron GET/POST drivers share one
   // cross-process lock. Health, cooldown, recovery, and snapshot persistence
   // therefore form one serialized tick instead of racing stale observations.
-  return withAdvisoryTransactionLock(WATCHDOG_TICK_LOCK, async () => {
+  //
+  // PS-471 (2026-07-30): acquire it WITHOUT blocking. A held lock means a tick
+  // is already running, so this round is redundant by definition and skipping
+  // costs nothing. The blocking acquire this replaces caused a ~90-minute
+  // outage: ticks queued behind a stranded transaction, each pinning a
+  // Supavisor connection for up to statement_timeout, until pooler capacity was
+  // gone and no request could reach the database at all.
+  const outcome = await tryAdvisoryTransactionLock(WATCHDOG_TICK_LOCK, async () => {
     const nowMs = options.nowMs ?? Date.now();
     const status = await buildShipmentSyncWatchdogStatus({
       nowMs,
@@ -1044,6 +1051,19 @@ export async function runShipmentSyncWatchdogTick(
     const finalStatus = { ...status, recovery, alertNotification };
     await persistWatchdogSnapshot(finalStatus);
     return finalStatus;
+  });
+  if (outcome.acquired) return outcome.value;
+
+  // Lock held elsewhere. Report what is true right now, but do NOT advance the
+  // backlog counter, run recovery, or persist a snapshot -- the tick holding the
+  // lock owns all three, and duplicating them is what the lock exists to stop.
+  console.warn(
+    `[shipment-sync-watchdog] tick skipped (source=${options.source ?? 'timer'}): `
+      + 'another tick already holds the lock',
+  );
+  return buildShipmentSyncWatchdogStatus({
+    nowMs: options.nowMs ?? Date.now(),
+    advanceBacklogCounter: false,
   });
 }
 

@@ -89,6 +89,19 @@ const schema = z.object({
   DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().positive().default(900),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(8),
   DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  // PS-471 (2026-07-30): how long a transaction may sit IDLE (waiting on the
+  // client) before Postgres kills it. Applied with SET LOCAL inside the
+  // transaction, not as a startup parameter -- the 2026-07-30 outage showed a
+  // waiter surviving 85s against a 12s DB_STATEMENT_TIMEOUT_MS, i.e. postgres.js
+  // `connection: {...}` startup params are NOT reliably honoured through
+  // Supavisor transaction pooling. SET LOCAL is transaction-scoped and is.
+  //
+  // This only ever fires when the client has stopped talking mid-transaction;
+  // a transaction that keeps issuing statements is never "idle in transaction",
+  // so a slow-but-live batch cannot trip it. 60s is far beyond any legitimate
+  // gap between statements here, and it bounds a stranded session at 60s
+  // instead of the 88 minutes it actually lasted.
+  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   // Audit PL-8 (2026-07-13): the inventory-deduction kill switch now flows through
   // validated env. OLD semantics (fulfillment-deductions.ts): only the exact strings
   // false/0/off/no disabled it — any typo ('fasle', 'disabled') silently left

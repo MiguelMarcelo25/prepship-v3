@@ -41,6 +41,15 @@ const REQUIRED_GUARDS = [
   // changed an action, published three times, and got three byte-identical
   // no-op versions, each reported as success.
   'test:ps-470-publish-gate-dirty',
+  // PS-471: a periodic tick must never BLOCK on its advisory lock. One stranded
+  // transaction held shipment_sync.watchdog.tick for 88 minutes; because the
+  // watchdog blocked, every later tick queued behind it and pinned a Supavisor
+  // connection, until no request could reach the database -- a ~90-minute
+  // outage while Postgres itself sat idle. Pinned here because the guard cuts
+  // BOTH ways: the periodic caller must skip, and the read-modify-write callers
+  // (combo defaults, account-state, billing storage) must keep blocking, since
+  // converting those the same way would silently drop writes.
+  'test:ps-471-advisory-lock-safety',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

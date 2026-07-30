@@ -78,8 +78,24 @@ assert.equal(
   'a complete pass must reset to newest-first page 1',
 );
 
+// PS-471 (2026-07-30): was pinned to `withAdvisoryTransactionLock(`. This
+// check's own name is "must use ONE cross-process advisory lock" -- a single
+// acquisition on the canonical key is the stated invariant, and naming the
+// blocking variant was an over-specific way of writing it. That over-specificity
+// forbade the fix for the outage blocking itself caused: ticks queued behind a
+// stranded transaction, each pinning a pooler connection, until nothing could
+// reach the database.
+//
+// Still enforced here, and it is the part that matters: exactly one lock on
+// WATCHDOG_TICK_LOCK -- not zero (unserialized ticks), not two. WHICH primitive
+// is correct is owned by ps-471-advisory-lock-safety-guard, which pins the tick
+// to the non-blocking acquire and pins the read-modify-write callers to the
+// blocking one.
+//
+// Third guard in this repo found pinning a tuning/implementation detail rather
+// than a property; the other two were the cron cadence literals.
 assert.equal(
-  watchdog.match(/withAdvisoryTransactionLock\(WATCHDOG_TICK_LOCK/g)?.length,
+  watchdog.match(/(?:try|with)AdvisoryTransactionLock\(WATCHDOG_TICK_LOCK/g)?.length,
   1,
   'the canonical timer/cron tick must use one cross-process advisory lock',
 );
