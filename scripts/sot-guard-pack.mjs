@@ -50,6 +50,15 @@ const REQUIRED_GUARDS = [
   // (combo defaults, account-state, billing storage) must keep blocking, since
   // converting those the same way would silently drop writes.
   'test:ps-471-advisory-lock-safety',
+  // PS-472: a blocked order must say WHY. A hazmat rule matched HU-10 HUGRAB
+  // orders, the declaration write was refused by a capability flag, one failed
+  // action failed the whole run, and a failed run blocks rating -- surfacing to
+  // the operator as nothing but "Rate unavailable". 11 orders sat frozen for two
+  // days while the cause sat in automation_action_results.reason the whole time.
+  // Pinned here because half these checks are FAIL-CLOSED pins: DJ chose "hold
+  // with a visible reason" over "skip and ship", so a later refactor must not
+  // quietly turn an unrecordable hazmat declaration into a shippable order.
+  'test:ps-472-automation-failure-visibility',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

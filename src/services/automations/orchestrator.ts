@@ -1,3 +1,4 @@
+import { automationFailureMessage } from './automation-failure-message.js';
 import { AUTOMATION_ENGINE_VERSION, type AutomationActionType } from './catalog.js';
 import type { ClientStoreScope } from '../../lib/client-store-scope.js';
 import type { LabelPurchaseLock } from '../../lib/label-purchase-lock.js';
@@ -17,6 +18,12 @@ export type AutomationWatermark = {
   plan: ReducedAutomationPlan;
   lastRunId: string | number | null;
   failureCode: string | null;
+  // PS-472: the handler message behind a failed run (e.g. "Hazmat declaration
+  // writes are disabled."), carried so the preflight can name the actual cause
+  // instead of the generic "Automation evaluation failed". Optional and
+  // read-only -- it is a display detail, never an input to authority.
+  failureActionType?: string | null;
+  failureReason?: string | null;
 };
 
 export type AutomationEffectRecord = {
@@ -339,7 +346,19 @@ export async function ensureAutomationStateCurrent(input: {
   }
   if (state.status === 'blocked') throw new AutomationPreflightError('AUTOMATION_FACTS_UNKNOWN', 'Automation facts are incomplete; rating and purchase are blocked');
   if (state.status === 'conflict') throw new AutomationPreflightError('AUTOMATION_CONFLICT', 'Automation actions conflict; operator review is required');
-  if (state.status === 'failed') throw new AutomationPreflightError('AUTOMATION_EVALUATION_FAILED', 'Automation evaluation failed; retry or review before continuing');
+  // PS-472: name the action and the handler's own reason. The generic message
+  // this replaces is what made a disabled hazmat flag look like an unexplained
+  // "Rate unavailable" for two days. Still a hard block -- nothing ships
+  // undeclared -- but the operator is told what to fix.
+  if (state.status === 'failed') {
+    throw new AutomationPreflightError(
+      'AUTOMATION_EVALUATION_FAILED',
+      automationFailureMessage({
+        actionType: state.failureActionType,
+        reason: state.failureReason,
+      }),
+    );
+  }
   if (state.status === 'audit_only') throw new AutomationPreflightError('AUTOMATION_TERMINAL_AUDIT_ONLY', 'Terminal orders are audit-only and cannot enter shipping actions');
   if (state.status !== 'current') throw new AutomationPreflightError('AUTOMATION_EVALUATION_REQUIRED', 'Automation evaluation is pending');
   return state;

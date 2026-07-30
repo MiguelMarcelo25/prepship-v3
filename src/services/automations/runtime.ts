@@ -1,6 +1,12 @@
-import { and, eq, isNull, lte, or } from 'drizzle-orm';
+import { and, desc, eq, isNull, lte, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { automationRules, automationRuleVersions, orderAutomationState } from '../../db/schema/automations.js';
+import {
+  automationActionResults,
+  automationRules,
+  automationRuleVersions,
+  automationRuns,
+  orderAutomationState,
+} from '../../db/schema/automations.js';
 import type { ClientStoreScope } from '../../lib/client-store-scope.js';
 import type { LabelPurchaseLock } from '../../lib/label-purchase-lock.js';
 import type { AutomationTrigger } from './catalog.js';
@@ -203,20 +209,51 @@ export async function reconcileOrderAutomationsForShipping(input: {
   return state;
 }
 
+// PS-472: the handler's own message for the newest failed effect on this order.
+// order_automation_state stores only a generic failureCode, so the actionable
+// detail ("Hazmat declaration writes are disabled.") lives one table over. This
+// is read-only display detail -- it never feeds authority or the reduced plan.
+async function loadLatestAutomationFailure(
+  orderId: number,
+): Promise<{ actionType: string | null; reason: string | null }> {
+  const [row] = await db
+    .select({
+      actionType: automationActionResults.actionType,
+      reason: automationActionResults.reason,
+    })
+    .from(automationActionResults)
+    .innerJoin(automationRuns, eq(automationRuns.id, automationActionResults.runId))
+    .where(and(
+      eq(automationRuns.orderId, orderId),
+      eq(automationActionResults.status, 'failed'),
+    ))
+    .orderBy(desc(automationActionResults.id))
+    .limit(1);
+  return { actionType: row?.actionType ?? null, reason: row?.reason ?? null };
+}
+
 export async function loadOrderAutomationWatermark(orderId: number): Promise<AutomationWatermark | null> {
   const [state] = await db.select().from(orderAutomationState)
     .where(eq(orderAutomationState.orderId, orderId))
     .limit(1);
   if (!state) return null;
+  const status = state.status as AutomationWatermark['status'];
+  // Only pay for the lookup when there is a failure to explain -- this loader
+  // sits on the rating path and must stay cheap for healthy orders.
+  const failure = status === 'failed'
+    ? await loadLatestAutomationFailure(orderId)
+    : { actionType: null, reason: null };
   return {
     orderId: state.orderId,
     factsRevision: state.factsRevision,
     rulesetDigest: state.rulesetDigest,
     engineVersion: state.engineVersion,
-    status: state.status as AutomationWatermark['status'],
+    status,
     plan: state.plan as AutomationWatermark['plan'],
     lastRunId: state.lastRunId,
     failureCode: state.failureCode,
+    failureActionType: failure.actionType,
+    failureReason: failure.reason,
   };
 }
 
