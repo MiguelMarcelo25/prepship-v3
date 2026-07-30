@@ -83,6 +83,14 @@ const REQUIRED_GUARDS = [
   // human's manual tick, never fire on unknown state, and hazmat.retract must
   // stay available:false so no rule can be authored to un-declare hazmat.
   'test:ps-475-hazmat-retraction',
+  // PS-476: a rule status change must WAKE the orders it affects. PS-475 knew
+  // how to retract but never ran -- pausing a rule enqueued nothing, and since
+  // PS-469 killed the ambient re-evaluation loop, nothing else wakes an order.
+  // Pinned for the two choices that silently break it: convergence must use
+  // plain fact events (a paused rule can never be reprocessed) and must NOT use
+  // the manual_reprocess trigger (which lets the add handler overwrite a human's
+  // manual declaration), plus the cap that keeps PS-469 from recurring.
+  'test:ps-476-rule-status-convergence',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

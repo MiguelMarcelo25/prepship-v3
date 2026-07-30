@@ -23,6 +23,7 @@ import {
   type CompiledAutomationRule,
 } from './contracts.js';
 import { documentRequiresSimulation } from './publish-gate.js';
+import { enqueueRuleStatusConvergence } from './rule-status-convergence.js';
 import { ruleExecutionHistoryExists } from './execution-history.js';
 import { reduceAutomationIntents } from './conflicts.js';
 import { evaluateAutomationBundle } from './evaluator.js';
@@ -578,13 +579,21 @@ export async function setAutomationRuleStatus(input: {
       throw new Error('This automation has never been published; publish the draft to activate it');
     }
   }
-  const [updated] = await db.update(automationRules).set({
-    status: input.status,
-    archivedAt: input.status === 'archived' ? new Date() : null,
-    updatedBy: input.actor,
-    updatedAt: new Date(),
-  }).where(eq(automationRules.id, input.ruleId)).returning();
-  return updated;
+  // PS-476: the status change and the wake-up are one transaction. Updating the
+  // rule without enqueueing left orders stranded on the previous outcome --
+  // pausing a hazmat rule changed nothing until something else happened to touch
+  // the order, and since PS-469 fixed the re-evaluation loop, nothing does.
+  return db.transaction(async (tx) => {
+    const [updated] = await tx.update(automationRules).set({
+      status: input.status,
+      archivedAt: input.status === 'archived' ? new Date() : null,
+      updatedBy: input.actor,
+      updatedAt: new Date(),
+    }).where(eq(automationRules.id, input.ruleId)).returning();
+    if (!updated) throw new Error('Automation rule status update did not apply');
+    await enqueueRuleStatusConvergence(tx, updated);
+    return updated;
+  });
 }
 
 export async function listAutomationRuns(input: {
