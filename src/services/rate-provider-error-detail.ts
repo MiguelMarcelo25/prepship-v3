@@ -52,21 +52,73 @@ export function rateProviderErrorDetail(
   error: unknown,
   maxLength = 400,
 ): string | undefined {
-  const raw = error instanceof Error
-    ? (error.message || error.name)
-    : typeof error === 'string'
-      ? error
-      : error == null
-        ? ''
-        : safeStringify(error);
-
-  let text = String(raw ?? '');
+  let text = String(collectRawDetail(error) ?? '');
   for (const [pattern, replacement] of REDACTIONS) {
     text = text.replace(pattern, replacement);
   }
   text = text.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!text) return undefined;
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+/**
+ * Gather everything useful the thrown value carries.
+ *
+ * The message alone is not enough. ShipStationError puts the HTTP status on
+ * `status` and the parsed response payload on `body` -- and the payload is
+ * where the actual complaint lives, e.g.
+ *
+ *   {"errors":[{"error_code":"invalid_field_value","message":"..."}]}
+ *
+ * The first cut of this function read only `.message` and therefore captured
+ * nothing on the very failure it was written for. Kept provider-agnostic:
+ * it looks for common shapes rather than importing a connector's types.
+ */
+function collectRawDetail(error: unknown): string {
+  if (error == null) return '';
+  if (typeof error === 'string') return error;
+  if (typeof error !== 'object') return String(error);
+
+  const source = error as { message?: unknown; name?: unknown; status?: unknown; body?: unknown };
+  const parts: string[] = [];
+
+  if (typeof source.status === 'number' && Number.isFinite(source.status)) {
+    parts.push(`HTTP ${source.status}`);
+  }
+  const message = typeof source.message === 'string' ? source.message.trim() : '';
+  if (message) parts.push(message);
+  else if (typeof source.name === 'string' && source.name) parts.push(source.name);
+
+  const body = describeErrorBody(source.body);
+  // Skip the body when the message already repeats it verbatim.
+  if (body && !message.includes(body)) parts.push(body);
+
+  return parts.join(' — ');
+}
+
+/** Pull the human-readable complaint out of a provider error payload. */
+function describeErrorBody(body: unknown): string {
+  if (body == null) return '';
+  if (typeof body === 'string') return body.trim();
+  if (typeof body !== 'object') return String(body);
+
+  const record = body as { errors?: unknown; message?: unknown; error?: unknown };
+  if (Array.isArray(record.errors)) {
+    const described = record.errors
+      .map((entry) => {
+        if (typeof entry === 'string') return entry;
+        if (!entry || typeof entry !== 'object') return '';
+        const item = entry as { message?: unknown; error_code?: unknown; errorCode?: unknown };
+        const code = String(item.error_code ?? item.errorCode ?? '').trim();
+        const text = String(item.message ?? '').trim();
+        return code && text ? `${code}: ${text}` : text || code;
+      })
+      .filter(Boolean);
+    if (described.length) return described.join('; ');
+  }
+  if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
+  if (typeof record.error === 'string' && record.error.trim()) return record.error.trim();
+  return safeStringify(body);
 }
 
 function safeStringify(value: unknown): string {

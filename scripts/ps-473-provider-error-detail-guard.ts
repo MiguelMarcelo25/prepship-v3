@@ -57,6 +57,41 @@ check(
   'long text is capped',
   (rateProviderErrorDetail(new Error('x'.repeat(5000))) ?? '').length <= 400,
 );
+// The failure this ticket exists for. ShipStationError puts the complaint on
+// `body`, not `message` -- the first cut read only `.message` and captured
+// nothing on exactly this error. This check is the regression pin for that.
+const shipStationShaped = rateProviderErrorDetail(Object.assign(
+  new Error('ShipStation request failed'),
+  {
+    status: 400,
+    body: {
+      request_id: 'req_abc',
+      errors: [{
+        error_source: 'shipengine',
+        error_type: 'validation',
+        error_code: 'invalid_field_value',
+        message: 'Hazardous materials are not supported for this service.',
+      }],
+    },
+  },
+)) ?? '';
+check(
+  'a provider error body is read, not just .message',
+  shipStationShaped.includes('Hazardous materials are not supported for this service'),
+);
+check(
+  'the provider error code survives',
+  shipStationShaped.includes('invalid_field_value'),
+);
+check(
+  'the HTTP status survives',
+  shipStationShaped.includes('HTTP 400'),
+);
+check(
+  'a plain string body is handled',
+  (rateProviderErrorDetail(Object.assign(new Error('x'), { body: 'service unavailable for hazmat' })) ?? '')
+    .includes('service unavailable for hazmat'),
+);
 check(
   'a circular object cannot throw on the rating path',
   (() => {
