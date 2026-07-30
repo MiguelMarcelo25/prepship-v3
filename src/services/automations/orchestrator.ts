@@ -6,6 +6,7 @@ import { automationDocumentHash, type AutomationFacts, type AutomationIntent, ty
 import { reduceAutomationIntents, type ReducedAutomationPlan } from './conflicts.js';
 import { evaluateAutomationBundle } from './evaluator.js';
 import { isTerminalAutomationStatus } from './facts.js';
+import { withHazmatRetractionIntent } from './hazmat-retraction-intent.js';
 
 export type AutomationStateStatus = 'pending' | 'current' | 'blocked' | 'conflict' | 'failed' | 'audit_only';
 
@@ -189,12 +190,21 @@ export async function executeAutomationEvaluation(input: {
     rulesetDigest,
     mode,
   });
-  const evaluation = evaluateAutomationBundle({
+  const evaluated = evaluateAutomationBundle({
     facts: input.facts,
     trigger: input.trigger,
     rules: input.rules,
     evaluateAllTriggers: input.evaluateAllTriggers,
   });
+  // PS-475: converge the dangerous-goods mark to the plan in BOTH directions.
+  // Ticking already worked via a rule's hazmat.add_declaration; unticking never
+  // did, because no rule means no intent means no handler. The synthetic intent
+  // is added before reduction so it inherits conflict handling, the effect
+  // lease, the idempotency key, and rate-proof invalidation.
+  const evaluation = {
+    ...evaluated,
+    intents: withHazmatRetractionIntent(evaluated.intents, input.facts, terminal),
+  };
   const reduction = reduceAutomationIntents(evaluation.intents);
 
   let status: AutomationExecutionResult['status'] = 'completed';

@@ -76,6 +76,13 @@ const REQUIRED_GUARDS = [
   // auto-declared HU-10 orders could not rate. Pinned because the guard covers
   // BOTH origin resolutions: the bug was one of them being un-normalised.
   'test:ps-474-hazmat-shipfrom-phone',
+  // PS-475: the dangerous-goods mark follows the rules BOTH ways. Unticking
+  // never worked -- no rule means no intent means no handler -- so orders kept
+  // a HAZMAT badge with every rule paused. Pinned here because half the guard
+  // is REFUSALS: a retraction must never touch a shipped order, never erase a
+  // human's manual tick, never fire on unknown state, and hazmat.retract must
+  // stay available:false so no rule can be authored to un-declare hazmat.
+  'test:ps-475-hazmat-retraction',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',

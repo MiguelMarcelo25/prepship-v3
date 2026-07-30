@@ -32,6 +32,10 @@ export const AUTOMATION_ACTION_TYPES = [
   'carrier.prefer',
   'service.prefer',
   'hazmat.add_declaration',
+  // PS-475: system-only. Never authorable in the builder (available: false) --
+  // the engine synthesises it when the plan no longer declares hazmat but an
+  // automation-written declaration is still on the order.
+  'hazmat.retract',
 ] as const;
 
 export type AutomationActionType = (typeof AUTOMATION_ACTION_TYPES)[number];
@@ -183,6 +187,26 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
       contactName: z.string().trim().min(1).max(120),
       contactPhone: dangerousGoodsPhone,
     }).strict(),
+  },
+  {
+    // PS-475: the counterpart to hazmat.add_declaration, so pausing or editing
+    // a rule takes the mark back off instead of leaving it stranded.
+    //
+    // available: false is load-bearing -- this must never appear in the builder
+    // or be authorable in a rule document. The engine synthesises it, and only
+    // when the reduced plan declares no hazmat while the order still carries an
+    // automation-written declaration. A rule that could "un-declare" dangerous
+    // goods on demand is exactly what this feature must not become.
+    type: 'hazmat.retract',
+    label: 'Clear automation-set dangerous goods',
+    actionClass: 'restrictive',
+    risk: 'high',
+    permission: 'automations:publish',
+    allowedTriggers: allTriggers,
+    invalidatesRateProof: true,
+    available: false,
+    unavailableReason: 'System-only: the engine emits this when no rule declares hazmat.',
+    schema: z.object({}).strict(),
   },
 ];
 
