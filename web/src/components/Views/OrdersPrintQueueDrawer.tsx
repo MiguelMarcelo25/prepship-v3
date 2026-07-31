@@ -340,11 +340,19 @@ export function OrdersPrintQueueDrawer({
                           </span>
                         ) : null}
                         {/* Per user override unlock shipped data on 2026-07-25:
-                            display-only badge from the immutable backend snapshot. */}
-                        {entry.hazmat_profile ? (
+                            display-only badge from the immutable backend snapshot.
+                            PS-477 Task 4: gate moved from hazmat_profile to hazmat_is_hazmat.
+                            An unsealed declaration (label bought outside PrepShip) legitimately
+                            has profile:null — a carrier profile can't be named for a shipment
+                            PrepShip never rated/purchased. Gating on profile hid exactly the
+                            case this ticket exists to fix. One badge either way; provenance
+                            (sealed vs. declared_unsealed) only changes the tooltip. */}
+                        {entry.hazmat_is_hazmat ? (
                           <span
                             className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 ring-1 ring-amber-300 text-[9.5px] font-semibold uppercase tracking-wide"
-                            title={`Immutable hazmat snapshot revision ${entry.hazmat_declaration_revision ?? 'unknown'} · ${entry.hazmat_profile}`}
+                            title={entry.hazmat_provenance === 'sealed'
+                              ? `Immutable hazmat snapshot revision ${entry.hazmat_declaration_revision ?? 'unknown'} · ${entry.hazmat_profile}`
+                              : 'Dangerous goods declared. This label was not purchased through PrepShip, so no snapshot was sealed at purchase.'}
                           >
                             ⚠ Hazmat
                           </span>
@@ -415,10 +423,14 @@ export function OrdersPrintQueueDrawer({
                             Delivered
                           </span>
                         ) : null}
-                        {entry.hazmat_profile ? (
+                        {/* PS-477 Task 4: gate on hazmat_is_hazmat, not hazmat_profile — profile
+                            is legitimately null for a declared-but-unsealed hazmat order. */}
+                        {entry.hazmat_is_hazmat ? (
                           <span
                             className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200"
-                            title={`Immutable hazmat snapshot · ${entry.hazmat_profile}`}
+                            title={entry.hazmat_provenance === 'sealed'
+                              ? `Immutable hazmat snapshot · ${entry.hazmat_profile}`
+                              : 'Dangerous goods declared. This label was not purchased through PrepShip, so no snapshot was sealed at purchase.'}
                           >
                             Hazmat
                           </span>

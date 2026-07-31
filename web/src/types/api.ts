@@ -80,6 +80,8 @@ export type PrintQueueEntryDto = AnyRecord & {
   order_qty: number | null
   primary_sku: string | null
   item_description: string | null
+  hazmat_is_hazmat?: boolean
+  hazmat_provenance?: 'sealed' | 'declared_unsealed' | 'none'
   hazmat_profile?: string | null
   hazmat_snapshot_hash?: string | null
   hazmat_declaration_revision?: number | null

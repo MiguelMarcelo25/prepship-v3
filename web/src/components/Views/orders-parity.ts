@@ -165,6 +165,8 @@ export interface PrintQueueEntryDto {
   // server-side; the drawer reads them to show the operator why (OrdersPrintQueueDrawer).
   shipping_hold?: boolean
   held_reason?: string | null
+  hazmat_is_hazmat?: boolean
+  hazmat_provenance?: 'sealed' | 'declared_unsealed' | 'none'
   hazmat_profile?: string | null
   hazmat_snapshot_hash?: string | null
   hazmat_declaration_revision?: number | null
