@@ -118,6 +118,12 @@ function editableState(writeEnabled = true) {
     validation: { valid: true, issues: [] },
     requiresRerate: false,
     frozenPurchaseFacts: null,
+    // PS-477: the awaiting fixture declares `clear`, so the backend owner
+    // resolves NOT_HAZMAT. Present even though no assertion reads it: the panel
+    // falls back to `disclosure` whenever capabilities are off, and a future
+    // case built on editableState(false) would hit `undefined.isHazmat` and
+    // throw a TypeError instead of failing on the thing it meant to check.
+    disclosure: { isHazmat: false, profile: null, provenance: 'none', snapshotHash: null, declarationRevision: null },
   }
 }
 

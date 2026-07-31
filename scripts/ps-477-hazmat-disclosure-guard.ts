@@ -48,6 +48,33 @@ function source(relativePath: string): string {
   );
 }
 
+// 0b. `disclosure` must never be gated by a rollout flag. Flags gate WRITING and
+//     RATING hazmat; they must never gate SEEING that something already shipped
+//     as dangerous goods. Every sibling field in order-hazmat.ts's publicState
+//     (revision, semanticHash, decisionSource, frozenPurchaseFacts) carries a
+//     `capabilities.featureEnabled ? ... : ...` ternary, so the obvious edit for
+//     someone tidying that block is to make `disclosure` match -- which restores
+//     the PS-477 bug for every client the flag is off for. Nothing else stops
+//     that. Structural check only; it supplements the reducer calls below, it
+//     does not replace them.
+{
+  const orderHazmat = source('src/services/order-hazmat.ts');
+  const disclosureAssignments = orderHazmat
+    .split('\n')
+    .filter((line) => /^\s*disclosure:/.test(line));
+  assert.ok(
+    disclosureAssignments.length > 0,
+    'order-hazmat.ts must still carry a disclosure field; this check must not pass by the field having vanished',
+  );
+  for (const line of disclosureAssignments) {
+    assert.doesNotMatch(
+      line,
+      /featureEnabled/,
+      `disclosure must never be gated by a rollout flag -- offending line: ${line.trim()}`,
+    );
+  }
+}
+
 function activeDeclaration(): NormalizedHazmatDeclaration & { status: 'active' } {
   return {
     schemaVersion: HAZMAT_DECLARATION_SCHEMA_VERSION,
