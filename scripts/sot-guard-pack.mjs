@@ -91,6 +91,19 @@ const REQUIRED_GUARDS = [
   // the manual_reprocess trigger (which lets the add handler overwrite a human's
   // manual declaration), plus the cap that keeps PS-469 from recurring.
   'test:ps-476-rule-status-convergence',
+  // PS-477: a shipment PrepShip did not purchase still discloses its hazmat.
+  // Absence of a snapshot must never read as "not dangerous goods" -- the queue
+  // omitted the fields entirely and the detail panel rendered clearDeclaration(),
+  // so five shipped HUGRAB orders displayed as clear. Both entries are hermetic:
+  // the first calls the pure reducer and reads source text, the second runs the
+  // real loaders AND the real listQueue against in-process PGlite, overwriting
+  // DATABASE_URL before the modules load so this runner's OFFLINE_GUARD_ENV
+  // singleton is unreachable. Pinned as a pair because they fail in different
+  // directions -- the reducer guard cannot see a caller that stops asking it,
+  // and the integration guard is the only thing that runs the DTO builder the
+  // bug actually lived in.
+  'test:ps-477-hazmat-disclosure',
+  'test:ps-477-hazmat-disclosure-integration',
   'test:ps-421-method-capability-matrix',
   'test:ps-314-no-sot-bypass-wrappers',
   'test:ps-316-backend-truth-law',
