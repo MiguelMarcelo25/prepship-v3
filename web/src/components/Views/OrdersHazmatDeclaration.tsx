@@ -114,7 +114,14 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder, clientId =
   if (!state?.capabilities.featureEnabled) {
     if (!state?.disclosure.isHazmat) return null
     return (
-      <div className="mt-2 rounded ring-1 ring-amber-300 bg-amber-50 px-2 py-1.5 text-[10px] text-amber-900">
+      <div
+        className="mt-2 rounded ring-1 ring-amber-300 bg-amber-50 px-2 py-1.5 text-[10px] text-amber-900"
+        // PS-481: this branch renders instead of the main panel, so it carries
+        // no order-hazmat-declaration testid and was unaddressable from a test.
+        // Named separately rather than reusing that id, because the two are
+        // different things: one is the editor, this is a read-only disclosure.
+        data-testid="order-hazmat-disclosure"
+      >
         <span className="font-bold uppercase tracking-wide">Hazmat</span>
         {state.disclosure.provenance === 'declared_unsealed'
           ? ' · declared, not sealed at purchase'

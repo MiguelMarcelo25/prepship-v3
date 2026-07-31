@@ -80,9 +80,13 @@ const activeDeclaration = {
   materials: [],
 }
 
-function capabilities(writeEnabled) {
+// PS-481: featureEnabled is a parameter now. It was hardcoded true, which meant
+// every fixture took the flags-on path and the flags-off disclosure branch --
+// the half of PS-477 that keeps a shipped dangerous-goods order visible when the
+// hazmat kill switch is off -- was never rendered by any test.
+function capabilities(writeEnabled, featureEnabled = true) {
   return {
-    featureEnabled: true,
+    featureEnabled,
     writeEnabled,
     clientAllowed: true,
     profiles: {
@@ -167,6 +171,26 @@ function unsealedShippedState() {
   }
 }
 
+// PS-481: the kill-switch case. Rollout flags gate WRITING and RATING hazmat;
+// they must never gate SEEING that a shipped order went out as dangerous goods.
+// Served on unsealedShippedOrder so the id matches whatever setup() resolves as
+// the active shipped order.
+function flagsOffState(isHazmat) {
+  return {
+    orderId: unsealedShippedOrder.id,
+    declaration: isHazmat ? activeDeclaration : { schemaVersion: 1, status: 'clear', materials: [] },
+    revision: 3,
+    semanticHash: 'hz_fixture_flags_off',
+    capabilities: capabilities(false, false),
+    validation: { valid: true, issues: [] },
+    requiresRerate: false,
+    frozenPurchaseFacts: null,
+    disclosure: isHazmat
+      ? { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3 }
+      : { isHazmat: false, profile: null, provenance: 'none', snapshotHash: null, declarationRevision: null },
+  }
+}
+
 const queueEntries = [
   {
     queue_entry_id: 'ps465-hazmat-entry', order_id: String(shippedOrder.id), order_number: shippedOrder.orderNumber,
@@ -236,6 +260,12 @@ async function setup(page, options = {}) {
     if (hazmatMatch && request.method() === 'GET') {
       const matchedId = Number(hazmatMatch[1])
       if (matchedId === activeShippedOrder.id) {
+        // PS-481: options.flagsOff is 'hazmat' or 'clear' and forces
+        // capabilities.featureEnabled false, so the panel takes its early-return
+        // disclosure branch instead of rendering the full editor.
+        if (options.flagsOff) {
+          return route.fulfill(json({ data: flagsOffState(options.flagsOff === 'hazmat') }))
+        }
         return route.fulfill(json({ data: options.unsealedShipped ? unsealedShippedState() : shippedState() }))
       }
       return route.fulfill(json({ data: editableState(options.writeEnabled !== false) }))
@@ -298,6 +328,20 @@ async function openOrder(page, status = 'awaiting_shipment') {
   await row.click()
   await expect(page.getByTestId('order-hazmat-declaration')).toBeVisible()
   return page.getByTestId('order-hazmat-declaration')
+}
+
+// PS-481: openOrder waits on order-hazmat-declaration, which the flags-off
+// branch never renders -- it returns the disclosure chip (or nothing) before
+// that markup is reached. So the flags-off cases need their own opener, and it
+// must confirm the detail panel actually opened via something OUTSIDE the hazmat
+// component. Otherwise "renders nothing" would pass just as happily if the row
+// click had silently done nothing at all.
+async function openShippedRowFlagsOff(page) {
+  await page.goto(`${baseUrl}/orders/shipped`)
+  const row = page.locator('#ordersTable tbody tr.order-row')
+  await expect(row).toHaveCount(1)
+  await row.click()
+  await expect(page.getByText(unsealedShippedOrder.orderNumber).first()).toBeVisible()
 }
 
 test('desktop validates, saves, invalidates the prior rate, and renders mixed queue badges', async ({ page }) => {
@@ -412,5 +456,47 @@ test('print queue badges an unsealed hazmat label as not purchased through PrepS
   const badge = queue.locator('[title*="not purchased through PrepShip"]')
   await expect(badge).toHaveCount(1)
   await expect(badge).toContainText('Hazmat')
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-481: the other half of PS-477's visibility fix. Rollout flags gate WRITING
+// and RATING hazmat; they must never gate SEEING that a shipped order went out
+// as dangerous goods. The backend side is pinned by guard case 0b in
+// scripts/ps-477-hazmat-disclosure-guard.ts, which fails if anyone re-gates
+// `disclosure` on featureEnabled or removes the field. Nothing pinned the
+// operator-visible side, which is also the branch most likely to be deleted by
+// someone who reads the early return and assumes it is dead code.
+test('flags-off shipped hazmat order still discloses dangerous goods', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { unsealedShipped: true, flagsOff: 'hazmat' })
+  await openShippedRowFlagsOff(page)
+
+  const chip = page.getByTestId('order-hazmat-disclosure')
+  await expect(chip).toBeVisible()
+  await expect(chip).toContainText('Hazmat')
+  await expect(chip).toContainText('declared, not sealed at purchase')
+
+  // Writes stay gated. The flags-off branch must render a read-only chip and
+  // nothing else -- no editor, no save affordance -- so a disabled kill switch
+  // still disables hazmat writing while leaving the fact visible.
+  await expect(page.getByTestId('order-hazmat-declaration')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save declaration' })).toHaveCount(0)
+  await expect(page.getByLabel('This shipment contains dangerous goods')).toHaveCount(0)
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-481: the negative half. Flags off plus a non-hazmat order must still render
+// nothing, so the branch added for the kill-switch case cannot start announcing
+// itself on ordinary orders.
+test('flags-off order that is not hazmat renders no disclosure', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { unsealedShipped: true, flagsOff: 'clear' })
+  // openShippedRowFlagsOff asserts the detail panel opened via the order number,
+  // which is outside the hazmat component -- without that, this test would pass
+  // even if the row click had done nothing.
+  await openShippedRowFlagsOff(page)
+
+  await expect(page.getByTestId('order-hazmat-disclosure')).toHaveCount(0)
+  await expect(page.getByTestId('order-hazmat-declaration')).toHaveCount(0)
   expect([...captured.externalHosts]).toEqual([])
 })
