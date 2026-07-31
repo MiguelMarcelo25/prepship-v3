@@ -184,9 +184,21 @@ export function purchaseFactsFromSnapshotRow(
   }
 }
 
-// Loaders are deliberately thin: fetch both inputs, hand them to the reducer.
-// They must not contain any rule -- if a rule appears here, it belongs in
-// resolveHazmatDisclosure.
+/**
+ * Loaders are deliberately thin: fetch both inputs, hand them to the reducer.
+ * They must not contain any rule -- if a rule appears here, it belongs in
+ * resolveHazmatDisclosure.
+ *
+ * Scope contract: `orderIds` must already be scope-checked by the caller.
+ * This function applies no client/store predicate of its own -- it returns
+ * disclosure for any id it is handed, so passing unscoped ids would leak
+ * hazmat facts across tenants. That mirrors order-hazmat.ts's
+ * loadDeclaration, which also takes a bare orderId and relies on scope being
+ * enforced upstream by loadOrderRow(orderId, scope) (throws before
+ * loadDeclaration runs). Both current callers already do this: getOrderHazmat
+ * calls loadOrderRow first, and Print Queue's listQueue passes the already
+ * scope-filtered visibleEntries set.
+ */
 export async function loadHazmatDisclosureForOrders(
   orderIds: number[],
   conn: HazmatDisclosureConn = db,
