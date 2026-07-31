@@ -8,7 +8,9 @@ import { orderItems } from '../db/schema/order-items';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
-import { shipmentHazmatSnapshots } from '../db/schema/hazmat.js';
+// PS-477: the disclosure owner, not the raw snapshot table -- see the call
+// site in listQueue for why the direct join was replaced.
+import { loadHazmatDisclosureForOrders } from './shipping-workflow/hazmat-disclosure-loader.js';
 import { env } from '../lib/env';
 import { recordLabelOperationLog } from '../lib/label-operation-log';
 import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
@@ -1513,33 +1515,20 @@ export async function listQueue(
   const visibleEntries = includePrinted
     ? entries
     : entries.filter((e) => !holds.has(Number(e.orderId)));
-  // Per user override unlock shipped data on 2026-07-25: read only the
-  // additive immutable PS-465 snapshot sidecar so operators can identify
-  // hazmat labels in Print Queue. No shipment/order/queue history is mutated.
+  // Per user override unlock shipped data on 2026-07-25: read hazmat
+  // disclosure (PS-465 snapshot sidecar, and via PS-477 the live declaration
+  // when no snapshot exists) so operators can identify hazmat labels in
+  // Print Queue. No shipment/order/queue history is mutated -- read-only.
   const visibleOrderIds = [...new Set(
     visibleEntries
       .map((entry) => Number(entry.orderId))
       .filter((orderId) => Number.isInteger(orderId) && orderId > 0),
   )];
-  const hazmatRows = visibleOrderIds.length === 0
-    ? []
-    : await db
-        .select({
-          orderId: shipments.orderId,
-          profile: shipmentHazmatSnapshots.summaryProfile,
-          snapshotHash: shipmentHazmatSnapshots.snapshotHash,
-          revision: shipmentHazmatSnapshots.orderDeclarationRevision,
-        })
-        .from(shipmentHazmatSnapshots)
-        .innerJoin(shipments, eq(shipments.id, shipmentHazmatSnapshots.shipmentId))
-        .where(inArray(shipments.orderId, visibleOrderIds))
-        .orderBy(desc(shipments.id));
-  const hazmatByOrderId = new Map<number, typeof hazmatRows[number]>();
-  for (const row of hazmatRows) {
-    if (row.orderId != null && !hazmatByOrderId.has(row.orderId)) {
-      hazmatByOrderId.set(row.orderId, row);
-    }
-  }
+  // PS-477: the queue must not treat a missing snapshot as "not hazmat". A label
+  // bought in ShipStation and ingested by sync has no snapshot, and five shipped
+  // HUGRAB orders proved the queue then showed nothing at all. The backend owns
+  // this fact now; the queue renders what it reports.
+  const disclosureByOrderId = await loadHazmatDisclosureForOrders(visibleOrderIds);
   const totalQty = visibleEntries.reduce((s, e) => s + (e.orderQty ?? 1), 0);
   return {
     queuedOrders: visibleEntries.map((e) => ({
@@ -1560,11 +1549,13 @@ export async function listQueue(
       queued_at: e.queuedAt.toISOString(),
       shipping_hold: holds.has(Number(e.orderId)),
       held_reason: holds.get(Number(e.orderId)) ?? null,
-      ...(hazmatByOrderId.has(Number(e.orderId))
+      ...(disclosureByOrderId.get(Number(e.orderId))?.isHazmat
         ? {
-            hazmat_profile: hazmatByOrderId.get(Number(e.orderId))?.profile ?? null,
-            hazmat_snapshot_hash: hazmatByOrderId.get(Number(e.orderId))?.snapshotHash ?? null,
-            hazmat_declaration_revision: hazmatByOrderId.get(Number(e.orderId))?.revision ?? null,
+            hazmat_is_hazmat: true,
+            hazmat_provenance: disclosureByOrderId.get(Number(e.orderId))!.provenance,
+            hazmat_profile: disclosureByOrderId.get(Number(e.orderId))!.profile,
+            hazmat_snapshot_hash: disclosureByOrderId.get(Number(e.orderId))!.snapshotHash,
+            hazmat_declaration_revision: disclosureByOrderId.get(Number(e.orderId))!.declarationRevision,
           }
         : {}),
     })),
