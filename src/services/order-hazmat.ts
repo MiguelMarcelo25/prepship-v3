@@ -301,9 +301,20 @@ export async function getOrderHazmat(
  * the operator — `disclosure` already reports `sealed_unreadable` for exactly
  * this row, and that is the honest thing to render.
  *
- * Deliberately NOT used by any write path. saveInTransaction still calls
- * loadFrozenPurchaseFacts and still throws, so no edit can proceed against a
- * seal PrepShip cannot verify.
+ * Deliberately NOT used by any write path.
+ *
+ * An earlier version of this comment claimed saveInTransaction still calls
+ * loadFrozenPurchaseFacts and still throws, so the write path was protected by
+ * that exception. That was wrong: saveInTransaction never reads the snapshot at
+ * all — both its publicState calls omit frozenPurchaseFacts and let the
+ * optional field default to null. loadFrozenPurchaseFacts has exactly one
+ * caller, this function.
+ *
+ * The safety conclusion is unchanged, because it never rested on that throw.
+ * An edit cannot proceed against a shipped order at all: assertEditable rejects
+ * it with HAZMAT_ORDER_TERMINAL before any snapshot would be consulted. That
+ * terminal lock is the protection; relaxing this reader could not have weakened
+ * a guard the write path was not using.
  */
 async function readFrozenPurchaseFactsForDisplay(
   orderId: number,
