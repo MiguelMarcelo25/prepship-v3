@@ -29,7 +29,10 @@ const clearDeclaration = (): HazmatDeclarationDraft => ({ status: 'clear', mater
 function displayedDeclaration(state: OrderHazmatDto, shipped: boolean): HazmatDeclarationDraft {
   // Per user override unlock shipped data on 2026-07-25: terminal views render
   // only the immutable purchase snapshot and never expose declaration writes.
-  if (shipped) return state.frozenPurchaseFacts?.declaration ?? clearDeclaration()
+  // PS-477: when there is no snapshot -- the label was bought outside PrepShip
+  // and ingested by sync -- fall back to the declaration rather than
+  // clearDeclaration(), which affirmatively displayed dangerous goods as clear.
+  if (shipped) return state.frozenPurchaseFacts?.declaration ?? state.declaration ?? clearDeclaration()
   return state.declaration ?? clearDeclaration()
 }
 
@@ -101,7 +104,21 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder, clientId =
     return () => { current = false }
   }, [orderId, shipped])
 
-  if (loading || !state?.capabilities.featureEnabled) return null
+  if (loading) return null
+  // PS-477: disclosure is not flag-gated. A shipped order that carries an active
+  // declaration must say so even when hazmat writes are disabled for this
+  // client, because absence used to read as "not dangerous goods".
+  if (!state?.capabilities.featureEnabled) {
+    if (!state?.disclosure.isHazmat) return null
+    return (
+      <div className="mt-2 rounded ring-1 ring-amber-300 bg-amber-50 px-2 py-1.5 text-[10px] text-amber-900">
+        <span className="font-bold uppercase tracking-wide">Hazmat</span>
+        {state.disclosure.provenance === 'declared_unsealed'
+          ? ' · declared, not sealed at purchase'
+          : ' · sealed at purchase'}
+      </div>
+    )
+  }
 
   const editable = !shipped && state.capabilities.writeEnabled
   const profiles = Object.values(state.capabilities.profiles).filter((profile) => profile.visible)
@@ -398,6 +415,10 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder, clientId =
       {state.requiresRerate ? <div className="mt-2 text-[10px] font-semibold text-amber-800">Re-rate required before label purchase.</div> : null}
       {shipped && state.frozenPurchaseFacts ? (
         <div className="mt-2 flex items-center gap-1 text-[10px] text-ink-3"><ShieldCheck size={11} /> Shipped hazmat snapshot is immutable.</div>
+      ) : shipped && !state.frozenPurchaseFacts && state.disclosure.isHazmat ? (
+        <div className="mt-2 flex items-center gap-1 text-[10px] text-amber-800">
+          <AlertTriangle size={11} /> Declared, not sealed at purchase — this label was not bought through PrepShip.
+        </div>
       ) : null}
 
       <div className="mt-2 flex gap-1.5">

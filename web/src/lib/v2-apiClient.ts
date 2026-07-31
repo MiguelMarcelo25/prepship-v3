@@ -184,6 +184,17 @@ export type OrderHazmatDto = {
     profile: string;
     declaration: HazmatDeclarationDraft;
   } | null;
+  // PS-477: the resolved sealed/declared_unsealed/none fact. Always present on
+  // the wire and never flag-gated by the backend (order-hazmat.ts publicState()
+  // sets it unconditionally) -- lets the detail panel show a shipped
+  // dangerous-goods order truthfully even when hazmat writes are rolled off.
+  disclosure: {
+    isHazmat: boolean;
+    profile: string | null;
+    provenance: 'sealed' | 'declared_unsealed' | 'none';
+    snapshotHash: string | null;
+    declarationRevision: number | null;
+  };
 };
 
 // PS-167: stableRateBrowseKey + parseDailyStatsSummary are kept in the barrel (not moved to
