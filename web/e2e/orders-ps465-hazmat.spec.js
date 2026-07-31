@@ -6,6 +6,18 @@ import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 // production data.
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
+// web/src/lib/api-base.ts resolves API_BASE from the repo-root .env's
+// VITE_API_URL ahead of the page's own location.hostname whenever that env
+// var is set in dev mode -- and this checkout's .env pins
+// VITE_API_URL=http://localhost:3000. So the app calls "localhost", not
+// "127.0.0.1", even though the page itself is loaded from 127.0.0.1 (see
+// playwright.config.js webServer --host). Both are the same loopback mock
+// backend this file intercepts and fulfills below -- neither ever reaches a
+// real network host -- so both must be recognized as "ours", or the
+// no-external-host bookkeeping below misreports a fully-mocked local request
+// as an escape.
+const apiOriginAlt = 'http://localhost:3000'
+const isKnownApiOrigin = (origin) => origin === apiOrigin || origin === apiOriginAlt
 const supabaseProjectRef = 'fdkseckgfuvdczzqmnac'
 
 const client = { id: 465, name: 'PS-465 Fixture Client', active: true, isTest: true, storeId: 1465 }
@@ -47,6 +59,11 @@ function makeOrder(id, status) {
 
 const awaitingOrder = makeOrder(465001, 'awaiting_shipment')
 const shippedOrder = makeOrder(465002, 'shipped')
+// PS-477: a second shipped order, distinct from shippedOrder, standing in for
+// the five HUGRAB orders whose label was bought in ShipStation and ingested by
+// sync -- an active declaration with no purchase snapshot. setup()'s
+// `unsealedShipped` option swaps this in wherever shippedOrder normally goes.
+const unsealedShippedOrder = makeOrder(465005, 'shipped')
 const activeDeclaration = {
   schemaVersion: 1,
   status: 'active',
@@ -121,6 +138,26 @@ function shippedState() {
       profile: 'shipstation_ups_dry_ice',
       declaration: activeDeclaration,
     },
+    disclosure: { isHazmat: true, profile: 'shipstation_ups_dry_ice', provenance: 'sealed', snapshotHash: 'hz_snapshot_fixture', declarationRevision: 3 },
+  }
+}
+
+// PS-477: the label was bought in ShipStation and ingested by sync -- an
+// active declaration exists but PrepShip never purchased it, so no snapshot
+// was ever sealed. frozenPurchaseFacts is null; the disclosure fact (backend
+// canonical owner: resolveHazmatDisclosure) is what tells the panel this is
+// still dangerous goods.
+function unsealedShippedState() {
+  return {
+    orderId: unsealedShippedOrder.id,
+    declaration: activeDeclaration,
+    revision: 3,
+    semanticHash: 'hz_fixture_unsealed',
+    capabilities: capabilities(false),
+    validation: { valid: true, issues: [] },
+    requiresRerate: false,
+    frozenPurchaseFacts: null,
+    disclosure: { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3 },
   }
 }
 
@@ -131,6 +168,10 @@ const queueEntries = [
     primary_sku: 'PS465-HAZMAT', item_description: 'Hazmat fixture', order_qty: 1, multi_sku_data: null,
     status: 'queued', print_count: 0, last_printed_at: null, auto_retired_at: null,
     queued_at: '2026-07-25T00:00:00.000Z', shipping_hold: false, held_reason: null,
+    // PS-477 Task 4 moved the badge's render gate off hazmat_profile onto
+    // hazmat_is_hazmat (profile is legitimately null for an unsealed order),
+    // so this fixture needs the new field to still trip the badge.
+    hazmat_is_hazmat: true, hazmat_provenance: 'sealed',
     hazmat_profile: 'shipstation_ups_dry_ice', hazmat_snapshot_hash: 'hz_snapshot_fixture', hazmat_declaration_revision: 3,
   },
   {
@@ -142,12 +183,30 @@ const queueEntries = [
   },
 ]
 
+// PS-477: a label bought in ShipStation and ingested by sync has an active
+// declaration but no purchase snapshot -- hazmat_profile/snapshot_hash are
+// genuinely null. Isolated fixture (not mixed into queueEntries) so the new
+// queue test stubs exactly the one entry the brief specifies.
+const unsealedQueueEntry = {
+  queue_entry_id: 'ps465-unsealed-entry', order_id: '465006', order_number: 'PS465-UNSEALED-465006',
+  client_id: client.id, label_url: 'https://example.test/unsealed.pdf', sku_group_id: 'PS465-UNSEALED',
+  primary_sku: 'PS465-UNSEALED', item_description: 'Unsealed hazmat fixture', order_qty: 1, multi_sku_data: null,
+  status: 'queued', print_count: 0, last_printed_at: null, auto_retired_at: null,
+  queued_at: '2026-07-25T00:02:00.000Z', shipping_hold: false, held_reason: null,
+  hazmat_is_hazmat: true, hazmat_provenance: 'declared_unsealed', hazmat_profile: null,
+  hazmat_snapshot_hash: null, hazmat_declaration_revision: 5,
+}
+
 function json(body, status = 200) {
   return { status, contentType: 'application/json', body: JSON.stringify(body) }
 }
 
 async function setup(page, options = {}) {
   const captured = { saveBodies: [], externalHosts: new Set() }
+  // PS-477: options.unsealedShipped swaps in the unsealed fixture everywhere
+  // the suite otherwise serves shippedOrder/shippedState(), so the existing
+  // three tests (which never pass this option) stay byte-identical.
+  const activeShippedOrder = options.unsealedShipped ? unsealedShippedOrder : shippedOrder
   await page.addInitScript((projectRef) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
     window.localStorage.setItem(`sb-${projectRef}-auth-token`, JSON.stringify({
@@ -160,16 +219,20 @@ async function setup(page, options = {}) {
   await page.route('**/*', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
-    if (url.origin !== baseUrl && url.origin !== apiOrigin && !url.hostname.endsWith('supabase.co')) {
+    if (url.origin !== baseUrl && !isKnownApiOrigin(url.origin) && !url.hostname.endsWith('supabase.co')) {
       captured.externalHosts.add(url.hostname)
     }
     if (url.hostname.endsWith('supabase.co')) return route.fulfill(json({ user: null }))
-    const isApi = url.origin === apiOrigin || url.origin !== baseUrl || url.pathname.startsWith('/api/')
+    const isApi = isKnownApiOrigin(url.origin) || url.origin !== baseUrl || url.pathname.startsWith('/api/')
     if (!isApi) return route.continue()
 
     const hazmatMatch = url.pathname.match(/^\/orders\/(\d+)\/hazmat$/)
     if (hazmatMatch && request.method() === 'GET') {
-      return route.fulfill(json({ data: Number(hazmatMatch[1]) === shippedOrder.id ? shippedState() : editableState(options.writeEnabled !== false) }))
+      const matchedId = Number(hazmatMatch[1])
+      if (matchedId === activeShippedOrder.id) {
+        return route.fulfill(json({ data: options.unsealedShipped ? unsealedShippedState() : shippedState() }))
+      }
+      return route.fulfill(json({ data: editableState(options.writeEnabled !== false) }))
     }
     if (url.pathname === `/orders/${awaitingOrder.id}/hazmat/validate` && request.method() === 'POST') {
       const body = request.postDataJSON()
@@ -188,7 +251,11 @@ async function setup(page, options = {}) {
       } }))
     }
     if (url.pathname === '/print-queue' && request.method() === 'GET') {
-      return route.fulfill(json({ queuedOrders: queueEntries, totalOrders: 2, totalQty: 2 }))
+      // PS-477: options.queueEntries lets a test stub an isolated single-entry
+      // response (per the brief) instead of the shared two-entry fixture.
+      const entries = options.queueEntries ?? queueEntries
+      const totalQty = entries.reduce((sum, entry) => sum + (entry.order_qty ?? 1), 0)
+      return route.fulfill(json({ queuedOrders: entries, totalOrders: entries.length, totalQty }))
     }
     if (url.pathname === '/clients') return route.fulfill(json([client]))
     if (url.pathname === '/users') return route.fulfill(json({ users: [{ id: 'u1', email: 'operator@example.test', isAdmin: true }] }))
@@ -208,11 +275,11 @@ async function setup(page, options = {}) {
     if (url.pathname === '/clients/order-stats') return route.fulfill(json({ data: [{ clientId: client.id, awaiting_shipment: 1, shipped: 1, cancelled: 0 }] }))
     if (url.pathname === '/orders/distinct-skus') return route.fulfill(json({ skus: ['PS465-DRY-ICE'] }))
     if (url.pathname === '/orders') {
-      const rows = url.searchParams.get('status') === 'shipped' ? [shippedOrder] : [awaitingOrder]
+      const rows = url.searchParams.get('status') === 'shipped' ? [activeShippedOrder] : [awaitingOrder]
       return route.fulfill(json({ data: rows, pagination: { page: 1, pageSize: 50, total: rows.length, totalPages: 1 } }))
     }
     const fullMatch = url.pathname.match(/^\/orders\/(\d+)\/full$/)
-    if (fullMatch) return route.fulfill(json(Number(fullMatch[1]) === shippedOrder.id ? shippedOrder : awaitingOrder))
+    if (fullMatch) return route.fulfill(json(Number(fullMatch[1]) === activeShippedOrder.id ? activeShippedOrder : awaitingOrder))
     return route.fulfill(json({}))
   })
   return captured
@@ -232,7 +299,13 @@ test('desktop validates, saves, invalidates the prior rate, and renders mixed qu
   const captured = await setup(page)
   const panel = await openOrder(page)
 
-  await panel.getByLabel('Hazmat declaration status').selectOption('active')
+  // The status select was replaced by a plain checkbox (see
+  // OrdersHazmatDeclaration.tsx); Dry ice/weight live under the collapsed
+  // "Advanced declaration details" <details>, closed by default since this
+  // fixture starts with zero validation issues, so it must be opened before
+  // its fields are interactable.
+  await panel.getByLabel('This shipment contains dangerous goods').check()
+  await panel.locator('summary', { hasText: 'Advanced declaration details' }).click()
   await panel.getByLabel('Dry ice').check()
   await panel.getByPlaceholder('Dry ice weight').fill('2.5')
   await panel.getByLabel('Dry ice weight unit').selectOption('pound')
@@ -258,7 +331,7 @@ test('permission denial stays backend-owned', async ({ page }) => {
   await setup(page, { writeEnabled: false })
   const panel = await openOrder(page)
   await expect(panel).toContainText('Hazmat writes are not enabled for this account or role.')
-  await expect(panel.getByLabel('Hazmat declaration status')).toBeDisabled()
+  await expect(panel.getByLabel('This shipment contains dangerous goods')).toBeDisabled()
   await expect(panel.getByRole('button', { name: 'Save declaration' })).toBeDisabled()
 })
 
@@ -274,14 +347,64 @@ test('mobile shipped view renders only the immutable purchase snapshot', async (
   await page.setViewportSize({ width: 390, height: 844 })
   const captured = await setup(page)
   const panel = await openOrder(page, 'shipped')
-  await expect(panel.getByLabel('Hazmat declaration status')).toHaveValue('active')
-  await expect(panel.getByLabel('Hazmat declaration status')).toBeDisabled()
-  await expect(panel.getByRole('checkbox', { name: 'Dry ice' })).toBeChecked()
+  await expect(panel.getByLabel('This shipment contains dangerous goods')).toBeChecked()
+  await expect(panel.getByLabel('This shipment contains dangerous goods')).toBeDisabled()
+  // "Dry ice" lives under the collapsed "Advanced declaration details"
+  // <details> (closed by default -- zero validation issues for a shipped
+  // order). getByRole/getByLabel resolve through the accessibility tree,
+  // which excludes a closed <details>' non-summary content outright -- and on
+  // this narrow mobile viewport the order detail drawer's real scroll
+  // container is nested inside two overflow:hidden/position:fixed ancestors
+  // that defeat Playwright's (and the browser's native) scrollIntoView, so
+  // opening the panel here is not viable. A plain CSS locator instead reads
+  // the checkbox's DOM `checked` property directly -- attached-but-hidden is
+  // enough for a state assertion; only actions (click/check/fill) need
+  // visibility.
+  const dryIceCheckbox = panel.locator('label', { hasText: 'Dry ice' }).locator('input[type="checkbox"]')
+  await expect(dryIceCheckbox).toBeChecked()
   await expect(panel).toContainText('Shipped hazmat snapshot is immutable.')
   await expect(panel.getByRole('button', { name: 'Save declaration' })).toBeDisabled()
   const box = await panel.boundingBox()
   expect(box).not.toBeNull()
   expect(box.x).toBeGreaterThanOrEqual(0)
   expect(box.x + box.width).toBeLessThanOrEqual(390)
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-477: five shipped HUGRAB orders carry an active hazmat declaration but no
+// purchase snapshot, because the label was bought in ShipStation and ingested
+// by sync rather than purchased through PrepShip. Before this ticket the panel
+// fell back to clearDeclaration() whenever frozenPurchaseFacts was null,
+// affirmatively lying that the shipment was clear. This proves the fixed
+// fallback (state.declaration, then disclosure) instead.
+test('unsealed shipped order shows an active declaration, not clear', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { unsealedShipped: true })
+  const panel = await openOrder(page, 'shipped')
+  // Proves the panel does NOT render as clear: the checkbox reflects the live
+  // declaration (status 'active'), not clearDeclaration()'s unchecked default.
+  await expect(panel.getByLabel('This shipment contains dangerous goods')).toBeChecked()
+  await expect(panel).toContainText('not sealed')
+  await expect(panel).not.toContainText('Shipped hazmat snapshot is immutable.')
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-477 Task 4: the badge's render gate is hazmat_is_hazmat, not
+// hazmat_profile -- profile is legitimately null when PrepShip never bought
+// the label, so gating on it would hide exactly the case this ticket exists
+// to fix. This is the regression that would silently reappear if the gate
+// moved back onto profile.
+test('print queue badges an unsealed hazmat label as not purchased through PrepShip', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { queueEntries: [unsealedQueueEntry] })
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await expect(page.locator('#ordersTable tbody tr.order-row')).toHaveCount(1)
+  await page.locator('#pq-toggle-btn').click()
+  const queue = page.locator('#print-queue-panel')
+  await expect(queue).toBeVisible()
+  await expect(queue).toContainText(unsealedQueueEntry.order_number)
+  const badge = queue.locator('[title*="not purchased through PrepShip"]')
+  await expect(badge).toHaveCount(1)
+  await expect(badge).toContainText('Hazmat')
   expect([...captured.externalHosts]).toEqual([])
 })
