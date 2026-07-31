@@ -40,9 +40,14 @@ import {
 // rule keeps being provable without an environment.
 import {
   declarationFromRows,
+  loadHazmatDisclosureForOrder,
   OrderHazmatError,
   purchaseFactsFromSnapshotRow,
 } from './shipping-workflow/hazmat-disclosure-loader.js';
+// PS-477: the type only -- hazmat-disclosure.ts must stay free of the db
+// client (see the comment above), so the loader is imported separately from
+// the pure module that owns this shape.
+import type { ShipmentHazmatDisclosure } from './shipping-workflow/hazmat-disclosure.js';
 import {
   hazmatSemanticHash,
   normalizeAndValidateHazmatDeclaration,
@@ -82,6 +87,9 @@ export type OrderHazmatState = {
   validation: HazmatValidationResult;
   requiresRerate: boolean;
   frozenPurchaseFacts: CanonicalHazmatPurchaseFacts | null;
+  // PS-477: the resolved sealed/declared_unsealed/none fact. Never flag-gated
+  // in publicState -- see the comment there.
+  disclosure: ShipmentHazmatDisclosure;
 };
 
 export type SaveOrderHazmatResult = OrderHazmatState & {
@@ -195,6 +203,7 @@ function publicState(input: {
   decisionSource: 'manual' | 'automation' | null;
   frozenPurchaseFacts?: CanonicalHazmatPurchaseFacts | null;
   isTestClient?: boolean;
+  disclosure: ShipmentHazmatDisclosure;
 }): OrderHazmatState {
   const capabilities = resolveHazmatCapabilities({
     clientId: input.order.clientId,
@@ -216,6 +225,11 @@ function publicState(input: {
     validation,
     requiresRerate: declaration?.status === 'active' && input.order.bestRateJson == null,
     frozenPurchaseFacts: capabilities.featureEnabled ? input.frozenPurchaseFacts ?? null : null,
+    // PS-477 / amendment A2: rollout flags gate WRITING and RATING hazmat. They
+    // must never gate SEEING that something already shipped as dangerous goods.
+    // getOrderHazmatForShipping sets the same precedent -- hiding a persisted
+    // declaration behind a kill switch is how an undeclared label gets bought.
+    disclosure: input.disclosure,
   };
 }
 
@@ -227,6 +241,13 @@ export async function getOrderHazmat(
   const order = await loadOrderRow(orderId, scope);
   const readIsTestClient = await loadClientIsTest(order.clientId);
   const readHasAutomation = await clientHasHazmatAutomation(order.clientId);
+  // PS-477 / amendment A2: computed unconditionally and BEFORE the
+  // featureEnabled gate below, so the flags-off branch carries a real,
+  // resolved disclosure instead of an empty one. Rollout flags gate WRITING
+  // and RATING hazmat; they must never gate SEEING that something already
+  // shipped as dangerous goods. Delegated to the canonical owner
+  // (resolveHazmatDisclosure, via this loader) rather than re-derived here.
+  const disclosure = await loadHazmatDisclosureForOrder(orderId);
   if (!resolveHazmatCapabilities({
     clientId: order.clientId,
     isTestClient: readIsTestClient,
@@ -239,6 +260,7 @@ export async function getOrderHazmat(
       semanticHash: null,
       decisionSource: null,
       frozenPurchaseFacts: null,
+      disclosure,
     });
   }
   const current = await loadDeclaration(db, orderId);
@@ -246,6 +268,7 @@ export async function getOrderHazmat(
     order,
     ...current,
     frozenPurchaseFacts: await loadFrozenPurchaseFacts(orderId),
+    disclosure,
   });
 }
 
@@ -414,7 +437,15 @@ async function saveInTransaction(
   const semanticHash = hazmatSemanticHash(declaration);
   if (current.semanticHash === semanticHash && current.declaration) {
     return {
-      ...publicState({ order, ...current }),
+      ...publicState({
+        order,
+        ...current,
+        // PS-477: publicState now requires disclosure on every call site.
+        // Nothing changed in this branch, so read it back through the same
+        // tx (read-your-writes) rather than re-deriving the rule here --
+        // resolveHazmatDisclosure remains the only owner of the fact.
+        disclosure: await loadHazmatDisclosureForOrder(input.orderId, tx),
+      }),
       capabilities,
       changed: false,
       invalidatedRate: false,
@@ -515,6 +546,10 @@ async function saveInTransaction(
       revision,
       semanticHash,
       decisionSource,
+      // PS-477: re-read within the same tx so disclosure reflects the
+      // declaration just written above (read-your-writes), not the
+      // pre-save state captured in `current`.
+      disclosure: await loadHazmatDisclosureForOrder(input.orderId, tx),
     }),
     capabilities,
     changed: true,
