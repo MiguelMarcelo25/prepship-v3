@@ -30,20 +30,31 @@ import {
   resolveHazmatCapabilities,
   type HazmatCapabilities,
 } from './shipping-workflow/hazmat-capability.js';
+// PS-477: declarationFromRows / purchaseFactsFromSnapshotRow are the same
+// row->fact mappers loadDeclaration / loadFrozenPurchaseFacts always used,
+// moved next to the resolveHazmatDisclosure reducer that also needs them.
+// OrderHazmatError moved with them (purchaseFactsFromSnapshotRow throws it)
+// and is re-exported below so every existing importer of this module is
+// unaffected.
+import {
+  declarationFromRows,
+  OrderHazmatError,
+  purchaseFactsFromSnapshotRow,
+} from './shipping-workflow/hazmat-disclosure.js';
 import {
   hazmatSemanticHash,
   normalizeAndValidateHazmatDeclaration,
   normalizeHazmatDeclaration,
-  sealHazmatDeclaration,
   summarizeHazmatDeclaration,
   validateHazmatDeclaration,
   type CanonicalHazmatPurchaseFacts,
   type HazmatDeclarationInput,
-  type HazmatProfile,
   type HazmatValidationResult,
   type NormalizedHazmatDeclaration,
   type NormalizedHazmatMaterial,
 } from './shipping-workflow/hazmat-declaration.js';
+
+export { OrderHazmatError };
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -83,18 +94,6 @@ export type OrderHazmatAutomationProvenance = Readonly<{
   ruleVersionId: string;
 }>;
 
-export class OrderHazmatError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly status: 400 | 403 | 404 | 409 | 422 = 400,
-    readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = 'OrderHazmatError';
-  }
-}
-
 function orderWhere(orderId: number, scope: ClientStoreScope) {
   const scopePredicate = orderScopePredicate(scope);
   return scopePredicate
@@ -102,37 +101,11 @@ function orderWhere(orderId: number, scope: ClientStoreScope) {
     : eq(orders.id, orderId);
 }
 
-function numberOrNull(value: unknown): number | null {
-  if (value == null || value === '') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function materialFromRow(row: typeof orderHazmatMaterials.$inferSelect): NormalizedHazmatMaterial {
-  return {
-    sequence: row.sequence,
-    unNaNumber: row.unNaNumber,
-    properShippingName: row.properShippingName,
-    technicalName: row.technicalName,
-    hazardClass: row.hazardClass,
-    subsidiaryHazardClass: row.subsidiaryHazardClass,
-    packingGroup: row.packingGroup,
-    amount: numberOrNull(row.amount),
-    amountUnit: row.amountUnit,
-    quantity: row.quantity,
-    packagingInstruction: row.packagingInstruction,
-    packagingInstructionSection: row.packagingInstructionSection,
-    packagingType: row.packagingType,
-    transportMean: row.transportMean,
-    transportCategory: row.transportCategory,
-    regulationAuthority: row.regulationAuthority,
-    regulationLevel: row.regulationLevel,
-    radioactive: row.radioactive === true,
-    reportableQuantity: row.reportableQuantity === true,
-    additionalDescription: row.additionalDescription,
-  };
-}
-
+// PS-477: row assembly and snapshot validation moved to
+// shipping-workflow/hazmat-disclosure.ts as declarationFromRows /
+// purchaseFactsFromSnapshotRow (exported there so the new batch loader can
+// share them). The queries below are unchanged; only the row->fact mapping
+// they used to inline now delegates to the moved helpers.
 async function loadDeclaration(
   conn: Pick<typeof db, 'select'>,
   orderId: number,
@@ -155,23 +128,8 @@ async function loadDeclaration(
     .from(orderHazmatMaterials)
     .where(eq(orderHazmatMaterials.orderId, orderId))
     .orderBy(orderHazmatMaterials.sequence);
-  const declaration: NormalizedHazmatDeclaration = {
-    schemaVersion: 1,
-    status: header.status,
-    limitedQuantity: header.limitedQuantity === true,
-    containsBattery: header.containsBattery === true,
-    dryIce: header.dryIce === true,
-    dryIceWeightValue: numberOrNull(header.dryIceWeightValue),
-    dryIceWeightUnit: header.dryIceWeightUnit,
-    emergencyContactName: header.emergencyContactName,
-    emergencyContactPhone: header.emergencyContactPhone,
-    uspsCategory: header.uspsCategory,
-    uspsPackageLevel: header.uspsPackageLevel,
-    regulatedContentType: header.regulatedContentType,
-    materials: materials.map(materialFromRow),
-  };
   return {
-    declaration,
+    declaration: declarationFromRows(header, materials),
     revision: header.revision,
     semanticHash: header.semanticHash,
     decisionSource: header.decisionSource,
@@ -194,53 +152,7 @@ async function loadFrozenPurchaseFacts(orderId: number): Promise<CanonicalHazmat
     .where(eq(shipments.orderId, orderId))
     .orderBy(desc(shipments.id))
     .limit(1);
-  if (!row) return null;
-  const profileValues: HazmatProfile[] = [
-    'shipstation_usps',
-    'shipstation_ups_dry_ice',
-    'shipstation_ups_dangerous_goods',
-    'ups_direct',
-    'walmart',
-    // Test-fixture snapshots are real rows and must read back, not be rejected
-    // as invalid. Omitted when the profile was added, so a test label could be
-    // written but never re-read.
-    'prepship_test',
-  ];
-  const candidate = row.snapshotJson as Partial<CanonicalHazmatPurchaseFacts> | null;
-  if (
-    row.isHazmat !== true
-    || !candidate?.declaration
-    || !profileValues.includes(row.profile as HazmatProfile)
-  ) {
-    throw new OrderHazmatError(
-      'The immutable hazmat snapshot is invalid.',
-      'HAZMAT_SNAPSHOT_INVALID',
-      409,
-    );
-  }
-  try {
-    const sealed = sealHazmatDeclaration({
-      declaration: candidate.declaration,
-      revision: row.revision,
-      profile: row.profile as HazmatProfile,
-    });
-    if (
-      candidate.revision !== row.revision
-      || candidate.profile !== row.profile
-      || candidate.declarationHash !== hazmatSemanticHash(candidate.declaration)
-      || candidate.snapshotHash !== row.snapshotHash
-      || sealed.snapshotHash !== row.snapshotHash
-    ) {
-      throw new Error('snapshot seal mismatch');
-    }
-    return sealed;
-  } catch {
-    throw new OrderHazmatError(
-      'The immutable hazmat snapshot failed integrity verification.',
-      'HAZMAT_SNAPSHOT_INVALID',
-      409,
-    );
-  }
+  return purchaseFactsFromSnapshotRow(row);
 }
 
 async function loadOrderRow(
