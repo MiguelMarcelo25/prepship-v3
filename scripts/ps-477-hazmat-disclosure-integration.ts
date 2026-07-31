@@ -24,6 +24,15 @@
 //   - order 4: declared + CORRUPT snapshot -> declared_unsealed, batch survives
 //   - order 5: corrupt LATEST snapshot over an older valid seal
 //                                          -> declared_unsealed (never the stale seal)
+//
+// The final section then drives the REAL print-queue listQueue() over the same
+// database and asserts the five hazmat_* fields it puts on the wire. Testing the
+// loader alone was not enough: the original bug was in listQueue's DTO
+// construction (it joined the snapshot table directly and omitted the fields
+// when no snapshot existed), and the Playwright suite stubs the HTTP response,
+// so nothing exercised that builder. listQueue takes a `conn` seam for exactly
+// this reason; it defaults to the production singleton and is only ever handed
+// the in-memory instance here.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
@@ -44,6 +53,25 @@ import {
 
 type LoaderModule = typeof import('../src/services/shipping-workflow/hazmat-disclosure-loader.js');
 type Conn = NonNullable<Parameters<LoaderModule['loadHazmatDisclosureForOrders']>[1]>;
+type PrintQueueModule = typeof import('../src/services/print-queue.js');
+type ListQueue = PrintQueueModule['listQueue'];
+type QueueConn = NonNullable<Parameters<ListQueue>[3]>;
+type QueueRow = Awaited<ReturnType<ListQueue>>['queuedOrders'][number];
+
+/**
+ * The hazmat_* subset of a queue DTO row, as an exact object. Filtering by
+ * prefix rather than reading five named properties is deliberate: deepEqual
+ * against this then proves BOTH that the expected fields are present with the
+ * expected values AND that no other hazmat field leaked in -- and for a
+ * non-hazmat order it proves the fields are absent entirely, which is the
+ * literal shape the PS-477 bug produced for a dangerous-goods order.
+ */
+function hazmatDto(row: QueueRow): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(row as unknown as Record<string, unknown>)
+      .filter(([key]) => key.startsWith('hazmat_')),
+  );
+}
 
 const dryIceMaterial: NormalizedHazmatMaterial = {
   sequence: 1,
@@ -146,6 +174,7 @@ async function main(): Promise<void> {
   const { loadHazmatDisclosureForOrder, loadHazmatDisclosureForOrders } = await import(
     '../src/services/shipping-workflow/hazmat-disclosure-loader.js'
   );
+  const { listQueue } = await import('../src/services/print-queue.js');
 
   const client = new PGlite();
   const pg = drizzle(client, { schema, casing: 'snake_case' });
@@ -153,7 +182,15 @@ async function main(): Promise<void> {
 
   try {
     await client.exec(`
-      CREATE TABLE public.orders (id serial PRIMARY KEY);
+      CREATE TABLE public.orders (
+        id serial PRIMARY KEY,
+        -- The four columns listQueue's shipping-hold read selects. Their real
+        -- defaults are copied from src/db/schema/orders.ts.
+        order_status text NOT NULL DEFAULT 'awaiting_shipment',
+        canonical_status text,
+        externally_shipped boolean NOT NULL DEFAULT false,
+        source_provider text
+      );
       CREATE TABLE public.order_overrides (
         order_id integer PRIMARY KEY REFERENCES public.orders(id) ON DELETE CASCADE,
         best_rate_json jsonb
@@ -164,11 +201,37 @@ async function main(): Promise<void> {
         source text
       );
       CREATE TABLE public.external_operations (id serial PRIMARY KEY);
+      -- src/db/schema/print-queue.ts. Only the columns listQueue selects.
+      CREATE TABLE public.print_queue_orders (
+        id text PRIMARY KEY,
+        client_id integer NOT NULL,
+        order_id text NOT NULL,
+        order_number text,
+        label_url text NOT NULL,
+        sku_group_id text NOT NULL,
+        primary_sku text,
+        item_description text,
+        order_qty integer NOT NULL DEFAULT 1,
+        multi_sku_data jsonb,
+        status text NOT NULL DEFAULT 'queued',
+        print_count integer NOT NULL DEFAULT 0,
+        last_printed_at timestamptz,
+        auto_retired_at timestamptz,
+        queued_at timestamptz NOT NULL DEFAULT now(),
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
     `);
     await client.exec(readFileSync('drizzle/0078_order_hazmat_declarations.sql', 'utf8'));
 
     await client.exec(`
-      INSERT INTO public.orders (id) VALUES (1), (2), (3), (4), (5);
+      -- Orders 1 and 2 are SHIPPED, which is the state the five real PS-477
+      -- orders are in. 'local_shipped' is deliberately not a print-queue hold
+      -- (printing an existing label buys nothing), so their queue entries must
+      -- still be visible -- and must still disclose their hazmat.
+      INSERT INTO public.orders (id, order_status, source_provider) VALUES
+        (1, 'shipped', 'shipstation'),
+        (2, 'shipped', 'shipstation');
+      INSERT INTO public.orders (id) VALUES (3), (4), (5);
       -- Order 1: the PS-477 shape. Sync-ingested shipment, active declaration,
       -- deliberately NO snapshot.
       INSERT INTO public.shipments (id, order_id, source) VALUES (10, 1, 'shipstation');
@@ -376,6 +439,60 @@ async function main(): Promise<void> {
     }, 'an unknown order id resolves to none, not undefined');
 
     assert.equal((await loadHazmatDisclosureForOrders([], conn)).size, 0, 'an empty batch queries nothing');
+
+    // ---- The Print Queue DTO, built by the real listQueue ------------------
+    //
+    // Everything above proves the OWNER. This proves the CALLER: the exact
+    // function whose hand-rolled snapshot join dropped the hazmat fields for
+    // five shipped orders. The Playwright suite stubs this endpoint's response,
+    // so without this section nothing in the plan ever ran the builder.
+    await client.exec(`
+      INSERT INTO public.print_queue_orders
+        (id, client_id, order_id, order_number, label_url, sku_group_id, primary_sku, status)
+      VALUES
+        ('pq-unsealed', 1, '1', 'HZ-UNSEALED', 'https://example.test/1.pdf', 'HZ', 'HZ-SKU', 'queued'),
+        ('pq-sealed',   1, '2', 'HZ-SEALED',   'https://example.test/2.pdf', 'HZ', 'HZ-SKU', 'queued'),
+        ('pq-clear',    1, '3', 'HZ-CLEAR',    'https://example.test/3.pdf', 'HZ', 'HZ-SKU', 'queued');
+    `);
+
+    const queue = await listQueue(undefined, false, {}, pg as unknown as QueueConn);
+    const queueByOrderId = new Map(queue.queuedOrders.map((row) => [Number(row.order_id), row]));
+    assert.deepEqual(
+      [...queueByOrderId.keys()].sort((a, b) => a - b),
+      [1, 2, 3],
+      'a shipped order keeps its queue entry -- local_shipped is not a print-queue hold',
+    );
+    assert.equal(queue.totalOrders, 3);
+
+    // THE PS-477 CASE, end to end: order 1 is shipped, its label was bought in
+    // ShipStation, and no snapshot exists. The wire DTO must still say hazmat.
+    assert.equal(queueByOrderId.get(1)?.shipping_hold, false, 'the shipped order really did reach the DTO');
+    assert.deepEqual(hazmatDto(queueByOrderId.get(1)!), {
+      hazmat_is_hazmat: true,
+      hazmat_provenance: 'declared_unsealed',
+      hazmat_profile: null,
+      hazmat_snapshot_hash: null,
+      hazmat_declaration_revision: 1,
+    }, 'order 1: the queue DTO discloses an unsealed declaration, with a null profile it did not invent');
+
+    // A sealed order carries the SNAPSHOT's profile, hash and revision --
+    // proof the DTO reports the owner's answer rather than the live declaration
+    // (which sits at revision 7).
+    assert.deepEqual(hazmatDto(queueByOrderId.get(2)!), {
+      hazmat_is_hazmat: true,
+      hazmat_provenance: 'sealed',
+      hazmat_profile: 'shipstation_usps',
+      hazmat_snapshot_hash: sealedOrder2.snapshotHash,
+      hazmat_declaration_revision: 4,
+    }, 'order 2: the queue DTO carries the seal, not the later declaration edit');
+
+    // A non-hazmat order carries no hazmat_* field at all. This is the shape the
+    // frontend keys "no badge" on, so it has to stay absent, not become false.
+    assert.deepEqual(
+      hazmatDto(queueByOrderId.get(3)!),
+      {},
+      'order 3: a clear order emits no hazmat fields whatsoever',
+    );
 
     console.log('PS-477 hazmat disclosure PGlite integration passed');
   } finally {

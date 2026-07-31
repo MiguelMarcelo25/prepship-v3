@@ -1495,19 +1495,29 @@ async function processQueueSendOrder(
 
 // â”€â”€â”€ CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// PS-477 (carried review item A): a read-only connection seam, identical in
+// shape to the one hazmat-disclosure-loader.ts already exposes. It exists so an
+// offline PGlite test can drive the REAL listQueue and assert the hazmat DTO it
+// builds -- the exact code path the PS-477 bug lived in, and one that no test
+// could previously reach because listQueue closed over the module singleton.
+// Defaults to `db`, so every production caller is byte-identical; nothing here
+// widens what listQueue may do (select only, no insert/update/delete).
+export type PrintQueueReadConn = Pick<typeof db, 'select'>;
+
 export async function listQueue(
   clientId?: number,
   includePrinted = false,
-  scope: PrintQueueListScope = {}
+  scope: PrintQueueListScope = {},
+  conn: PrintQueueReadConn = db
 ) {
   const conds: SQL[] = [];
   if (clientId !== undefined) conds.push(eq(printQueue.clientId, clientId));
   if (!includePrinted) conds.push(eq(printQueue.status, 'queued'));
   conds.push(printQueueScopePredicate(scope));
   const where = conds.length ? and(...conds) : undefined;
-  const entries = await db.select().from(printQueue).where(where);
+  const entries = await conn.select().from(printQueue).where(where);
   // PS-129: per-entry shipping hold (locally shipped/cancelled, cancelled upstream, externally shipped).
-  const holds = await loadShippingHoldsForOrderIds(entries.map((e) => Number(e.orderId)));
+  const holds = await loadShippingHoldsForOrderIds(entries.map((e) => Number(e.orderId)), conn);
   // Per user override unlock shipped data on 2026-06-10: the merge/print job already EXCLUDES held
   // entries server-side; align the ACTIVE queue display with it so already-shipped/blocked orders no
   // longer clutter the queue or inflate the "labels not printed" count (operator confusion). The
@@ -1528,7 +1538,7 @@ export async function listQueue(
   // bought in ShipStation and ingested by sync has no snapshot, and five shipped
   // HUGRAB orders proved the queue then showed nothing at all. The backend owns
   // this fact now; the queue renders what it reports.
-  const disclosureByOrderId = await loadHazmatDisclosureForOrders(visibleOrderIds);
+  const disclosureByOrderId = await loadHazmatDisclosureForOrders(visibleOrderIds, conn);
   const totalQty = visibleEntries.reduce((s, e) => s + (e.orderQty ?? 1), 0);
   return {
     queuedOrders: visibleEntries.map((e) => ({
@@ -3060,12 +3070,18 @@ async function loadPackageDimsByOrderId(
 // label from the active queue and failed it at merge with "Already shipped â€” excluded from
 // print batch" (DJ report: order 1463 invisible in an empty queue). Printing an existing
 // label purchases nothing; the creation-time block in decideShippingSafety is unchanged.
-export async function loadShippingHoldsForOrderIds(ids: number[]): Promise<Map<number, string>> {
+export async function loadShippingHoldsForOrderIds(
+  ids: number[],
+  // PS-477 (carried review item A): same read-only seam as listQueue, which is
+  // the only reason it is here. Defaults to `db`; every existing caller is
+  // unchanged.
+  conn: PrintQueueReadConn = db,
+): Promise<Map<number, string>> {
   const result = new Map<number, string>();
   const unique = [...new Set(ids.filter((n) => Number.isFinite(n)))];
   if (unique.length === 0) return result;
 
-  const rows = await db
+  const rows = await conn
     .select({
       id: orders.id,
       orderStatus: orders.orderStatus,
