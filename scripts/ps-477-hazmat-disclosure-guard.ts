@@ -97,9 +97,17 @@ function snapshot(): CanonicalHazmatPurchaseFacts {
   assert.equal(result.snapshotHash, null);
 }
 
-// 6. Delegation pin: the reducer must agree with summarizeHazmatDeclaration on
-//    every declaration input rather than testing status itself. A second
-//    derivation of "is this hazmat" is the exact failure this module removes.
+// 6. Result-agreement check, not (yet) a delegation pin: this only asserts
+//    that the reducer's isHazmat matches
+//    summarizeHazmatDeclaration(declaration).isHazmat for every declaration
+//    input. It cannot today tell real delegation apart from an identical
+//    local re-derivation, because summarizeHazmatDeclaration is currently
+//    defined as exactly `declaration.status === 'active'` -- both sides
+//    compute the same value for every input this loop exercises, so a
+//    regression that replaced the delegation with that same local check
+//    would pass here undetected. This becomes a genuine delegation pin the
+//    moment summarizeHazmatDeclaration grows logic beyond a pure status
+//    check.
 for (const declaration of [activeDeclaration(), clearDeclaration()]) {
   const result = resolveHazmatDisclosure(null, { declaration, revision: 1 });
   assert.equal(
