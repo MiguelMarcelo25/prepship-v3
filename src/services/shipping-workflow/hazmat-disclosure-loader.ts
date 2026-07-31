@@ -18,6 +18,7 @@ import {
 import {
   resolveHazmatDisclosure,
   type ShipmentHazmatDisclosure,
+  type UnreadableSeal,
 } from './hazmat-disclosure.js';
 
 // PS-477: the database half of the disclosure owner. It is deliberately split
@@ -118,6 +119,28 @@ type HazmatSnapshotRow = {
 };
 
 /**
+ * PS-478: one list, two readers. `purchaseFactsFromSnapshotRow` rejects a row
+ * whose profile is unrecognised, and the corrupt-row path needs the same
+ * judgement to decide whether `summary_profile` is safe to surface. Keeping the
+ * values in one place stops those two answers drifting apart.
+ */
+const HAZMAT_PROFILE_VALUES: readonly HazmatProfile[] = [
+  'shipstation_usps',
+  'shipstation_ups_dry_ice',
+  'shipstation_ups_dangerous_goods',
+  'ups_direct',
+  'walmart',
+  // Test-fixture snapshots are real rows and must read back, not be rejected
+  // as invalid. Omitted when the profile was added, so a test label could be
+  // written but never re-read.
+  'prepship_test',
+];
+
+function isHazmatProfile(value: unknown): value is HazmatProfile {
+  return typeof value === 'string' && HAZMAT_PROFILE_VALUES.includes(value as HazmatProfile);
+}
+
+/**
  * Row -> sealed purchase facts, moved verbatim out of order-hazmat.ts's
  * loadFrozenPurchaseFacts. Returns null only when there is no row (no
  * snapshot exists for this shipment) -- that is a normal, expected case
@@ -136,22 +159,11 @@ export function purchaseFactsFromSnapshotRow(
   row: HazmatSnapshotRow | undefined,
 ): CanonicalHazmatPurchaseFacts | null {
   if (!row) return null;
-  const profileValues: HazmatProfile[] = [
-    'shipstation_usps',
-    'shipstation_ups_dry_ice',
-    'shipstation_ups_dangerous_goods',
-    'ups_direct',
-    'walmart',
-    // Test-fixture snapshots are real rows and must read back, not be rejected
-    // as invalid. Omitted when the profile was added, so a test label could be
-    // written but never re-read.
-    'prepship_test',
-  ];
   const candidate = row.snapshotJson as Partial<CanonicalHazmatPurchaseFacts> | null;
   if (
     row.isHazmat !== true
     || !candidate?.declaration
-    || !profileValues.includes(row.profile as HazmatProfile)
+    || !isHazmatProfile(row.profile)
   ) {
     throw new OrderHazmatError(
       'The immutable hazmat snapshot is invalid.',
@@ -232,6 +244,9 @@ export async function loadHazmatDisclosureForOrders(
   // divergence is invisible while the mapper always throws, and silently wrong
   // the moment it does not -- the single-order .limit(1) path never had it.
   const decidedSnapshotOrders = new Set<number>();
+  // PS-478: orders whose latest seal exists but failed validation. Distinct
+  // from being absent from snapshotByOrder, which now means only "no seal".
+  const unreadableSealByOrder = new Map<number, UnreadableSeal>();
   for (const row of snapshotRows) {
     if (row.orderId == null || decidedSnapshotOrders.has(row.orderId)) continue;
     decidedSnapshotOrders.add(row.orderId);
@@ -259,6 +274,16 @@ export async function loadHazmatDisclosureForOrders(
       // back invalid is a real corruption signal and is surfaced structurally
       // so it is alertable. The single-order edit/save path in order-hazmat.ts
       // still throws, unchanged.
+      // PS-478: record that a seal EXISTS here but could not be read. Leaving
+      // this unset would collapse "corrupt" into "absent", which is what let a
+      // shipment sealed as dangerous goods read back as `none` once its live
+      // declaration had been retracted. summary_is_hazmat and summary_profile
+      // carry their own DB CHECK constraints, so they survive a garbage
+      // snapshot_json and are what the reducer consumes.
+      unreadableSealByOrder.set(row.orderId, {
+        summaryIsHazmat: row.isHazmat === true,
+        summaryProfile: isHazmatProfile(row.profile) ? row.profile : null,
+      });
       reportError('hazmat_disclosure_snapshot_corrupt', error, {
         orderId: row.orderId,
         shipmentId: row.shipmentId,
@@ -310,6 +335,7 @@ export async function loadHazmatDisclosureForOrders(
       resolveHazmatDisclosure(
         snapshotByOrder.get(orderId) ?? null,
         declarationByOrder.get(orderId) ?? null,
+        unreadableSealByOrder.get(orderId) ?? null,
       ),
     );
   }

@@ -171,4 +171,64 @@ for (const declaration of [activeDeclaration(), clearDeclaration()]) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// PS-478: a seal that exists but cannot be read is its own state.
+//
+// PS-477 deliberately treated a corrupt snapshot as identical to "no snapshot",
+// which is right whenever a live declaration survives -- the order stays
+// dangerous goods. It is wrong when the declaration was retracted (the PS-475
+// path): the order then read `none` / isHazmat false, so a shipment that went
+// out sealed as dangerous goods read back as not dangerous goods.
+//
+// The distinction is real, not defensive: summary_is_hazmat and summary_profile
+// are separate columns carrying their own DB CHECK constraints, so they remain
+// trustworthy even when snapshot_json is garbage. A corrupt seal is therefore
+// not "no information" -- it is "the sealed detail is unreadable, but the
+// summary still says what this was".
+
+// 7. THE PS-478 CASE: unreadable seal, no live declaration at all. This is the
+//    exact combination that used to answer "not dangerous goods".
+{
+  const result = resolveHazmatDisclosure(null, null, { summaryIsHazmat: true, summaryProfile: 'shipstation_usps' });
+  assert.equal(result.provenance, 'sealed_unreadable');
+  assert.equal(result.isHazmat, true, 'an unreadable seal must never answer "not dangerous goods"');
+  assert.equal(result.profile, 'shipstation_usps', 'summary_profile is DB-constrained and survives a corrupt snapshot_json');
+  assert.equal(result.snapshotHash, null, 'the hash cannot be trusted when the sealed bytes failed validation');
+}
+
+// 8. Unreadable seal WITH a retracted (cleared) declaration -- same answer. The
+//    retraction cannot un-ship what already went out under a seal.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: clearDeclaration(), revision: 4 }, { summaryIsHazmat: true, summaryProfile: null });
+  assert.equal(result.provenance, 'sealed_unreadable');
+  assert.equal(result.isHazmat, true);
+}
+
+// 9. Safety union: an unreadable seal whose summary says NOT hazmat, beside a
+//    live declaration that says it is, still reports hazmat. Neither source
+//    gets to veto the other downward.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: activeDeclaration(), revision: 5 }, { summaryIsHazmat: false, summaryProfile: null });
+  assert.equal(result.provenance, 'sealed_unreadable');
+  assert.equal(result.isHazmat, true, 'a corrupt seal must not downgrade a live active declaration');
+}
+
+// 10. An unreadable seal whose summary says not-hazmat, with no declaration, is
+//     honestly not hazmat -- the summary column is DB-constrained, so this is a
+//     real answer rather than an absence. Provenance still records that the
+//     sealed detail was unreadable.
+{
+  const result = resolveHazmatDisclosure(null, null, { summaryIsHazmat: false, summaryProfile: null });
+  assert.equal(result.provenance, 'sealed_unreadable');
+  assert.equal(result.isHazmat, false);
+}
+
+// 11. A readable seal still wins outright. The unreadable input is only
+//     consulted when there are no verified facts.
+{
+  const result = resolveHazmatDisclosure(snapshot(), null, { summaryIsHazmat: false, summaryProfile: null });
+  assert.equal(result.provenance, 'sealed');
+  assert.equal(result.snapshotHash, `hz_${'b'.repeat(64)}`);
+}
+
 console.log('PS-477 hazmat disclosure guard passed');

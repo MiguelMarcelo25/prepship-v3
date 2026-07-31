@@ -123,9 +123,14 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder, clientId =
         data-testid="order-hazmat-disclosure"
       >
         <span className="font-bold uppercase tracking-wide">Hazmat</span>
+        {/* PS-478: three states, not two. The old binary would have labelled an
+            unreadable seal "sealed at purchase" -- claiming proof of exactly
+            the bytes that failed to validate. */}
         {state.disclosure.provenance === 'declared_unsealed'
           ? ' · declared, not sealed at purchase'
-          : ' · sealed at purchase'}
+          : state.disclosure.provenance === 'sealed_unreadable'
+            ? ' · sealed at purchase, seal unreadable'
+            : ' · sealed at purchase'}
       </div>
     )
   }

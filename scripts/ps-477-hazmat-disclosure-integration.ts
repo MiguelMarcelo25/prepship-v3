@@ -231,7 +231,7 @@ async function main(): Promise<void> {
       INSERT INTO public.orders (id, order_status, source_provider) VALUES
         (1, 'shipped', 'shipstation'),
         (2, 'shipped', 'shipstation');
-      INSERT INTO public.orders (id) VALUES (3), (4), (5);
+      INSERT INTO public.orders (id) VALUES (3), (4), (5), (6);
       -- Order 1: the PS-477 shape. Sync-ingested shipment, active declaration,
       -- deliberately NO snapshot.
       INSERT INTO public.shipments (id, order_id, source) VALUES (10, 1, 'shipstation');
@@ -245,6 +245,13 @@ async function main(): Promise<void> {
       -- corrupt. The stale seal must never be presented as this order's proof.
       INSERT INTO public.shipments (id, order_id, source) VALUES (50, 5, 'prepship_v2');
       INSERT INTO public.shipments (id, order_id, source) VALUES (51, 5, 'prepship_v2');
+      -- PS-478 order 6: a corrupt seal with NO declaration row at all. This is
+      -- the combination that used to answer "not dangerous goods" -- orders 4
+      -- and 5 were masked by their surviving live declarations, so the gap only
+      -- showed once the declaration was retracted (the PS-475 path). It also
+      -- exercises a distinct wiring path: declarationByOrder has no entry for
+      -- this order, so the unreadable seal must carry the answer alone.
+      INSERT INTO public.shipments (id, order_id, source) VALUES (60, 6, 'prepship_v2');
     `);
 
     const order1Declaration = activeDeclaration({ materials: [dryIceMaterial] });
@@ -334,17 +341,27 @@ async function main(): Promise<void> {
         snapshotJson: corruptSnapshotJson,
         captureKind: 'provider_purchase',
       },
+      {
+        shipmentId: 60,
+        snapshotSchemaVersion: 1,
+        orderDeclarationRevision: 1,
+        snapshotHash: `hz_${'f'.repeat(64)}`,
+        summaryIsHazmat: true,
+        summaryProfile: 'shipstation_ups_dry_ice',
+        snapshotJson: corruptSnapshotJson,
+        captureKind: 'provider_purchase',
+      },
     ]);
 
     // ONE batch, all five orders together: the corrupt rows for 4 and 5 must not
     // disturb 1, 2 or 3.
     const { value: batch, events } = await captureErrorLog(
-      () => loadHazmatDisclosureForOrders([1, 2, 3, 4, 5], conn),
+      () => loadHazmatDisclosureForOrders([1, 2, 3, 4, 5, 6], conn),
     );
 
     assert.deepEqual(
       [...batch.keys()].sort((a, b) => a - b),
-      [1, 2, 3, 4, 5],
+      [1, 2, 3, 4, 5, 6],
       'every requested order gets an entry',
     );
 
@@ -380,18 +397,23 @@ async function main(): Promise<void> {
     //    none. It falls through to the live declaration.
     assert.deepEqual(batch.get(4), {
       isHazmat: true,
-      profile: null,
-      provenance: 'declared_unsealed',
+      // PS-478: summary_profile survives a corrupt snapshot_json -- it is its
+      // own column with its own CHECK constraint -- so an unreadable seal can
+      // still name the carrier profile it was sealed under.
+      profile: 'shipstation_usps',
+      provenance: 'sealed_unreadable',
+      // Null: the hash describes bytes that failed validation, so presenting it
+      // would offer proof of something nobody could read.
       snapshotHash: null,
       declarationRevision: 2,
-    }, 'order 4: an unverifiable seal falls back to the live declaration, never to none');
+    }, 'order 4: an unreadable seal is its own state, never none and never a plain unsealed order');
 
     // 5. Latest-wins is keyed on the ORDER, not on whether facts were produced:
     //    a corrupt latest snapshot must not expose the older shipment's seal.
     assert.deepEqual(batch.get(5), {
       isHazmat: true,
-      profile: null,
-      provenance: 'declared_unsealed',
+      profile: 'shipstation_usps',
+      provenance: 'sealed_unreadable',
       snapshotHash: null,
       declarationRevision: 6,
     }, 'order 5: a corrupt LATEST snapshot must not fall back to a stale older seal');
@@ -401,16 +423,29 @@ async function main(): Promise<void> {
       'order 5 must never present the second-latest shipment seal as current proof',
     );
 
+    // 6. PS-478's reason for existing. A corrupt seal with NO live declaration
+    //    used to resolve to `none` / isHazmat false: a shipment that went out
+    //    sealed as dangerous goods read back as not dangerous goods. The
+    //    surviving summary columns now carry the answer on their own.
+    assert.deepEqual(batch.get(6), {
+      isHazmat: true,
+      profile: 'shipstation_ups_dry_ice',
+      provenance: 'sealed_unreadable',
+      snapshotHash: null,
+      // Null, not 0: there is no declaration row to take a revision from.
+      declarationRevision: null,
+    }, 'order 6: an unreadable seal with no live declaration must still report dangerous goods');
+
     // Corruption is surfaced, never swallowed.
     const corruptEvents = events.filter((event) => event.event === 'hazmat_disclosure_snapshot_corrupt');
     assert.deepEqual(
       corruptEvents.map((event) => event.orderId).sort((a, b) => Number(a) - Number(b)),
-      [4, 5],
+      [4, 5, 6],
       'each corrupt snapshot is reported once, structurally, with its order id',
     );
     assert.deepEqual(
       corruptEvents.map((event) => event.shipmentId).sort((a, b) => Number(a) - Number(b)),
-      [40, 51],
+      [40, 51, 60],
       'the corruption report names the LATEST offending shipment, not the older clean one',
     );
     assert.ok(

@@ -16,7 +16,20 @@ import {
  *                         declaration recorded minutes earlier).
  * - `none`              — not dangerous goods.
  */
-export type HazmatProvenance = 'sealed' | 'declared_unsealed' | 'none';
+export type HazmatProvenance = 'sealed' | 'sealed_unreadable' | 'declared_unsealed' | 'none';
+
+/**
+ * PS-478: the columns of a snapshot row that survive a corrupt `snapshot_json`.
+ *
+ * Both carry DB CHECK constraints of their own, so they remain trustworthy when
+ * the sealed JSON does not. Passing this is how a caller says "a seal exists
+ * here, but I could not verify its contents" — distinct from passing nothing,
+ * which says "no seal was ever written".
+ */
+export type UnreadableSeal = {
+  summaryIsHazmat: boolean;
+  summaryProfile: HazmatProfile | null;
+};
 
 export type ShipmentHazmatDisclosure = {
   isHazmat: boolean;
@@ -46,19 +59,31 @@ const NOT_HAZMAT: ShipmentHazmatDisclosure = {
  * A snapshot wins when present: it is proof of what was declared at purchase,
  * and a later declaration edit cannot change what was on the label.
  *
- * PS-477 corrupt-snapshot rule (owned here, not by the loader and not by the
- * consumer): a snapshot ROW that exists but fails shape or integrity validation
- * is not proof of anything — the bytes cannot be trusted to describe the label.
- * For disclosure it is therefore the same input as "no snapshot": the shipment
- * falls back to its live declaration and stays dangerous goods whenever that
- * declaration is active. Never `none` on the strength of a seal nobody can
- * verify. Callers express a corrupt snapshot by passing `snapshot: null`; they
- * do not get to invent a different outcome, and they must surface the
- * corruption (see `hazmat-disclosure-loader.ts`).
+ * PS-478 corrupt-snapshot rule (owned here, not by the loader and not by the
+ * consumer): a snapshot ROW that exists but whose sealed JSON fails shape or
+ * integrity validation is its own state, `sealed_unreadable` — NOT the same
+ * input as "no snapshot".
+ *
+ * PS-477 originally collapsed the two. That is right whenever a live
+ * declaration survives, because the order stays dangerous goods either way. It
+ * is wrong once the declaration is retracted (the PS-475 path): the answer
+ * became `none` / isHazmat false, so a shipment that went out sealed as
+ * dangerous goods read back as not dangerous goods.
+ *
+ * The distinction is grounded, not merely defensive. `summary_is_hazmat` and
+ * `summary_profile` are separate columns carrying their own DB CHECK
+ * constraints, so they stay trustworthy even when `snapshot_json` is garbage. A
+ * corrupt seal is therefore not an absence of information; it is "the sealed
+ * detail is unreadable, but the summary still says what this was."
+ *
+ * Callers pass those surviving columns as `unreadableSeal`. They must still
+ * surface the corruption (see `hazmat-disclosure-loader.ts`); they do not get
+ * to invent a different outcome.
  */
 export function resolveHazmatDisclosure(
   snapshot: CanonicalHazmatPurchaseFacts | null,
   declaration: { declaration: NormalizedHazmatDeclaration | null; revision: number } | null,
+  unreadableSeal: UnreadableSeal | null = null,
 ): ShipmentHazmatDisclosure {
   if (snapshot) {
     return {
@@ -67,6 +92,24 @@ export function resolveHazmatDisclosure(
       provenance: 'sealed',
       snapshotHash: snapshot.snapshotHash,
       declarationRevision: snapshot.revision,
+    };
+  }
+  if (unreadableSeal) {
+    const declaredHazmat = declaration?.declaration
+      ? summarizeHazmatDeclaration(declaration.declaration).isHazmat
+      : false;
+    return {
+      // Safety union, deliberately. Neither source may veto the other
+      // downward: a corrupt seal cannot downgrade a live active declaration,
+      // and a retracted declaration cannot un-ship what already went out under
+      // a seal. Only agreement on "not hazmat" produces false here.
+      isHazmat: unreadableSeal.summaryIsHazmat || declaredHazmat,
+      profile: unreadableSeal.summaryProfile,
+      provenance: 'sealed_unreadable',
+      // Null on purpose. The hash describes bytes that failed validation, so
+      // presenting it would offer proof of something we could not read.
+      snapshotHash: null,
+      declarationRevision: declaration?.revision ?? null,
     };
   }
   if (!declaration?.declaration) return NOT_HAZMAT;

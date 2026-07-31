@@ -53,6 +53,27 @@ export type OrdersPrintQueueDrawerProps = {
   openDetailDrawer: (orderId: number, fromQueue: boolean) => void
 }
 
+/**
+ * PS-478: the hazmat badge tooltip, in one place.
+ *
+ * There are three provenances now, and the two badge sites were each carrying
+ * their own binary `sealed ? … : …`. That binary labelled an unreadable seal as
+ * "not purchased through PrepShip", which is the opposite of what happened: it
+ * WAS purchased here, and the seal recorded at purchase is what cannot be read.
+ * Duplicating a three-way ternary twice is how the two sites drift, so they
+ * share this instead.
+ *
+ * Display only. The backend owns whether the shipment is hazmat and how well
+ * that is known; this just words it.
+ */
+function hazmatBadgeTitle(entry: PrintQueueEntryDto, sealedDetail: string): string {
+  if (entry.hazmat_provenance === 'sealed') return sealedDetail
+  if (entry.hazmat_provenance === 'sealed_unreadable') {
+    return 'Dangerous goods. This label was purchased through PrepShip, but the sealed snapshot failed validation and cannot be shown — the shipment is still hazmat.'
+  }
+  return 'Dangerous goods declared. This label was not purchased through PrepShip, so no snapshot was sealed at purchase.'
+}
+
 export function OrdersPrintQueueDrawer({
   queueClients,
   pqClientFilter,
@@ -350,9 +371,10 @@ export function OrdersPrintQueueDrawer({
                         {entry.hazmat_is_hazmat ? (
                           <span
                             className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 ring-1 ring-amber-300 text-[9.5px] font-semibold uppercase tracking-wide"
-                            title={entry.hazmat_provenance === 'sealed'
-                              ? `Immutable hazmat snapshot revision ${entry.hazmat_declaration_revision ?? 'unknown'} · ${entry.hazmat_profile}`
-                              : 'Dangerous goods declared. This label was not purchased through PrepShip, so no snapshot was sealed at purchase.'}
+                            title={hazmatBadgeTitle(
+                              entry,
+                              `Immutable hazmat snapshot revision ${entry.hazmat_declaration_revision ?? 'unknown'} · ${entry.hazmat_profile}`,
+                            )}
                           >
                             ⚠ Hazmat
                           </span>
@@ -428,9 +450,7 @@ export function OrdersPrintQueueDrawer({
                         {entry.hazmat_is_hazmat ? (
                           <span
                             className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200"
-                            title={entry.hazmat_provenance === 'sealed'
-                              ? `Immutable hazmat snapshot · ${entry.hazmat_profile}`
-                              : 'Dangerous goods declared. This label was not purchased through PrepShip, so no snapshot was sealed at purchase.'}
+                            title={hazmatBadgeTitle(entry, `Immutable hazmat snapshot · ${entry.hazmat_profile}`)}
                           >
                             Hazmat
                           </span>

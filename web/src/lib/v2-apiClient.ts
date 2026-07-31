@@ -191,7 +191,7 @@ export type OrderHazmatDto = {
   disclosure: {
     isHazmat: boolean;
     profile: string | null;
-    provenance: 'sealed' | 'declared_unsealed' | 'none';
+    provenance: 'sealed' | 'sealed_unreadable' | 'declared_unsealed' | 'none';
     snapshotHash: string | null;
     declarationRevision: number | null;
   };

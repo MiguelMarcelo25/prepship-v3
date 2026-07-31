@@ -267,9 +267,43 @@ export async function getOrderHazmat(
   return publicState({
     order,
     ...current,
-    frozenPurchaseFacts: await loadFrozenPurchaseFacts(orderId),
+    // PS-478 read/write split. loadFrozenPurchaseFacts throws
+    // HAZMAT_SNAPSHOT_INVALID (409) on a corrupt seal. On the WRITE path that
+    // throw is protective and stays. On this READ path it was hiding the very
+    // answer the operator needed: `disclosure` above already resolved to
+    // `sealed_unreadable`, and then the 409 replaced the whole response with an
+    // error page. Nobody could see that the shipment went out as dangerous
+    // goods -- a corrupt seal became a hidden 409, exactly what PS-478 forbids.
+    //
+    // Reading is not editing. A shipped order stays uneditable via the terminal
+    // lock in saveOrderHazmatDeclaration, not via this exception, so dropping
+    // it here does not let anyone edit around a broken seal. The frozen block
+    // renders nothing (there are no verified facts to show) while the
+    // disclosure carries the truth.
+    frozenPurchaseFacts: await readFrozenPurchaseFactsForDisplay(orderId),
     disclosure,
   });
+}
+
+/**
+ * PS-478: the display-only reader. Returns null where loadFrozenPurchaseFacts
+ * would throw on an unverifiable seal, because a read must not fail closed on
+ * the operator — `disclosure` already reports `sealed_unreadable` for exactly
+ * this row, and that is the honest thing to render.
+ *
+ * Deliberately NOT used by any write path. saveInTransaction still calls
+ * loadFrozenPurchaseFacts and still throws, so no edit can proceed against a
+ * seal PrepShip cannot verify.
+ */
+async function readFrozenPurchaseFactsForDisplay(
+  orderId: number,
+): Promise<CanonicalHazmatPurchaseFacts | null> {
+  try {
+    return await loadFrozenPurchaseFacts(orderId);
+  } catch (error) {
+    if (error instanceof OrderHazmatError && error.code === 'HAZMAT_SNAPSHOT_INVALID') return null;
+    throw error;
+  }
 }
 
 export async function getOrderHazmatForShipping(orderId: number): Promise<{
