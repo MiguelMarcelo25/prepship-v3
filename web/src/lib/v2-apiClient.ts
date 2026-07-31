@@ -194,6 +194,12 @@ export type OrderHazmatDto = {
     provenance: 'sealed' | 'sealed_unreadable' | 'declared_unsealed' | 'none';
     snapshotHash: string | null;
     declarationRevision: number | null;
+    // PS-479: the declaration a terminal view should display, already chosen by
+    // the backend -- sealed content when a seal is readable, the live one
+    // otherwise. Null means nothing to display, NOT "not hazmat"; read
+    // isHazmat for that. Flag-gated like the sibling `declaration` field above,
+    // because this is content rather than the disclosure fact.
+    declaration: HazmatDeclarationDraft | null;
   };
 };
 

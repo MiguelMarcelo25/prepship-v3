@@ -127,7 +127,7 @@ function editableState(writeEnabled = true) {
     // falls back to `disclosure` whenever capabilities are off, and a future
     // case built on editableState(false) would hit `undefined.isHazmat` and
     // throw a TypeError instead of failing on the thing it meant to check.
-    disclosure: { isHazmat: false, profile: null, provenance: 'none', snapshotHash: null, declarationRevision: null },
+    disclosure: { isHazmat: false, profile: null, provenance: 'none', snapshotHash: null, declarationRevision: null, declaration: null },
   }
 }
 
@@ -148,7 +148,9 @@ function shippedState() {
       profile: 'shipstation_ups_dry_ice',
       declaration: activeDeclaration,
     },
-    disclosure: { isHazmat: true, profile: 'shipstation_ups_dry_ice', provenance: 'sealed', snapshotHash: 'hz_snapshot_fixture', declarationRevision: 3 },
+    // PS-479: the backend now chooses what a terminal view displays. For a
+    // sealed order that is the SEALED declaration, not the live one.
+    disclosure: { isHazmat: true, profile: 'shipstation_ups_dry_ice', provenance: 'sealed', snapshotHash: 'hz_snapshot_fixture', declarationRevision: 3, declaration: activeDeclaration },
   }
 }
 
@@ -167,7 +169,8 @@ function unsealedShippedState() {
     validation: { valid: true, issues: [] },
     requiresRerate: false,
     frozenPurchaseFacts: null,
-    disclosure: { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3 },
+    // PS-479: nothing was sealed, so the live declaration is what displays.
+    disclosure: { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3, declaration: activeDeclaration },
   }
 }
 
@@ -186,8 +189,10 @@ function flagsOffState(isHazmat) {
     requiresRerate: false,
     frozenPurchaseFacts: null,
     disclosure: isHazmat
-      ? { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3 }
-      : { isHazmat: false, profile: null, provenance: 'none', snapshotHash: null, declarationRevision: null },
+      // PS-479: declaration CONTENT is flag-gated even though the FACT is not,
+      // so publicState nulls it. The chip renders off isHazmat/provenance.
+      ? { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3, declaration: null }
+      : { isHazmat: false, profile: null, provenance: 'none', snapshotHash: null, declarationRevision: null, declaration: null },
   }
 }
 

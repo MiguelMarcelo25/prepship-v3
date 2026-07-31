@@ -35,7 +35,17 @@ function displayedDeclaration(state: OrderHazmatDto, shipped: boolean): HazmatDe
   // This needs no override of its own: it is a read-only display choice, no
   // declaration write path is touched, and CLAUDE.md's standing allowance for
   // agents to read shipped data already covers it.
-  if (shipped) return state.frozenPurchaseFacts?.declaration ?? state.declaration ?? clearDeclaration()
+  // PS-479: the backend resolved which declaration a terminal view shows. This
+  // used to be `frozenPurchaseFacts?.declaration ?? state.declaration ?? clear`
+  // -- resolveHazmatDisclosure's own snapshot-wins precedence, restated here in
+  // React and fed by two different backend functions with different corruption
+  // behaviour. They agreed, right up until they wouldn't. Now there is one
+  // answer and this renders it.
+  //
+  // clearDeclaration() remains only as the empty-form default: the backend
+  // reports null when there is nothing to display, which is not the same claim
+  // as "not hazmat" -- read state.disclosure.isHazmat for that.
+  if (shipped) return state.disclosure.declaration ?? clearDeclaration()
   return state.declaration ?? clearDeclaration()
 }
 
@@ -428,9 +438,20 @@ export function OrdersHazmatDeclaration({ orderId, shipped, rawOrder, clientId =
       {error ? <div className="mt-2 text-[10px] text-danger">{error}</div> : null}
       {notice ? <div className="mt-2 text-[10px] font-medium text-ink-2">{notice}</div> : null}
       {state.requiresRerate ? <div className="mt-2 text-[10px] font-semibold text-amber-800">Re-rate required before label purchase.</div> : null}
-      {shipped && state.frozenPurchaseFacts ? (
+      {/* PS-479: keyed on the backend's provenance, not on whether
+          frozenPurchaseFacts happens to be present. That boolean was a second
+          way of asking the same question, and it got the answer wrong for one
+          case: a corrupt seal has no frozenPurchaseFacts, so it fell into the
+          else-branch and told the operator the label "was not bought through
+          PrepShip" — the opposite of what happened. PS-478 fixed that wording
+          on the flags-off chip and both queue badges and missed this site. */}
+      {shipped && state.disclosure.provenance === 'sealed' ? (
         <div className="mt-2 flex items-center gap-1 text-[10px] text-ink-3"><ShieldCheck size={11} /> Shipped hazmat snapshot is immutable.</div>
-      ) : shipped && !state.frozenPurchaseFacts && state.disclosure.isHazmat ? (
+      ) : shipped && state.disclosure.provenance === 'sealed_unreadable' ? (
+        <div className="mt-2 flex items-center gap-1 text-[10px] text-amber-800">
+          <AlertTriangle size={11} /> Sealed at purchase, but the snapshot failed validation and cannot be shown.
+        </div>
+      ) : shipped && state.disclosure.provenance === 'declared_unsealed' ? (
         <div className="mt-2 flex items-center gap-1 text-[10px] text-amber-800">
           <AlertTriangle size={11} /> Declared, not sealed at purchase — this label was not bought through PrepShip.
         </div>

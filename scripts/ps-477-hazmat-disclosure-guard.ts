@@ -66,12 +66,32 @@ function source(relativePath: string): string {
     disclosureAssignments.length > 0,
     'order-hazmat.ts must still carry a disclosure field; this check must not pass by the field having vanished',
   );
+  // PS-479 narrowed this from "the word featureEnabled may not appear on a
+  // disclosure line" to the property that was actually worth protecting.
+  //
+  // Splitting fact from content is legitimate and now happens: the FACT
+  // (isHazmat / provenance / profile) stays ungated, while the CONTENT
+  // (`declaration` — materials, UN numbers, emergency contacts) follows the
+  // same gating as its siblings. The blanket ban would have rejected that, and
+  // the tempting "fix" is to delete the check. So it pins the real invariant
+  // instead: whatever the flag does, it may only ever override `declaration`,
+  // and the rest of the resolved fact must pass through by spread.
   for (const line of disclosureAssignments) {
-    assert.doesNotMatch(
-      line,
-      /featureEnabled/,
-      `disclosure must never be gated by a rollout flag -- offending line: ${line.trim()}`,
+    if (!/featureEnabled/.test(line)) continue;
+    const window = orderHazmat.slice(orderHazmat.indexOf(line), orderHazmat.indexOf(line) + 400);
+    assert.match(
+      window,
+      /\.\.\.input\.disclosure/,
+      'a flag-conditional disclosure must still spread the resolved fact through -- rebuilding it field by field is how isHazmat quietly gets dropped',
     );
+    const overriddenKeys = [...window.matchAll(/\.\.\.input\.disclosure,\s*([a-zA-Z]+):/g)].map((match) => match[1]);
+    for (const key of overriddenKeys) {
+      assert.equal(
+        key,
+        'declaration',
+        `only declaration CONTENT may be flag-gated; "${key}" is part of the disclosure fact and must stay visible when the kill switch is off`,
+      );
+    }
   }
 }
 
@@ -229,6 +249,100 @@ for (const declaration of [activeDeclaration(), clearDeclaration()]) {
   const result = resolveHazmatDisclosure(snapshot(), null, { summaryIsHazmat: false, summaryProfile: null });
   assert.equal(result.provenance, 'sealed');
   assert.equal(result.snapshotHash, `hz_${'b'.repeat(64)}`);
+}
+
+// 11b. PS-479 STRUCTURAL PIN. This one cannot be a behavioural test, and that
+//      is worth stating plainly rather than pretending otherwise.
+//
+//      The old React line and the new one return the SAME value for every
+//      consistent input -- that was the point of the card: "they agree today".
+//      PS-479's value is deleting the duplicate rule, not changing an answer,
+//      so a mutation restoring the old precedence passes the whole browser
+//      suite. It was run and it did pass; the honest conclusion is that no
+//      behavioural test can pin this, so the pin is structural.
+//
+//      What must stay true: the panel's terminal display picks nothing. It
+//      renders what the backend resolved. Reintroducing a
+//      `frozenPurchaseFacts?.declaration ?? ...` chain there restores the
+//      duplicate precedence PS-477 exists to close.
+{
+  const panel = source('web/src/components/Views/OrdersHazmatDeclaration.tsx');
+  const displayed = panel.slice(
+    panel.indexOf('function displayedDeclaration'),
+    panel.indexOf('function importedHazmatEvidence'),
+  );
+  assert.ok(
+    displayed.length > 0,
+    'displayedDeclaration must still exist; this check must not pass by the function being renamed away',
+  );
+  assert.match(
+    displayed,
+    /state\.disclosure\.declaration/,
+    'the terminal branch must render the backend-resolved declaration',
+  );
+  const executable = displayed
+    .split('\n')
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join('\n');
+  assert.doesNotMatch(
+    executable,
+    /frozenPurchaseFacts/,
+    'displayedDeclaration must not consult frozenPurchaseFacts -- choosing between it and the live declaration IS the precedence rule the backend now owns',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PS-479: the backend resolves WHICH declaration a terminal view shows, so the
+// panel stops restating this module's precedence in React.
+//
+// The old frontend line was:
+//   frozenPurchaseFacts?.declaration ?? state.declaration ?? clearDeclaration()
+// which is rules 1 and 2 of this reducer, written a second time, fed by two
+// different functions with two different corruption behaviours.
+
+// 12. Sealed shows the SEALED declaration, never the live one. This is the case
+//     that would drift first: an edit after purchase must not change what a
+//     terminal view says went out on the label.
+{
+  const live = { ...activeDeclaration(), regulatedContentType: 'edited_after_purchase' } as NormalizedHazmatDeclaration;
+  const result = resolveHazmatDisclosure(snapshot(), { declaration: live, revision: 9 });
+  assert.equal(result.provenance, 'sealed');
+  assert.equal(
+    result.declaration?.regulatedContentType,
+    snapshot().declaration.regulatedContentType,
+    'a sealed order must display the sealed declaration, not a later edit',
+  );
+}
+
+// 13. Unsealed shows the live declaration -- there is nothing else.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: activeDeclaration(), revision: 3 });
+  assert.equal(result.provenance, 'declared_unsealed');
+  assert.deepEqual(result.declaration, activeDeclaration());
+}
+
+// 14. An unreadable seal shows the live declaration when one survives, because
+//     the sealed content is by definition unreadable.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: activeDeclaration(), revision: 3 }, { summaryIsHazmat: true, summaryProfile: null });
+  assert.equal(result.provenance, 'sealed_unreadable');
+  assert.deepEqual(result.declaration, activeDeclaration());
+}
+
+// 15. null declaration does NOT mean "not hazmat". An unreadable seal with no
+//     surviving declaration has nothing to display and is still dangerous
+//     goods -- a consumer reading the field instead of the fact would get this
+//     backwards, which is the whole bug class PS-477 opened on.
+{
+  const result = resolveHazmatDisclosure(null, null, { summaryIsHazmat: true, summaryProfile: null });
+  assert.equal(result.declaration, null);
+  assert.equal(result.isHazmat, true, 'nothing to display is not the same as nothing declared');
+}
+
+// 16. Not hazmat has nothing to display.
+{
+  assert.equal(resolveHazmatDisclosure(null, null).declaration, null);
+  assert.equal(resolveHazmatDisclosure(null, { declaration: clearDeclaration(), revision: 2 }).declaration, null);
 }
 
 console.log('PS-477 hazmat disclosure guard passed');

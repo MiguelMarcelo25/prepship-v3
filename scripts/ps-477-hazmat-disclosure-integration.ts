@@ -365,8 +365,20 @@ async function main(): Promise<void> {
       'every requested order gets an entry',
     );
 
+    // PS-479 added `declaration` — the content a terminal view should render,
+    // chosen by the backend instead of by React. The deepEqual assertions below
+    // stay strict about the FACT (they still fail on any unexpected field) and
+    // check the content separately, where its identity is what matters rather
+    // than its full body being retyped into six fixtures.
+    const fact = (orderId: number) => {
+      const entry = batch.get(orderId);
+      assert.ok(entry, `order ${orderId} must resolve`);
+      const { declaration: _displayed, ...rest } = entry;
+      return rest;
+    };
+
     // 1. THE PS-477 CASE. A shipment PrepShip did not buy is still dangerous goods.
-    assert.deepEqual(batch.get(1), {
+    assert.deepEqual(fact(1), {
       isHazmat: true,
       profile: null,
       provenance: 'declared_unsealed',
@@ -376,7 +388,7 @@ async function main(): Promise<void> {
 
     // 2. Sealed wins over a declaration edited after purchase, and reports the
     //    SNAPSHOT's revision/profile/hash -- proof the loader read the seal.
-    assert.deepEqual(batch.get(2), {
+    assert.deepEqual(fact(2), {
       isHazmat: true,
       profile: 'shipstation_usps',
       provenance: 'sealed',
@@ -385,7 +397,7 @@ async function main(): Promise<void> {
     }, 'order 2: a verifiable seal wins over the later declaration edit');
 
     // 3. Nothing declared, nothing sealed.
-    assert.deepEqual(batch.get(3), {
+    assert.deepEqual(fact(3), {
       isHazmat: false,
       profile: null,
       provenance: 'none',
@@ -395,7 +407,7 @@ async function main(): Promise<void> {
 
     // 4. A corrupt snapshot must NOT abort the batch and must NOT downgrade to
     //    none. It falls through to the live declaration.
-    assert.deepEqual(batch.get(4), {
+    assert.deepEqual(fact(4), {
       isHazmat: true,
       // PS-478: summary_profile survives a corrupt snapshot_json -- it is its
       // own column with its own CHECK constraint -- so an unreadable seal can
@@ -410,7 +422,7 @@ async function main(): Promise<void> {
 
     // 5. Latest-wins is keyed on the ORDER, not on whether facts were produced:
     //    a corrupt latest snapshot must not expose the older shipment's seal.
-    assert.deepEqual(batch.get(5), {
+    assert.deepEqual(fact(5), {
       isHazmat: true,
       profile: 'shipstation_usps',
       provenance: 'sealed_unreadable',
@@ -427,7 +439,7 @@ async function main(): Promise<void> {
     //    used to resolve to `none` / isHazmat false: a shipment that went out
     //    sealed as dangerous goods read back as not dangerous goods. The
     //    surviving summary columns now carry the answer on their own.
-    assert.deepEqual(batch.get(6), {
+    assert.deepEqual(fact(6), {
       isHazmat: true,
       profile: 'shipstation_ups_dry_ice',
       provenance: 'sealed_unreadable',
@@ -471,6 +483,7 @@ async function main(): Promise<void> {
       provenance: 'none',
       snapshotHash: null,
       declarationRevision: null,
+      declaration: null,
     }, 'an unknown order id resolves to none, not undefined');
 
     assert.equal((await loadHazmatDisclosureForOrders([], conn)).size, 0, 'an empty batch queries nothing');

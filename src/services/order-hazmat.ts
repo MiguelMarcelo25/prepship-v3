@@ -229,7 +229,17 @@ function publicState(input: {
     // must never gate SEEING that something already shipped as dangerous goods.
     // getOrderHazmatForShipping sets the same precedent -- hiding a persisted
     // declaration behind a kill switch is how an undeclared label gets bought.
-    disclosure: input.disclosure,
+    //
+    // PS-479 splits fact from content. isHazmat / provenance / profile are the
+    // FACT and stay ungated for exactly that reason. `declaration` is the
+    // CONTENT -- materials, UN numbers, emergency contacts -- and follows the
+    // same gating as the sibling `declaration` and `frozenPurchaseFacts` fields
+    // above. Carrying content through an intentionally ungated field would have
+    // widened its exposure as a side effect of moving a precedence rule, which
+    // is not a change this ticket is entitled to make.
+    disclosure: capabilities.featureEnabled
+      ? input.disclosure
+      : { ...input.disclosure, declaration: null },
   };
 }
 

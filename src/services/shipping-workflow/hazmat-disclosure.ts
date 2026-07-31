@@ -37,6 +37,27 @@ export type ShipmentHazmatDisclosure = {
   provenance: HazmatProvenance;
   snapshotHash: string | null;
   declarationRevision: number | null;
+  /**
+   * PS-479: the declaration a terminal view should DISPLAY, already chosen.
+   *
+   * The panel used to pick this itself —
+   * `frozenPurchaseFacts?.declaration ?? state.declaration ?? clearDeclaration()`
+   * — which restated this module's snapshot-wins precedence in React. The two
+   * agreed, but they were fed by different functions with different corruption
+   * semantics, so they could drift. Two copies of a precedence rule drifting is
+   * the exact failure PS-477 exists to close, and it had been reintroduced one
+   * layer up.
+   *
+   * Null means "nothing to display", not "not hazmat" — read `isHazmat` for
+   * that. A `sealed_unreadable` order can be hazmat with a null declaration
+   * when the seal is unreadable and no live declaration survives.
+   *
+   * This is declaration CONTENT (materials, UN numbers, emergency contacts),
+   * not the disclosure FACT. The fact is never gated by rollout flags; the
+   * content follows the same gating as `OrderHazmatState.declaration`, so
+   * `publicState` nulls it when the hazmat feature is off for the client.
+   */
+  declaration: NormalizedHazmatDeclaration | null;
 };
 
 const NOT_HAZMAT: ShipmentHazmatDisclosure = {
@@ -45,6 +66,7 @@ const NOT_HAZMAT: ShipmentHazmatDisclosure = {
   provenance: 'none',
   snapshotHash: null,
   declarationRevision: null,
+  declaration: null,
 };
 
 /**
@@ -92,6 +114,9 @@ export function resolveHazmatDisclosure(
       provenance: 'sealed',
       snapshotHash: snapshot.snapshotHash,
       declarationRevision: snapshot.revision,
+      // The sealed declaration, not the live one. A terminal view must show
+      // what actually went out on the label; a later edit cannot rewrite it.
+      declaration: snapshot.declaration,
     };
   }
   if (unreadableSeal) {
@@ -110,6 +135,11 @@ export function resolveHazmatDisclosure(
       // presenting it would offer proof of something we could not read.
       snapshotHash: null,
       declarationRevision: declaration?.revision ?? null,
+      // The sealed content is unreadable by definition, so the live
+      // declaration is the only thing left worth showing. Null when none
+      // survives -- which is still `isHazmat: true` off the summary column, so
+      // a consumer must read the fact, not the presence of this field.
+      declaration: declaration?.declaration ?? null,
     };
   }
   if (!declaration?.declaration) return NOT_HAZMAT;
@@ -126,5 +156,9 @@ export function resolveHazmatDisclosure(
     provenance: 'declared_unsealed',
     snapshotHash: null,
     declarationRevision: declaration.revision,
+    // Nothing was sealed, so the live declaration IS what this shipment
+    // declares. Non-null here by construction: the guard above returned early
+    // unless this declaration exists and is active.
+    declaration: declaration.declaration,
   };
 }
