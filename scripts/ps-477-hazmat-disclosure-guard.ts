@@ -1,0 +1,112 @@
+// PS-477: a shipment PrepShip did not buy must still disclose its hazmat.
+//
+// Five shipped HUGRAB orders (3243-3246, 3249) carry an active declaration and a
+// shipment row but no shipment_hazmat_snapshots row: the labels were bought in
+// ShipStation and ingested by shipment-sync.ts:163, while the snapshot is only
+// ever written by PrepShip's own purchase flow (labels.ts:3100).
+//
+// Absence of a snapshot silently meant "not hazmat". print-queue.ts omitted the
+// fields entirely; OrdersHazmatDeclaration.tsx returned clearDeclaration(),
+// which affirmatively displayed a dangerous-goods order as clear.
+//
+// This guard calls the reducer rather than matching source text.
+import assert from 'node:assert/strict';
+import {
+  resolveHazmatDisclosure,
+} from '../src/services/shipping-workflow/hazmat-disclosure.js';
+import {
+  summarizeHazmatDeclaration,
+  HAZMAT_DECLARATION_SCHEMA_VERSION,
+  type CanonicalHazmatPurchaseFacts,
+  type NormalizedHazmatDeclaration,
+} from '../src/services/shipping-workflow/hazmat-declaration.js';
+
+function activeDeclaration(): NormalizedHazmatDeclaration & { status: 'active' } {
+  return {
+    schemaVersion: HAZMAT_DECLARATION_SCHEMA_VERSION,
+    status: 'active',
+    limitedQuantity: false,
+    containsBattery: false,
+    dryIce: false,
+    dryIceWeightValue: null,
+    dryIceWeightUnit: null,
+    emergencyContactName: 'Eddie Kim',
+    emergencyContactPhone: '310-720-1871',
+    uspsCategory: null,
+    uspsPackageLevel: null,
+    regulatedContentType: null,
+    materials: [],
+  } as NormalizedHazmatDeclaration & { status: 'active' };
+}
+
+function clearDeclaration(): NormalizedHazmatDeclaration {
+  return { ...activeDeclaration(), status: 'clear' } as NormalizedHazmatDeclaration;
+}
+
+function snapshot(): CanonicalHazmatPurchaseFacts {
+  return {
+    schemaVersion: HAZMAT_DECLARATION_SCHEMA_VERSION,
+    revision: 3,
+    declarationHash: `hz_${'a'.repeat(64)}`,
+    snapshotHash: `hz_${'b'.repeat(64)}`,
+    profile: 'shipstation_usps',
+    declaration: { ...activeDeclaration(), status: 'active' },
+  };
+}
+
+// 1. Snapshot present wins and is sealed.
+{
+  const result = resolveHazmatDisclosure(snapshot(), { declaration: activeDeclaration(), revision: 9 });
+  assert.equal(result.provenance, 'sealed');
+  assert.equal(result.isHazmat, true);
+  assert.equal(result.profile, 'shipstation_usps');
+  assert.equal(result.snapshotHash, `hz_${'b'.repeat(64)}`);
+  assert.equal(result.declarationRevision, 3, 'sealed revision comes from the snapshot, not the live declaration');
+}
+
+// 2. THE PS-477 CASE: no snapshot, active declaration.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: activeDeclaration(), revision: 3 });
+  assert.equal(result.provenance, 'declared_unsealed');
+  assert.equal(result.isHazmat, true, 'a shipment PrepShip did not buy is still dangerous goods');
+  assert.equal(result.snapshotHash, null);
+  assert.equal(result.declarationRevision, 3);
+}
+
+// 3. profile is ALWAYS null when unsealed. A declaration cannot name a carrier
+//    profile -- that is resolved at rating/purchase by hazmat-capability.ts.
+//    Inventing one would fabricate the provenance this module exists to keep honest.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: activeDeclaration(), revision: 3 });
+  assert.equal(result.profile, null, 'unsealed disclosure must not invent a carrier profile');
+}
+
+// 4. Cleared declaration is not hazmat.
+{
+  const result = resolveHazmatDisclosure(null, { declaration: clearDeclaration(), revision: 2 });
+  assert.equal(result.provenance, 'none');
+  assert.equal(result.isHazmat, false);
+}
+
+// 5. Nothing at all.
+{
+  const result = resolveHazmatDisclosure(null, null);
+  assert.equal(result.provenance, 'none');
+  assert.equal(result.isHazmat, false);
+  assert.equal(result.profile, null);
+  assert.equal(result.snapshotHash, null);
+}
+
+// 6. Delegation pin: the reducer must agree with summarizeHazmatDeclaration on
+//    every declaration input rather than testing status itself. A second
+//    derivation of "is this hazmat" is the exact failure this module removes.
+for (const declaration of [activeDeclaration(), clearDeclaration()]) {
+  const result = resolveHazmatDisclosure(null, { declaration, revision: 1 });
+  assert.equal(
+    result.isHazmat,
+    summarizeHazmatDeclaration(declaration).isHazmat,
+    'reducer must delegate the hazmat determination to summarizeHazmatDeclaration',
+  );
+}
+
+console.log('PS-477 hazmat disclosure guard passed');

@@ -907,7 +907,8 @@
     "test:ps-473-provider-error-detail": "tsx scripts/ps-473-provider-error-detail-guard.ts",
     "test:ps-474-hazmat-shipfrom-phone": "tsx scripts/ps-474-hazmat-shipfrom-phone-guard.ts",
     "test:ps-475-hazmat-retraction": "tsx scripts/ps-475-hazmat-retraction-guard.ts",
-    "test:ps-476-rule-status-convergence": "tsx scripts/ps-476-rule-status-convergence-guard.ts"
+    "test:ps-476-rule-status-convergence": "tsx scripts/ps-476-rule-status-convergence-guard.ts",
+    "test:ps-477-hazmat-disclosure": "tsx scripts/ps-477-hazmat-disclosure-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
