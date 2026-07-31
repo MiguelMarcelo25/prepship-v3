@@ -11,6 +11,8 @@
 //
 // This guard calls the reducer rather than matching source text.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   resolveHazmatDisclosure,
 } from '../src/services/shipping-workflow/hazmat-disclosure.js';
@@ -20,6 +22,31 @@ import {
   type CanonicalHazmatPurchaseFacts,
   type NormalizedHazmatDeclaration,
 } from '../src/services/shipping-workflow/hazmat-declaration.js';
+
+function source(relativePath: string): string {
+  return readFileSync(fileURLToPath(new URL(`../${relativePath}`, import.meta.url)), 'utf8');
+}
+
+// 0. The reducer must stay I/O-free -- the one property this whole guard rests
+//    on. Running it with an unparseable DATABASE_URL proves it on a bare
+//    checkout (the db client parses process.env at import and exits the
+//    process), but CI runs with a real environment, where a db import would
+//    load silently and every assertion below would keep passing while proving
+//    nothing about purity. So pin it statically too: the loaders live in the
+//    sibling hazmat-disclosure-loader.ts, and that is where the db client is
+//    allowed to appear.
+{
+  assert.doesNotMatch(
+    source('src/services/shipping-workflow/hazmat-disclosure.ts'),
+    /\bfrom\s+'[^']*db\/client\.js'/,
+    'hazmat-disclosure.ts must not import the database client -- loaders belong in hazmat-disclosure-loader.ts',
+  );
+  assert.match(
+    source('src/services/shipping-workflow/hazmat-disclosure-loader.ts'),
+    /\bfrom\s+'[^']*db\/client\.js'/,
+    'the loader module is where the database client belongs; this check must not pass by the file having vanished',
+  );
+}
 
 function activeDeclaration(): NormalizedHazmatDeclaration & { status: 'active' } {
   return {

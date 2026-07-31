@@ -32,15 +32,17 @@ import {
 } from './shipping-workflow/hazmat-capability.js';
 // PS-477: declarationFromRows / purchaseFactsFromSnapshotRow are the same
 // row->fact mappers loadDeclaration / loadFrozenPurchaseFacts always used,
-// moved next to the resolveHazmatDisclosure reducer that also needs them.
+// moved next to the hazmat disclosure loaders that also need them.
 // OrderHazmatError moved with them (purchaseFactsFromSnapshotRow throws it)
 // and is re-exported below so every existing importer of this module is
-// unaffected.
+// unaffected. They live in hazmat-disclosure-LOADER.ts, not beside the
+// reducer: hazmat-disclosure.ts must stay free of the db client so the pure
+// rule keeps being provable without an environment.
 import {
   declarationFromRows,
   OrderHazmatError,
   purchaseFactsFromSnapshotRow,
-} from './shipping-workflow/hazmat-disclosure.js';
+} from './shipping-workflow/hazmat-disclosure-loader.js';
 import {
   hazmatSemanticHash,
   normalizeAndValidateHazmatDeclaration,
@@ -102,7 +104,7 @@ function orderWhere(orderId: number, scope: ClientStoreScope) {
 }
 
 // PS-477: row assembly and snapshot validation moved to
-// shipping-workflow/hazmat-disclosure.ts as declarationFromRows /
+// shipping-workflow/hazmat-disclosure-loader.ts as declarationFromRows /
 // purchaseFactsFromSnapshotRow (exported there so the new batch loader can
 // share them). The queries below are unchanged; only the row->fact mapping
 // they used to inline now delegates to the moved helpers.
