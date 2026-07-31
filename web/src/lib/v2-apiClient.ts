@@ -176,14 +176,6 @@ export type OrderHazmatDto = {
     issues: Array<{ path: string; code: string; message: string; severity: string }>;
   };
   requiresRerate: boolean;
-  frozenPurchaseFacts: {
-    schemaVersion: 1;
-    revision: number;
-    declarationHash: string;
-    snapshotHash: string;
-    profile: string;
-    declaration: HazmatDeclarationDraft;
-  } | null;
   // PS-477: the resolved sealed/declared_unsealed/none fact. Always present on
   // the wire and never flag-gated by the backend (order-hazmat.ts publicState()
   // sets it unconditionally) -- lets the detail panel show a shipped

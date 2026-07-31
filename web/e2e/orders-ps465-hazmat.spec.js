@@ -121,7 +121,6 @@ function editableState(writeEnabled = true) {
     capabilities: capabilities(writeEnabled),
     validation: { valid: true, issues: [] },
     requiresRerate: false,
-    frozenPurchaseFacts: null,
     // PS-477: the awaiting fixture declares `clear`, so the backend owner
     // resolves NOT_HAZMAT. Present even though no assertion reads it: the panel
     // falls back to `disclosure` whenever capabilities are off, and a future
@@ -140,14 +139,6 @@ function shippedState() {
     capabilities: capabilities(false),
     validation: { valid: true, issues: [] },
     requiresRerate: false,
-    frozenPurchaseFacts: {
-      schemaVersion: 1,
-      revision: 3,
-      declarationHash: 'hz_fixture_frozen',
-      snapshotHash: 'hz_snapshot_fixture',
-      profile: 'shipstation_ups_dry_ice',
-      declaration: activeDeclaration,
-    },
     // PS-479: the backend now chooses what a terminal view displays. For a
     // sealed order that is the SEALED declaration, not the live one.
     disclosure: { isHazmat: true, profile: 'shipstation_ups_dry_ice', provenance: 'sealed', snapshotHash: 'hz_snapshot_fixture', declarationRevision: 3, declaration: activeDeclaration },
@@ -156,8 +147,8 @@ function shippedState() {
 
 // PS-477: the label was bought in ShipStation and ingested by sync -- an
 // active declaration exists but PrepShip never purchased it, so no snapshot
-// was ever sealed. frozenPurchaseFacts is null; the disclosure fact (backend
-// canonical owner: resolveHazmatDisclosure) is what tells the panel this is
+// was ever sealed. The disclosure fact (backend canonical owner:
+// resolveHazmatDisclosure) is what tells the panel this is
 // still dangerous goods.
 function unsealedShippedState() {
   return {
@@ -168,7 +159,6 @@ function unsealedShippedState() {
     capabilities: capabilities(false),
     validation: { valid: true, issues: [] },
     requiresRerate: false,
-    frozenPurchaseFacts: null,
     // PS-479: nothing was sealed, so the live declaration is what displays.
     disclosure: { isHazmat: true, profile: null, provenance: 'declared_unsealed', snapshotHash: null, declarationRevision: 3, declaration: activeDeclaration },
   }
@@ -187,7 +177,6 @@ function flagsOffState(isHazmat) {
     capabilities: capabilities(false, false),
     validation: { valid: true, issues: [] },
     requiresRerate: false,
-    frozenPurchaseFacts: null,
     disclosure: isHazmat
       // PS-479: declaration CONTENT is flag-gated even though the FACT is not,
       // so publicState nulls it. The chip renders off isHazmat/provenance.
@@ -430,8 +419,8 @@ test('mobile shipped view renders only the immutable purchase snapshot', async (
 // purchase snapshot, because the label was bought in ShipStation and ingested
 // by sync rather than purchased through PrepShip. Before this ticket the panel
 // fell back to clearDeclaration() whenever frozenPurchaseFacts was null,
-// affirmatively lying that the shipment was clear. This proves the fixed
-// fallback (state.declaration, then disclosure) instead.
+// affirmatively lying that the shipment was clear. PS-479 then moved the
+// choice to the backend; this proves the panel renders what it resolved.
 test('unsealed shipped order shows an active declaration, not clear', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const captured = await setup(page, { unsealedShipped: true })

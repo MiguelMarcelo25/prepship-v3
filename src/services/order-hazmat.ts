@@ -1,12 +1,10 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   orderHazmatDeclarations,
   orderHazmatMaterials,
-  shipmentHazmatSnapshots,
 } from '../db/schema/hazmat.js';
 import { orderOverrides, orders } from '../db/schema/orders.js';
-import { shipments } from '../db/schema/shipments.js';
 import {
   acquireLabelPurchaseLock,
   assertLabelPurchaseLockHeld,
@@ -30,19 +28,18 @@ import {
   resolveHazmatCapabilities,
   type HazmatCapabilities,
 } from './shipping-workflow/hazmat-capability.js';
-// PS-477: declarationFromRows / purchaseFactsFromSnapshotRow are the same
-// row->fact mappers loadDeclaration / loadFrozenPurchaseFacts always used,
-// moved next to the hazmat disclosure loaders that also need them.
-// OrderHazmatError moved with them (purchaseFactsFromSnapshotRow throws it)
-// and is re-exported below so every existing importer of this module is
-// unaffected. They live in hazmat-disclosure-LOADER.ts, not beside the
+// PS-477: declarationFromRows is the same row->fact mapper loadDeclaration
+// always used, moved next to the hazmat disclosure loaders that also need it.
+// OrderHazmatError moved with it and is re-exported below so every existing
+// importer of this module is unaffected. PS-482 removed this file's use of
+// purchaseFactsFromSnapshotRow along with loadFrozenPurchaseFacts; the
+// disclosure loader still owns and uses it. They live in hazmat-disclosure-LOADER.ts, not beside the
 // reducer: hazmat-disclosure.ts must stay free of the db client so the pure
 // rule keeps being provable without an environment.
 import {
   declarationFromRows,
   loadHazmatDisclosureForOrder,
   OrderHazmatError,
-  purchaseFactsFromSnapshotRow,
 } from './shipping-workflow/hazmat-disclosure-loader.js';
 // PS-477: the type only -- hazmat-disclosure.ts must stay free of the db
 // client (see the comment above), so the loader is imported separately from
@@ -54,7 +51,6 @@ import {
   normalizeHazmatDeclaration,
   summarizeHazmatDeclaration,
   validateHazmatDeclaration,
-  type CanonicalHazmatPurchaseFacts,
   type HazmatDeclarationInput,
   type HazmatValidationResult,
   type NormalizedHazmatDeclaration,
@@ -86,7 +82,6 @@ export type OrderHazmatState = {
   capabilities: HazmatCapabilities;
   validation: HazmatValidationResult;
   requiresRerate: boolean;
-  frozenPurchaseFacts: CanonicalHazmatPurchaseFacts | null;
   // PS-477: the resolved sealed/declared_unsealed/none fact. Never flag-gated
   // in publicState -- see the comment there.
   disclosure: ShipmentHazmatDisclosure;
@@ -146,25 +141,6 @@ async function loadDeclaration(
   };
 }
 
-async function loadFrozenPurchaseFacts(orderId: number): Promise<CanonicalHazmatPurchaseFacts | null> {
-  // Per user override unlock shipped data on 2026-07-25: read only the additive,
-  // immutable PS-465 snapshot sidecar; shipment history is never rewritten.
-  const [row] = await db
-    .select({
-      snapshotJson: shipmentHazmatSnapshots.snapshotJson,
-      snapshotHash: shipmentHazmatSnapshots.snapshotHash,
-      revision: shipmentHazmatSnapshots.orderDeclarationRevision,
-      profile: shipmentHazmatSnapshots.summaryProfile,
-      isHazmat: shipmentHazmatSnapshots.summaryIsHazmat,
-    })
-    .from(shipmentHazmatSnapshots)
-    .innerJoin(shipments, eq(shipments.id, shipmentHazmatSnapshots.shipmentId))
-    .where(eq(shipments.orderId, orderId))
-    .orderBy(desc(shipments.id))
-    .limit(1);
-  return purchaseFactsFromSnapshotRow(row);
-}
-
 async function loadOrderRow(
   orderId: number,
   scope: ClientStoreScope,
@@ -201,7 +177,6 @@ function publicState(input: {
   revision: number;
   semanticHash: string | null;
   decisionSource: 'manual' | 'automation' | null;
-  frozenPurchaseFacts?: CanonicalHazmatPurchaseFacts | null;
   isTestClient?: boolean;
   disclosure: ShipmentHazmatDisclosure;
 }): OrderHazmatState {
@@ -224,7 +199,6 @@ function publicState(input: {
     capabilities,
     validation,
     requiresRerate: declaration?.status === 'active' && input.order.bestRateJson == null,
-    frozenPurchaseFacts: capabilities.featureEnabled ? input.frozenPurchaseFacts ?? null : null,
     // PS-477 / amendment A2: rollout flags gate WRITING and RATING hazmat. They
     // must never gate SEEING that something already shipped as dangerous goods.
     // getOrderHazmatForShipping sets the same precedent -- hiding a persisted
@@ -233,7 +207,7 @@ function publicState(input: {
     // PS-479 splits fact from content. isHazmat / provenance / profile are the
     // FACT and stay ungated for exactly that reason. `declaration` is the
     // CONTENT -- materials, UN numbers, emergency contacts -- and follows the
-    // same gating as the sibling `declaration` and `frozenPurchaseFacts` fields
+    // same gating as the sibling `declaration` field
     // above. Carrying content through an intentionally ungated field would have
     // widened its exposure as a side effect of moving a precedence rule, which
     // is not a change this ticket is entitled to make.
@@ -269,7 +243,6 @@ export async function getOrderHazmat(
       revision: 0,
       semanticHash: null,
       decisionSource: null,
-      frozenPurchaseFacts: null,
       disclosure,
     });
   }
@@ -277,55 +250,10 @@ export async function getOrderHazmat(
   return publicState({
     order,
     ...current,
-    // PS-478 read/write split. loadFrozenPurchaseFacts throws
-    // HAZMAT_SNAPSHOT_INVALID (409) on a corrupt seal. On the WRITE path that
-    // throw is protective and stays. On this READ path it was hiding the very
-    // answer the operator needed: `disclosure` above already resolved to
-    // `sealed_unreadable`, and then the 409 replaced the whole response with an
-    // error page. Nobody could see that the shipment went out as dangerous
-    // goods -- a corrupt seal became a hidden 409, exactly what PS-478 forbids.
-    //
-    // Reading is not editing. A shipped order stays uneditable via the terminal
-    // lock in saveOrderHazmatDeclaration, not via this exception, so dropping
-    // it here does not let anyone edit around a broken seal. The frozen block
-    // renders nothing (there are no verified facts to show) while the
-    // disclosure carries the truth.
-    frozenPurchaseFacts: await readFrozenPurchaseFactsForDisplay(orderId),
     disclosure,
   });
 }
 
-/**
- * PS-478: the display-only reader. Returns null where loadFrozenPurchaseFacts
- * would throw on an unverifiable seal, because a read must not fail closed on
- * the operator — `disclosure` already reports `sealed_unreadable` for exactly
- * this row, and that is the honest thing to render.
- *
- * Deliberately NOT used by any write path.
- *
- * An earlier version of this comment claimed saveInTransaction still calls
- * loadFrozenPurchaseFacts and still throws, so the write path was protected by
- * that exception. That was wrong: saveInTransaction never reads the snapshot at
- * all — both its publicState calls omit frozenPurchaseFacts and let the
- * optional field default to null. loadFrozenPurchaseFacts has exactly one
- * caller, this function.
- *
- * The safety conclusion is unchanged, because it never rested on that throw.
- * An edit cannot proceed against a shipped order at all: assertEditable rejects
- * it with HAZMAT_ORDER_TERMINAL before any snapshot would be consulted. That
- * terminal lock is the protection; relaxing this reader could not have weakened
- * a guard the write path was not using.
- */
-async function readFrozenPurchaseFactsForDisplay(
-  orderId: number,
-): Promise<CanonicalHazmatPurchaseFacts | null> {
-  try {
-    return await loadFrozenPurchaseFacts(orderId);
-  } catch (error) {
-    if (error instanceof OrderHazmatError && error.code === 'HAZMAT_SNAPSHOT_INVALID') return null;
-    throw error;
-  }
-}
 
 export async function getOrderHazmatForShipping(orderId: number): Promise<{
   declaration: NormalizedHazmatDeclaration | null;
