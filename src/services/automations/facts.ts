@@ -65,10 +65,6 @@ export function buildAutomationFactsSnapshot(input: {
     return lineTotal == null || total == null ? null : total + lineTotal;
   }, 0);
   const tags = sortedTags(input.override?.tags);
-  const latestItemUpdate = input.items.reduce<number>(
-    (latest, item) => Math.max(latest, item.updatedAt?.getTime() ?? 0),
-    0,
-  );
   const factsWithoutRevision: Omit<AutomationFacts, 'revision'> = {
     order: {
       id: input.order.id,
@@ -114,11 +110,27 @@ export function buildAutomationFactsSnapshot(input: {
       workflow: true,
     },
   };
+  // PS-469 part 2. The revision is a fingerprint of the FACTS, and nothing else.
+  //
+  // It used to also hash orderUpdatedAt, overrideUpdatedAt and latestItemUpdate.
+  // Sync re-upserts rows that have not changed and Postgres bumps updated_at
+  // regardless, so the revision moved on writes where every evaluated fact was
+  // byte-identical -- which minted a new executionKey, missed findCompleted, and
+  // re-ran the engine to compute the same answer. Measured on production
+  // 2026-08-01: order 1801946 at 913 runs/day over 458 revisions, every sampled
+  // result identical (zero intents, zero matches).
+  //
+  // Dropping them loses no change detection: every field a rule can read is
+  // already inside factsWithoutRevision, which the guard pins with 16 separate
+  // "the revision still CHANGES when X changes" checks. Those checks passed
+  // BEFORE this change too -- the timestamps were never the thing detecting a
+  // real edit, only the thing detecting a no-op one.
+  //
+  // hazmat.revision stays: order-hazmat.ts short-circuits a save whose
+  // semanticHash is unchanged, so that counter is already content-gated and
+  // does not churn.
   const revision = automationDocumentHash({
     facts: factsWithoutRevision,
-    orderUpdatedAt: input.order.updatedAt?.toISOString() ?? null,
-    overrideUpdatedAt: input.override?.updatedAt?.toISOString() ?? null,
-    latestItemUpdate,
     hazmat: input.hazmat === undefined
       ? null
       : {
