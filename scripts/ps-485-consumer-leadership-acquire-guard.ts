@@ -167,6 +167,82 @@ check('a failed acquire still schedules a retry rather than giving up',
 check('a successful acquire clears the failure clock',
   /this\.acquireFailingSinceMs = null;\n\s*this\.acquireWarnLogged = false;\n\s*this\.connection = reserved;/.test(src));
 
+// ── the watchdog must not call an unconsumed enqueue a success ───────────────
+/**
+ * The second half of the same incident. The watchdog saw order sync was stale, enqueued
+ * a recovery job, found one already pending, and reported:
+ *
+ *   status: "completed", reason: "order sync recovery job already queued"
+ *
+ * every cycle for 29 minutes -- into a queue whose consumer had never registered. Self-
+ * healing was feeding work into a void and reporting success, which is why nobody was
+ * alerted while order sync sat frozen.
+ *
+ * "Already queued" is only good news if something is going to run it.
+ */
+const { decideSyncEnqueueRecovery, WATCHDOG_UNCONSUMED_QUEUE_SECONDS } =
+  await import('../src/services/shipment-sync-watchdog');
+
+const recovery = (over: Partial<Parameters<typeof decideSyncEnqueueRecovery>[0]>) =>
+  decideSyncEnqueueRecovery({
+    action: 'enqueue_order_sync',
+    enqueued: { queued: false, error: null },
+    unconsumedForSeconds: null,
+    nowMs: Date.parse('2026-08-01T03:26:00Z'),
+    ...over,
+  });
+
+check('a fresh enqueue on a consumed queue is a success',
+  recovery({ enqueued: { queued: true, error: null }, unconsumedForSeconds: 2 }).status === 'completed');
+check('"already queued" is a success while the queue is being consumed',
+  recovery({ unconsumedForSeconds: 30 }).status === 'completed');
+check('nothing waiting at all is a success (healthy or idle are the same thing)',
+  recovery({ unconsumedForSeconds: null }).status === 'completed');
+
+// The incident: a job eligible and unstarted well past the cadence.
+const stalled = recovery({ unconsumedForSeconds: 1_740 });
+check('a queue nothing has consumed for 29 minutes is NOT reported as completed',
+  stalled.status === 'failed', stalled);
+check('the reason names the real problem rather than "already queued"',
+  /not being consumed/i.test(stalled.reason) && !/already queued/i.test(stalled.reason),
+  stalled.reason);
+check('the reason says enqueuing more cannot help',
+  /cannot help/i.test(stalled.reason), stalled.reason);
+check('the reason points at the consumer, which is where the fault actually is',
+  /consumer/i.test(stalled.reason), stalled.reason);
+
+check('a real enqueue error still fails, and reports the error',
+  recovery({ enqueued: { queued: false, error: 'boom' } }).status === 'failed'
+    && /boom/.test(recovery({ enqueued: { queued: false, error: 'boom' } }).reason));
+check('an enqueue error outranks the unconsumed check',
+  /enqueue failed/i.test(recovery({
+    enqueued: { queued: false, error: 'boom' }, unconsumedForSeconds: 9_999,
+  }).reason));
+
+// Boundary: a brief wait is normal scheduling, not a missing consumer.
+check('just under the threshold is still a success (normal scheduling latency)',
+  recovery({ unconsumedForSeconds: WATCHDOG_UNCONSUMED_QUEUE_SECONDS - 1 }).status === 'completed');
+check('at the threshold it fails',
+  recovery({ unconsumedForSeconds: WATCHDOG_UNCONSUMED_QUEUE_SECONDS }).status === 'failed');
+check('the threshold is bounded and no tighter than the sync cadence',
+  WATCHDOG_UNCONSUMED_QUEUE_SECONDS >= 180 && Number.isFinite(WATCHDOG_UNCONSUMED_QUEUE_SECONDS));
+
+// Both lanes, same rule -- shipments had no consumer either.
+const shipStalled = recovery({ action: 'enqueue_shipment_sync', unconsumedForSeconds: 1_740 });
+check('the shipment lane gets the same treatment',
+  shipStalled.status === 'failed' && /shipment sync/.test(shipStalled.reason), shipStalled);
+
+const wd = readFileSync('src/services/shipment-sync-watchdog.ts', 'utf8').replace(/\r\n/g, '\n');
+check('the watchdog actually consults the unconsumed-queue age',
+  /readEligibleUnstartedQueueAgeSeconds\(ORDER_SYNC_JOB_NAME\)/.test(wd)
+  && /readEligibleUnstartedQueueAgeSeconds\(SHIPMENT_SYNC_JOB_NAME\)/.test(wd));
+check('the unconsumed age is recorded on the action for operators',
+  /details: \{ \.\.\.enqueued, unconsumedForSeconds \}/.test(wd));
+check('a failure reading the queue age cannot break recovery',
+  /readEligibleUnstartedQueueAgeSeconds\([A-Z_]+\)\n\s*\.catch\(\(\) => null\)/.test(wd));
+check('the queue-age query counts only ELIGIBLE, never-started jobs',
+  /state = 'created'/.test(src) && /started_on IS NULL/.test(src) && /start_after <= now\(\)/.test(src));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-485 consumer leadership acquire guard (${failures} failing)`);
   process.exit(1);

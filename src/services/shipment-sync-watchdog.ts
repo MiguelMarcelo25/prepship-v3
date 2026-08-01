@@ -8,7 +8,11 @@ import {
 } from './order-sync';
 import { getShipmentSyncStatus } from './shipment-sync';
 import { getSetting, setSetting } from './settings';
-import { enqueueOrderSyncWatchdogJob, enqueueShipmentSyncWatchdogJob } from './sync-job-queue';
+import {
+  enqueueOrderSyncWatchdogJob,
+  enqueueShipmentSyncWatchdogJob,
+  readEligibleUnstartedQueueAgeSeconds,
+} from './sync-job-queue';
 import {
   reapStaleQueuedCadenceJobs,
   reapStuckActiveJobs,
@@ -941,38 +945,8 @@ async function runRecoveryAction(
     };
   }
 
-  if (action === 'enqueue_order_sync') {
-    // Per user override unlock shipped data on 2026-07-15: watchdog recovery
-    // uses the status-capable order-sync payload so a reported catch-up backlog
-    // can converge. It only enqueues the existing worker; it does not buy labels,
-    // create postage, notify marketplaces, or directly modify rows here.
-    const enqueued = await enqueueOrderSyncWatchdogJob();
-    return {
-      action,
-      status: enqueued.error ? 'failed' : 'completed',
-      at: new Date(nowMs).toISOString(),
-      reason: enqueued.error
-        ? `order sync enqueue failed: ${enqueued.error}`
-        : enqueued.queued
-          ? 'order sync recovery job enqueued'
-          : 'order sync recovery job already queued',
-      details: enqueued,
-    };
-  }
-
-  if (action === 'enqueue_shipment_sync') {
-    const enqueued = await enqueueShipmentSyncWatchdogJob();
-    return {
-      action,
-      status: enqueued.error ? 'failed' : 'completed',
-      at: new Date(nowMs).toISOString(),
-      reason: enqueued.error
-        ? `shipment sync enqueue failed: ${enqueued.error}`
-        : enqueued.enqueued
-          ? 'shipment sync recovery job enqueued'
-          : 'shipment sync recovery job already queued',
-      details: enqueued,
-    };
+  if (action === 'enqueue_order_sync' || action === 'enqueue_shipment_sync') {
+    return runSyncEnqueueRecovery(action, nowMs);
   }
 
   if (action === 'restart_worker') {
@@ -980,6 +954,100 @@ async function runRecoveryAction(
   }
 
   return null;
+}
+
+/**
+ * PS-485: how long a recovery job may sit eligible-but-unstarted before the watchdog
+ * stops calling the enqueue a success.
+ *
+ * The stately queues run on a ~3 minute cadence, so a recovery job untouched for five
+ * minutes is not "queued", it is queued into a queue nothing is consuming. Five minutes
+ * also matches the leadership acquire-escalation window, so the two agree on when an
+ * unconsumed queue has stopped being a transient handoff.
+ */
+export const WATCHDOG_UNCONSUMED_QUEUE_SECONDS = 5 * 60;
+
+/**
+ * PS-485. Decide what an enqueue attempt actually achieved.
+ *
+ * Extracted and exported because the bug was a reporting decision, and the old inline
+ * version could not be tested: any result without an `error` became
+ * `status: 'completed'`, including `queued: false` -- "already queued" -- which is
+ * exactly what the watchdog reported for 29 minutes while nothing consumed the queue.
+ *
+ * "Already queued" is only good news if something is going to run it. The age of the
+ * oldest eligible unstarted job is what distinguishes the two, and it is the signal the
+ * watchdog never looked at.
+ */
+export function decideSyncEnqueueRecovery(input: {
+  action: 'enqueue_order_sync' | 'enqueue_shipment_sync';
+  enqueued: { queued: boolean; error: string | null };
+  unconsumedForSeconds: number | null;
+  nowMs: number;
+}): { status: 'completed' | 'failed'; reason: string } {
+  const label = input.action === 'enqueue_order_sync' ? 'order sync' : 'shipment sync';
+  if (input.enqueued.error) {
+    return { status: 'failed', reason: `${label} enqueue failed: ${input.enqueued.error}` };
+  }
+  const unconsumedFor = input.unconsumedForSeconds;
+  if (unconsumedFor !== null && unconsumedFor >= WATCHDOG_UNCONSUMED_QUEUE_SECONDS) {
+    return {
+      status: 'failed',
+      reason:
+        `${label} queue is NOT being consumed: oldest eligible job has waited `
+        + `${unconsumedFor}s unstarted. Enqueuing more work cannot help; the consumer `
+        + 'is missing (check ShipStation stately consumer leadership).',
+    };
+  }
+  return {
+    status: 'completed',
+    reason: input.enqueued.queued
+      ? `${label} recovery job enqueued`
+      : `${label} recovery job already queued`,
+  };
+}
+
+async function runSyncEnqueueRecovery(
+  action: 'enqueue_order_sync' | 'enqueue_shipment_sync',
+  nowMs: number,
+): Promise<ShipmentSyncWatchdogAction> {
+  if (action === 'enqueue_order_sync') {
+    // Per user override unlock shipped data on 2026-07-15: watchdog recovery
+    // uses the status-capable order-sync payload so a reported catch-up backlog
+    // can converge. It only enqueues the existing worker; it does not buy labels,
+    // create postage, notify marketplaces, or directly modify rows here.
+    const enqueued = await enqueueOrderSyncWatchdogJob();
+    const unconsumedForSeconds = await readEligibleUnstartedQueueAgeSeconds(ORDER_SYNC_JOB_NAME)
+      .catch(() => null);
+    const outcome = decideSyncEnqueueRecovery({
+      action, enqueued, unconsumedForSeconds, nowMs,
+    });
+    return {
+      action,
+      status: outcome.status,
+      at: new Date(nowMs).toISOString(),
+      reason: outcome.reason,
+      details: { ...enqueued, unconsumedForSeconds },
+    };
+  }
+
+  const enqueued = await enqueueShipmentSyncWatchdogJob();
+  const unconsumedForSeconds = await readEligibleUnstartedQueueAgeSeconds(SHIPMENT_SYNC_JOB_NAME)
+    .catch(() => null);
+  const outcome = decideSyncEnqueueRecovery({
+    action,
+    // the shipment result names the same fact `enqueued`
+    enqueued: { queued: enqueued.enqueued, error: enqueued.error },
+    unconsumedForSeconds,
+    nowMs,
+  });
+  return {
+    action,
+    status: outcome.status,
+    at: new Date(nowMs).toISOString(),
+    reason: outcome.reason,
+    details: { ...enqueued, unconsumedForSeconds },
+  };
 }
 
 async function persistWatchdogSnapshot(status: ShipmentSyncWatchdogStatus): Promise<void> {

@@ -1361,6 +1361,37 @@ function busyDeferCount(jobData: unknown): number {
   return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
 }
 
+/**
+ * PS-485: how long this queue's oldest ELIGIBLE job has been waiting unstarted.
+ *
+ * A job that is `created`, past its `start_after`, and has never been picked up is not
+ * "queued and handled" -- it is evidence that nothing is consuming the queue. On
+ * 2026-08-01 the watchdog enqueued an order-sync recovery job into a queue whose
+ * consumer had never registered, then reported "recovery job already queued" as a
+ * completed recovery. It repeated that for 29 minutes while order sync stayed frozen.
+ *
+ * Returns null when the queue has nothing eligible waiting, which is the healthy case
+ * (jobs are being taken promptly) and is indistinguishable from an idle queue -- both
+ * mean there is nothing to worry about.
+ */
+export async function readEligibleUnstartedQueueAgeSeconds(
+  jobName: string,
+): Promise<number | null> {
+  const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+  const rows = await shipStationConsumerStateSql<Array<{ ageSeconds: number | null }>>`
+    SELECT EXTRACT(EPOCH FROM (now() - MIN(start_after)))::double precision AS "ageSeconds"
+    FROM ${shipStationConsumerStateSql(jobTable)}
+    WHERE name = ${jobName}
+      AND state = 'created'
+      AND started_on IS NULL
+      AND start_after <= now()
+  `;
+  const ageSeconds = rows[0]?.ageSeconds;
+  return typeof ageSeconds === 'number' && Number.isFinite(ageSeconds)
+    ? Math.max(0, Math.round(ageSeconds))
+    : null;
+}
+
 async function pendingOperationalBlockerForRateBackfill(): Promise<string | null> {
   const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
   // Per user override unlock shipped data on 2026-07-18: rate admission reads

@@ -89,9 +89,25 @@ assert.ok(
 assert.ok(
   watchdog.includes('enqueueOrderSyncWatchdogJob') &&
     watchdog.includes("action === 'enqueue_order_sync'") &&
-    watchdog.includes('order sync recovery job enqueued'),
+    watchdog.includes('recovery job enqueued'),
   'watchdog recovery must target the status-capable order-sync recovery job',
 );
+// PS-485 moved the reason text into decideSyncEnqueueRecovery, so the literal
+// "order sync recovery job enqueued" no longer appears in the source -- the label is
+// interpolated. Pin the BEHAVIOUR instead of the spelling, which is what this
+// assertion was always trying to protect.
+{
+  const { decideSyncEnqueueRecovery } = await import('../src/services/shipment-sync-watchdog');
+  const enqueuedOutcome = decideSyncEnqueueRecovery({
+    action: 'enqueue_order_sync',
+    enqueued: { queued: true, error: null },
+    unconsumedForSeconds: 1,
+    nowMs: Date.now(),
+  });
+  assert.equal(enqueuedOutcome.status, 'completed');
+  assert.equal(enqueuedOutcome.reason, 'order sync recovery job enqueued',
+    'a successful order-sync recovery enqueue must still say so in those words');
+}
 assert.ok(
   queue.includes('buildOrderSyncWatchdogJobPayload') &&
     queue.includes("kind: 'watchdog-order'"),
