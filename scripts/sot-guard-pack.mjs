@@ -43,6 +43,12 @@ const REQUIRED_GUARDS = [
   // 294 orders in four days. Pinned here because the regression is silent: it
   // breaks nothing, it just burns the database.
   'test:ps-469-automation-idempotency',
+  // PS-469 retention: the same table, bounded. The loop put 926 MB here in a week and
+  // the fix stopped the growth, but nothing stopped the SIZE. Pinned for the half that
+  // is easy to get wrong: automation_runs is the evidence ruleExecutionHistoryExists
+  // reads, so pruning a row with matched_rule_version_ids would make a rule that really
+  // ran silently deletable, audit trail and all. Those rows survive at any age.
+  'test:ps-469-run-retention',
   // The three below were each found RED on a clean base on 2026-08-01, having
   // rotted unnoticed precisely because they were not in this pack. In every case
   // the protection was intact and only the source-text assertion had gone stale

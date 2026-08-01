@@ -88,6 +88,7 @@ import {
   rateBackfillPriority,
 } from './rate-backfill-job-types';
 import { runDurableRateBackfillJob } from './rates-backfill';
+import { pruneExpiredAutomationRuns } from './automations/run-retention';
 import { runLocalTariffCalibrationTick } from './local-tariff-calibration';
 import {
   hasPendingOrderSyncWork,
@@ -2016,7 +2017,23 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.queueMaintenance, async () => {
     const active = await reapStuckActiveJobs();
     const queued = await reapStaleQueuedCadenceJobs();
-    return { active, queued };
+    // PS-469: bound automation_runs. Housekeeping runs AFTER the reapers so a slow
+    // delete can never delay queue recovery, and it is batched internally so one tick
+    // cannot run long. Best-effort: a failed prune must not fail the maintenance job.
+    const automationRuns = await pruneExpiredAutomationRuns().catch((err) => {
+      console.warn(
+        '[job-queue] automation run retention skipped:',
+        err instanceof Error ? err.message : err,
+      );
+      return { deleted: 0, batches: 0, reachedLimit: false };
+    });
+    if (automationRuns.deleted > 0) {
+      console.log(
+        `[job-queue] pruned ${automationRuns.deleted} expired automation run(s)`
+        + `${automationRuns.reachedLimit ? ' (more remain for the next tick)' : ''}`,
+      );
+    }
+    return { active, queued, automationRuns };
   });
   await registerWorker(
     JOBS.carrierAccountSnapshots,
