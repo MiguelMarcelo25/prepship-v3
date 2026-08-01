@@ -351,6 +351,8 @@ export function evaluateShipmentSyncWatchdog(
     consecutiveBacklogChecks: number;
     orderStatusCatchupBacklog?: boolean;
     orderStatusCatchupBacklogCount?: number;
+    /** PS-431: backlogged passes whose cursor has stopped advancing. */
+    orderStatusCatchupStalledCount?: number;
     staleOrderAccountCount?: number;
   },
   thresholds: ShipmentSyncWatchdogThresholds = SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
@@ -381,6 +383,14 @@ export function evaluateShipmentSyncWatchdog(
     missingShipmentRate >= thresholds.missingShipmentRateThreshold;
   const orderStatusBacklog = input.orderStatusCatchupBacklog === true;
   const orderStatusBacklogCount = Math.max(0, Number(input.orderStatusCatchupBacklogCount ?? 0) || 0);
+  // PS-431: a backlog that is still draining is normal paginated progress, not a
+  // fault. Only a backlog whose cursor has stopped advancing escalates. The state
+  // itself stays reported either way -- PS-409 requires catch-up to be visible
+  // rather than implied-healthy, and that visibility is the state, not the alarm.
+  const orderStatusStalledCount = Math.max(
+    0,
+    Number(input.orderStatusCatchupStalledCount ?? 0) || 0,
+  );
   const currentJobAgeSeconds = input.workerCurrentJobAgeSeconds ?? null;
 
   const base = {
@@ -396,6 +406,7 @@ export function evaluateShipmentSyncWatchdog(
     missingShipmentRate,
     orderStatusBacklog,
     orderStatusBacklogCount,
+    orderStatusStalledCount,
     staleOrderAccountCount,
   };
 
@@ -470,11 +481,14 @@ export function evaluateShipmentSyncWatchdog(
   }
 
   if (orderStatusBacklog && !shipmentStale) {
+    const stalled = orderStatusStalledCount > 0;
     return {
       ...base,
       state: 'order_status_backlog',
-      alert: true,
-      reason: `order status catch-up has ${orderStatusBacklogCount} partial/backlogged pass(es)`,
+      alert: stalled,
+      reason: stalled
+        ? `order status catch-up is not draining: ${orderStatusStalledCount} pass(es) stalled on the same page`
+        : `order status catch-up is working through ${orderStatusBacklogCount} partial pass(es)`,
       recommendedAction: 'enqueue_order_sync',
     };
   }
@@ -707,6 +721,7 @@ async function buildShipmentSyncWatchdogStatus(
       consecutiveBacklogChecks,
       orderStatusCatchupBacklog: orders.statusCatchup.hasBacklog,
       orderStatusCatchupBacklogCount: orders.statusCatchup.backlogCount,
+      orderStatusCatchupStalledCount: orders.statusCatchup.stalledCount,
       staleOrderAccountCount: orders.staleAccountCount,
     },
     thresholds,

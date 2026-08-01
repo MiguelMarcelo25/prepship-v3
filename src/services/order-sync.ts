@@ -391,6 +391,19 @@ export type OrderStatusCatchupEntry = {
   backlogPages: number | null;
   stoppedBy: StatusCatchupStopReason;
   checkedAt: string;
+  /**
+   * PS-431: consecutive passes where this entry carried a backlog and `nextPage`
+   * did NOT advance. Zero means the backlog is draining normally.
+   *
+   * A page-budgeted catch-up ALWAYS leaves pages behind on any store with more
+   * pages than the budget, so `hasBacklog` alone cannot distinguish "working
+   * through it" from "wedged". Store 378060 has 13 pages of shipped orders
+   * against a 10-page budget: it stops at 10 (backlog), resumes at 11 and
+   * completes, restarts at 1 and backlogs again -- forever, while updating zero
+   * rows. That alternation is what made the watchdog flap red/green 12 times in
+   * 20 runs and is not a fault.
+   */
+  stalledPasses: number;
 };
 
 export type OrderStatusCatchupSnapshot = {
@@ -398,8 +411,19 @@ export type OrderStatusCatchupSnapshot = {
   updatedAt: string | null;
   hasBacklog: boolean;
   backlogCount: number;
+  /** PS-431: entries whose backlog has not advanced for STALLED_PASS_ALERT_THRESHOLD passes. */
+  stalledCount: number;
   entries: OrderStatusCatchupEntry[];
 };
+
+/**
+ * PS-431. Consecutive non-advancing passes before a backlog counts as wedged.
+ *
+ * Three keeps detection inside the card's ~10 minute target at the observed
+ * catch-up cadence, while being longer than the one-pass dip a store larger
+ * than the page budget produces on every cycle.
+ */
+export const STALLED_PASS_ALERT_THRESHOLD = 3;
 
 function emptyStatusCatchupSnapshot(): OrderStatusCatchupSnapshot {
   return {
@@ -407,6 +431,7 @@ function emptyStatusCatchupSnapshot(): OrderStatusCatchupSnapshot {
     updatedAt: null,
     hasBacklog: false,
     backlogCount: 0,
+    stalledCount: 0,
     entries: [],
   };
 }
@@ -416,19 +441,30 @@ export async function getOrderStatusCatchupSnapshot(): Promise<OrderStatusCatchu
     STATUS_CATCHUP_SNAPSHOT_KEY,
   );
   if (!parsed || !Array.isArray(parsed.entries)) return emptyStatusCatchupSnapshot();
-  const entries = parsed.entries.filter((entry): entry is OrderStatusCatchupEntry => {
-    return Boolean(
-      entry &&
-        typeof entry.accountLabel === 'string' &&
-        typeof entry.orderStatus === 'string' &&
-        typeof entry.hasBacklog === 'boolean',
-    );
-  });
+  const entries = parsed.entries
+    .filter((entry): entry is OrderStatusCatchupEntry => {
+      return Boolean(
+        entry &&
+          typeof entry.accountLabel === 'string' &&
+          typeof entry.orderStatus === 'string' &&
+          typeof entry.hasBacklog === 'boolean',
+      );
+    })
+    // PS-431: snapshots written before stalledPasses existed have no counter.
+    // Default to 0 (draining) rather than treating unknown history as wedged --
+    // a stall has to be observed across passes to be claimed.
+    .map((entry) => ({
+      ...entry,
+      stalledPasses: Number.isFinite(entry.stalledPasses) ? entry.stalledPasses : 0,
+    }));
   return {
     version: 1,
     updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
     hasBacklog: entries.some((entry) => entry.hasBacklog),
     backlogCount: entries.filter((entry) => entry.hasBacklog).length,
+    stalledCount: entries.filter(
+      (entry) => entry.hasBacklog && entry.stalledPasses >= STALLED_PASS_ALERT_THRESHOLD,
+    ).length,
     entries,
   };
 }
@@ -458,9 +494,30 @@ async function persistOrderStatusCatchupSnapshot(
     updatedAt: new Date(updatedAtMs).toISOString(),
     hasBacklog: mergedEntries.some((entry) => entry.hasBacklog),
     backlogCount: mergedEntries.filter((entry) => entry.hasBacklog).length,
+    stalledCount: mergedEntries.filter(
+      (entry) => entry.hasBacklog && entry.stalledPasses >= STALLED_PASS_ALERT_THRESHOLD,
+    ).length,
     entries: mergedEntries,
   };
   await setJsonSetting(STATUS_CATCHUP_SNAPSHOT_KEY, snapshot);
+}
+
+/**
+ * PS-431. A backlog is only a fault if it stops moving.
+ *
+ * Draining normally -- including the every-other-pass restart of a store whose
+ * page count exceeds the pass budget -- resets the counter, because either the
+ * backlog cleared or `nextPage` advanced. Only a backlog that persists across
+ * passes with the cursor pinned to the same page increments it.
+ */
+function nextStalledPasses(
+  previous: OrderStatusCatchupEntry | undefined,
+  current: OrderStatusCatchupEntry,
+): number {
+  if (!current.hasBacklog) return 0;
+  if (!previous?.hasBacklog) return 0;
+  if (previous.nextPage !== current.nextPage) return 0;
+  return (Number.isFinite(previous.stalledPasses) ? previous.stalledPasses : 0) + 1;
 }
 
 export function mergeOrderStatusCatchupEntries(
@@ -480,8 +537,7 @@ export function mergeOrderStatusCatchupEntries(
       Boolean(previous?.hasBacklog) &&
       current.pagesProcessed === 0 &&
       (current.stoppedBy === 'failed' || current.stoppedBy === 'not_started_budget_exhausted');
-    merged.set(
-      key,
+    const resolved =
       shouldPreserveCursor && previous
         ? {
             ...current,
@@ -492,8 +548,8 @@ export function mergeOrderStatusCatchupEntries(
             hasBacklog: true,
             backlogPages: previous.backlogPages,
           }
-        : current,
-    );
+        : current;
+    merged.set(key, { ...resolved, stalledPasses: nextStalledPasses(previous, resolved) });
   }
   return [...merged.values()].sort((left, right) =>
     statusCatchupEntryKey(left).localeCompare(statusCatchupEntryKey(right)),
@@ -1169,6 +1225,10 @@ function statusCatchupEntry(args: {
         : Math.max(0, totalPages - processedThroughPage),
     stoppedBy,
     checkedAt: new Date(args.checkedAtMs).toISOString(),
+    // PS-431: a freshly observed pass has no history of its own. Whether this
+    // backlog is stalled is decided in mergeOrderStatusCatchupEntries, which is
+    // the only place that can see the previous pass's cursor.
+    stalledPasses: 0,
   };
 }
 

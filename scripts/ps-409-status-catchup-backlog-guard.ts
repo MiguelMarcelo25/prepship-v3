@@ -18,7 +18,10 @@ const {
   evaluateShipmentSyncWatchdog,
   SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 } = await import('../src/services/shipment-sync-watchdog');
-const { prioritizeOrderStatusCatchupPasses } = await import('../src/services/order-sync');
+const { prioritizeOrderStatusCatchupPasses, mergeOrderStatusCatchupEntries } =
+  await import('../src/services/order-sync');
+type OrderStatusCatchupEntry =
+  import('../src/services/order-sync').OrderStatusCatchupEntry;
 
 const prioritizedPasses = prioritizeOrderStatusCatchupPasses(
   'main',
@@ -50,8 +53,10 @@ const prioritizedPasses = prioritizeOrderStatusCatchupPasses(
         backlogPages: 1,
         stoppedBy: 'time_budget',
         checkedAt: '2026-07-15T00:00:00.000Z',
+        stalledPasses: 0,
       },
     ],
+    stalledCount: 0,
   },
 );
 assert.equal(prioritizedPasses[0]?.storeId, 378060);
@@ -77,13 +82,85 @@ const healthyExceptStatusBacklog = evaluateShipmentSyncWatchdog(
   SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 );
 
+// PS-409's requirement is that a partial catch-up stays VISIBLE rather than
+// implying clean health. That is the state, and it still reports unconditionally.
 assert.equal(healthyExceptStatusBacklog.state, 'order_status_backlog');
-assert.equal(healthyExceptStatusBacklog.alert, true);
 assert.equal(healthyExceptStatusBacklog.orderFresh, true);
 assert.equal(healthyExceptStatusBacklog.orderStatusBacklog, true);
 assert.equal(healthyExceptStatusBacklog.orderStatusBacklogCount, 2);
 assert.equal(healthyExceptStatusBacklog.recommendedAction, 'enqueue_order_sync');
 assert.match(healthyExceptStatusBacklog.reason, /status catch-up/i);
+
+// PS-431 refines only the ALARM. A page-budgeted catch-up on a store with more
+// pages than the budget always leaves pages behind, so `hasBacklog` alone fired
+// forever: production store 378060 (13 pages, 10-page budget) flapped the
+// watchdog red/green 12 times in 20 runs while updating zero rows. A backlog
+// that is still draining is progress, not a fault.
+assert.equal(healthyExceptStatusBacklog.alert, false);
+assert.match(healthyExceptStatusBacklog.reason, /working through/i);
+
+const stalledStatusBacklog = evaluateShipmentSyncWatchdog(
+  {
+    nowMs: Date.parse('2026-07-07T01:00:00Z'),
+    orderLastSyncedAt: '2026-07-07T00:59:00Z',
+    shipmentLastSyncedAt: '2026-07-07T00:59:00Z',
+    workerHeartbeatAgeSeconds: 30,
+    queue: { created: 0, retry: 0, active: 0, failed: 0, activeMaxAgeSeconds: null },
+    missingShipments: { recentShippedOrders: 10, missingActiveShipments: 0 },
+    consecutiveBacklogChecks: 0,
+    orderStatusCatchupBacklog: true,
+    orderStatusCatchupBacklogCount: 2,
+    orderStatusCatchupStalledCount: 1,
+  },
+  SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
+);
+
+// ...but a backlog that has stopped advancing must still escalate, or PS-431
+// would have traded false alarms for silence on a genuinely wedged catch-up.
+assert.equal(stalledStatusBacklog.state, 'order_status_backlog');
+assert.equal(stalledStatusBacklog.alert, true);
+assert.equal(stalledStatusBacklog.orderStatusStalledCount, 1);
+assert.match(stalledStatusBacklog.reason, /not draining/i);
+
+// The stall counter itself: the owner is mergeOrderStatusCatchupEntries, which is
+// the only place that can compare a pass against its predecessor.
+const stallEntry = (over: Partial<OrderStatusCatchupEntry>): OrderStatusCatchupEntry => ({
+  accountLabel: 'main',
+  storeId: 378060,
+  orderStatus: 'shipped',
+  sinceIso: '2026-06-15T00:00:00.000Z',
+  sortDir: 'DESC',
+  pageSize: 100,
+  startPage: 1,
+  totalPages: 13,
+  pagesProcessed: 10,
+  lastPageProcessed: 10,
+  nextPage: 11,
+  updatedRows: 0,
+  hasBacklog: true,
+  backlogPages: 3,
+  stoppedBy: 'page_budget',
+  checkedAt: '2026-07-15T00:00:00.000Z',
+  stalledPasses: 0,
+  ...over,
+});
+const stallKeys = new Set(['main:378060:shipped']);
+const stallOnce = mergeOrderStatusCatchupEntries(
+  [stallEntry({ stalledPasses: 0 })], [stallEntry({})], stallKeys);
+assert.equal(stallOnce[0]?.stalledPasses, 1, 'same nextPage across passes increments the stall');
+
+const stallAdvanced = mergeOrderStatusCatchupEntries(
+  [stallEntry({ stalledPasses: 4 })], [stallEntry({ nextPage: 12 })], stallKeys);
+assert.equal(stallAdvanced[0]?.stalledPasses, 0, 'an advancing cursor is draining, not stalled');
+
+// The exact production shape: budget-limited pass, then a completing pass. This
+// is the alternation that caused the flap and it must never count as a stall.
+const stallDrained = mergeOrderStatusCatchupEntries(
+  [stallEntry({ stalledPasses: 2 })],
+  [stallEntry({ hasBacklog: false, nextPage: null, stoppedBy: 'complete' })],
+  stallKeys,
+);
+assert.equal(stallDrained[0]?.stalledPasses, 0, 'clearing the backlog resets the stall');
 
 const orderSync = readFileSync('src/services/order-sync.ts', 'utf8');
 assert.match(
@@ -158,7 +235,10 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /if \(startPage > 1[\s\S]*processPage\(1\)/,
+  // Whitespace-tolerant: the condition is a multi-line `if (\n  startPage > 1 &&`.
+  // The original regex required `if (startPage` adjacent and went red the moment
+  // the condition grew a second clause -- protection intact, assertion rotted.
+  /if \(\s*startPage > 1[\s\S]*processPage\(1\)/,
   'resumed status catch-up must still probe newest-first page 1 for recent transitions',
 );
 assert.match(

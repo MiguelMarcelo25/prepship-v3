@@ -102,3 +102,54 @@ Production disruption requires DJ's explicit approval. With approval:
 
 Do not buy labels/postage, notify marketplaces, invoke live provider confirmation, or
 update/delete production shipped/cancelled orders or shipment history during this drill.
+
+## Operator setup steps (DJ / Lawrence — not automatable from the repo)
+
+These are the two PS-431 deliverables that live in third-party dashboards. Everything
+else in this runbook is already wired in code. Tick these off and note the date and
+owner in the table at the end.
+
+### 1. External uptime monitor (deliverable 3)
+
+The point is a check that still fires when Render itself is down, so it must not run on
+Render.
+
+1. Create an account on UptimeRobot (free tier is sufficient) or Better Stack.
+2. Add an **HTTP(s)** monitor:
+   - URL: `https://prepshipv4-api-l5xc.onrender.com/health/ready`
+   - Interval: 5 minutes (1 minute if the paid tier allows)
+   - Timeout: 30 seconds
+   - **Expected status: 200.** `/health/ready` returns 503 when the DB is unreachable or
+     not writable, which is exactly the condition worth paging on.
+3. Alert contacts: add DJ's mobile number for SMS **and** an email address. SMS matters —
+   a push notification on a silenced phone is not an alert at 3 AM.
+4. Set "notify when down after" to 2 consecutive failures. One failed poll during a
+   deploy is normal; two in a row is not.
+5. Verify it works before trusting it: use the provider's **Test notification** action,
+   confirm the SMS arrives, and record the date.
+
+Do NOT point the monitor at `/health/deep`. That endpoint reports degraded subsystems and
+is intentionally noisier; `/health/ready` is the "is the service actually usable" signal.
+
+### 2. Render dashboard configuration (deliverable 4)
+
+The read-only-session restart lever only works if Render actually polls the endpoint.
+
+1. Render dashboard, service `prepshipv4-api`, **Settings**.
+2. Set **Health Check Path** to `/health/ready`. If it is blank, Render never restarts an
+   unhealthy-but-running process, and the poisoned-session recovery from Audit 1.9/2.9
+   cannot fire.
+3. **Notifications**: enable email on deploy failure and on service failure, to an address
+   that reaches a phone.
+4. Confirm the sync worker service auto-restarts on crash (default, but verify it was not
+   disabled). A platform restart is free and uncapped; the watchdog's Render-API deploy
+   path is capped at 2/hour, so the platform restart is the cheaper recovery.
+
+### Verification record
+
+| Item | Done | Date | Owner | Verified how |
+|---|---|---|---|---|
+| Uptime monitor created | ☐ | | | test notification received |
+| SMS contact confirmed | ☐ | | | test SMS received on phone |
+| Render health check path | ☐ | | | value reads `/health/ready` |
+| Render failure emails | ☐ | | | test or real deploy failure |
