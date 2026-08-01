@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, count, eq, gte } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
   automationActionResults,
@@ -37,6 +37,13 @@ export function createPostgresAutomationExecutionStore(): AutomationExecutionSto
         .limit(1);
       if (!row || row.status === 'running' || row.status === 'failed') return null;
       return resultFromTrace(row.trace);
+    },
+    async countRunsSince(orderId, since) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(automationRuns)
+        .where(and(eq(automationRuns.orderId, orderId), gte(automationRuns.startedAt, since)));
+      return Number(row?.n ?? 0);
     },
     async begin(input) {
       const [created] = await db.insert(automationRuns).values({

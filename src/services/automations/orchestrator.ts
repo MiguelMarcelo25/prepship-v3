@@ -60,6 +60,11 @@ export type AutomationEffectClaim =
 
 export interface AutomationExecutionStore {
   findCompleted(executionKey: string): Promise<AutomationExecutionResult | null>;
+  /**
+   * PS-469 backstop: how many runs this order has logged since `since`.
+   * Served by automation_runs_order_trigger_idx, whose leading column is order_id.
+   */
+  countRunsSince(orderId: number, since: Date): Promise<number>;
   begin(input: {
     executionKey: string;
     orderId: number;
@@ -150,6 +155,51 @@ function executionKey(input: {
   return automationDocumentHash({ ...input, engineVersion: AUTOMATION_ENGINE_VERSION });
 }
 
+/**
+ * PS-469 backstop. A bound on how often ONE order may be evaluated, so a future
+ * trigger bug degrades instead of running unbounded.
+ *
+ * This is not what stopped the original loop -- three separate fixes did that, each
+ * removing a value that changed on every write from a fingerprint meant to describe
+ * content (sourceEventId's txid, the updated_at timestamps, the line's row serial).
+ * This is insurance for the NEXT one, because the failure mode is silent: nothing
+ * breaks, no rule misfires, the engine simply burns ~200 MB/day computing the same
+ * answer until a human happens to look.
+ *
+ * Sized from measured production, 2026-08-01, after the three fixes landed:
+ *
+ *   healthy, average order        ~34 runs/day
+ *   healthy, busiest single order ~79 runs/day
+ *   during the bug (order 1801946) 913 runs/day
+ *
+ * 300/day sits in that gap -- ~3.8x above the busiest healthy order, and a third of
+ * the bug's rate, so the old defect would have tripped this in ~8 hours rather than
+ * running four days and 791 MB.
+ *
+ * The cost of tripping is real and is why the ceiling is not tighter: a skipped
+ * evaluation is a rule that does not fire. Erring high keeps legitimate bursts --
+ * an operator editing one order repeatedly -- well clear of it.
+ */
+export const AUTOMATION_BACKSTOP_MAX_RUNS_PER_WINDOW = 300;
+export const AUTOMATION_BACKSTOP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * One backstop row per order per window, not one per suppressed attempt.
+ *
+ * The key buckets on the window so it is deterministic, which means the store's
+ * existing onConflictDoNothing on execution_key collapses every trip in that window
+ * to a single row. A backstop that logged every suppressed evaluation would flood the
+ * table it exists to protect -- the exact failure it is bounding.
+ */
+function backstopKey(input: { orderId: number; nowMs: number }): string {
+  return automationDocumentHash({
+    backstop: 'ps-469',
+    orderId: input.orderId,
+    window: Math.floor(input.nowMs / AUTOMATION_BACKSTOP_WINDOW_MS),
+    engineVersion: AUTOMATION_ENGINE_VERSION,
+  });
+}
+
 function effectKey(input: { executionKey: string; intent: AutomationIntent }): string {
   return automationDocumentHash({
     executionKey: input.executionKey,
@@ -181,6 +231,55 @@ export async function executeAutomationEvaluation(input: {
   });
   const completed = await input.store.findCompleted(key);
   if (completed) return completed;
+
+  // PS-469 backstop. Deliberately AFTER findCompleted: a repeat of work already done
+  // is free and must never be suppressed, since suppressing it would turn a cache hit
+  // into a skipped rule. Only genuinely new evaluations count against the ceiling.
+  const nowMs = Date.now();
+  const recentRuns = await input.store.countRunsSince(
+    input.facts.order.id,
+    new Date(nowMs - AUTOMATION_BACKSTOP_WINDOW_MS),
+  );
+  if (recentRuns >= AUTOMATION_BACKSTOP_MAX_RUNS_PER_WINDOW) {
+    const trippedKey = backstopKey({ orderId: input.facts.order.id, nowMs });
+    const existing = await input.store.findCompleted(trippedKey);
+    if (existing) return existing;
+    const trippedRunId = await input.store.begin({
+      executionKey: trippedKey,
+      orderId: input.facts.order.id,
+      trigger: input.trigger,
+      sourceEventId: input.sourceEventId,
+      factsRevision: input.facts.revision,
+      rulesetDigest,
+      mode: 'audit_only',
+    });
+    const tripped: AutomationExecutionResult = {
+      runId: trippedRunId,
+      executionKey: trippedKey,
+      rulesetDigest,
+      mode: 'audit_only',
+      status: 'blocked',
+      evaluation: {
+        blocked: true,
+        intents: [],
+        matches: [],
+        engineVersion: AUTOMATION_ENGINE_VERSION,
+        factsRevision: input.facts.revision,
+      },
+      reduction: reduceAutomationIntents([]),
+    };
+    console.error(
+      `[automations] backstop tripped for order ${input.facts.order.id}: `
+      + `${recentRuns} runs in the last ${AUTOMATION_BACKSTOP_WINDOW_MS / 3_600_000}h `
+      + `exceeds ${AUTOMATION_BACKSTOP_MAX_RUNS_PER_WINDOW}; evaluation suppressed`,
+    );
+    await input.store.finish(tripped);
+    // Deliberately NO setState here. setState persists reduction.plan, and this
+    // reduction is empty because nothing was evaluated -- writing it would wipe the
+    // order's existing automation plan. A backstop suppresses work; it must not
+    // mutate derived state on the way past. The run row is the visible record.
+    return tripped;
+  }
 
   const terminal = isTerminalAutomationStatus(input.facts.order.status);
   const mode = terminal ? 'audit_only' as const : 'apply' as const;
@@ -411,6 +510,10 @@ export function createInMemoryAutomationExecutionStore(): AutomationExecutionSto
     effects,
     states,
     async findCompleted(key) { return completed.get(key) ?? null; },
+    // PS-469: this in-memory store is for callers that keep no run history, so it
+    // reports zero and the backstop never trips. A store that cannot count runs must
+    // not be able to suppress evaluations on a guess.
+    async countRunsSince() { return 0; },
     async begin(input) {
       const runId = nextRunId++;
       runKeys.set(runId, input.executionKey);
