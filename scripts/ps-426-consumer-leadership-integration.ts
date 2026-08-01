@@ -23,9 +23,18 @@ type ActiveJob = { id: string; name: string };
 class FakeClock {
   private nextId = 1;
   private readonly timers = new Map<number, { callback: () => void; delayMs: number }>();
+  /**
+   * PS-485: the controller now needs a clock to bound how long leadership
+   * acquisition may keep failing. Scheduling advances it, so elapsed time here
+   * tracks the retries the controller actually made rather than wall time.
+   */
+  private nowMs = 1_000_000;
+
+  now = (): number => this.nowMs;
 
   setTimer = (callback: () => void, delayMs: number): number => {
     const id = this.nextId++;
+    this.nowMs += delayMs;
     this.timers.set(id, { callback, delayMs });
     return id;
   };
@@ -147,6 +156,7 @@ function createWorker(workerId: string, manager: FakeLeadershipManager) {
         unregisterCount += 1;
       },
       requestRestart: (reason: string) => restartRequests.push(reason),
+      now: clock.now,
       setTimer: clock.setTimer,
       clearTimer: clock.clearTimer,
       info: (message: string) => diagnostics.push(`info:${message}`),
@@ -184,6 +194,8 @@ assert.deepEqual(workerA.controller.snapshot(), {
   ownsLock: true,
   consumersRegistered: true,
   scheduledDelayMs: 15,
+  // PS-485: null while leadership is held -- only set when acquisition is failing.
+  acquireFailingForMs: null,
 });
 assert.deepEqual(workerA.counts(), {
   recoveryCount: 1,

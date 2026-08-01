@@ -910,7 +910,8 @@
     "test:ps-476-rule-status-convergence": "tsx scripts/ps-476-rule-status-convergence-guard.ts",
     "test:ps-477-hazmat-disclosure": "tsx scripts/ps-477-hazmat-disclosure-guard.ts",
     "test:ps-477-hazmat-disclosure-integration": "tsx scripts/ps-477-hazmat-disclosure-integration.ts",
-    "test:ps-431-worker-status-event-retention": "tsx scripts/ps-431-worker-status-event-retention-guard.ts"
+    "test:ps-431-worker-status-event-retention": "tsx scripts/ps-431-worker-status-event-retention-guard.ts",
+    "test:ps-485-consumer-leadership-acquire": "tsx scripts/ps-485-consumer-leadership-acquire-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

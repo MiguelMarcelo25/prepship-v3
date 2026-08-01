@@ -178,6 +178,31 @@ const BUSY_DEFER_JOB_NAMES = new Set<JobName>([
 const SHIPSTATION_CONSUMER_LEADER_LOCK = 'prepship.worker.shipstation-stately-consumers';
 const SHIPSTATION_CONSUMER_LEADER_RETRY_MS = 5_000;
 const SHIPSTATION_CONSUMER_LEADER_HEALTH_MS = 15_000;
+
+/**
+ * PS-485: how long this process may fail to ACQUIRE leadership before it treats the
+ * lock as unreachable and asks the supervisor for a clean restart.
+ *
+ * The incident this bounds (2026-08-01): a deploy restarted the service, the outgoing
+ * instance's leadership session left its advisory lock alive, and the incoming instance
+ * called tryAcquire() every 5s for 29 MINUTES without ever acquiring it. Because the
+ * three stately queues (orders, shipments, fulfillment-outbox) only get consumers once
+ * leadership is held, all three had NO consumer for that entire window while every
+ * non-gated queue kept running normally. Order sync froze at 03:02:04 and only moved
+ * after DJ restarted the worker by hand.
+ *
+ * The remedy already exists for the sibling case: restartAfterLostConnection() calls
+ * requestRestart() precisely because "a lost leadership session can leave its
+ * server-side advisory lock alive". Losing the lock and never getting it have the SAME
+ * cause and the SAME fix; only the first was wired up.
+ *
+ * Five minutes is deliberately well past a normal deploy handoff -- during one the
+ * outgoing leader legitimately holds the lock while it drains, and restarting then
+ * would be wrong. It is far short of the 29 minutes this actually cost.
+ */
+const SHIPSTATION_CONSUMER_LEADER_ACQUIRE_ESCALATE_MS = 5 * 60_000;
+/** Log once well before escalating, so the silent stretch is at least visible. */
+const SHIPSTATION_CONSUMER_LEADER_ACQUIRE_WARN_MS = 60_000;
 const SHARED_LANE_PRIORITY_POLL_MS = 5_000;
 
 export type ActiveShipStationSyncJob = {
@@ -201,6 +226,8 @@ type ShipStationConsumerLeadershipDependencies = {
   requestRestart(reason: string): void;
   setTimer(callback: () => void, delayMs: number): unknown;
   clearTimer(handle: unknown): void;
+  /** PS-485: injectable so the acquire-timeout escalation is testable without a clock. */
+  now(): number;
   info(message: string): void;
   warn(message: string, error: unknown): void;
   error(message: string, error: unknown): void;
@@ -212,6 +239,8 @@ export type ShipStationConsumerLeadershipSnapshot = {
   ownsLock: boolean;
   consumersRegistered: boolean;
   scheduledDelayMs: number | null;
+  /** PS-485: ms since acquisition first failed, null while leadership is held. */
+  acquireFailingForMs: number | null;
 };
 
 /**
@@ -231,6 +260,9 @@ export class ShipStationConsumerLeadershipController {
   private stopping = false;
   private consumersRegistered = false;
   private handoffLogged = false;
+  /** PS-485: when this process first failed to acquire leadership, null once held. */
+  private acquireFailingSinceMs: number | null = null;
+  private acquireWarnLogged = false;
 
   constructor(
     private readonly dependencies: ShipStationConsumerLeadershipDependencies,
@@ -245,6 +277,12 @@ export class ShipStationConsumerLeadershipController {
       ownsLock: Boolean(this.connection),
       consumersRegistered: this.consumersRegistered,
       scheduledDelayMs: this.scheduledDelayMs,
+      // PS-485: how long acquisition has been failing. This is the signal that was
+      // entirely invisible during the 29-minute stall -- the process looked healthy
+      // by every other measure while consuming nothing.
+      acquireFailingForMs: this.acquireFailingSinceMs === null
+        ? null
+        : Math.max(0, this.dependencies.now() - this.acquireFailingSinceMs),
     };
   }
 
@@ -319,6 +357,42 @@ export class ShipStationConsumerLeadershipController {
     }, delayMs);
   }
 
+  /**
+   * PS-485. Track how long acquisition has been failing, warn once, then escalate.
+   *
+   * Escalation is the same lever restartAfterLostConnection() already pulls: ask the
+   * supervisor to restart so the OS closes every socket, which is what actually frees
+   * a stale server-side advisory lock. A platform restart is free and uncapped, unlike
+   * the watchdog's Render-API deploy path.
+   */
+  private noteAcquireFailure(): void {
+    const nowMs = this.dependencies.now();
+    if (this.acquireFailingSinceMs === null) {
+      this.acquireFailingSinceMs = nowMs;
+      return;
+    }
+    const failingMs = nowMs - this.acquireFailingSinceMs;
+    if (!this.acquireWarnLogged && failingMs >= SHIPSTATION_CONSUMER_LEADER_ACQUIRE_WARN_MS) {
+      this.acquireWarnLogged = true;
+      this.dependencies.warn(
+        `[job-queue] ShipStation consumer leadership not acquired for ${Math.round(failingMs / 1000)}s; `
+        + 'the stately queues (orders, shipments, fulfillment-outbox) have NO consumer while this persists',
+        null,
+      );
+    }
+    if (failingMs >= SHIPSTATION_CONSUMER_LEADER_ACQUIRE_ESCALATE_MS) {
+      // Reset so a restart that does not clear the lock re-arms rather than
+      // escalating on every subsequent tick.
+      this.acquireFailingSinceMs = nowMs;
+      this.acquireWarnLogged = false;
+      this.dependencies.error(
+        '[job-queue] ShipStation consumer leadership unreachable; requesting supervisor restart',
+        new Error('shipstation_consumer_leadership_acquire_timeout'),
+      );
+      this.dependencies.requestRestart('shipstation_consumer_leadership_acquire_timeout');
+    }
+  }
+
   private async unregisterConsumers(): Promise<void> {
     if (!this.consumersRegistered) return;
     try {
@@ -389,9 +463,15 @@ export class ShipStationConsumerLeadershipController {
         try {
           if (!(await reserved.tryAcquire())) {
             reserved.release();
+            // PS-485: an unbounded silent retry here cost 29 minutes of dead sync.
+            // Failing to acquire is normal DURING a deploy handoff and pathological
+            // after one, and the two are only distinguishable by how long it lasts.
+            this.noteAcquireFailure();
             this.schedule(this.retryMs);
             return;
           }
+          this.acquireFailingSinceMs = null;
+          this.acquireWarnLogged = false;
           this.connection = reserved;
         } catch (error) {
           reserved.release();
@@ -1808,6 +1888,7 @@ function createShipStationConsumerLeadership(): ShipStationConsumerLeadershipCon
       console.error(`[job-queue] unhealthy; requesting supervisor restart (${reason})`);
       process.exit(1);
     },
+    now: () => Date.now(),
     setTimer: (callback, delayMs) => {
       const timer = setTimeout(callback, delayMs);
       timer.unref?.();

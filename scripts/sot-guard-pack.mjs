@@ -50,6 +50,14 @@ const REQUIRED_GUARDS = [
   // happening. Pinned here so the retention window cannot quietly become unbounded
   // and repeat what PS-469 hit at 925 MB.
   'test:ps-431-worker-status-event-retention',
+  // PS-485: leadership acquisition is the gate on ALL THREE stately consumers
+  // (orders, shipments, fulfillment-outbox). Failing to acquire used to retry
+  // silently forever -- 29 minutes with no consumer, 40 minutes of dead order sync,
+  // and a watchdog that queued recovery into the unconsumed queue and called it done.
+  // Pinned for BOTH directions: a sustained failure must escalate to a restart, and
+  // a brief one must NOT -- restarting during a normal deploy handoff would be worse
+  // than the bug, since losing to the outgoing leader is exactly how handoff works.
+  'test:ps-485-consumer-leadership-acquire',
   'test:ps-205-package-facts-precedence',
   'test:ps-361-shipment-sync-watchdog',
   'test:ps-409-status-catchup-backlog',
