@@ -18,8 +18,12 @@ const {
   evaluateShipmentSyncWatchdog,
   SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 } = await import('../src/services/shipment-sync-watchdog');
-const { prioritizeOrderStatusCatchupPasses, mergeOrderStatusCatchupEntries } =
-  await import('../src/services/order-sync');
+const {
+  prioritizeOrderStatusCatchupPasses,
+  mergeOrderStatusCatchupEntries,
+  isOrderSyncAccountStale,
+  buildAwaitingOrderCursorState,
+} = await import('../src/services/order-sync');
 type OrderStatusCatchupEntry =
   import('../src/services/order-sync').OrderStatusCatchupEntry;
 
@@ -265,3 +269,101 @@ assert.match(
 );
 
 console.log('PASS PS-409 status catch-up backlog guard');
+
+// ── PS-484: an account is stale only once a backlog STOPS DRAINING ───────────
+// Both backlog clauses used to read `.length > 0`, so any backlog at all made the
+// account stale and healthy paginated progress reported as a fault. This rule was
+// inline in the diagnostics loop and therefore untested -- reverting the fix left
+// every sync guard green, which is why it lives in a pure function now.
+const HEALTHY_ACCOUNT = {
+  failed: false,
+  watermarkMs: Date.parse('2026-08-01T03:00:00Z'),
+  ageMs: 60_000,
+  freshMs: 15 * 60 * 1000,
+  statusBacklogEntries: [] as Array<{ stalledPasses: number }>,
+  awaitingBacklogEntries: [] as Array<{ stalledPasses: number }>,
+};
+
+assert.equal(isOrderSyncAccountStale(HEALTHY_ACCOUNT), false,
+  'a healthy account with no backlog is not stale');
+
+// The production case: store 378060, 13 pages against a 10-page budget, backlog on
+// every other pass forever while updating zero rows. Draining, so NOT a fault.
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, statusBacklogEntries: [{ stalledPasses: 0 }] }),
+  false,
+  'a status backlog that is still draining must NOT make the account stale',
+);
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, awaitingBacklogEntries: [{ stalledPasses: 0 }] }),
+  false,
+  'an awaiting backlog that is still draining must NOT make the account stale',
+);
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, statusBacklogEntries: [{ stalledPasses: 2 }] }),
+  false,
+  'a backlog below the stall threshold is still progress, not staleness',
+);
+
+// ...but a wedged one must still escalate, or this trades false alarms for silence.
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, statusBacklogEntries: [{ stalledPasses: 3 }] }),
+  true,
+  'a status backlog stalled at the threshold DOES make the account stale',
+);
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, awaitingBacklogEntries: [{ stalledPasses: 9 }] }),
+  true,
+  'a wedged awaiting backlog DOES make the account stale',
+);
+
+// The other clauses must survive the narrowing untouched.
+assert.equal(isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, failed: true }), true,
+  'a failed pass is still stale');
+assert.equal(isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, watermarkMs: null }), true,
+  'a never-synced account is still stale');
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, ageMs: 16 * 60 * 1000 }), true,
+  'a watermark older than the freshness window is still stale',
+);
+assert.equal(
+  isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, ageMs: 15 * 60 * 1000 }), false,
+  'a watermark exactly at the freshness window is not yet stale',
+);
+
+// ── PS-484: the awaiting cursor learns the same stall rule as status catch-up ─
+const awaitingPass = (over: Partial<Parameters<typeof buildAwaitingOrderCursorState>[0]>) =>
+  buildAwaitingOrderCursorState({
+    accountId: 'main', storeId: 378060,
+    sinceMs: Date.parse('2026-07-02T00:00:00Z'), untilMs: Date.parse('2026-08-01T00:00:00Z'),
+    pageSize: 100, checkedAtMs: Date.parse('2026-08-01T03:00:00Z'),
+    result: { pages: 13, totalOrders: 1300, startPage: 1, lastPageProcessed: 10,
+      complete: false, stoppedBy: 'page_budget', resumePage: 11 },
+    ...over,
+  });
+
+assert.equal(awaitingPass({}).stalledPasses, 0,
+  'a first backlogged awaiting pass has no stall history');
+assert.equal(awaitingPass({ previous: awaitingPass({}) }).stalledPasses, 1,
+  'the same nextPage across two awaiting passes increments the stall');
+assert.equal(
+  awaitingPass({
+    previous: { ...awaitingPass({}), nextPage: 5 },
+  }).stalledPasses,
+  0,
+  'an advancing awaiting cursor is draining, not stalled',
+);
+assert.equal(
+  buildAwaitingOrderCursorState({
+    accountId: 'main', storeId: 378060,
+    sinceMs: Date.parse('2026-07-02T00:00:00Z'), untilMs: Date.parse('2026-08-01T00:00:00Z'),
+    pageSize: 100, checkedAtMs: Date.parse('2026-08-01T03:00:00Z'),
+    result: { pages: 13, totalOrders: 1300, startPage: 11, lastPageProcessed: 13,
+      complete: true, stoppedBy: 'complete', resumePage: null },
+    previous: { ...awaitingPass({}), stalledPasses: 4 },
+  }).stalledPasses,
+  0,
+  'completing the awaiting pass clears the stall',
+);
+
+console.log('ok   PS-484 backlog-implies-stale narrowing');

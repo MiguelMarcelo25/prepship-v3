@@ -372,6 +372,12 @@ export type AwaitingOrderCursorState = {
     'complete' | 'page_budget' | 'time_budget' | 'page_count_changed'
   >;
   checkedAt: string;
+  /**
+   * PS-484: consecutive passes where this cursor carried a backlog and `nextPage`
+   * did NOT advance. Mirrors OrderStatusCatchupEntry.stalledPasses and is computed
+   * by the same shared rule, so "stuck" means one thing across both cursors.
+   */
+  stalledPasses: number;
 };
 
 export type OrderStatusCatchupEntry = {
@@ -503,21 +509,71 @@ async function persistOrderStatusCatchupSnapshot(
 }
 
 /**
- * PS-431. A backlog is only a fault if it stops moving.
+ * PS-431 / PS-484. A backlog is only a fault if it stops moving.
  *
  * Draining normally -- including the every-other-pass restart of a store whose
  * page count exceeds the pass budget -- resets the counter, because either the
  * backlog cleared or `nextPage` advanced. Only a backlog that persists across
  * passes with the cursor pinned to the same page increments it.
+ *
+ * Shared by BOTH paginated cursors (status catch-up and awaiting) so the two
+ * cannot drift into different definitions of "stuck". PS-484 was filed because
+ * they already had: the status path learned this rule and the awaiting path did
+ * not, so an account could still be called stale for healthy paginated progress.
  */
-function nextStalledPasses(
-  previous: OrderStatusCatchupEntry | undefined,
-  current: OrderStatusCatchupEntry,
+function nextStalledPassCount(
+  previous: { hasBacklog: boolean; nextPage: number | null; stalledPasses?: number } | null | undefined,
+  current: { hasBacklog: boolean; nextPage: number | null },
 ): number {
   if (!current.hasBacklog) return 0;
   if (!previous?.hasBacklog) return 0;
   if (previous.nextPage !== current.nextPage) return 0;
-  return (Number.isFinite(previous.stalledPasses) ? previous.stalledPasses : 0) + 1;
+  const prior = previous.stalledPasses;
+  return (typeof prior === 'number' && Number.isFinite(prior) ? prior : 0) + 1;
+}
+
+function nextStalledPasses(
+  previous: OrderStatusCatchupEntry | undefined,
+  current: OrderStatusCatchupEntry,
+): number {
+  return nextStalledPassCount(previous, current);
+}
+
+/**
+ * PS-484. Whether one ShipStation sync account counts as stale.
+ *
+ * Extracted from the diagnostics loop so the rule is directly testable. It was inline
+ * and consequently untested: reverting the fix below left every sync guard green.
+ *
+ * The correction: a backlog only counts once it has STOPPED DRAINING. Both backlog
+ * clauses used to read `.length > 0`, so ANY backlog made the account stale and healthy
+ * paginated progress reported as a fault. Store 378060 carries 13 pages of shipped
+ * orders against a 10-page pass budget, so it has a backlog on every other pass
+ * forever while updating zero rows -- the same non-fault PS-431 fixed one layer up in
+ * the watchdog verdict, of which this flag was the half that never learned it.
+ *
+ * Narrowing loses no real detection. A backlog whose watermark has stopped advancing is
+ * already caught by the age clause; a failed pass by `failed`. What only these clauses
+ * can catch is a backlog that never drains while the watermark keeps moving, and that
+ * is exactly what stalledPasses measures.
+ */
+export function isOrderSyncAccountStale(input: {
+  failed: boolean;
+  watermarkMs: number | null;
+  ageMs: number | null;
+  freshMs: number;
+  statusBacklogEntries: ReadonlyArray<{ stalledPasses: number }>;
+  awaitingBacklogEntries: ReadonlyArray<{ stalledPasses: number }>;
+}): boolean {
+  const stalled = (entries: ReadonlyArray<{ stalledPasses: number }>) =>
+    entries.some((entry) => entry.stalledPasses >= STALLED_PASS_ALERT_THRESHOLD);
+  return (
+    input.failed ||
+    input.watermarkMs === null ||
+    (input.ageMs !== null && input.ageMs > input.freshMs) ||
+    stalled(input.statusBacklogEntries) ||
+    stalled(input.awaitingBacklogEntries)
+  );
 }
 
 export function mergeOrderStatusCatchupEntries(
@@ -1018,7 +1074,13 @@ export function parseAwaitingOrderCursorState(
   ) {
     return null;
   }
-  return cursor as AwaitingOrderCursorState;
+  // PS-484: cursors written before stalledPasses existed carry no counter. Default
+  // to 0 (draining) rather than treating unknown history as wedged -- a stall has to
+  // be observed across passes to be claimed, never inferred from its absence.
+  return {
+    ...(cursor as AwaitingOrderCursorState),
+    stalledPasses: Number.isFinite(cursor.stalledPasses) ? Number(cursor.stalledPasses) : 0,
+  };
 }
 
 export function buildAwaitingOrderCursorState(input: {
@@ -1037,6 +1099,12 @@ export function buildAwaitingOrderCursorState(input: {
     stoppedBy: AwaitingOrderCursorState['stoppedBy'];
     resumePage: number | null;
   };
+  /**
+   * PS-484: the cursor this pass is replacing. Required to tell a backlog that is
+   * advancing from one that is wedged -- only the previous pass's nextPage can say.
+   * Omitted/null means no history, which counts as draining, never as stuck.
+   */
+  previous?: AwaitingOrderCursorState | null;
 }): AwaitingOrderCursorState {
   const totalPages = Math.max(0, Math.floor(Number(input.result.pages) || 0));
   const hasBacklog = !input.result.complete;
@@ -1058,6 +1126,7 @@ export function buildAwaitingOrderCursorState(input: {
     backlogPages: hasBacklog ? Math.max(0, totalPages - nextPage + 1) : 0,
     stoppedBy: input.result.stoppedBy,
     checkedAt: new Date(input.checkedAtMs).toISOString(),
+    stalledPasses: nextStalledPassCount(input.previous, { hasBacklog, nextPage }),
   };
 }
 
@@ -1336,6 +1405,9 @@ async function syncOrdersForAccount(
         pageSize: awaitingPageSize,
         checkedAtMs: runStartMs,
         result,
+        // PS-484: the cursor loaded at the top of this target's pass, so the stall
+        // counter can see whether nextPage actually moved.
+        previous: loadedCursor.state,
       }));
       total += result.synced;
       if (
@@ -1740,12 +1812,14 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
     const runVerdict = orderSyncRunQueueVerdict(runState, queueTruth, nowMs);
     const failed = runState?.status === 'failed' || runVerdict.abandoned;
     const running = runVerdict.running;
-    const stale =
-      failed ||
-      watermarkMs === null ||
-      (ageMs !== null && ageMs > freshMs) ||
-      statusBacklogEntries.length > 0 ||
-      awaitingBacklogEntries.length > 0;
+    const stale = isOrderSyncAccountStale({
+      failed,
+      watermarkMs,
+      ageMs,
+      freshMs,
+      statusBacklogEntries,
+      awaitingBacklogEntries,
+    });
     const backlogPageValues = [
       ...statusBacklogEntries.map((entry) => entry.backlogPages),
       ...awaitingBacklogEntries.map((entry) => entry.backlogPages),
