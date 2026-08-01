@@ -36,6 +36,16 @@ const REQUIRED_GUARDS = [
   // 294 orders in four days. Pinned here because the regression is silent: it
   // breaks nothing, it just burns the database.
   'test:ps-469-automation-idempotency',
+  // The three below were each found RED on a clean base on 2026-08-01, having
+  // rotted unnoticed precisely because they were not in this pack. In every case
+  // the protection was intact and only the source-text assertion had gone stale
+  // (a literal moved into a helper, a condition wrapped onto a second line, a
+  // helper renamed with -> try). A guard nobody runs is not a guard, so they are
+  // pinned here now. Each was mutation-tested when repaired: break the thing it
+  // protects and it goes red.
+  'test:ps-205-package-facts-precedence',
+  'test:ps-361-shipment-sync-watchdog',
+  'test:ps-409-status-catchup-backlog',
   // PS-470: an unsaved edit must never publish. publish() posts only the
   // simulation hash, so the backend ships the SAVED draft -- an operator
   // changed an action, published three times, and got three byte-identical

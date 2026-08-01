@@ -162,8 +162,13 @@ check('Render restart path is explicit, env-gated, and auditable',
   service.includes('RENDER_API_KEY') &&
   service.includes('recordWatchdogAction') &&
   service.includes('restart-requested'));
+// The helper was renamed with -> try (non-blocking acquire: a second caller
+// skips rather than queues, which still serializes the tick). The assertion kept
+// grepping the old spelling and went red on a clean base while the lock was
+// intact. Accept either form so a rename cannot masquerade as a lost lock, but
+// still require the lock to be taken on the tick's own key.
 check('timer and cron recovery drivers serialize the complete watchdog tick',
-  service.includes('withAdvisoryTransactionLock(WATCHDOG_TICK_LOCK') &&
+  /\b(with|try)AdvisoryTransactionLock\(WATCHDOG_TICK_LOCK/.test(service) &&
   /app\.post\('\/shipment-sync-watchdog'[\s\S]*runShipmentSyncWatchdogTick/.test(cronRoute) &&
   /app\.get\('\/shipment-sync-watchdog'[\s\S]*runShipmentSyncWatchdogTick/.test(cronRoute));
 check('watchdog records shipped-data override comment and safety boundary', /unlock shipped data on 2026-07-01/.test(service));

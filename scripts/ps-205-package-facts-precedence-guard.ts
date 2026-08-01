@@ -126,8 +126,19 @@ check('materialization failures never fail the sync itself (best-effort)',
   /catch \(err\) \{\s*\n\s*console\.warn\(\s*\n\s*'\[store-order-import\] package-facts materialization skipped:'/.test(importer));
 
 // ── (8) shipped/cancelled/labelled rows are read-only no-ops ──────────────────
+// The gate lives in a named predicate, not an inline eq(). The original
+// assertion grepped for a literal eq(orders.orderStatus, 'awaiting_shipment')
+// inside a 1500-character window of the materializer; the gate was refactored
+// into orderLifecycleEffectiveStatusSql() and the window was brittle to the
+// function growing, so this went red on a clean base while the lockdown itself
+// was intact. Pin the predicate and its application instead of the old spelling.
+check('the awaiting-only predicate resolves through the lifecycle status owner',
+  /function mutableAwaitingOrderLifecyclePredicate\(\): SQL \{\s*\n\s*return sql`\$\{orderLifecycleEffectiveStatusSql\(\)\} = 'awaiting_shipment'`;/
+    .test(service));
 check('materializer touches ONLY mutable awaiting rows (lockdown gate)',
-  /materializePackageFactsForImportedOrders[\s\S]{0,1500}?eq\(orders\.orderStatus, 'awaiting_shipment'\)/.test(service));
+  (service.match(/mutableAwaitingOrderLifecyclePredicate\(\),/g) ?? []).length >= 2 &&
+  /materializePackageFactsForImportedOrders[\s\S]*?mutableAwaitingOrderLifecyclePredicate\(\),/
+    .test(service));
 check('rows with a live (non-voided) label are skipped — via a READ-ONLY shipments probe',
   /hasActiveLabel: sql<boolean>`exists \(/.test(service) &&
   /if \(candidate\.hasActiveLabel\) continue;/.test(service));
