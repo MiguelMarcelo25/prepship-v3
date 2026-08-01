@@ -40,6 +40,62 @@ export function classifyUnattributedShipment(input: {
   return orderNumber === '' ? 'blank_order_number' : 'order_not_found';
 }
 
+/**
+ * PS-467 historical audit. Why is an EXISTING orphan unattributed?
+ *
+ * Deliberately separate from classifyUnattributedShipment above, which runs at ingest
+ * and can only see the row in front of it. This one is allowed cross-row evidence --
+ * chiefly whether some LINKED shipment already carries the same tracking number, which
+ * is the difference between "we lost this shipment" and "we ingested it twice".
+ *
+ * That distinction decided the disposition of the 4,004 historical orphans. 796 of them
+ * have a linked sibling with identical tracking, created seconds to minutes earlier by
+ * label purchase; the orphan is shipment sync re-ingesting the same physical label and
+ * failing to match it. Measured 2026-08-01: 779 of the 796 share the sibling's ship_date
+ * and 565 differ only in carrier_code (`stamps_com` vs `usps` naming one USPS label).
+ *
+ * Those are NOT recoverable links. The order already has its shipment; writing the
+ * sibling's order_id onto the orphan would give 790 orders a second row for one physical
+ * label, and for the 6 whose sibling is voided it would attach a row that falsely appears
+ * live. The reason is the deliverable here, not a repair.
+ *
+ * Nothing is persisted. The relationship is derivable from the rows themselves, so
+ * storing it would add a column to a locked table, a 790-row write to shipped data, and
+ * a value that goes stale the moment a sibling is voided or re-linked.
+ */
+export type UnattributedShipmentAuditReason =
+  /** A LINKED shipment already carries this tracking number -- the same label, twice. */
+  | 'duplicate_of_shipment'
+  /** No order number at all, and no sibling to explain it. */
+  | 'blank_order_number'
+  /** Belongs to a store excluded from order sync, so its order was never ingested (PS-468). */
+  | 'excluded_store'
+  /** An order number that matched nothing, with no sibling evidence. */
+  | 'unmatched_order_number';
+
+export type UnattributedShipmentAuditInput = {
+  orderNumber: string | null;
+  /** The linked shipment sharing this tracking number, when one exists. */
+  duplicateOfShipmentId: number | null;
+};
+
+/**
+ * Order matters. Sibling evidence outranks anything the order number suggests: a
+ * duplicate of an excluded-store label is still a duplicate, and calling it
+ * `excluded_store` would hide that the order already has the shipment.
+ */
+export function classifyUnattributedShipmentAudit(
+  input: UnattributedShipmentAuditInput,
+): UnattributedShipmentAuditReason {
+  if (input.duplicateOfShipmentId !== null) return 'duplicate_of_shipment';
+  const orderNumber = (input.orderNumber ?? '').trim();
+  if (orderNumber === '') return 'blank_order_number';
+  // PS-468: these SEAuto- numbers belong to stores excluded from order sync in April
+  // 2026, so no PrepShip order for them can ever exist. Not a matching failure.
+  if (orderNumber.startsWith('SEAuto-')) return 'excluded_store';
+  return 'unmatched_order_number';
+}
+
 /** How many examples to name per batch. Enough to act on, not enough to flood. */
 const SAMPLE_LIMIT = 5;
 

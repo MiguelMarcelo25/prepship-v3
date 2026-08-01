@@ -30,6 +30,13 @@ const REQUIRED_GUARDS = [
   // its twenty checks are CONSUMPTION pins -- an owner nothing calls is not a
   // fix, and shipment-sync losing those call sites must fail here.
   'test:ps-467-468-shipment-scope',
+  // PS-467 audit: WHY each unattributed shipment is unattributed, derived not stored.
+  // The card called 796 of them "recoverable" -- a dry-run proved the order_id is
+  // recoverable in every case and correct in none, because those orders already have
+  // the shipment. Pinned here because the precedence rule is what stops that mistake
+  // recurring: sibling evidence must outrank the order number, or a duplicate reads as
+  // a lost link and someone backfills 790 duplicate rows onto shipped orders.
+  'test:ps-467-unattributed-audit',
   // PS-469: same facts => one run. The idempotency key used to include the
   // trigger's sourceEventId, which carries txid_current(), so every write minted
   // a new key and identical facts were re-evaluated forever -- 322,962 runs over
