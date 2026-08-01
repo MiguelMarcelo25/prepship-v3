@@ -909,7 +909,8 @@
     "test:ps-475-hazmat-retraction": "tsx scripts/ps-475-hazmat-retraction-guard.ts",
     "test:ps-476-rule-status-convergence": "tsx scripts/ps-476-rule-status-convergence-guard.ts",
     "test:ps-477-hazmat-disclosure": "tsx scripts/ps-477-hazmat-disclosure-guard.ts",
-    "test:ps-477-hazmat-disclosure-integration": "tsx scripts/ps-477-hazmat-disclosure-integration.ts"
+    "test:ps-477-hazmat-disclosure-integration": "tsx scripts/ps-477-hazmat-disclosure-integration.ts",
+    "test:ps-431-worker-status-event-retention": "tsx scripts/ps-431-worker-status-event-retention-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

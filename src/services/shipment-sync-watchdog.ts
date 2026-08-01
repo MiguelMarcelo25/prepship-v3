@@ -19,6 +19,7 @@ import {
   notifyShipmentSyncWatchdogEscalation,
   type ShipmentSyncWatchdogAlertNotification,
 } from './shipment-sync-watchdog-alert';
+import { pruneWorkerStatusEventsIfDue } from './worker-status-events';
 
 export const ORDER_SYNC_JOB_NAME = 'prepship.sync.orders';
 export const SHIPMENT_SYNC_JOB_NAME = 'prepship.sync.shipments';
@@ -1065,6 +1066,15 @@ export async function runShipmentSyncWatchdogTick(
     });
     const finalStatus = { ...status, recovery, alertNotification };
     await persistWatchdogSnapshot(finalStatus);
+
+    // PS-431: bound the durable worker-event log. This tick is already serialized by
+    // WATCHDOG_TICK_LOCK, so the prune cannot run concurrently with itself, and it is
+    // internally throttled to ~6h so most ticks skip it outright. No-op while
+    // WORKER_STATUS_EVENTS_DURABLE is off. Deliberately AFTER the snapshot: retention
+    // housekeeping must never delay or fail the health verdict it shares a tick with.
+    const pruned = await pruneWorkerStatusEventsIfDue();
+    if (pruned) console.log(`[shipment-sync-watchdog] pruned ${pruned} old worker-status event(s)`);
+
     return finalStatus;
   });
   if (outcome.acquired) return outcome.value;

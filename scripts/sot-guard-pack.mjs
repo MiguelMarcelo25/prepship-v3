@@ -43,6 +43,13 @@ const REQUIRED_GUARDS = [
   // helper renamed with -> try). A guard nobody runs is not a guard, so they are
   // pinned here now. Each was mutation-tested when repaired: break the thing it
   // protects and it goes red.
+  // PS-431: worker_status_events is the telemetry that would have explained the
+  // 2026-07-13 crash loop and could not, because its flag defaults off. Before that
+  // flag can safely be flipped the log has to be bounded -- its emission rate is a
+  // fixed 30s heartbeat, so it grows at a constant rate whether or not anything is
+  // happening. Pinned here so the retention window cannot quietly become unbounded
+  // and repeat what PS-469 hit at 925 MB.
+  'test:ps-431-worker-status-event-retention',
   'test:ps-205-package-facts-precedence',
   'test:ps-361-shipment-sync-watchdog',
   'test:ps-409-status-catchup-backlog',
