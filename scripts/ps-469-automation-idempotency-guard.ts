@@ -199,6 +199,13 @@ check('a null updatedAt is treated the same as any other timestamp',
     ...baseFacts, order: { ...ORDER_ROW, updatedAt: null },
   }));
 
+// PS-469 part 3. Sync deletes and re-inserts order_items rather than updating
+// them, so the row's serial id is a write artefact, not a fact about the line.
+check('re-inserted item rows with new serial ids produce the SAME revision',
+  revisionOf(baseFacts) === revisionOf({
+    ...baseFacts, items: [{ ...ITEM_ROW, id: ITEM_ROW.id + 999_999 }],
+  }));
+
 // ...but the revision must still MOVE for every fact a rule can read. Without
 // these, "stop the loop" could be satisfied by a constant, and the engine would
 // stop reacting to real changes.

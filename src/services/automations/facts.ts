@@ -55,7 +55,18 @@ export function buildAutomationFactsSnapshot(input: {
   const lines = [...input.items]
     .sort((left, right) => left.lineIndex - right.lineIndex || left.id - right.id)
     .map((item) => ({
-      lineId: String(item.id),
+      // PS-469 part 3. NOT item.id -- sync deletes and re-inserts order_items on
+      // every pass, so the serial changes while the line does not. Measured
+      // 2026-08-01: orders created 2026-07-20 and 2026-07-23 carried item ids
+      // 2514791-2514799 stamped minutes earlier, allocated sequentially across
+      // both orders in one batch. That surrogate key was inside the fact
+      // document, so re-importing an unchanged line moved the revision.
+      //
+      // lineIndex is the line's stable identity within the order and is already
+      // the sort key above. Nothing reads lineId -- the automation engine
+      // declares it in contracts.ts and never consults it -- so this narrows
+      // churn without changing any rule's meaning.
+      lineId: String(item.lineIndex),
       sku: item.sku?.trim() || null,
       name: item.name?.trim() || null,
       quantity: finite(item.quantity),
