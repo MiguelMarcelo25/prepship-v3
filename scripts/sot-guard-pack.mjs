@@ -119,6 +119,35 @@ const REQUIRED_GUARDS = [
   'test:settings-read-scope',
   'test:ps-083-direct-carrier-scope',
   'test:store-order-import-batch-dedupe',
+  // ── Batch 4: marketplace confirmation, fulfillment, order lifecycle ──
+  //
+  // inventory-auto-deduct guards the INVENTORY_AUTO_DEDUCT kill switch, which
+  // AGENTS.md names as a locked surface; the confirmation pair covers telling a
+  // marketplace a shipment happened, which is an external side effect that
+  // cannot be taken back once sent.
+  //
+  // Two candidates were tested and deliberately NOT admitted:
+  //   test:inventory-source-of-truth -- a bare alias for test:ps-462-inventory-sot,
+  //     already gated at de52b19c. Admitting it would have paid its 16s twice for
+  //     zero additional coverage.
+  //   test:ps-067-billing-external-fulfilled -- RED on stable. It pins
+  //     `billingShipDateSql`, a read-time SQL fallback that PS-434 replaced with
+  //     the persisted billingSourceCalendar.actualActivityDay column. Almost
+  //     certainly rot rather than a billing defect (shipDate: row.billingShipDate
+  //     and fulfilledAt both survive), but repointing it means re-expressing the
+  //     property against the calendar WRITER, and I have not verified the
+  //     fallback chain there. Not gating a red, and not repairing one I have not
+  //     traced to the end.
+  'test:inventory-auto-deduct',
+  'test:walmart-confirmation:payload',
+  'test:ebay-confirmation:mocked',
+  'test:ps-402-fulfillment-conflict',
+  'test:ps-411-effective-lifecycle-edit-lock',
+  'test:ps-387-effective-order-status-sot',
+  'test:ps-199-walmart-po-resolution',
+  'test:ps-194-confirm-printed-persistence',
+  'test:inventory-history-dedupe',
+  'test:ps-401-shopify-order-total',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
