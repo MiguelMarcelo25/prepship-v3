@@ -176,6 +176,25 @@ const REQUIRED_GUARDS = [
   'test:ps-286-applied-rate-sync',
   'test:best-rate-saved-display-contract',
   'test:ps-102-best-rate-workflow-dto',
+  // ── Batch 6: label normalization, external certification, rate cache ──
+  //
+  // All twelve candidates passed first time -- the first batch with no reds since
+  // batch 3. Eleven admitted: test:print-queue-label-normalization was dropped as
+  // a bare alias for test:ps-287-print-queue-label-normalization. Second alias
+  // caught this sweep (the first was test:inventory-source-of-truth in batch 4),
+  // so checking the script body before promoting is now part of the routine --
+  // an alias costs its runtime twice and adds no coverage.
+  'test:ps-056-external-label-certification',
+  'test:ps-084-label-size-normalize',
+  'test:ps-287-print-queue-label-normalization',
+  'test:ps-286-label-url-backfill',
+  'test:carrier-enable-disable-label',
+  'test:ps-099-create-print-shipp-label-output',
+  'test:ps-099-orders-rate-cache-first',
+  'test:rates-multi-cache',
+  'test:ps-081-rate-sync',
+  'test:ps-057-hugrab-ground-saver',
+  'test:multi-sku-product-dims-rate-fallback',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
