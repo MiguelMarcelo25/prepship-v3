@@ -44,10 +44,22 @@ check('fractional velocity → restock is ceil()',
 
 // ── 2) DashboardView delegates (no inline reorder math) ──
 const dashboardView = readFileSync('web/src/components/Views/DashboardView.tsx', 'utf8');
-checkBool('DashboardView imports the canonical reorder policy owner',
-  /import \{ computeReorderPolicy \} from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/inventory-reorder-policy'/.test(dashboardView));
-checkBool('DashboardView calls computeReorderPolicy({ units30, stock, minStock })',
-  /computeReorderPolicy\(\{ units30, stock, minStock \}\)/.test(dashboardView));
+// Inverted 2026-08-04. These required DashboardView to import
+// '../../../../src/lib/inventory-reorder-policy' and call it -- the frontend
+// reaching four levels up out of web/ into backend src/ to run a policy itself.
+// PS-325 moved every dashboard metric to a backend read model and PS-464's
+// boundary law forbids that import outright, so both assertions were demanding
+// an architecture violation the repo has since removed.
+//
+// Second guard in two batches found requiring the frontend to own a backend
+// computation, after ps-166's rate builders. The delegation is still pinned --
+// harder than before, because "does not compute" is a stronger property than
+// "imports the shared helper": a view that cannot reach the policy cannot drift
+// from it either.
+checkBool('DashboardView does not reach into backend src/ for the reorder policy',
+  !/from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/inventory-reorder-policy'/.test(dashboardView));
+checkBool('DashboardView never computes reorder policy itself (backend DTO only)',
+  !/computeReorderPolicy\(/.test(dashboardView));
 checkBool('DashboardView no longer inlines the velocity dailyRate math',
   !/const dailyRate = units30 > 0 \? units30 \/ 30/.test(dashboardView));
 checkBool('DashboardView no longer inlines the restock = ceil(targetStock - stock) math',
@@ -57,8 +69,12 @@ checkBool('DashboardView no longer inlines the restock = ceil(targetStock - stoc
 const dashboardRoute = readFileSync('src/routes/dashboard.ts', 'utf8');
 checkBool('dashboard route imports the canonical reorder policy owner',
   /import \{ computeReorderPolicy \} from '\.\.\/lib\/inventory-reorder-policy'/.test(dashboardRoute));
+// Repointed 2026-08-04: `stock: stockQty` became `stock: inventoryQuantity` when
+// PS-462 replaced the split balances with one canonical ledger quantity. The
+// delegation is unchanged; the variable it reads from is the point of that
+// ticket. Pin the call and its keys, not the local that supplies stock.
 checkBool('dashboard route delegates to computeReorderPolicy for the inventory-risk DTO',
-  /computeReorderPolicy\(\{ units30: soldLast30Days, stock: stockQty, minStock: reorderLevel \}\)/.test(dashboardRoute));
+  /computeReorderPolicy\(\{ units30: soldLast30Days, stock: \w+, minStock: reorderLevel \}\)/.test(dashboardRoute));
 checkBool('dashboard route no longer inlines the par-level restock (reorderLevel - stockQty)',
   !/restockQty: Math\.max\(0, reorderLevel - stockQty\)/.test(dashboardRoute));
 

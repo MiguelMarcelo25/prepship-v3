@@ -340,6 +340,33 @@ const REQUIRED_GUARDS = [
   'test:ps-402-hugrab-shipped-insurance-breakdown',
   'test:ps-411-bulk-assign-terminal-lock',
   'test:single-sku-default-qty-scope',
+  // ── Batch 13: dashboard/inventory policy, print-queue hygiene, search ──
+  //
+  // ps-150-reorder-policy was RED for two unrelated reasons in one guard:
+  //   - it required DashboardView to import '../../../../src/lib/...' and run the
+  //     policy itself. PS-325 moved dashboard metrics to a backend read model and
+  //     PS-464's boundary law forbids that import, so the assertion demanded an
+  //     architecture violation the repo had already removed. Inverted: the view
+  //     must NOT reach into src/ and must NOT compute. That is a stronger pin than
+  //     the original -- a view that cannot reach the policy cannot drift from it.
+  //   - it required `stock: stockQty` on the backend call. PS-462 renamed that to
+  //     inventoryQuantity when it collapsed the split balances into one canonical
+  //     ledger quantity. Delegation unchanged; pinned the call and keys instead of
+  //     the local supplying stock.
+  // Mutation-checked in both directions: the FE computing fails it, the route not
+  // delegating fails it.
+  'test:ps-150-reorder-policy',
+  'test:ps-459-rate-on-ingest-cache',
+  'test:best-rate-dims',
+  'test:shipp-rate-retry',
+  'test:print-queue-hygiene',
+  'test:print-queue-sku-grouping',
+  'test:awaiting-onhold-backsync',
+  'test:ps-166-orders-rate-cells',
+  'test:ps-210-global-orders-search',
+  'test:ps-404-international-order-indicator',
+  'test:ps-420-print-queue-progress',
+  'test:label-coldstart-import',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
