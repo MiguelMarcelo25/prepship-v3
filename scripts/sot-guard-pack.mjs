@@ -34,6 +34,14 @@ const REQUIRED_GUARDS = [
   // modules. Aggregate entry on purpose -- it also carries PS-439's inventory
   // source-of-truth guard and concurrency integration, which had the same gap.
   'test:ps-462-inventory-sot',
+  // PS-442 sync lane fairness, watermarks and durable state. Fourth instance of
+  // the same pattern in one day: the guard existed, passed, and ran nowhere --
+  // and both PS-442 commits shipped with [skip ci], so it had never run in CI
+  // either. It pins the busy-defer job set, the inventory product cursor keys,
+  // the per-account watermark triples and the Walmart token abort, i.e. exactly
+  // the starvation and freeze behaviour that is invisible until a lane stalls in
+  // production. Hermetic: verified green under OFFLINE_GUARD_ENV before adding.
+  'test:ps-442-sync-fairness',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
