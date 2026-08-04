@@ -94,6 +94,31 @@ const REQUIRED_GUARDS = [
   'test:ps-104-print-queue-selected-rate-proof-pass-through',
   'test:print-to-queue-selected-rate-proof',
   'test:ps-105-backend-rate-snapshot-id',
+  // ── Batch 3: authority, shipped/cancelled safety, scope ──
+  //
+  // The lockdown in AGENTS.md is the loudest rule in this repo, and until now
+  // nothing ran the guards that enforce it. ps-128-external-shipped-label-block
+  // and ps-129-upstream-cancellation-hold protect the shipped/cancelled surface;
+  // ps-422-shipping-quote-authorization sits on the purchase authorization
+  // boundary; the ps-176/178/181 trio pins where authority is allowed to live.
+  //
+  // A written rule that nothing executes is a convention, not a control. These
+  // are the executable half.
+  //
+  // All twelve verified green and hermetic under OFFLINE_GUARD_ENV before
+  // admission; no reds in this batch, unlike batch 2.
+  'test:ps-422-shipping-quote-authorization',
+  'test:ps-181-backend-admin-authority',
+  'test:ps-176-queue-route-authority',
+  'test:ps-416-billing-fail-closed',
+  'test:ps-178-fe-authority-ratchet',
+  'test:ps-128-external-shipped-label-block',
+  'test:ps-129-upstream-cancellation-hold',
+  'test:ps-192-shipped-external-provider',
+  'test:ps-168-scope-sql',
+  'test:settings-read-scope',
+  'test:ps-083-direct-carrier-scope',
+  'test:store-order-import-batch-dedupe',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
