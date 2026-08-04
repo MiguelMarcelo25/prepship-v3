@@ -237,6 +237,26 @@ const REQUIRED_GUARDS = [
   'test:ps-173-order-row-workflow',
   'test:shipment-tracking-retirement',
   'test:print-queue-timing-proof',
+  // ── Batch 9: the two billing-export guards Hermes found rotted, now repaired ──
+  //
+  // Both were RED on stable and ungated, which is the same pair of facts every
+  // time. Hermes' exact-head audit found them while scoring PS-434 and correctly
+  // called them "rotted guard assertions, not verified runtime billing defects".
+  //   billing-invoice-xlsx-layout expected header 'Fulfillment Fee'; the column
+  //     was re-labelled 'Total' while KEEPING key 'fulfillmentFee', so the data
+  //     binding never moved -- only the operator-visible label.
+  //   ps-217-billing-export-box-fields required the literal `if (rowTotal > 0)`.
+  //     The owner now reads `Number.isFinite(rowTotal) && rowTotal !== 0` and
+  //     returns roundMoney(rowTotal). Every difference is a strengthening -- signed
+  //     totals survive, NaN cannot be returned as money, rounding goes through
+  //     PS-457's single owner -- so the guard was demanding the WEAKER predicate
+  //     back. A stale guard does not just miss regressions; it can argue for them.
+  // Both repointed to the property rather than the spelling, and mutation-checked:
+  // re-labelling the column fails the first, weakening !== 0 back to > 0 fails the
+  // second. ps-208 added alongside them as the third ungated invoice-XLSX guard.
+  'test:billing-invoice-xlsx-layout',
+  'test:ps-217-billing-export-box-fields',
+  'test:ps-208-billing-calendar-day-invoice-xlsx',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

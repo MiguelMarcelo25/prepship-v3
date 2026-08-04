@@ -143,7 +143,12 @@ const expectedHeaders = [
   "header: 'Box Size'",
   "header: 'Shipping'",
   "header: 'Storage'",
-  "header: 'Fulfillment Fee'",
+  // Repointed 2026-08-04. This expected "header: 'Fulfillment Fee'". The column
+  // was re-labelled to 'Total' in the export while KEEPING key 'fulfillmentFee'
+  // (routes/billing.ts:2398), so the data binding never moved -- only the
+  // operator-visible label. The CSV owner agrees (billing-invoice-csv.ts:64).
+  // Nothing about the money changed; the guard was pinned to the old wording.
+  "header: 'Total'",
 ];
 let lastHeaderIndex = -1;
 for (const header of expectedHeaders) {

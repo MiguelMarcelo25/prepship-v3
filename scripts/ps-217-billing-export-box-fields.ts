@@ -77,8 +77,22 @@ check(`both renderers consume billingInvoiceData (found ${dataCalls})`, dataCall
 //    row_total unchanged and adds package cost only for the legacy fallback.
 check('HTML and XLSX delegate per-row Fulfillment Fee to one owner',
   routes.split('resolveBillingInvoiceRowTotal({').length - 1 >= 2);
+// Repointed 2026-08-04. This required the literal `if (rowTotal > 0) return
+// rowTotal;`. The owner now reads:
+//   if (Number.isFinite(rowTotal) && rowTotal !== 0) return roundMoney(rowTotal);
+// Every difference is a STRENGTHENING, and pinning the old form made the guard
+// demand the weaker predicate back:
+//   > 0        -> !== 0            a negative authoritative total (credit, refund,
+//                                  adjustment) is now preserved instead of falling
+//                                  through to the recomputed fallback
+//   (none)     -> Number.isFinite  NaN/Infinity can no longer be returned as money
+//   rowTotal   -> roundMoney(...)  delegates to PS-457's single cent-rounding owner
+// Pin the PROPERTY -- an authoritative nonzero total is preserved, not recomputed,
+// and package cost is added only in the fallback -- rather than one spelling of it.
 check('row-total owner preserves authoritative totals and includes box in fallback',
-  rowTotalOwner.includes('if (rowTotal > 0) return rowTotal;')
+  rowTotalOwner.includes('rowTotal !== 0')
+    && rowTotalOwner.includes('Number.isFinite(rowTotal)')
+    && rowTotalOwner.includes('roundMoney(rowTotal)')
     && rowTotalOwner.includes('+ Number(input.packageCost)'));
 
 // 6. XLSX totals match the current one-sheet Invoice layout.
