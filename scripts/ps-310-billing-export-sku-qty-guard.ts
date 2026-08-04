@@ -42,9 +42,16 @@ check('empty item_rows -> itemSkus null (export falls back to the bare string_ag
 const billingRoute = readFileSync('src/routes/billing.ts', 'utf8');
 // d2abef4e hoisted the summarizer call to a local (itemSummary); export still delegates
 // SKU strings to it with a bare `?? r.skus` fallback.
+// Repointed 2026-08-04. This required `skus:` to be immediately followed by
+// `itemSummary.itemSkus ?? r.skus`. A credit-note branch was inserted between
+// them -- when the row derives from a source finalization the column shows
+// "Original invoice N" instead -- so the ternary broke adjacency while the
+// property this check protects is untouched: the non-credit branch is still the
+// canonical summarizer with the bare string_agg fallback.
+// Match the delegation, not its adjacency to the key.
 check('export builds the SKU string via the canonical summarizer with a bare fallback',
   /const itemSummary = summarizeBillingItemsForDetail\(r\.item_rows\)/.test(billingRoute) &&
-  /skus:\s*itemSummary\.itemSkus\s*\?\?\s*r\.skus/.test(billingRoute));
+  /skus:[\s\S]{0,160}?itemSummary\.itemSkus\s*\?\?\s*r\.skus/.test(billingRoute));
 check('export fetches per-SKU item_rows (sku + name + quantity, ordered by line_index)',
   /json_build_object\(\s*'sku',\s*oi\.sku,\s*'name',\s*oi\.name,\s*'quantity',\s*oi\.quantity\s*\)/.test(billingRoute) &&
   /\)\s*as item_rows/.test(billingRoute));

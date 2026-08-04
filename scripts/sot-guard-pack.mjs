@@ -257,6 +257,34 @@ const REQUIRED_GUARDS = [
   'test:billing-invoice-xlsx-layout',
   'test:ps-217-billing-export-box-fields',
   'test:ps-208-billing-calendar-day-invoice-xlsx',
+  // ── Batch 10: billing. Three more reds, all rot, all from improvements ──
+  //
+  // The billing tier has the worst rot rate of the sweep: 5 reds in 15 sampled,
+  // against 6 in the other ~90. Not because billing is fragile -- because it has
+  // been refactored hardest, and these guards pin source text.
+  //   ps-370 pinned roundCents(persisted). PS-457 consolidated cent rounding into
+  //     one owner; roundCents no longer exists in src at all. Third guard broken
+  //     by that single rename, after ps-217 and the PS-434 pair.
+  //   ps-310 required `skus:` to sit immediately beside itemSummary.itemSkus. A
+  //     credit-note branch ("Original invoice N") was inserted between them.
+  //   hugrab-shipping-floor pinned clearCachedReads('fetchBillingSummary',
+  //     'fetchShippingMarginAnalytics'), replaced by the typed
+  //     invalidateBillingReads({ summary, shippingMargin }) and made conditional
+  //     on data.apply so a dry-run preview stops invalidating caches it never
+  //     changed. Two improvements the old assertion scored as a failure.
+  // All three repointed to the property, all three mutation-checked.
+  'test:ps-370-selected-rate-cost-parity',
+  'test:ps-310-billing-export-sku-qty',
+  'test:billing-hugrab-shipping-floor',
+  'test:markup-single-source',
+  'test:billing-formula',
+  'test:ps-364-billing-selected-rate-sot',
+  'test:ps-372-billing-read-divergence',
+  'test:ps-362-billing-detail-sot-export',
+  'test:ps-798-per-account-billing',
+  'test:ps-207-shipped-box-billing-policy',
+  'test:ps-373-prorated-storage-billing',
+  'test:billing-client-scope',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

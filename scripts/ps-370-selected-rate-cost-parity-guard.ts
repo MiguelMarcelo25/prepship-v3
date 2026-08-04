@@ -115,8 +115,18 @@ check('reader (billingDetails) threads the column into resolveBillingSelectedRat
   /selectedRateCost: row\.selectedRateCost \?\? fallbackShipment\?\.selectedRateCost/.test(billing));
 
 const resolver = read('src/services/billing-selected-rate-cost.ts');
+// Repointed 2026-08-04. This pinned `roundCents(persisted)`. PS-457 consolidated
+// cent rounding into one named owner and roundCents no longer exists anywhere in
+// src -- every call site is roundMoney now, which is the whole point of that
+// ticket. The preference order this check exists to protect (persisted column
+// first, component derivation second) never changed.
+//
+// Third guard today rotted by the same consolidation, after
+// ps-217-billing-export-box-fields and the PS-434 pair. Renaming a shared money
+// helper is exactly the kind of change that breaks source-pinned guards in bulk,
+// and none of them ran, so the breakage was invisible.
 check('resolver prefers the persisted column before the component derivation',
-  /const persisted = toFiniteNumber\(input\.selectedRateCost\)[\s\S]{0,80}if \(persisted != null\) return roundCents\(persisted\)/.test(resolver));
+  /const persisted = toFiniteNumber\(input\.selectedRateCost\)[\s\S]{0,80}if \(persisted != null\) return roundMoney\(persisted\)/.test(resolver));
 
 const floor = read('src/services/hugrab-billing-shipping-floor.ts');
 check('HUGRAB floor SQL coalesces the persisted column FIRST',

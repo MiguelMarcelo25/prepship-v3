@@ -98,7 +98,14 @@ check('api client has a thin HUGRAB shipping floor wrapper and clears billing ca
   apiClient.includes('/billing/hugrab-shipping-floor') &&
   apiClient.includes('selectedRateBelow?: number') &&
   apiClient.includes('targetShipping?: number') &&
-  apiClient.includes("clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics')"));
+  // Repointed 2026-08-04. This pinned the stringly-typed
+  // clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics'),
+  // which no longer exists anywhere in the api client. It was replaced by the
+  // typed invalidateBillingReads({ summary, shippingMargin }) -- typo-proof and
+  // discoverable where a pair of magic strings was neither -- and made
+  // conditional on data.apply, so a dry-run preview no longer invalidates caches
+  // it did not change. Both are improvements the old assertion called a failure.
+  /invalidateBillingReads\(\{[^}]*summary: true[^}]*shippingMargin: true[^}]*\}\)/.test(apiClient));
 check('HUGRAB bulk button sits next to the detail Columns control (line-items header + modal stack)',
   // trigger renders in the header, immediately before the Columns anchor span
   /data-hugrab-shipping-floor-trigger[\s\S]*?columnsAnchorRef/.test(lineItemsHeader) &&
