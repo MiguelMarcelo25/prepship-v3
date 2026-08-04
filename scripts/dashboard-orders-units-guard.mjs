@@ -7,6 +7,13 @@ const packagePath = path.join(root, 'package.json');
 
 const dashboard = fs.readFileSync(dashboardPath, 'utf8');
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+// PS-325/PS-336: reporting windows are backend-owned. Read the canonical owner so
+// this guard can pin WHERE the trailing-seven window is computed, not just that
+// some expression exists somewhere.
+const reportingWindows = fs.readFileSync(
+  path.join(root, 'src/services/reporting-window-presets.ts'),
+  'utf8',
+);
 
 function assert(condition, message) {
   if (!condition) {
@@ -47,9 +54,28 @@ assert(
   '7-day KPI is not calculated as 25% of the selected range',
 );
 
+// Inverted 2026-08-04. This required DashboardView -- the FRONTEND -- to contain
+//   const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))
+// i.e. the browser deriving a reporting window itself. PS-325 moved that to a
+// named backend owner: src/services/reporting-window-presets.ts computes
+// currentTrailingSeven as shiftDay(current.to, -(trailingDays - 1)), and
+// dateOffsetFrom no longer exists in src at all. DashboardView now READS the
+// backend window (dashboardWindowQuery.data.currentTrailingSeven.from) and
+// relays it, which is display/intent rather than policy.
+//
+// Third guard in three batches found requiring the frontend to own a backend
+// computation, after ps-166's rate builders and ps-150's reorder policy. All
+// three were written when the frontend legitimately owned that work.
+//
+// Pin the rule as it now stands: the owner computes, the view does not.
 assert(
-  dashboard.includes('const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))'),
-  '7-day summary window uses the last seven calendar days, bounded by selected range length',
+  reportingWindows.includes('currentTrailingSeven') &&
+    /shiftDay\(current\.to, -\(trailingDays - 1\)\)/.test(reportingWindows),
+  'the trailing-seven window is computed by the canonical reporting-window owner',
+);
+assert(
+  !dashboard.includes('dateOffsetFrom(currentTo'),
+  'DashboardView never derives the seven-day reporting window itself',
 );
 
 if (process.exitCode) {

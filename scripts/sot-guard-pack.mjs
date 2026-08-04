@@ -367,6 +367,34 @@ const REQUIRED_GUARDS = [
   'test:ps-404-international-order-indicator',
   'test:ps-420-print-queue-progress',
   'test:label-coldstart-import',
+  // ── Batch 14: client/store scope, inventory ledger, dashboard windows ──
+  //
+  // dashboard-orders-units was RED requiring DashboardView -- the FRONTEND -- to
+  // contain `dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))`: the
+  // browser deriving a reporting window. PS-325 moved it to
+  // reporting-window-presets.ts and the view now relays the backend window.
+  //
+  // Third guard in three batches demanding the frontend own a backend
+  // computation, after ps-166 (rate builders) and ps-150 (reorder policy). Each
+  // was correct when written and none was updated when the source-of-truth passes
+  // moved the work -- because nothing ran them to say so. That is the clearest
+  // argument in this whole sweep for gating: these did not drift quietly, they
+  // drifted into asserting the opposite of the architecture.
+  //
+  // Inverted and mutation-checked both ways: the FE deriving fails it, the owner
+  // not computing fails it.
+  'test:dashboard-orders-units',
+  'test:inventory-ledger-balance',
+  'test:client-store-scope',
+  'test:dashboard-client-scope',
+  'test:analysis-client-scope',
+  'test:inventory-client-scope',
+  'test:marketplace-order-auth-cors',
+  'test:inventory-default-view',
+  'test:batch-header-package-size',
+  'test:inventory-history-date-range-total',
+  'test:inventory-history-table-pagination',
+  'test:ps-438-rate-recalculation-progress',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
