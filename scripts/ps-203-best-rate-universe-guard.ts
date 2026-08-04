@@ -161,10 +161,21 @@ check('backfill delegates to the same combined owner',
   /combineCarrierUniverses\(\{/.test(backfill) &&
   /getDirectCarrierRatesForRateInput\(\{/.test(backfill) &&
   /includeVisibleDirectCarriers: true/.test(backfill));
+// Repointed 2026-08-04. This pinned the local `rawAmountBest`, which was renamed
+// to `persistedFinalizedBest` when the raw restore moved to AFTER finalization so
+// proof stamps survive the spread (rates-backfill.ts:1500-1509) -- a correctness
+// reordering, not a weakening. The second-best path gained the same treatment as
+// `rawAmountSecondBest` (:1370-1375), so there are now TWO strip sites where this
+// pinned one.
+//
+// The property is unchanged and still enforced in both: the carrier's
+// original_amount is restored into shipping_amount, and original_amount + markup
+// are deleted before persisting, so a marked amount can never be persisted and
+// marked again. Match the strip, not the variable that happens to hold it.
 check('backfill persists the RAW carrier amount (kills the double-markup display)',
-  /best\.original_amount \? \{ shipping_amount: best\.original_amount \}/.test(backfill) &&
-  /delete rawAmountBest\.original_amount/.test(backfill) &&
-  /delete rawAmountBest\.markup/.test(backfill));
+  /original_amount\s*\n?\s*\?\s*\{ shipping_amount: \(?[A-Za-z]*[Bb]est[^)]*\)?\.?original_amount|original_amount \? \{ shipping_amount: [A-Za-z]*\.?original_amount/.test(backfill) &&
+  /delete \w+\.original_amount/.test(backfill) &&
+  /delete \w+\.markup/.test(backfill));
 check('backfill completeness + fingerprint come from the combined universe',
   /isComplete: combined\.bestRateComplete/.test(backfill) &&
   /requestFingerprint: combined\.combinedRequestKey/.test(backfill));

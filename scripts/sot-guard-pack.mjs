@@ -285,6 +285,36 @@ const REQUIRED_GUARDS = [
   'test:ps-207-shipped-box-billing-policy',
   'test:ps-373-prorated-storage-billing',
   'test:billing-client-scope',
+  // ── Batch 11: void labels, rate proof, print queue ──
+  //
+  // ps-203 was RED and is repaired here. It pinned the local `rawAmountBest`,
+  // renamed to `persistedFinalizedBest` when the raw restore moved to AFTER
+  // finalization so proof stamps survive the spread -- a correctness reordering.
+  // The second-best path gained the same treatment, so there are now two strip
+  // sites where the guard pinned one. Double-markup protection was never absent.
+  // Mutation-checked: removing both markup deletes fails it.
+  //
+  // NOT admitted: test:ps-202-direct-label-owner, RED and deliberately unrepaired.
+  // It pins `enqueueFulfillmentDeductions({ order, shipmentId, source: 'label' })`,
+  // which no longer exists anywhere in src -- PS-450 replaced it with the
+  // fulfillment outbox (enqueueInventoryDeduction). labels.ts imports the new
+  // owner and passes it to the bundle-member fan-out, but I could not establish
+  // where the PRIMARY deduction is enqueued from the label path. Almost certainly
+  // rot like the other ten, but "almost certainly" is not evidence, this is
+  // inventory behind the INVENTORY_AUTO_DEDUCT kill switch, and repointing it
+  // would mean inventing an assertion about a path I have not traced. Third red
+  // left standing with its diagnosis, after ps-067 and ps-380.
+  'test:ps-203-best-rate-universe',
+  'test:ps-399-shipstation-void-label-id',
+  'test:ps-219-void-label-ui',
+  'test:ps-209-label-owner-slice',
+  'test:ps-295-house-customer-rate-proof',
+  'test:ps-299-finalized-best-rate',
+  'test:ps-348-pre-expiry-rate-refresh',
+  'test:ps-354-print-queue-stale-job',
+  'test:ps-214-hugrab-universal-insurance',
+  'test:ps-468-invoice-csv',
+  'test:ps-406-shopify-rates-labels',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
