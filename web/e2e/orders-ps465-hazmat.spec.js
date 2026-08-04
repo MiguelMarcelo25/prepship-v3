@@ -164,6 +164,53 @@ function unsealedShippedState() {
   }
 }
 
+// PS-478: PrepShip DID buy this label, but the sealed snapshot fails integrity
+// validation. Mirrors resolveHazmatDisclosure's unreadableSeal branch exactly:
+//
+//   isHazmat            safety union of summaryIsHazmat and the live declaration
+//   snapshotHash        NULL on purpose -- the hash describes bytes that failed
+//                       validation, so showing it would offer proof of something
+//                       nobody could read
+//   declaration         the LIVE one, since the sealed content is by definition
+//                       unreadable; null when none survives
+//
+// `surviving` is the parameter that matters. With no live declaration the
+// disclosure carries declaration: null while isHazmat stays TRUE off the summary
+// column -- which is this card's title: an unreadable seal must not read as
+// not-dangerous-goods. A consumer has to read the fact, not the presence of the
+// declaration field, and that is precisely the bug worth pinning.
+function sealedUnreadableState(surviving) {
+  return {
+    orderId: unsealedShippedOrder.id,
+    declaration: surviving ? activeDeclaration : { schemaVersion: 1, status: 'clear', materials: [] },
+    revision: 4,
+    semanticHash: 'hz_fixture_unreadable',
+    capabilities: capabilities(false),
+    validation: { valid: true, issues: [] },
+    requiresRerate: false,
+    disclosure: {
+      isHazmat: true,
+      profile: 'shipstation_ups_dry_ice',
+      provenance: 'sealed_unreadable',
+      snapshotHash: null,
+      declarationRevision: surviving ? 4 : null,
+      declaration: surviving ? activeDeclaration : null,
+    },
+  }
+}
+
+// PS-478: the same state as a queue row. hazmat_snapshot_hash is null for the
+// same reason it is null on the disclosure -- the seal exists but cannot be read.
+const unreadableQueueEntry = {
+  queue_entry_id: 'ps478-unreadable-entry', order_id: '465007', order_number: 'PS478-UNREADABLE-465007',
+  client_id: client.id, label_url: 'https://example.test/unreadable.pdf', sku_group_id: 'PS478-UNREADABLE',
+  primary_sku: 'PS478-UNREADABLE', item_description: 'Unreadable seal fixture', order_qty: 1, multi_sku_data: null,
+  status: 'queued', print_count: 0, last_printed_at: null, auto_retired_at: null,
+  queued_at: '2026-07-25T00:03:00.000Z', shipping_hold: false, held_reason: null,
+  hazmat_is_hazmat: true, hazmat_provenance: 'sealed_unreadable', hazmat_profile: 'shipstation_ups_dry_ice',
+  hazmat_snapshot_hash: null, hazmat_declaration_revision: 4,
+}
+
 // PS-481: the kill-switch case. Rollout flags gate WRITING and RATING hazmat;
 // they must never gate SEEING that a shipped order went out as dangerous goods.
 // Served on unsealedShippedOrder so the id matches whatever setup() resolves as
@@ -230,7 +277,10 @@ async function setup(page, options = {}) {
   // PS-477: options.unsealedShipped swaps in the unsealed fixture everywhere
   // the suite otherwise serves shippedOrder/shippedState(), so the existing
   // three tests (which never pass this option) stay byte-identical.
-  const activeShippedOrder = options.unsealedShipped ? unsealedShippedOrder : shippedOrder
+  // PS-478 resolves to the same order as PS-477's, because sealedUnreadableState
+  // is keyed on unsealedShippedOrder.id.
+  const activeShippedOrder =
+    options.unsealedShipped || options.sealedUnreadable ? unsealedShippedOrder : shippedOrder
   await page.addInitScript((projectRef) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
     window.localStorage.setItem(`sb-${projectRef}-auth-token`, JSON.stringify({
@@ -259,6 +309,11 @@ async function setup(page, options = {}) {
         // disclosure branch instead of rendering the full editor.
         if (options.flagsOff) {
           return route.fulfill(json({ data: flagsOffState(options.flagsOff === 'hazmat') }))
+        }
+        // PS-478: 'surviving' keeps the live declaration, 'orphaned' drops it --
+        // the case where isHazmat is true with nothing left to display.
+        if (options.sealedUnreadable) {
+          return route.fulfill(json({ data: sealedUnreadableState(options.sealedUnreadable === 'surviving') }))
         }
         return route.fulfill(json({ data: options.unsealedShipped ? unsealedShippedState() : shippedState() }))
       }
@@ -450,6 +505,72 @@ test('print queue badges an unsealed hazmat label as not purchased through PrepS
   const badge = queue.locator('[title*="not purchased through PrepShip"]')
   await expect(badge).toHaveCount(1)
   await expect(badge).toContainText('Hazmat')
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-478: an unreadable seal is its own state, not an absence. The panel must
+// say the seal failed validation -- NOT "immutable" (which claims the snapshot
+// is intact) and NOT "not bought through PrepShip" (the opposite of what
+// happened, and the exact wording bug PS-479 found at this site).
+test('order detail: an unreadable seal is disclosed as unreadable, not as intact or unpurchased', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { sealedUnreadable: 'surviving' })
+  const panel = await openOrder(page, 'shipped')
+
+  await expect(panel).toContainText('Sealed at purchase, but the snapshot failed validation and cannot be shown.')
+
+  // The two wrong answers, both of which have shipped as bugs before.
+  await expect(panel).not.toContainText('Shipped hazmat snapshot is immutable.')
+  await expect(panel).not.toContainText('was not bought through PrepShip')
+
+  // Still visibly dangerous goods, and the live declaration is what shows,
+  // because the sealed content is by definition unreadable.
+  await expect(panel.getByLabel('This shipment contains dangerous goods')).toBeChecked()
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-478, the case in this card's title. An unreadable seal with NO surviving
+// declaration carries declaration: null. If any consumer reads "no declaration"
+// as "not hazmat", a dangerous-goods shipment silently renders clear. isHazmat
+// comes off the summary column and stays true, and that is what must win.
+test('order detail: an unreadable seal with nothing left to display still reads as hazmat', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { sealedUnreadable: 'orphaned' })
+  const panel = await openOrder(page, 'shipped')
+
+  // The fact survives even though the content did not. This is the whole point:
+  // declaration is null, so the editor's checkbox is legitimately unchecked --
+  // there is no declaration content to show -- but the shipment is still
+  // disclosed as dangerous goods by the provenance line. Content-absence must
+  // never become fact-absence, which is what "reads as not-dangerous-goods" in
+  // this card's title actually means.
+  await expect(panel).toContainText('Sealed at purchase, but the snapshot failed validation and cannot be shown.')
+
+  // Corrupt bytes are never dressed up as trustworthy declaration content, and
+  // the seal is never claimed intact.
+  await expect(panel).not.toContainText('Shipped hazmat snapshot is immutable.')
+  await expect(panel).not.toContainText('was not bought through PrepShip')
+  expect([...captured.externalHosts]).toEqual([])
+})
+
+// PS-478: the queue badge for the same state. Its wording is deliberately
+// distinct from the unsealed badge -- this label WAS purchased through PrepShip
+// and the seal recorded at purchase is what cannot be read.
+test('print queue badges an unreadable seal as purchased here but unverifiable', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await setup(page, { queueEntries: [unreadableQueueEntry] })
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await expect(page.locator('#ordersTable tbody tr.order-row')).toHaveCount(1)
+  await page.locator('#pq-toggle-btn').click()
+  const queue = page.locator('#print-queue-panel')
+  await expect(queue).toBeVisible()
+  await expect(queue).toContainText(unreadableQueueEntry.order_number)
+
+  const badge = queue.locator('[title*="sealed snapshot failed validation"]')
+  await expect(badge).toHaveCount(1)
+  await expect(badge).toContainText('Hazmat')
+  // Must not borrow the unsealed wording: this label WAS bought here.
+  await expect(queue.locator('[title*="not purchased through PrepShip"]')).toHaveCount(0)
   expect([...captured.externalHosts]).toEqual([])
 })
 
