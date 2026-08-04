@@ -142,7 +142,15 @@ check(
 const printQueueSource = readFileSync('src/services/print-queue.ts', 'utf8');
 check(
   'backend queue worker buys via createLabelV2 from the intent payload (order.label)',
-  /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,/.test(printQueueSource),
+  // Repointed 2026-08-04. This demanded the spread be INLINE in the call --
+  // createLabelV2({ ...labelInput, -- and broke when the input object was
+  // hoisted into a variable so resumeLabelV2FromDurableReceipt could share it.
+  // Behaviour never changed: `const input = { ...labelInput, ... }` is still what
+  // createLabelV2 receives. The property worth pinning is that the intent payload
+  // reaches the purchase, not the syntax it travels in, so match the chain rather
+  // than the call shape. Found by the ungated-guard sweep; this guard had rotted
+  // silently because nothing ran it.
+  /const labelInput = order\.label;[\s\S]*?\{\s*\.\.\.labelInput,[\s\S]*?createLabelV2\(/.test(printQueueSource),
 );
 const labelsSource = readFileSync('src/services/labels.ts', 'utf8');
 check(

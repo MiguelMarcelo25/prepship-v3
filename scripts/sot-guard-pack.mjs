@@ -66,6 +66,34 @@ const REQUIRED_GUARDS = [
   'test:ps-095-selected-rate-proof-pass-through',
   'test:ps-462-billing-sot',
   'test:recalculate-best-rate-strict',
+  // ── Batch 2: label / postage integrity, plus two guards the sweep found RED ──
+  //
+  // print-to-queue-selected-rate-proof and ps-105-backend-rate-snapshot-id were
+  // both FAILING on stable when the sweep ran them. Neither was a money-path
+  // hole; both had rotted, and neither could be noticed because nothing ran them:
+  //   - the input object was hoisted out of the createLabelV2 call so the durable
+  //     receipt-resume path could share it. `{ ...labelInput, ... }` still reaches
+  //     createLabelV2, so every pinned field still travels.
+  //   - the /browse route went multi-line AND gained an authz middleware
+  //     (requireBusinessRoutePolicy). The route got STRONGER and the guard,
+  //     matching an adjacent one-line form, called that a failure.
+  // Both regexes were repointed to match the chain rather than the call shape,
+  // then mutation-checked: deleting the ...labelInput spread fails both. A
+  // repointed guard that can no longer fail would be worse than the red it
+  // replaced.
+  //
+  // ps-186-test-label-authority leads this batch deliberately: it is what keeps a
+  // test from buying real postage.
+  'test:ps-186-test-label-authority',
+  'test:ps-053-print-queue-atomic',
+  'test:print-queue-in-progress-recovery',
+  'test:ps-288-label-recovery',
+  'test:ps-108-parcelguard-insured-best-rate',
+  'test:ps-126-parcelguard-schedule-premium',
+  'test:ps-125-hugrab-zero-insurance-premium',
+  'test:ps-104-print-queue-selected-rate-proof-pass-through',
+  'test:print-to-queue-selected-rate-proof',
+  'test:ps-105-backend-rate-snapshot-id',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

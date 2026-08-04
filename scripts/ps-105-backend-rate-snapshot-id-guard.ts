@@ -128,7 +128,13 @@ const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-s
 // browse producer so both /rates/browse and /rates/browse/workflow use the same path.
 check('rates /browse emits opaque authorized selections via the single finalizer',
   /import \{\s*produceRateBrowsePayload\s*\} from ['"]\.\.\/services\/rate-browse-response-producer['"]/.test(ratesRoute) &&
-    /app\.post\('\/browse', zValidator\('json', browseBody\), async \(c\) =>/.test(ratesRoute) &&
+    // Repointed 2026-08-04. This required app.post('/browse', zValidator(...)
+    // adjacent on one line. It broke for two reasons, neither of them a
+    // regression: the registration went multi-line, and an authz middleware
+    // (requireBusinessRoutePolicy('rates.browse')) was inserted between them --
+    // i.e. the route got STRONGER and the guard called it a failure. Pin that
+    // /browse exists and still validates browseBody, tolerant of middleware.
+    /app\.post\(\s*'\/browse',[\s\S]{0,240}?zValidator\('json', browseBody\)/.test(ratesRoute) &&
     /produceRateBrowsePayload\(\{/.test(ratesRoute) &&
     /return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute) &&
     /finalizeBestRateWithQuote\(/.test(rateBrowseProducer) &&
@@ -223,8 +229,13 @@ check('backend createLabelV2 owns the direct-carrier buy behind the strict proof
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsServiceForRelocation) &&
   /createDirectCarrierLabelForOrder\(/.test(labelsServiceForRelocation) &&
   /await assertLabelPurchaseRateSelection\(\{[\s\S]{0,120}?selectionRef: body\.selectionRef,/.test(labelsServiceForRelocation));
+// Repointed 2026-08-04, same rot as print-to-queue-selected-rate-proof-guard:
+// the input object was hoisted out of the createLabelV2 call so the durable
+// receipt-resume path could share it. `{ ...labelInput, orderId, orderNumber }`
+// still reaches createLabelV2, so every field this pins still travels; only the
+// call shape moved. Match the chain, not the shape.
 check('print-queue routes the FE intent (order.label proof/binding) into createLabelV2',
-  /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,/.test(printQueueService));
+  /const labelInput = order\.label;[\s\S]*?\{\s*\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?createLabelV2\(/.test(printQueueService));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-105 backend rate snapshot id guard (${failures} failing)`);
