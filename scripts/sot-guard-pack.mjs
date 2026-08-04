@@ -195,6 +195,32 @@ const REQUIRED_GUARDS = [
   'test:ps-081-rate-sync',
   'test:ps-057-hugrab-ground-saver',
   'test:multi-sku-product-dims-rate-fallback',
+  // ── Batch 7: proof forwarding, markup, insurance display ──
+  //
+  // NOT admitted: test:ps-380-billing-summary-cache-freshness, RED. It requires
+  // the literal log line "[billing] refreshing stale or incomplete summary
+  // metrics from billing_line_items" in reporting-metrics.ts, and that string is
+  // GONE -- not renamed, absent, along with every other [billing] log in the
+  // file. reporting-metrics.ts:626 now says the refresh path "never touches
+  // billing_line_items", so the strategy this guard describes appears to have
+  // been replaced rather than reformatted.
+  //
+  // That makes it unlike the five rots repaired so far. Those pinned syntax
+  // around behaviour that demonstrably survived, so repointing was safe and
+  // mutation-checkable. Here the behaviour itself may have moved, and I cannot
+  // repoint a guard without knowing what property is left to pin. Left red and
+  // documented, like ps-067.
+  'test:batch-send-proof-forwarding',
+  'test:ps-198-rate-quote-proof-passthrough',
+  'test:ps-391-shipstation-addons-markup',
+  'test:ps-170-account-capability-insurance',
+  'test:ps-197-effective-insurance-display',
+  'test:ps-190-label-conflict-codes',
+  'test:ps-124-backend-combined-best-rate',
+  'test:ps-385-rate-adjustment-classification',
+  'test:ps-386-stale-rate-aliases',
+  'test:ps-134-billing-ref-rates',
+  'test:ps-084-direct-carrier-print-queue',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
