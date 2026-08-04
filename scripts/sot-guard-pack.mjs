@@ -42,6 +42,30 @@ const REQUIRED_GUARDS = [
   // the starvation and freeze behaviour that is invisible until a lane stalls in
   // production. Hermetic: verified green under OFFLINE_GUARD_ENV before adding.
   'test:ps-442-sync-fairness',
+  // ── Ungated-guard sweep, batch 1 of N: the money-path boundaries ──
+  //
+  // A sweep of every test: script against this pack, ci.yml and the deploy
+  // workflow found 798 scripts, 94 gated, and 249 ungated ones that touch money
+  // or safety. test:master:all-safe gates nowhere either -- by design, since it
+  // exits 0 and reports a baseline diff rather than passing or failing, so it
+  // cannot serve as a gate. The practical consequence is that the DEFAULT state
+  // of a guard in this repo is ungated, and the four added above were simply the
+  // ones that happened to cost a review.
+  //
+  // These six are batch 1 because they sit on the purchase and rate-proof
+  // boundaries -- the places where a regression spends real money rather than
+  // rendering something wrong. Each was verified green under OFFLINE_GUARD_ENV
+  // and timed before admission, per this pack's own rule; all six are ~1.2s.
+  //
+  // Deliberately a small batch. Admitting 249 at once would put unknown runtime
+  // and unknown hermeticity in front of every deploy, and one flake would block
+  // all shipping. Promote in batches, verify each, keep the gate trustworthy.
+  'test:ps-098-shipping-purchase-boundary',
+  'test:selected-rate-proof-boundary',
+  'test:ps-094-rate-selection-proof',
+  'test:ps-095-selected-rate-proof-pass-through',
+  'test:ps-462-billing-sot',
+  'test:recalculate-best-rate-strict',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
