@@ -315,6 +315,31 @@ const REQUIRED_GUARDS = [
   'test:ps-214-hugrab-universal-insurance',
   'test:ps-468-invoice-csv',
   'test:ps-406-shopify-rates-labels',
+  // ── Batch 12: rate proof, print-queue recovery, insurance proof ──
+  //
+  // ps-166-orders-rate-proof was RED because it required OrdersView to IMPORT
+  // and CALL buildBestTestRateForShipment. The import has since been narrowed to
+  // display constants under the comment "Mock-label display constants only; the
+  // browser never fabricates rate money" -- PS-313/PS-316 enforced. The guard was
+  // demanding the frontend keep minting rate money.
+  //
+  // Third guard today found asserting the defect rather than the rule, after the
+  // CP-045 company override and ps-217's `rowTotal > 0`. Repairing any of them by
+  // making the code match would have reintroduced the bug AND gone green doing
+  // it. Inverted to pin the law's actual direction, then mutation-checked by
+  // reintroducing the builder call.
+  'test:ps-166-orders-rate-proof',
+  'test:best-rate-boundary',
+  'test:ps-419-strict-rate-snapshot',
+  'test:ps-400-print-queue-retry-recovery',
+  'test:ps-401-print-queue-mixed-success',
+  'test:ps-403-print-queue-worker-recovery',
+  'test:print-queue-merge-claim-deadline',
+  'test:ps-403-print-queue-pdf-chunks',
+  'test:ps-404-hugrab-insurance-proof',
+  'test:ps-402-hugrab-shipped-insurance-breakdown',
+  'test:ps-411-bulk-assign-terminal-lock',
+  'test:single-sku-default-qty-scope',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

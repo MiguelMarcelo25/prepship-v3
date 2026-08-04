@@ -153,15 +153,31 @@ check('test-rate-mock module is small (the slice keeps it tiny)',
   testRateMockSrc.split('\n').length < 120);
 
 // ── 10. NEW SLICE: OrdersView delegates to orders/test-rate-mock, no longer inline ──
-check('OrdersView imports the builders from ./orders/test-rate-mock',
+// Inverted 2026-08-04. These two previously required OrdersView to IMPORT and
+// CALL buildBestTestRateForShipment. Both now fail, and correctly so: the import
+// was narrowed to display constants only, under the comment
+//   "Mock-label display constants only; the browser never fabricates rate money."
+// That is PS-313/PS-316 being enforced -- the frontend may not mint rate money or
+// selected-rate proof. The guard was demanding the frontend keep building it.
+//
+// This is the third guard today found asserting the defect rather than the rule,
+// after the CP-045 company override and ps-217's `rowTotal > 0`. Repairing it by
+// making the code match would have reintroduced frontend rate fabrication and
+// gone green doing it. A guard written against an old architecture does not
+// simply stop protecting -- it starts pulling the other way.
+//
+// Now pinned in the direction the law actually runs: the module may supply
+// display constants; it may not supply money to this file.
+check('OrdersView imports only display constants from ./orders/test-rate-mock',
   /from '\.\/orders\/test-rate-mock'/.test(ordersView) &&
-  /buildBestTestRateForShipment/.test(ordersView));
+  /TEST_CARRIER_CODE/.test(ordersView));
 check('OrdersView no longer declares buildBestTestRateForShipment inline',
   !/function buildBestTestRateForShipment\b/.test(ordersView));
 check('OrdersView no longer declares buildTestRatesForShipment inline',
   !/function buildTestRatesForShipment\b/.test(ordersView));
-check('OrdersView still consumes buildBestTestRateForShipment (call sites preserved)',
-  /buildBestTestRateForShipment\(/.test(ordersView));
+check('OrdersView never fabricates rate money (PS-313/PS-316: no test-rate builders)',
+  !/buildBestTestRateForShipment\(/.test(ordersView) &&
+  !/buildTestRatesForShipment\(/.test(ordersView));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-166 orders-rate-proof guard (${failures} failing)`);
