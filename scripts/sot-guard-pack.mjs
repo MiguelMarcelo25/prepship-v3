@@ -23,6 +23,17 @@ const REQUIRED_GUARDS = [
   'test:ps-465-hazmat',
   'test:mock-hazmat-label',
   'test:ps-465-466-migration-rollout',
+  // PS-462 canonical inventory ledger. Same story as the hazmat block above, and
+  // the third time this pattern has cost a review: eleven proofs existed and
+  // passed -- including three migrated-database integrations -- and nothing ran
+  // any of them, so the ledger cutover that removed every competing quantity
+  // column could rot undetected. Inventory balances feed Billing and the Client
+  // Portal, so a silent regression here is a money-path regression.
+  // Hermetic: verified green under this runner's OFFLINE_GUARD_ENV before being
+  // added, the integrations use PGlite in-process, and the rest read files and
+  // modules. Aggregate entry on purpose -- it also carries PS-439's inventory
+  // source-of-truth guard and concurrency integration, which had the same gap.
+  'test:ps-462-inventory-sot',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
