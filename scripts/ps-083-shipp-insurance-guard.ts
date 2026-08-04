@@ -253,7 +253,13 @@ const browseProducer = readFileSync('src/services/rate-browse-response-producer.
   // resolvedForBrowse (resolveRateInput, the SAME deterministic resolver getRates uses internally),
   // byte-identical to the prior result.effectiveInsurance*. Match the call itself.
   const callStart = browseProducer.indexOf('getDirectCarrierRatesForRateInput({');
-  const callEnd = browseProducer.indexOf('}, { cachedOnly: isCachedOnlyLookup });', callStart);
+  // Repointed 2026-08-04. This anchored on the options object being EXACTLY
+  // `{ cachedOnly: isCachedOnlyLookup }` and stopped matching when
+  // `priority: 'interactive'` was added to it. indexOf returned -1, the slice
+  // below came out empty, and all four insurance checks reported "got false" --
+  // four alarming money-path failures produced by one added option. Anchor on
+  // the start of the options object so extra fields cannot fake a red.
+  const callEnd = browseProducer.indexOf('}, { cachedOnly: isCachedOnlyLookup', callStart);
   const directFanoutCall = callStart >= 0 && callEnd > callStart ? browseProducer.slice(callStart, callEnd) : '';
   check(
     '/rates/browse direct fanout forwards resolved insurance provider',

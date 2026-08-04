@@ -99,7 +99,15 @@ assert(
   // fingerprint/freshness/completeness metadata is preserved unchanged.
   ratesBackfill.includes('requestFingerprint') &&
     ratesBackfill.includes('isComplete: combined.bestRateComplete') &&
-    ratesBackfill.includes('bestRateJson: stampedBest'),
+    // Repointed 2026-08-04. This pinned the exact variable name at the persist
+    // site and broke when stampRateSourceDisplay was inserted into the chain:
+    // bestWithMetadata -> stampHouseTuple -> stampedBest -> stampRateSourceDisplay
+    // -> sourceStampedBest -> persisted. Each step wraps the previous, so the
+    // fingerprint/freshness/completeness metadata this check exists to protect is
+    // still preserved unchanged; only the final binding was renamed. Pin that a
+    // stamped-best derivative is what gets persisted, so another wrapping step
+    // does not read as a metadata regression.
+    /bestRateJson: \w*[Ss]tampedBest\b/.test(ratesBackfill),
   'Rate backfill persists fingerprint/freshness/completeness metadata',
 )
 

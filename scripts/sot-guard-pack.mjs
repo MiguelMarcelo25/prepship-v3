@@ -148,6 +148,34 @@ const REQUIRED_GUARDS = [
   'test:ps-194-confirm-printed-persistence',
   'test:inventory-history-dedupe',
   'test:ps-401-shopify-order-total',
+  // ── Batch 5: rate accuracy, insurance, best-rate contracts ──
+  //
+  // Two more reds found and repaired, both rot, both caused by improvements:
+  //   ps-083-shipp-insurance reported FOUR money-path failures ("resolved
+  //     insurance provider: got false, want true") produced by ONE added option.
+  //     It sliced the fanout call between two text anchors; the options object
+  //     gained `priority: 'interactive'`, the end anchor stopped matching,
+  //     indexOf returned -1, and every check ran against an empty string. The
+  //     insurance forwarding was never broken. Anchored on the start of the
+  //     options object so extra fields cannot manufacture a red.
+  //   ps-050-rate-accuracy pinned the exact variable name at the persist site and
+  //     broke when stampRateSourceDisplay was inserted into the chain. Each step
+  //     wraps the previous, so the metadata it protects survives; only the final
+  //     binding was renamed. Now pins that a stamped-best derivative is persisted.
+  // Both mutation-checked: removing the insurance forwarding fails the first,
+  // persisting a raw best fails the second.
+  'test:ps-050-rate-accuracy',
+  'test:ps-050-rate-exactness',
+  'test:rates-multi-durable-snapshot',
+  'test:rate-system-hardening',
+  'test:ps-072-hugrab-insurance',
+  'test:ps-083-shipp-insurance',
+  'test:ps-082-browse-rate-reconcile',
+  'test:batch-recalculate-best-rate',
+  'test:ps-286-awaiting-row-rate-truth',
+  'test:ps-286-applied-rate-sync',
+  'test:best-rate-saved-display-contract',
+  'test:ps-102-best-rate-workflow-dto',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
