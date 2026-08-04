@@ -221,6 +221,22 @@ const REQUIRED_GUARDS = [
   'test:ps-386-stale-rate-aliases',
   'test:ps-134-billing-ref-rates',
   'test:ps-084-direct-carrier-print-queue',
+  // ── Batch 8: order identity, shipping state, row money display ──
+  // Twelve, all green and hermetic first time. Nothing notable -- which is worth
+  // recording as much as the reds are: the ungated population is not uniformly
+  // rotten, and batches 3, 6 and 8 came back completely clean.
+  'test:ps-388-order-source-identity-sot',
+  'test:ps-349-order-shipping-state',
+  'test:ps-177-row-money-display',
+  'test:ps-177-queue-sku-identity',
+  'test:ps-187-backend-test-rate-fixture',
+  'test:ps-126-zip4-rate-parity',
+  'test:ps-121-group-rate-recalc',
+  'test:ps-120-rate-job-status',
+  'test:ps-165-order-shipping-display',
+  'test:ps-173-order-row-workflow',
+  'test:shipment-tracking-retirement',
+  'test:print-queue-timing-proof',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
