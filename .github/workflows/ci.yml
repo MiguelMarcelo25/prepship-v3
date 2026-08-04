@@ -46,3 +46,45 @@ jobs:
 
       - name: Frontend build
         run: npm run build:web
+
+  # PS-481 / PS-477: the hazmat disclosure browser proof existed as
+  # test:ps-465-hazmat:browser but nothing ran it, so "does it pass?" depended on
+  # whose machine you asked -- and a review that saw it red bounced five cards
+  # (PS-477/478/479/481/482) on a result nobody could arbitrate. A gated spec has
+  # one authoritative run URL instead.
+  #
+  # Deliberately scoped to this ONE spec, not the whole e2e suite: the suite has
+  # known flappers, and a flaky required check would block deploys on noise. Widen
+  # only per-spec, once a spec has earned it.
+  #
+  # Fully mocked -- page.route intercepts every request and the Supabase key is a
+  # dummy. No network, no provider, no postage.
+  hazmat-browser-proof:
+    name: Hazmat disclosure browser proof (PS-465/477/478/479/481/482)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Hazmat disclosure browser proof
+        run: npm run test:ps-465-hazmat:browser
+
+      - name: Upload failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hazmat-browser-proof-failure
+          path: test-results/
+          retention-days: 7
