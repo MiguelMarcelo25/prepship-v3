@@ -124,7 +124,11 @@ check('generator still emits kind:line as a package_cost line + kind:review as $
 
 check('bulk apply persists the reviewed override (incl. 0.00) as billing_box_resolutions.overridePrice', () => {
   const bulk = readFileSync('src/services/billing-box-cost-bulk.ts', 'utf8');
-  assert.ok(/const overridePrice = round2\(scope\.newCost\)\.toFixed\(2\)/.test(bulk));
+  // Repointed 2026-08-05: round2 -> roundMoney. PS-457 consolidated every ad-hoc money
+  // rounding onto one owner, which is precisely what a $0-vs-null box cost guard wants:
+  // the reviewed override and the billed amount round identically. Pin the canonical
+  // rounder rather than the old local name.
+  assert.ok(/const overridePrice = roundMoney\(scope\.newCost\)\.toFixed\(2\)/.test(bulk));
   assert.ok(/\.insert\(billingBoxResolutions\)[\s\S]*overridePrice/.test(bulk));
 });
 

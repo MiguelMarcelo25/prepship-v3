@@ -90,7 +90,14 @@ check('orders loads marketplace-fee rules once', orders.includes('loadMarketplac
 check('orders computes productSubtotal + resolves the rule per row',
   orders.includes('computeProductSubtotal(r.order.items)') && orders.includes('resolveMarketplaceFeeRule(marketplaceFeeRules'));
 const settings = readFileSync('src/routes/settings.ts', 'utf8');
-check('settings allows marketplace_fee_rules', settings.includes("'marketplace_fee_rules'"));
+// Repointed 2026-08-05: the settings allowlist moved out of the route and into a policy
+// owner, src/services/user-setting-policy.ts, so src/routes/settings.ts no longer names
+// the key. That is the right direction -- which keys are writable is policy, not routing
+// -- so follow the rule to its owner instead of asserting the route still hardcodes it.
+const settingPolicy = readFileSync('src/services/user-setting-policy.ts', 'utf8');
+check('settings policy allows marketplace_fee_rules', settingPolicy.includes("'marketplace_fee_rules'"));
+check('the route delegates the allowlist rather than keeping its own copy',
+  !/const\s+ALLOWED\w*\s*=\s*\[[^\]]*'marketplace_fee_rules'/.test(settings));
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json exposes test:ps-239-marketplace-fee', /test:ps-239-marketplace-fee/.test(pkg));
 

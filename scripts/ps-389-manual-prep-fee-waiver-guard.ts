@@ -66,7 +66,14 @@ check(
 );
 check(
   'PS-389: generator already consumes billing_fee_waivers before final billing_line_items are inserted',
-  /await readBillingFeeWaivers\(orderIdsInScope\)/.test(service) &&
+  // Repointed 2026-08-05: the bare `await readBillingFeeWaivers(orderIdsInScope)` is now
+  // a thunk passed to requireBillingRegenerationRead('billing fee-waiver sidecar', ...).
+  // That wrapper converts ANY failure reading the sidecar into a
+  // BillingRegenerationBlockedError, so regeneration now FAILS CLOSED rather than
+  // continuing without the waiver list -- which would have billed a prep fee the
+  // operator had explicitly waived. That fail-closed behaviour is a better thing to pin
+  // than the await, so require the read to stay inside the wrapper.
+  /requireBillingRegenerationRead\(\s*'billing fee-waiver sidecar',\s*\(\) => readBillingFeeWaivers\(orderIdsInScope\),?\s*\)/.test(service) &&
     /const effectiveRows: LineRow\[\][\s\S]*applyPrepFeeWaiver\(rows, waived\)/.test(service) &&
     /for \(const row of effectiveRows\)/.test(service),
 );

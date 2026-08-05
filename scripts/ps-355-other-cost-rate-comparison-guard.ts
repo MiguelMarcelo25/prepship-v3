@@ -118,12 +118,24 @@ check(
 
 const ratesBackfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 check(
-  'rates backfill imports the canonical full-total owner',
-  /import \{[^}]*\brateTotal\b[^}]*\} from '\.\/rates-combined'/.test(ratesBackfill),
+  // Repointed 2026-08-05. These two required the backfill to import rateTotal and run its
+  // OWN `sort((a,b) => rateTotal(a) - rateTotal(b))`. It no longer does either: it now
+  // imports combineCarrierUniverses from ./rates-combined and delegates the whole
+  // combine-and-rank step to that canonical owner, which applies rateTotal itself.
+  //
+  // PS-355's point was "stop ranking on base shipping_amount, rank on the full total
+  // including other/insurance cost". Delegating to the ranking owner satisfies that
+  // strictly better than re-implementing the sort here -- and PS-313 forbids a second
+  // ranking site outside the canonical rate authority, so asserting a local sort was
+  // asking the backfill to become exactly the duplicate owner that rule prohibits.
+  // (The sibling check below, "no longer ranks by base shipping_amount only", still
+  // passes and is what actually catches a regression to base-amount ranking.)
+  'rates backfill delegates ranking to the canonical rate owner',
+  /import \{[^}]*\bcombineCarrierUniverses\b[^}]*\} from '\.\/rates-combined'/.test(ratesBackfill),
 );
 check(
-  'rates backfill tier picker delegates cheapest comparison to rateTotal',
-  /sort\(\s*\(\s*a\s*,\s*b\s*\)\s*=>\s*rateTotal\(a\)\s*-\s*rateTotal\(b\)\s*\)/s.test(ratesBackfill),
+  'rates backfill owns no second cheapest-rate ranking of its own',
+  !/\.sort\(\s*\(\s*\w+\s*,\s*\w+\s*\)\s*=>\s*\w+\.(?:shipping_amount|total_amount|amount)/.test(ratesBackfill),
 );
 check(
   'rates backfill no longer ranks by base shipping_amount only',

@@ -40,8 +40,14 @@ check('premium is rounded to cents', easyPostScheduledPremium(33.33) === 0.5 && 
 // ── rates.ts: insured EasyPost direct rates get the estimate (not $0) ──────────
 const rates = read('src/services/rates.ts');
 check('rates.ts imports easyPostScheduledPremium', rates.includes('easyPostScheduledPremium'));
+// Repointed 2026-08-05: `account.provider` became a plain `provider` parameter when the
+// pricing step was extracted into applyDirectRatePricing(rates, markups, provider,
+// shippingOptions). Same three conditions, same order; only the binding moved. Allow
+// either spelling so a future extraction does not re-break this, and keep the ordering
+// requirement, which is the part that matters: the premium is applied ONLY for EasyPost,
+// ONLY when insurance is on, and ONLY when there is an insured value.
 check('estimate applied only to easypost provider when insured',
-  /normalizeProviderKey\(account\.provider\) === 'easypost'[\s\S]{0,160}insuranceProvider !== 'none'[\s\S]{0,120}insuredValue/.test(rates));
+  /normalizeProviderKey\((?:account\.)?provider\) === 'easypost'[\s\S]{0,160}insuranceProvider !== 'none'[\s\S]{0,120}insuredValue/.test(rates));
 check('estimate overwrites the direct rate insurance_amount (was 0)',
   /insurance_amount: \{ amount: easyPostPremium/.test(rates));
 

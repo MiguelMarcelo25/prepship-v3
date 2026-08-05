@@ -719,6 +719,53 @@ const REQUIRED_GUARDS = [
   'test:ps-415-carrier-store-identity',
   'test:sync-advisory-lock',
   'test:ps-417-shipstation-sync-account-state',
+  // ── Batch 24: billing + reporting money math ──
+  //
+  // Densest rot in the sweep: 6 of 22 red. Three were renames/moves, three were the code
+  // moving TOWARD the source of truth:
+  //   ps-374  round2 -> roundMoney (PS-457 consolidated every ad-hoc money rounding onto
+  //           one owner, which is exactly what a $0-vs-null box cost guard wants).
+  //   ps-261  account.provider -> provider when the pricing step was extracted into
+  //           applyDirectRatePricing. Now accepts either binding.
+  //   ps-239  the settings allowlist moved from src/routes/settings.ts into
+  //           src/services/user-setting-policy.ts -- which keys are writable is policy,
+  //           not routing. Follows the rule to its owner; also asserts the route keeps
+  //           no second copy.
+  //   ps-389  the fee-waiver read is now wrapped in requireBillingRegenerationRead, which
+  //           turns ANY sidecar read failure into BillingRegenerationBlockedError. Billing
+  //           regeneration FAILS CLOSED instead of continuing without the waiver list and
+  //           billing a prep fee the operator explicitly waived. Pinned the wrapper.
+  //   ps-355  required the backfill to run its OWN sort by rateTotal. It now delegates the
+  //           whole combine-and-rank to combineCarrierUniverses. PS-313 forbids a second
+  //           ranking site outside the canonical rate authority, so the old assertion was
+  //           asking the backfill to become exactly the duplicate owner that rule bans.
+  //   hugrab  pinned literal copy ("No billable shipped or cancelled orders found for this
+  //           range.") that no longer exists -- the empty-state message was folded into the
+  //           single result message, which reports billableRows.length and covers empty by
+  //           reporting zero. Replaced with the structural property.
+  // All six mutation-checked against green baselines.
+  'test:ps-323-billing-sot-parity',
+  'test:ps-433-billing-boundary',
+  'test:ps-434-weekend-billing',
+  'test:ps-434-billing-readiness',
+  'test:ps-418-reporting-projection',
+  'test:ps-249-storage-atomicity',
+  'test:ps-249-billing-details-transaction',
+  'test:ps-374-resolved-zero-box-cost',
+  'test:ps-375-manual-zero-box-cost',
+  'test:ps-389-manual-prep-fee-waiver',
+  'test:hugrab-cancelled-billing-guard',
+  'test:ps-311-bulk-box-cost-preview',
+  'test:ps-311-bulk-box-cost-integration',
+  'test:ps-311b-box-cost-by-dims-integration',
+  'test:ps-239-marketplace-fee',
+  'test:ps-261-easypost-insurance-cost',
+  'test:ps-296-shipping-margin',
+  'test:ps-296-margin-breakdown',
+  'test:ps-296-shipping-margin-closeout',
+  'test:ps-220-house-margin',
+  'test:ps-355-other-cost-rate-comparison',
+  'test:manifest-csv',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
