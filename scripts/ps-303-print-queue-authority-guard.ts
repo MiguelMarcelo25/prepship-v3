@@ -25,17 +25,43 @@ function check(name: string, condition: boolean, detail?: unknown): void {
 
 function read(path: string): string {
   try {
-    return readFileSync(path, 'utf8');
+    // Normalize CRLF on read. Several sources in this repo are checked out with \r\n,
+    // and any needle in this file that spans a line break is written with \n -- e.g. the
+    // routePlanBlock end anchor "app.post(\n  '/clear'", which never matched because the
+    // route file is CRLF. Combined with blockBetween's old silent truncation that failure
+    // was invisible: the block just became an arbitrary 8,000-char window that happened
+    // to be large enough for its assertions. Normalize once here rather than making every
+    // multi-line needle carry \r\n?.
+    return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
   } catch {
     return '';
   }
 }
 
+// Hardened 2026-08-05. This used to return '' when the START needle was missing and an
+// arbitrary 8,000-character window when the END needle was missing. The second fallback
+// is how this guard broke: `getMergedQueueLabels` was deleted from print-queue.ts, so
+// runJobBlock silently became the first 8,000 chars of a ~14,000-char function and five
+// of six clauses in the retry check were looking at text that was no longer in scope. No
+// regex fix could have repaired that, because the property had left the window.
+//
+// A missing anchor is a broken guard, not a smaller guard. Say so instead of narrowing
+// the search area and letting the assertions explain it badly -- and note that for any
+// NEGATIVE assertion (!block.includes(...)) a silently-truncated block passes VACUOUSLY,
+// which is the same failure wearing a green tick.
 function blockBetween(text: string, startNeedle: string, endNeedle: string): string {
   const start = text.indexOf(startNeedle);
-  if (start < 0) return '';
+  if (start < 0) {
+    console.error(`FAIL blockBetween: start anchor is gone from the source: ${startNeedle}`);
+    process.exit(1);
+  }
   const end = text.indexOf(endNeedle, start + startNeedle.length);
-  return text.slice(start, end > start ? end : start + 8000);
+  if (end <= start) {
+    console.error(`FAIL blockBetween: end anchor is gone from the source: ${endNeedle}`);
+    console.error('  (a truncated block makes positive checks fail for the wrong reason and negative checks pass vacuously)');
+    process.exit(1);
+  }
+  return text.slice(start, end);
 }
 
 const baseRoute = (extra: Partial<QueueOrderRouteInput> = {}): QueueOrderRouteInput => ({
@@ -106,23 +132,31 @@ const startJobBlock = blockBetween(
 const runJobBlock = blockBetween(
   printQueueService,
   'async function runQueueSendJob',
-  'export async function getMergedQueueLabels',
+  // Repointed 2026-08-05: getMergedQueueLabels no longer exists anywhere in src/.
+  // removeFromQueue is the next top-level export after runQueueSendJob, so this spans
+  // the whole function again instead of the first 8,000 characters of it.
+  'export async function removeFromQueue',
 );
 
+// Repointed 2026-08-05: the inline label payload was hoisted to `const input = {...}`,
+// and PS-444 added a durable receipt-resume branch ahead of the fresh buy. A guard
+// demanding an unconditional createLabelV2 demands the double-buy path -- on a resume the
+// postage already exists and only the response was lost. Require both branches to take
+// the same scoped input instead.
 const findExistingIndex = processBlock.indexOf('findExistingQueueSendLabel(order)');
-const createLabelIndex = processBlock.indexOf('createLabelV2({');
+const createLabelIndex = processBlock.indexOf('createLabelV2(input, labelPurchaseScope)');
 const queueIndex = processBlock.indexOf('addToQueue({');
 
 check('backend process checks for an existing queueable label before purchase',
   findExistingIndex >= 0 && createLabelIndex > findExistingIndex);
 check('backend process creates missing labels through createLabelV2 with worker scope',
   processBlock.includes('const created = await timeQueueStep(') &&
-  processBlock.includes('return await createLabelV2({') &&
   processBlock.includes('const labelInput = order.label') &&
   processBlock.includes('...labelInput') &&
   processBlock.includes('orderId: order.orderId') &&
   processBlock.includes('orderNumber: order.orderNumber ?? labelInput.orderNumber') &&
-  processBlock.includes('}, labelPurchaseScope)'));
+  processBlock.includes('createLabelV2(input, labelPurchaseScope)') &&
+  processBlock.includes('resumeLabelV2FromDurableReceipt(input, labelPurchaseScope)'));
 check('backend process recovers labels created before a later queue failure',
   processBlock.includes('existingLabelUrl = getExistingLabelUrl(err)') &&
   processBlock.includes('findExistingQueueSendLabel(order)') &&
@@ -145,12 +179,19 @@ check('startQueueSendJob persists a durable worker job before worker dispatch',
   startJobBlock.includes('const enqueueResult = await enqueueQueueSendWorkerJob({') &&
   startJobBlock.includes('queueSendJobs.delete(jobId)') &&
   !startJobBlock.includes('void runQueueSendJob'));
+// Repointed 2026-08-05: `const retryEligible = !labelPurchaseInProgress` no longer starts
+// the expression -- PS-360 added `!localTailFailureState` ahead of it when queue-tail
+// recovery became its own non-retryable state. Unlike ps-269, this guard was already on
+// the CORRECT side of the PS-444 rule (it requires the EXCLUSION, i.e. an in-flight
+// purchase is never offered as a retryable buy, so a user retry cannot double-purchase);
+// it just pinned that exclusion's position in the chain. Assert that
+// labelPurchaseInProgress is negated and ANDed into retryEligible wherever it sits.
 check('worker calls the backend process and classifies retry eligibility structurally',
   runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
   runJobBlock.includes('classifyLabelPurchaseRetry(err)') &&
   runJobBlock.includes('const labelPurchaseInProgress = isLabelPurchaseInProgressError(err)') &&
   runJobBlock.includes('const providerPending = labelPurchaseInProgress') &&
-  runJobBlock.includes('const retryEligible = !labelPurchaseInProgress') &&
+  /const retryEligible = [\s\S]{0,400}?&&\s*!labelPurchaseInProgress\b/.test(runJobBlock) &&
   runJobBlock.includes("? 'label_purchase_reconciliation_required'"));
 
 const printQueueRoute = read('src/routes/print-queue.ts');

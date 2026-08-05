@@ -610,6 +610,42 @@ const REQUIRED_GUARDS = [
   'test:label-shipment-scope-enforcement',
   'test:label-shipment-scope-review',
   'test:ps-243-direct-label-shipment-id-namespace',
+  // ── Batch 21: print-queue durability, recovery, and PDF ──
+  //
+  // 15 of 16 clean. ps-303 was RED for a reason worth recording, because no regex fix
+  // could have repaired it: its blockBetween() helper returned an arbitrary 8,000-char
+  // window when the END anchor was missing, and `getMergedQueueLabels` had been deleted
+  // from src/ entirely. runJobBlock silently became the first 8,000 chars of a
+  // ~14,000-char function, so five of six clauses in the retry check were looking at
+  // text that had left the window.
+  //
+  // Two fixes, one of which prevents the class:
+  //   - blockBetween now EXITS on a missing anchor instead of narrowing the search area.
+  //     A missing anchor is a broken guard, not a smaller guard -- and for any negative
+  //     assertion (!block.includes(...)) a truncated block passes VACUOUSLY, which is
+  //     the same failure wearing a green tick.
+  //   - read() now normalizes CRLF. That immediately surfaced a SECOND masked anchor:
+  //     the routePlanBlock end needle "app.post(\n  '/clear'" never matched, because
+  //     src/routes/print-queue.ts is checked out CRLF. It had been silently truncating
+  //     too, and only passed because 8,000 chars happened to be enough.
+  // Mutation-checked against a green baseline, including deleting the end anchor
+  // outright (loud now, silent before).
+  'test:ps-444-print-queue-recovery',
+  'test:ps-303-print-queue-authority',
+  'test:ps-285-print-queue-evidence',
+  'test:ps-351-durable-print-queue-jobs',
+  'test:ps-256-durable-print-queue-pdf',
+  'test:ps-346-print-queue-durable-full-results',
+  'test:ps-346-print-queue-volume-evidence',
+  'test:ps-360-print-queue-tail',
+  'test:print-queue-ownership',
+  'test:print-queue-durable',
+  'test:print-queue-persistence',
+  'test:print-queue-invalid-label',
+  'test:print-queue-signed-pdf',
+  'test:print-queue-client-scope',
+  'test:print-queue-worker-offload',
+  'test:label-operation-log',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
