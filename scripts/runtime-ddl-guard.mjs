@@ -300,6 +300,7 @@ const readinessCallers = [
   'src/db/ensure-billing-storage-proof.ts',
   'src/db/ensure-order-competitive-rate.ts',
   'src/db/ensure-shipments-selected-rate-cost.ts',
+  'src/db/ensure-returns-billing-date-override.ts',
   'src/lib/label-purchase-intent.ts',
   'src/lib/label-purchase-lock.ts',
   'src/lib/shipstation/durable-rate-limiter.ts',

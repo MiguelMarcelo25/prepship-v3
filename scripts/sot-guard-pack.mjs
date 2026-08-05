@@ -983,6 +983,10 @@ const REQUIRED_GUARDS = [
   // finalized period is never rewritten, and that the generator delegates amounts to
   // the planner instead of doing its own arithmetic.
   'test:ps-487-return-billing-wiring',
+  // PS-487 AC-4/AC-7 — the date-correction decision: admin-only, reason required, and a
+  // finalized period on EITHER side needs DJ-approved evidence and becomes an
+  // adjustment rather than a rewrite. Pure; posting stays PS-449's job.
+  'test:ps-487-return-date-correction',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes

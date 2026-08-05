@@ -51,6 +51,12 @@ export const returns = pgTable('returns', {
     scale: 2,
   }),
   returnRecipientName: text('return_recipient_name'),
+  // PS-487 AC-4 (migration 0088, additive + nullable): the admin-corrected billing
+  // day. NULL means no correction and the contract falls back to createdAt, so every
+  // pre-existing row keeps its behaviour with no backfill.
+  billingDateOverride: timestamp('billing_date_override', { withTimezone: true }),
+  billingDateOverrideBy: text('billing_date_override_by'),
+  billingDateOverrideReason: text('billing_date_override_reason'),
 });
 
 export type ReturnRow = typeof returns.$inferSelect;

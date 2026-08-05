@@ -31,6 +31,12 @@ creating or altering schema.
 - `drizzle/0054_shipments_selected_rate_cost.sql`: additive nullable selected-rate cost.
 - `drizzle/0055_billing_storage_proof.sql`: billing storage proof. Compatibility
   function: `src/db/ensure-billing-storage-proof.ts`.
+- `drizzle/0088_returns_billing_date_override.sql`: PS-487 AC-4 admin-corrected
+  return billing date (three additive nullable columns on `returns`). Compatibility
+  function: `src/db/ensure-returns-billing-date-override.ts`. NULL means no correction
+  and the contract falls back to `returns.created_at`, so no backfill is required and
+  the original system-creation timestamp is never overwritten (AC-7 needs it as
+  evidence).
 - `drizzle/0057_store_source_cutovers.sql`: store cutover state.
 - `drizzle/0059_billing_finalized_lock.sql`: finalized-billing DB enforcement.
 - `drizzle/0060_package_consumption_ledger.sql`: package identity/review schema.
