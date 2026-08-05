@@ -1,6 +1,10 @@
 import { NO_BOX_COST_BILLING_BADGE, resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { isCancelledNoChargeBillingRow } from './billing-cancelled-no-charge';
 import { isBillingReturnLineType } from './billing-row-status';
+import {
+  INTERNATIONAL_BILLING_BADGE,
+  classifyDestinationCountry,
+} from './billing-destination-international';
 
 // PS-368 — the TYPED canonical billing detail order-row boundary.
 //
@@ -54,6 +58,10 @@ export interface BillingDetailRowDto {
   fulfillmentConflictLabel?: string | null;
   fulfillmentConflictReason?: string | null;
   displayQty?: string;
+  /** Normalized destination country code, or null when the order carries none. */
+  destinationCountry?: string | null;
+  /** Backend-owned: true only for destinations outside the US domestic postal area. */
+  destinationIsInternational?: boolean;
   relatedOrderId?: number | string | null;
   returnId?: number | string | null;
   manualBillingOverrideLineTypes?: string[];
@@ -269,6 +277,7 @@ const VALUE_CARRY_FIELDS = [
   'refUpsRate',
   'refUspsRate',
   'feeWaiverDecision',
+  'destinationCountry',
   'billingBadges',
   'relatedOrderId',
   'returnId',
@@ -342,8 +351,20 @@ function applyCancelledNoCharge(row: BillingDetailRowDto): void {
     : [];
 }
 
+function applyDestinationInternational(row: BillingDetailRowDto): void {
+  // The backend decides; the FE only renders the badge. `destinationCountry` is the raw
+  // provider value projected from orders.raw->'shipTo'->>'country' — it is carried onto
+  // the DTO so operators can see WHICH country, but the international decision itself
+  // comes from the canonical classifier, never from a comparison at a call site.
+  const { countryCode, isInternational } = classifyDestinationCountry(row.destinationCountry);
+  row.destinationCountry = countryCode;
+  row.destinationIsInternational = isInternational;
+  if (isInternational) appendBillingBadge(row, INTERNATIONAL_BILLING_BADGE);
+}
+
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
   applyCancelledNoCharge(row);
+  applyDestinationInternational(row);
   row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
   const orderNumber = orderNumberValue(row);
   if (orderNumber && duplicatedOrderNumbers.has(orderNumber)) {

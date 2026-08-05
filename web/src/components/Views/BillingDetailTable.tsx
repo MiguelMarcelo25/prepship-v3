@@ -391,6 +391,29 @@ export function BillingDetailTable({
                       >
                         {row.orderNumber}
                       </button>
+                      {row.destinationIsInternational === true ? (
+                        <span
+                          data-billing-badge="INTERNATIONAL"
+                          title={
+                            row.destinationCountry
+                              ? `International destination (${row.destinationCountry})`
+                              : 'International destination'
+                          }
+                          style={{
+                            fontSize: 8.5,
+                            padding: '0 3px',
+                            borderRadius: 3,
+                            fontWeight: 700,
+                            letterSpacing: 0.2,
+                            border: '1px solid var(--ss-blue)',
+                            color: 'var(--ss-blue)',
+                            background: 'transparent',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {row.destinationCountry || 'INTL'}
+                        </span>
+                      ) : null}
                       {backupStatus === 'Cancelled' ? (
                         <span
                           data-billing-badge="CANCELLED"

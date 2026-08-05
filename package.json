@@ -914,7 +914,8 @@
     "test:ps-431-worker-status-event-retention": "tsx scripts/ps-431-worker-status-event-retention-guard.ts",
     "test:ps-485-consumer-leadership-acquire": "tsx scripts/ps-485-consumer-leadership-acquire-guard.ts",
     "test:ps-467-unattributed-audit": "tsx scripts/ps-467-unattributed-audit-guard.ts",
-    "test:ps-469-run-retention": "tsx scripts/ps-469-run-retention-guard.ts"
+    "test:ps-469-run-retention": "tsx scripts/ps-469-run-retention-guard.ts",
+    "test:billing-destination-international": "tsx scripts/billing-destination-international-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

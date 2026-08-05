@@ -964,6 +964,11 @@ const REQUIRED_GUARDS = [
   'test:ps-rate-limiter-priority-behavior',
   'test:ps-191-retry-eligibility',
   'test:ps-443-durable-selected-recalculate',
+  // Billing INTERNATIONAL destination badge. The rule is backend-owned because it is not
+  // `country !== 'US'`: Puerto Rico ships at USPS domestic rates but carries code 'PR',
+  // and a missing country must not be invented into "international" (293 orders in the
+  // last 120 days carry none). The FE renders the emitted badge and compares no codes.
+  'test:billing-destination-international',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes

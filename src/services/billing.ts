@@ -2438,6 +2438,11 @@ export async function billingDetails(input: GenerateInput) {
       externallyShippedSource: orderOverrides.externallyShippedSource,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
+      // Destination country for the INTERNATIONAL billing badge. `orders` has no
+      // country column — it lives only inside raw.shipTo — so read it the same way
+      // externallyFulfilled above reads raw. Classification is NOT done here: the
+      // canonical owner is classifyDestinationCountry (billing-destination-international).
+      destinationCountry: sql<string | null>`nullif(trim(${orders.raw}->'shipTo'->>'country'), '')`,
     })
     .from(billingLineItems)
     .leftJoin(shipments, eq(billingLineItems.shipmentId, shipments.id))
