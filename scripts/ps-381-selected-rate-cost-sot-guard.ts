@@ -199,7 +199,12 @@ check('shipping margin SQL reads selected_rate_cost and selected_rate_json into 
 check('shipment writers stamp selectedRateCost anywhere durable proof exists', () => {
   assert.match(labels, /selectedRateCost: label\.shipment_cost\.amount\.toFixed\(2\)/);
   assert.match(labels, /selectedRateCost: '0\.00'/);
-  assert.match(labels, /selectedRateCost: result\.cost\.toFixed\(2\)/);
+  // Repointed 2026-08-04: `result.cost` became `durableResult.cost` when the
+  // durable receipt-resume path was added and the local was renamed to
+  // distinguish it from the live purchase result (labels.ts:3901). Same stamp,
+  // same toFixed(2), different local. The other three clauses here still match
+  // verbatim, which is what isolated this to a rename rather than a lost stamp.
+  assert.match(labels, /selectedRateCost: \w*[Rr]esult\.cost\.toFixed\(2\)/);
   assert.match(sync, /values\.otherCost = toNumeric\(s\.insuranceCost\) \?\? '0\.00'/);
   assert.match(sync, /values\.selectedRateCost = resolveBillingSelectedRateCost\(/);
 });

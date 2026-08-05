@@ -395,6 +395,37 @@ const REQUIRED_GUARDS = [
   'test:inventory-history-date-range-total',
   'test:inventory-history-table-pagination',
   'test:ps-438-rate-recalculation-progress',
+  // ── Batch 15: selected-rate cost SOT, inventory ledger, storage proof ──
+  //
+  // ps-381 was RED on one clause: `result.cost` became `durableResult.cost` when
+  // the durable receipt-resume path was added and the local was renamed to
+  // distinguish it from the live purchase result. Its other three clauses matched
+  // verbatim, which is what isolated this to a rename rather than a lost stamp.
+  // Repointed and mutation-checked.
+  //
+  // THREE REDS NOT REPAIRED, each needing a trace I have not done:
+  //   test:ps-383-billing-storage-proof-migration -- two failures, "storage charge
+  //     is skipped when proof durability fails" and "generated totals move only
+  //     after proof+line transaction commits". Both are durability ORDERING
+  //     properties, not string shapes. Whether the ordering still holds under a
+  //     different implementation is a real question about billing correctness and
+  //     deserves tracing, not a regex nudge.
+  //   test:daily-orders-trend-count -- "backend payload type includes count".
+  //   test:dashboard-client-sku-filter -- "the dashboard load effect must re-run
+  //     on selectedClientId", a React effect-dependency property; if that is
+  //     genuinely gone it is a stale-data bug, and if the effect moved it needs
+  //     repointing to wherever the dependency now lives.
+  // Left red on purpose. Fourteen repairs today were each traced end to end
+  // first; these three have not been, and a guess here is worth less than the red.
+  'test:ps-381-selected-rate-cost-sot',
+  'test:ps-370-selected-rate-cost-backfill',
+  'test:ps-366-hugrab-shipping-rate-override',
+  'test:ps-365-client-used-package-pricing',
+  'test:ps-373-storage-proof',
+  'test:ps-414-inventory-ledger',
+  'test:inventory-repair-plan',
+  'test:daily-orders-trend-total-line',
+  'test:analysis-table-first',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
