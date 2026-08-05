@@ -62,14 +62,38 @@ check('billing ensures storage proof schema before any storage line insert',
 check('billing writes proof before storage line in one transaction',
   /await db\.transaction\(async \(tx\) => \{[\s\S]*tx\s*\n\s*\.insert\(billingStorageProof\)[\s\S]*tx\s*\n\s*\.insert\(billingLineItems\)[\s\S]*\}\);/.test(storageBlock));
 
+// Repointed 2026-08-04. Both of these failed, and both properties still hold --
+// the implementations under them improved and the assertions pinned the old
+// spelling.
+//
+// The prose log "storage line skipped because proof freeze failed" became a
+// structured reportError('billing.storage_line.freeze_failed', ...), matching the
+// convention used everywhere else in this file. The skip semantics are unchanged
+// and the branch additionally tracks finalized-lock skips now. Pin the error
+// CODE, which is the queryable thing, rather than a sentence.
 check('storage charge is skipped when proof durability fails',
   /catch \(storageErr\)[\s\S]*skipped \+= 1/.test(storageBlock) &&
-    /storage line skipped because proof freeze failed/.test(storageBlock) &&
-    !/storage line generated but proof freeze failed/.test(storageBlock));
+    /billing\.storage_line\.freeze_failed/.test(storageBlock) &&
+    !/generated but proof freeze failed/.test(storageBlock));
 
+// `generated += 1;` became `generated += insertedStorageLines.length;` -- the
+// insert carries onConflictDoNothing and now .returning()s the rows Postgres
+// ACTUALLY persisted, so a blind +1 over-counted on conflict. That is a
+// correctness fix, and the ordering this check exists to protect is untouched:
+// the increment still sits after the transaction closes and before the catch.
+// Match the increment, not the literal it adds.
+// Anchored on the STORAGE transaction specifically. The original assertion used
+// indexOf('await db.transaction(async (tx) =>'), which matches an EARLIER
+// transaction in this same block (offset ~2176 of ~12600), not the storage one at
+// ~8600. So the ordering was being checked against the wrong transaction, and a
+// mutation moving the storage increment before the storage transaction still
+// passed. That flaw predates this repoint -- I reproduced it faithfully before a
+// mutation check caught it.
+const txIdx = storageBlock.indexOf('insertedStorageLines = await db.transaction');
+const generatedIdx = storageBlock.search(/generated \+= insertedStorageLines/);
+const catchIdx = storageBlock.indexOf('catch (storageErr)');
 check('generated totals move only after proof+line transaction commits',
-  storageBlock.indexOf('await db.transaction(async (tx) =>') < storageBlock.indexOf('generated += 1;') &&
-    storageBlock.indexOf('generated += 1;') < storageBlock.indexOf('catch (storageErr)'));
+  txIdx >= 0 && generatedIdx > txIdx && catchIdx > generatedIdx);
 
 check('package.json wires the PS-383 storage proof migration guard',
   /"test:ps-383-billing-storage-proof-migration":\s*"tsx scripts\/ps-383-billing-storage-proof-migration-guard\.ts"/.test(packageJson));

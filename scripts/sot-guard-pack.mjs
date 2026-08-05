@@ -426,6 +426,22 @@ const REQUIRED_GUARDS = [
   'test:inventory-repair-plan',
   'test:daily-orders-trend-total-line',
   'test:analysis-table-first',
+  // PS-383 billing storage proof. Both its reds were rot from improvements:
+  //   the prose log "storage line skipped because proof freeze failed" became a
+  //     structured reportError('billing.storage_line.freeze_failed', ...), and the
+  //     branch now also tracks finalized-lock skips.
+  //   `generated += 1` became `generated += insertedStorageLines.length` -- the
+  //     insert carries onConflictDoNothing and .returning()s the rows Postgres
+  //     ACTUALLY persisted, so the old blind +1 over-counted on conflict.
+  // Both skip-on-failure and commit-ordering still hold.
+  //
+  // The ordering check also gained real teeth here. It anchored on
+  // indexOf('await db.transaction(async (tx) =>'), which matches an EARLIER
+  // transaction in the same block, so it was comparing against the wrong one --
+  // moving the storage increment before the storage transaction passed. Now
+  // anchored on insertedStorageLines specifically. That flaw predated this sweep;
+  // the mutation check is the only reason it surfaced.
+  'test:ps-383-billing-storage-proof-migration',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
