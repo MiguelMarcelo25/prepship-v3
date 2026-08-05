@@ -683,6 +683,42 @@ const REQUIRED_GUARDS = [
   'test:auth-logout',
   'test:frontend-auth-cache',
   'test:worker-status-role-snapshot',
+  // ── Batch 23: marketplace confirmation + sync integrity ──
+  //
+  // The "did we actually tell the marketplace we shipped" path. A missed confirmation
+  // costs seller metrics; a duplicate confuses the buyer. order-editable-lockdown is in
+  // here too -- the guard for the shipped/cancelled lockdown itself was not gating.
+  //
+  // ps-078-connector-matrix was RED on a magic number that became a named constant:
+  // `processFulfillmentOutboxOnce({ limit: 25 })` is now
+  // `{ limit: FULFILLMENT_OUTBOX_BATCH_LIMIT }`, and that constant was deliberately cut
+  // from 25 to 1 on 2026-07-18. One marketplace confirmation may use its full two-minute
+  // provider timeout, so claiming 25 per tick could hold the shared lane for the best
+  // part of an hour and starve order refresh past its three-minute freshness budget; the
+  // minute cadence drains the backlog instead. Pinning 25 would have demanded restoring
+  // that starvation. Re-anchored on what PS-078 actually owns -- one tick both recovers
+  // missing confirmations and drains the outbox, recovery first so anything just
+  // re-enqueued drains in the same pass -- with the limit required to stay a bounded
+  // positive constant. Mutation-checked three ways.
+  'test:ps-064-confirmation-outbox',
+  'test:ps-268-marketplace-confirmation-residual-audit',
+  'test:ps-262a-confirmation-payload-funnel',
+  'test:ps-262c-walmart-store-correlation',
+  'test:ps-285-marketplace-confirm-boundary',
+  'test:ps-253-combo-confirm-atomicity',
+  'test:ps-255-ops-confirm-gate',
+  'test:marketplace-reconciliation',
+  'test:shipment-confirmation-auto-recovery',
+  'test:ps-078-shipstation-direct-carrier-confirm',
+  'test:ps-078-connector-matrix',
+  'test:ps-424-order-lifecycle',
+  'test:order-editable-lockdown',
+  'test:walmart-dual-dedupe',
+  'test:ps-289-multi-package-marketplace-confirmation-plan',
+  'test:ps-289-multi-package-marketplace-confirmation-sidecar',
+  'test:ps-415-carrier-store-identity',
+  'test:sync-advisory-lock',
+  'test:ps-417-shipstation-sync-account-state',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

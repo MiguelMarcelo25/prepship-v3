@@ -163,9 +163,31 @@ const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
 check('pg-boss runs the fulfillment outbox on a durable 1-minute schedule',
   /const FULFILLMENT_OUTBOX_INTERVAL_MS = SYNC_CADENCE_MS\.fulfillmentOutbox/.test(queue) &&
   /JOBS\.fulfillmentOutbox,[\s\S]*SCHEDULE_CRON\.everyMinute/.test(queue));
+// Repointed 2026-08-05. This required `processFulfillmentOutboxOnce({ limit: 25 })`
+// literally. The batch limit is now a named constant, FULFILLMENT_OUTBOX_BATCH_LIMIT,
+// and it was deliberately dropped from 25 to 1 on 2026-07-18: one marketplace
+// confirmation may use its full two-minute provider timeout, so claiming 25 per tick
+// could hold the shared lane for the best part of an hour and starve order refresh past
+// its three-minute freshness budget. The minute cadence drains the backlog instead.
+//
+// So pinning 25 would demand restoring lane starvation. The batch size is a tuning
+// decision owned at the scheduler; what PS-078 owns is that ONE tick both recovers
+// missing confirmations and drains the outbox. Assert that, inside the tick body, in
+// that order -- recover first so anything just re-enqueued can drain in the same pass --
+// and that the limit stays a bounded named constant rather than becoming unbounded.
+const outboxTick = (() => {
+  const start = scheduler.indexOf('export async function runFulfillmentOutboxTick');
+  if (start < 0) return '';
+  const end = scheduler.indexOf('\nexport ', start + 1);
+  return scheduler.slice(start, end > start ? end : start + 3_000);
+})();
+const recoverIdx = outboxTick.indexOf('enqueueMissingShipmentConfirmations({');
+const processIdx = outboxTick.indexOf('processFulfillmentOutboxOnce({');
 check('outbox tick both auto-recovers missing confirmations AND processes the outbox',
-  /enqueueMissingShipmentConfirmations\(\{ limit: 25 \}\)/.test(scheduler) &&
-  /processFulfillmentOutboxOnce\(\{ limit: 25 \}\)/.test(scheduler));
+  outboxTick !== '' && recoverIdx >= 0 && processIdx > recoverIdx &&
+  /processFulfillmentOutboxOnce\(\{\s*limit: FULFILLMENT_OUTBOX_BATCH_LIMIT,?\s*\}\)/.test(outboxTick));
+check('the outbox batch limit stays a bounded positive constant',
+  /export const FULFILLMENT_OUTBOX_BATCH_LIMIT = ([1-9]\d{0,2});/.test(scheduler));
 
 // ── Print the certification table ──────────────────────────────────────────
 const rows = buildCompatibilityMatrix();
