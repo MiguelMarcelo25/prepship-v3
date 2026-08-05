@@ -918,7 +918,8 @@
     "test:billing-destination-international": "tsx scripts/billing-destination-international-guard.ts",
     "test:billing-international-destination:browser": "playwright test web/e2e/billing-international-destination.spec.js --reporter=line",
     "test:ps-487-return-billing-contract": "tsx scripts/ps-487-return-billing-contract-guard.ts",
-    "test:ps-487-return-line-planner": "tsx scripts/ps-487-return-line-planner-guard.ts"
+    "test:ps-487-return-line-planner": "tsx scripts/ps-487-return-line-planner-guard.ts",
+    "test:ps-487-return-billing-wiring": "tsx scripts/ps-487-return-billing-wiring-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

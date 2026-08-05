@@ -115,6 +115,10 @@ const schema = z.object({
   // approves an exact dry-run plan and enables this gate for the reviewed run.
   INVENTORY_RECONCILIATION_APPLY_ENABLED: booleanFlag(false),
   STRICT_JWT_CLAIMS: booleanFlag(false),
+  // PS-487: return billing generation. Default OFF — flipping it on is what starts
+  // putting return_processing / return_label lines on real invoices, so it stays a
+  // deliberate Render env change after canary, never a deploy side effect.
+  RETURN_BILLING_ENABLED: booleanFlag(false),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.
   RUN_SYNC_SCHEDULER: booleanFlag(true),

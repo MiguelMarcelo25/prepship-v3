@@ -12,6 +12,7 @@ import {
 } from '../db/schema/billing';
 import { shipments } from '../db/schema/shipments';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { returns } from '../db/schema/returns';
 import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
@@ -89,6 +90,11 @@ import {
   type BillingPolicyVersion,
 } from './billing-calendar-policy';
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
+import { planReturnBillingLines } from './billing-return-line-planner';
+import {
+  RETURN_PROCESSING_LINE_TYPE,
+  RETURN_SHIPPING_LINE_TYPE,
+} from './billing-return-event-contract';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
@@ -934,6 +940,7 @@ export async function generateLineItems(input: GenerateInput) {
     hugrabShippingRateOverrideEnabled: boolean;
     hugrabShippingRateOverrideThreshold: string;
     hugrabShippingRateOverrideAmount: string;
+    returnProcessingFee: string;
   }>(sql`
     select
       c.id as "clientId",
@@ -955,7 +962,10 @@ export async function generateLineItems(input: GenerateInput) {
       coalesce(
         b.hugrab_shipping_rate_override_amount,
         ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT}::numeric
-      )::text as "hugrabShippingRateOverrideAmount"
+      )::text as "hugrabShippingRateOverrideAmount",
+      -- PS-487: the configured return-processing fee. Every client currently holds
+      -- 0.00, so a return bills a visible $0 processing line until one is set.
+      coalesce(b.return_processing_fee, 0)::text as "returnProcessingFee"
     from clients c
     left join billing_config b on b.client_id = c.id
     where c.active = true
@@ -1770,6 +1780,107 @@ export async function generateLineItems(input: GenerateInput) {
   } catch (error) {
     if (isBillingFinalizedLockError(error)) rethrowAsBillingFinalizedLock(error);
     throw error;
+  }
+
+  // ── PS-487: return billing ────────────────────────────────────────────────
+  // Default OFF. Flipping RETURN_BILLING_ENABLED is what starts putting
+  // return_processing / return_label lines on real invoices, so it is a deliberate
+  // Render env change after canary — never a deploy side effect.
+  //
+  // Modelled on the storage pass below: its own delete+insert inside one transaction,
+  // fenced by billingLineItemIsEditablePredicate() so a finalized or invoiced period is
+  // never touched. WHICH lines exist and what they cost is decided by the pure planner
+  // (billing-return-line-planner); this block only reads, deletes and inserts.
+  //
+  // The forward-only cutover lives in the contract, so the 8 pre-PS-487 production
+  // returns can never be swept into an invoice by turning the flag on.
+  let returnLinesGenerated = 0;
+  let returnLinesSkipped = 0;
+  if (env.RETURN_BILLING_ENABLED) {
+    const returnRows = await db
+      .select({
+        id: returns.id,
+        orderId: returns.orderId,
+        clientId: returns.clientId,
+        createdAt: returns.createdAt,
+        returnCustomerShippingRate: returns.returnCustomerShippingRate,
+        returnReference: returns.returnReference,
+        orderNumber: orders.orderNumber,
+      })
+      .from(returns)
+      .leftJoin(orders, eq(orders.id, returns.orderId))
+      .where(
+        and(
+          sql`${returns.createdAt} >= ${fromIso}::timestamptz`,
+          sql`${returns.createdAt} < ${toIso}::timestamptz`,
+          input.clientId !== undefined ? eq(returns.clientId, input.clientId) : undefined,
+        ),
+      );
+
+    const returnPlan = planReturnBillingLines({
+      returns: returnRows.map((r) => ({
+        id: r.id,
+        orderId: r.orderId,
+        orderNumber: r.orderNumber ?? null,
+        clientId: r.clientId,
+        createdAt: r.createdAt,
+        returnCustomerShippingRate: r.returnCustomerShippingRate,
+        returnReference: r.returnReference,
+      })),
+      returnProcessingFeeByClientId: new Map(
+        [...configByClient.entries()].map(([cid, cfg]) => [
+          cid,
+          toNum(cfg.returnProcessingFee ?? 0),
+        ]),
+      ),
+    });
+    returnLinesSkipped = returnPlan.skipped.length;
+
+    if (returnPlan.lines.length) {
+      await db.transaction(async (tx) => {
+        // Clear only EDITABLE return lines in range, so regeneration is repeatable and a
+        // finalized period keeps its rows.
+        await tx.delete(billingLineItems).where(
+          and(
+            inArray(billingLineItems.lineType, [
+              RETURN_PROCESSING_LINE_TYPE,
+              RETURN_SHIPPING_LINE_TYPE,
+            ]),
+            sql`${billingLineItems.billingEffectiveDate} >= ${fromIso}::timestamptz`,
+            sql`${billingLineItems.billingEffectiveDate} < ${toIso}::timestamptz`,
+            input.clientId !== undefined
+              ? eq(billingLineItems.clientId, input.clientId)
+              : undefined,
+            billingLineItemScopePredicate(input),
+            billingLineItemIsEditablePredicate(),
+          ),
+        );
+        const inserted = await tx
+          .insert(billingLineItems)
+          .values(
+            returnPlan.lines.map((line) => ({
+              clientId: line.clientId,
+              orderId: line.orderId,
+              orderNumber: line.orderNumber,
+              shipmentId: null,
+              lineType: line.lineType,
+              description: line.description,
+              qty: line.qty,
+              unitCost: line.unitCost,
+              totalCost: line.totalCost,
+              shipDate: new Date(`${line.shipDate}T00:00:00.000Z`),
+              billingEffectiveDate: new Date(`${line.billingEffectiveDate}T00:00:00.000Z`),
+            })),
+          )
+          // Same choice as PS-425: a duplicate is a loud transaction failure. The unique
+          // index on (order_id, line_type, description) is what makes this idempotent,
+          // and the description carries the canonical return event key.
+          .returning({ id: billingLineItems.id, totalCost: billingLineItems.totalCost });
+        returnLinesGenerated = inserted.length;
+        for (const r of inserted) total += toNum(r.totalCost);
+      });
+      generated += returnLinesGenerated;
+    }
   }
 
   const finalizedCandidateTotalsByClient = new Map<number, Map<number, number>>();

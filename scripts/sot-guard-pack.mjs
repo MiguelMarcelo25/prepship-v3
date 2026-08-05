@@ -978,6 +978,11 @@ const REQUIRED_GUARDS = [
   // bills nobody. The generator wiring is NOT written; when it is, it goes behind a
   // default-OFF flag like every other money-path cutover in this repo.
   'test:ps-487-return-line-planner',
+  // PS-487 slice 3 — the generator wiring. Pins that RETURN_BILLING_ENABLED defaults
+  // OFF, that the write is fenced by billingLineItemIsEditablePredicate() so a
+  // finalized period is never rewritten, and that the generator delegates amounts to
+  // the planner instead of doing its own arithmetic.
+  'test:ps-487-return-billing-wiring',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes
