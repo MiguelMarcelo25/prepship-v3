@@ -497,6 +497,42 @@ const REQUIRED_GUARDS = [
   'test:shopify-store-connector',
   'test:ebay-nosku-title-fallback-grouping',
   'test:ps-405-shopify-shipping-spike',
+  // ── Batch 18: the Rate Browser cluster ──
+  //
+  // Every rate the operator picks from is chosen here, so this whole cluster sits
+  // under the PS-313 rate source-of-truth lockdown and none of it was gating.
+  //
+  // Three were RED, and all three had rotted in the SAME direction -- the code moved
+  // TOWARD the source of truth and the guard was pinning the pre-move spelling:
+  //   rate-browser-carrier-account-click: the sidebar count filtered on an FE-derived
+  //     isBlockedRate(rate, order, shippingOptions). It now calls shouldHideRate ->
+  //     rateBrowserShouldHideUnavailableRate -> readBackendEligibilityBlockReason, i.e.
+  //     it READS the backend eligibility reason instead of recomputing eligibility in
+  //     React. PS-316 exactly. Re-pinned at both ends: sidebar filters through the
+  //     injected predicate and re-derives nothing, modal binds the canonical one.
+  //   ps-390-rate-browser-country: required requestedCountry/canonicalCountry verbatim.
+  //     Both are behind `orderForBrowse ? ... : ...` now, so on an order-backed browse
+  //     the frontend's country is not even offered to the resolver -- a tightening the
+  //     guard read as a break. Now checks canonical comes from the order ship-to,
+  //     requested never does, and the two are not swapped.
+  //   ps-206-rate-browser-full-coverage: PS-459 lifted the cached-only rule out of an
+  //     inline `if` into the pure decideDirectCarrierCacheUse owner, and Audit R-4
+  //     replaced withCarrierQuoteTimeout with the abort-capable variant after finding
+  //     the old one abandoned the loser as a zombie retrying for minutes. Now exercises
+  //     the pure decision table directly and requires the deadline to come from the
+  //     bounded execution policy rather than an inline literal.
+  // All six repaired assertions mutation-checked, mutation confirmed applied first.
+  'test:rate-browser-carrier-account-click',
+  'test:rate-browser-dynamic-service-selection',
+  'test:rate-browser-manual-selection-table-sync',
+  'test:rate-browser-manual-selection-apply-error',
+  'test:ps-123-insured-rate-browser-display',
+  'test:ps-390-rate-browser-country',
+  'test:ps-135-rate-browser-rerank',
+  'test:ps-295-rate-browser-speed-diagnostics',
+  'test:ps-206-rate-browser-full-coverage',
+  'test:ps-216-rate-browser-account-labels',
+  'test:ps-403-rate-browser-provider-timeouts',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

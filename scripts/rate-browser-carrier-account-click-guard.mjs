@@ -53,12 +53,25 @@ const checks = [
   },
   {
     name: 'account count still reflects only available rates when hidden rates are filtered',
+    // Repointed 2026-08-05. This required, verbatim:
+    //   rates.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions)).length
+    //   isBlockedRate={isBlockedRate}
+    // `isBlockedRate` no longer exists in the modal. The frontend used to re-derive
+    // "is this rate blocked" from the order plus the current shipping options; it now
+    // calls shouldHideRate -> rateBrowserShouldHideUnavailableRate ->
+    // readBackendEligibilityBlockReason, i.e. it READS the backend-issued eligibility
+    // block reason instead of recomputing eligibility client-side. That is the PS-316
+    // direction, so the old spelling is exactly what should have disappeared.
+    //
+    // The count property is unchanged, so pin it at both ends the way this guard
+    // already pins the click paths: the sidebar filters through the injected
+    // predicate and does not re-derive hiding itself, and the modal binds that prop
+    // to the canonical backend-reading predicate.
     ok:
-      sidebarSource.includes(
-        'rates.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions)).length'
-      ) &&
-      // The sidebar's isBlockedRate prop is the modal's canonical implementation.
-      /<RateBrowserCarrierSidebar[\s\S]{0,1200}?isBlockedRate=\{isBlockedRate\}/.test(modalSource),
+      /rates\.filter\(\(r\) => !shouldHideRate\(r\)\)\.length/.test(sidebarSource) &&
+      !/rateBrowserShouldHideUnavailableRate|readBackendEligibilityBlockReason|rateBlockedReason/.test(sidebarSource) &&
+      /<RateBrowserCarrierSidebar[\s\S]{0,1200}?shouldHideRate=\{shouldHideUnavailableRate\}/.test(modalSource) &&
+      /function shouldHideUnavailableRate\([\s\S]{0,200}?rateBrowserShouldHideUnavailableRate\(/.test(modalSource),
   },
 ];
 

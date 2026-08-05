@@ -20,6 +20,9 @@ import {
   withCarrierQuoteTimeout,
   DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
 } from '../src/services/rates-combined';
+// PS-459 moved the cached-only decision out of an inline `if` in rates.ts into this
+// pure owner. Run it directly rather than regexing the branch it used to be.
+import { decideDirectCarrierCacheUse } from '../src/services/shipping-workflow/rate-signature-cache-policy';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -107,10 +110,42 @@ const rate = (carrierId: string, amount: number) => ({
 
 // ── (4) wiring pins: cachedOnly honored end-to-end ────────────────────────────
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
+// Repointed 2026-08-05. Both of these pinned a spelling that PS-459 and Audit R-4
+// replaced with something stronger. The invariants they protect are unchanged, so
+// they are re-anchored on the owners the rules moved TO.
+//
+// (a) The cached-only rule used to be an inline `if (options.cachedOnly) { ...
+// status: 'uncached' }` in rates.ts. PS-459 lifted it into the pure
+// decideDirectCarrierCacheUse owner, which now also has to get cache-first right.
+// Exercise that owner directly -- a decision table beats a regex over the branch
+// that used to hold it -- then pin that rates.ts routes the uncached decision to a
+// zero-provider-fetch return rather than falling through to a quote.
+check('cached-only miss is TERMINAL uncached (never a silent live direct quote)',
+  decideDirectCarrierCacheUse({ cachedOnly: true, cacheFirst: false, cachedRateCount: 0 }) === 'uncached');
+check('cached-only hit serves the cache',
+  decideDirectCarrierCacheUse({ cachedOnly: true, cacheFirst: false, cachedRateCount: 3 }) === 'cache_hit');
+check('cache-FIRST miss may still fall through to the provider (that is the difference)',
+  decideDirectCarrierCacheUse({ cachedOnly: false, cacheFirst: true, cachedRateCount: 0 }) === 'provider_fetch');
+check('a plain lookup with no cache flags always quotes',
+  decideDirectCarrierCacheUse({ cachedOnly: false, cacheFirst: false, cachedRateCount: 9 }) === 'provider_fetch');
 check('rates service: cached-only lookups return uncached coverage WITHOUT quoting direct carriers',
-  /options\.cachedOnly\)\s*\{[\s\S]{0,700}?status: 'uncached' as CarrierRateDiagnosticStatus/.test(ratesService));
+  /cacheDecision = decideDirectCarrierCacheUse\(\{[\s\S]{0,200}?cachedOnly: options\.cachedOnly === true/.test(ratesService) &&
+  /cacheDecision === 'uncached'\)\s*\{[\s\S]{0,900}?status: 'uncached' as CarrierRateDiagnosticStatus[\s\S]{0,400}?providerFetches: 0/.test(ratesService));
+
+// (b) `withCarrierQuoteTimeout(quoteCarrierRates(` became
+// `withAbortableCarrierQuoteTimeout((signal) => quoteCarrierRates(...))`. Audit R-4
+// found the old wrapper raced and ABANDONED the loser, leaving a zombie provider
+// call retrying for minutes; the replacement hands down an AbortSignal so a timeout
+// stops the work instead of only stopping the wait. Bounded is now bounded AND
+// cancelled. Accept either wrapper by name, but require the quote to be inside it and
+// the deadline to come from the bounded policy rather than an inline literal.
+const quoteWrap = /with(?:Abortable)?CarrierQuoteTimeout\(([\s\S]{0,4000}?)\n\s{0,8}\}\)?, (\w[\w.]*), ([\w.]+)/.exec(ratesService);
 check('rates service: direct quoting is wrapped in the bounded per-carrier timeout',
-  /withCarrierQuoteTimeout\(quoteCarrierRates\(/.test(ratesService));
+  quoteWrap != null && /quoteCarrierRates\(/.test(quoteWrap[1]) &&
+    /executionPolicy\.timeoutMs|DIRECT_CARRIER_QUOTE_TIMEOUT_MS/.test(quoteWrap[3]),
+  quoteWrap ? `timeout arg was ${quoteWrap[3]}` : 'no carrier-quote-timeout wrap found');
+check('the per-carrier deadline is resolved from the bounded execution policy',
+  /resolveRateBrowseProviderExecutionPolicy\(\{[\s\S]{0,300}?defaultTimeoutMs: DIRECT_CARRIER_QUOTE_TIMEOUT_MS/.test(ratesService));
 const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 // PS-perf 2026-06-23: the direct call body grew (forwards the resolved insurance from
 // resolvedForBrowse and now lives in a Promise.all IIFE) — widen the span; the invariant (the

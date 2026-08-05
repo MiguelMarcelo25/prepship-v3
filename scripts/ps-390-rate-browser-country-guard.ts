@@ -77,10 +77,41 @@ assert.ok(
   'OrdersView must pass canonical shipTo.country into Rate Browser order data',
 );
 
+// Repointed 2026-08-05. This required the two arguments verbatim:
+//   requestedCountry: rest.toCountry
+//   canonicalCountry: readText(orderRawShipTo.country)
+// Both are now guarded by a ternary on whether the order actually loaded:
+//   requestedCountry: orderForBrowse ? undefined : rest.toCountry
+//   canonicalCountry: orderForBrowse ? readText(orderRawShipTo.country) : null
+// That is a NARROWING, not a regression -- on an order-backed browse the frontend's
+// requested country is no longer even offered to the resolver, so a frontend default
+// US cannot reach the decision at all. Pinning the argument expressions turned a
+// tightening into a red.
+//
+// Check the wiring the resolver actually depends on: it is the resolver that builds
+// toCountry, canonical comes from the order ship-to, requested does not, and the two
+// are not swapped. The resolver's own preference rule is proven by the pure cases above.
+const toCountryArgs = /toCountry:\s*resolveRateBrowseDestinationCountry\(\{([\s\S]*?)\}\)/.exec(producer)?.[1] ?? null;
 assert.ok(
-  producer.includes("from './rate-browse-destination-country'") &&
-    /toCountry:\s*resolveRateBrowseDestinationCountry\(\{[\s\S]*requestedCountry:\s*rest\.toCountry[\s\S]*canonicalCountry:\s*readText\(orderRawShipTo\.country\)[\s\S]*\}\)/.test(producer),
-  'backend rate browse producer must resolve destination country from canonical order country',
+  producer.includes("from './rate-browse-destination-country'") && toCountryArgs,
+  'backend rate browse producer must build toCountry through resolveRateBrowseDestinationCountry',
+);
+const canonicalArg = /canonicalCountry:([^\n]*)/.exec(toCountryArgs!)?.[1] ?? '';
+const requestedArg = /requestedCountry:([^\n]*)/.exec(toCountryArgs!)?.[1] ?? '';
+assert.match(
+  canonicalArg,
+  /orderRawShipTo\.country/,
+  'canonicalCountry must be fed from the canonical order ship-to country',
+);
+assert.doesNotMatch(
+  canonicalArg,
+  /\brest\./,
+  'canonicalCountry must never be fed from the frontend request',
+);
+assert.doesNotMatch(
+  requestedArg,
+  /orderRawShipTo/,
+  'requestedCountry must not receive the canonical country (arguments must not be swapped)',
 );
 
 assert.ok(
