@@ -23,9 +23,21 @@ function read(path: string): string {
 
 function blockBetween(text: string, startNeedle: string, endNeedle: string): string {
   const start = text.indexOf(startNeedle);
-  if (start < 0) return '';
+  // Hardened 2026-08-05: a missing anchor is a BROKEN guard, not a smaller guard.
+  // The old fallbacks ('' on a missing start, an arbitrary N-char window on a missing
+  // end) silently changed what every assertion below was searching. Positive checks then
+  // fail for the wrong reason and negative checks (!block.includes(...)) pass VACUOUSLY.
+  // ps-303 lost five of six clauses this way when getMergedQueueLabels was deleted.
+  if (start < 0) {
+    console.error(`FAIL blockBetween: start anchor is gone from the source: ${startNeedle}`);
+    process.exit(1);
+  }
   const end = text.indexOf(endNeedle, start + startNeedle.length);
-  return text.slice(start, end > start ? end : start + 5000);
+  if (end <= start) {
+    console.error(`FAIL blockBetween: end anchor is gone from the source: ${endNeedle}`);
+    process.exit(1);
+  }
+  return text.slice(start, end);
 }
 
 const printQueue = read('src/services/print-queue.ts');

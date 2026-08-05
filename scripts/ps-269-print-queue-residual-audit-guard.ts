@@ -46,9 +46,21 @@ function checkPatterns(name: string, text: string, patterns: RegExp[]): void {
 
 function blockBetween(text: string, startNeedle: string, endNeedle: string): string {
   const start = text.indexOf(startNeedle);
-  if (start < 0) return '';
+  // Hardened 2026-08-05: a missing anchor is a BROKEN guard, not a smaller guard.
+  // The old fallbacks ('' on a missing start, an arbitrary N-char window on a missing
+  // end) silently changed what every assertion below was searching. Positive checks then
+  // fail for the wrong reason and negative checks (!block.includes(...)) pass VACUOUSLY.
+  // ps-303 lost five of six clauses this way when getMergedQueueLabels was deleted.
+  if (start < 0) {
+    console.error(`FAIL blockBetween: start anchor is gone from the source: ${startNeedle}`);
+    process.exit(1);
+  }
   const end = text.indexOf(endNeedle, start + startNeedle.length);
-  return text.slice(start, end > start ? end : start + 10_000);
+  if (end <= start) {
+    console.error(`FAIL blockBetween: end anchor is gone from the source: ${endNeedle}`);
+    process.exit(1);
+  }
+  return text.slice(start, end);
 }
 
 const packageJson = read('package.json');
@@ -200,7 +212,15 @@ const printQueue = read('src/services/print-queue.ts');
 const processBlock = blockBetween(
   printQueue,
   'async function processQueueSendOrder',
-  '// ---- CRUD',
+  // Repointed 2026-08-05: '// ---- CRUD' has zero occurrences in print-queue.ts -- the
+  // section comment was restyled to box-drawing characters ('// ─── CRUD ───'). Under the
+  // old helper that silently became a flat 10,000-char window. processQueueSendOrder is
+  // only ~7,750 chars, so the window OVER-included ~2,250 chars of the next function
+  // rather than truncating this one: assertions still saw the whole function, but an
+  // ordering check could be satisfied by a match that had bled in from listQueue.
+  // Anchor on the next top-level export, which is a declaration rather than a comment
+  // and so cannot be restyled out from under this guard.
+  'export async function listQueue',
 );
 checkPatterns('Print Queue worker owns existing-label, missing-label, recovery, normalization, and queue write sequence', processBlock, [
   /let existingLabelUrl = await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
