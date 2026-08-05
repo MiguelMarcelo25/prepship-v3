@@ -246,8 +246,19 @@ const printQueue = read('src/services/print-queue.ts');
 const printQueueRoute = read('src/routes/print-queue.ts');
 check('print-queue service imports createLabelV2 as the missing-label purchase boundary',
   /import \{[\s\S]*?createLabelV2,[\s\S]*?type CreateLabelInputDto,[\s\S]*?type LabelCreateTimingBreakdown,[\s\S]*?\} from '\.\/labels'/.test(printQueue));
+// Repointed 2026-08-05 (same anchor PS-422's guard already uses). This required an
+// UNCONDITIONAL `return await createLabelV2({ ...labelInput, ... }, labelPurchaseScope)`.
+// Two things changed: the inline literal was hoisted to `const input = {...}`, and
+// PS-444 added a receipt-resume branch. A guard demanding an unconditional
+// createLabelV2 would literally be demanding the double-buy path -- on a resume the
+// postage was already purchased and only the response was lost, so resuming from the
+// durable receipt is what prevents paying twice.
+//
+// What PS-261 needs is that BOTH branches go through a canonical purchase owner (so
+// both inherit the HUGRAB preflight) and neither reaches a provider directly. Require
+// the hoisted input, and require both branches to receive it with the scope.
 check('print-queue missing-label path delegates to createLabelV2 (therefore uses the same PS-261 preflight)',
-  /const labelInput = order\.label;[\s\S]*?const created = await timeQueueStep\([\s\S]*?'labelPurchaseMs'[\s\S]*?return await createLabelV2\(\{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?\}, labelPurchaseScope\)/.test(printQueue));
+  /const input = \{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?\};[\s\S]*?resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/.test(printQueue));
 check('print-queue does NOT recompute HUGRAB coverage or call provider purchase APIs directly',
   !/resolveHugrabLabelPurchasePreflight|resolveHugrabLabelPurchaseGate|createDirectCarrierLabelForOrder|createLabelShipp|createLabelEasyPost/.test(printQueue));
 check('print-queue route schema preserves opaque selectionRef for the createLabelV2 purchase boundary',

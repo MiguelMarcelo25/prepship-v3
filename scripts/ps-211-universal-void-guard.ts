@@ -152,7 +152,17 @@ assert.ok(/provider_failed'\s*\?\s*502/.test(labelsRoute), 'route must return 50
 assert.ok(/not_supported'\s*\|\|\s*result\.status === 'not_voidable'\s*\?\s*409/.test(labelsRoute), 'route must return 409 for not_supported/not_voidable');
 
 // The ShipStation connector voids provider-native label ids, not shipment ids.
-assert.ok(/await ssVoidLabel\(raw/.test(ssConnector), 'shipstation voidLabel must call ssVoidLabel(label_id)');
+// Repointed 2026-08-05: the call went multi-line when PS-399 added the apiKeyV2 and
+// signal arguments, so `await ssVoidLabel(raw` no longer matched across the newline.
+// Pure formatting. The argument is still `raw`, and what PS-211 actually cares about
+// is that `raw` is the PROVIDER-NATIVE label id and not a shipment id -- so pin that
+// derivation too, which the old one-line regex never did.
+assert.match(ssConnector, /await ssVoidLabel\(\s*raw\b/, 'shipstation voidLabel must call ssVoidLabel(label_id)');
+assert.match(
+  ssConnector,
+  /const raw = String\(input\.labelId[\s\S]{0,40}?\)\.trim\(\)/,
+  'the voided id must come from input.labelId (the provider-native label id), never a shipment id',
+);
 assert.ok(!/await ssVoidShipment\(/.test(ssConnector), 'shipstation voidLabel must not call ssVoidShipment');
 
 // npm wiring.

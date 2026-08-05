@@ -148,7 +148,13 @@ checkPatterns('createLabelV2 owns safety, proof, HUGRAB preflight, provider purc
   /export async function createLabelV2/,
   /await assertOrderSafeToShip\(order, \{ entryPoint: 'createLabelV2' \}\)/,
   /await assertLabelPurchaseRateSelection\(\{/,
-  /purchaseShippingProviderId: body\.shippingProviderId/,
+  // Repointed 2026-08-05: PS-422 replaced the request-body rate facts at the purchase
+  // boundary with a single opaque backend-minted selectionRef, and moved the
+  // purchaseShippingProviderId binding into the canonical rate-fingerprint owner
+  // (src/services/shipping-workflow/rate-fingerprint.ts). labels.ts no longer names it,
+  // which is the point: "legacy carried quote ids, keys, and proof never authorize
+  // postage" (labels.ts, at the boundary). Pin what the boundary is fed NOW.
+  /assertLabelPurchaseRateSelection\(\{\s*selectionRef: body\.selectionRef,?\s*\}\)/,
   /resolveHugrabLabelPurchasePreflight\(\{/,
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/,
   /createDirectCarrierLabelForOrder\(\{/,
@@ -216,7 +222,11 @@ checkPatterns('Print Queue owner queues existing labels without rebuy and create
   /let existingLabelUrl = await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
   /if \(!labelUrl\) \{/,
   /const labelInput = order\.label/,
-  /return await createLabelV2\(\{\s*\.\.\.labelInput/,
+  // Repointed 2026-08-05: the literal was hoisted to `const input = {...}`, and PS-444
+  // added a receipt-resume branch ahead of the fresh buy. Requiring an unconditional
+  // createLabelV2 would demand the double-buy path -- on a resume the postage already
+  // exists and only the response was lost. Both branches must take the same scoped input.
+  /const input = \{[\s\S]*?\.\.\.labelInput,[\s\S]*?\};[\s\S]*?resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/,
   /const recoverCreatedLabelUrl = existingLabelUrl \?\? await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
   /normalizePrintQueueLabelUrl\(labelUrl\)/,
   /classifyLabelPurchaseRetry\(err\)/,
@@ -246,19 +256,38 @@ const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const ordersViewCode = stripComments(ordersView);
 check('frontend direct-carrier buy stays removed from OrdersView',
   !ordersViewCode.includes('createDirectCarrierLabelThenQueue'));
+// Repointed 2026-08-05, and this pair mattered more than the rest of this file.
+//
+// These required OrdersView to contain `buildSelectedRateProofPayload` and
+// `selectedRateProof:`, and the helper to return `rateQuoteId` + `selectedRateKey`.
+// PS-422 removed exactly that: the frontend now passes ONLY an opaque backend-minted
+// selectionRef, because semantic rate fields are reconstructable and therefore cannot be
+// purchase authority. rate-proof.ts says it outright -- "the frontend cannot reconstruct
+// purchase authority from displayed rate fields" -- and so does the purchase boundary in
+// labels.ts: "legacy carried quote ids, keys, and proof never authorize postage".
+//
+// So these two assertions were pinning the PRE-PS-422 world, and PS-313 forbids it
+// ("Frontend cannot mint selected-rate proof"). Six other guards -- ps-422, ps-098,
+// ps-095, ps-105, ps-204, selected-rate-proof-purchase-boundary -- assert the NEGATIVE
+// of what these asserted. ps-422 spells the contradiction out:
+//   assert.doesNotMatch(ordersView, /selectedRateProof: buildSelectedRateProofPayload/,
+//     'the frontend must not carry reconstructable purchase proof into label or queue payloads')
+// Fixing this red by making the code match the guard would have restored frontend-minted
+// purchase authority on the postage money path. Flipped to the direction the
+// architecture actually requires, matching ps-422's anchors so the two agree.
 checkIncludesAll('OrdersView sends label/queue intent with backend-issued proof/ref fields', ordersView, [
-  'buildSelectedRateProofPayload',
   'buildRateQuoteRefForOrder',
-  'selectedRateProof:',
-  'rateQuoteId',
   'sendOrdersToQueueBackend',
   'apiClient.createLabel',
 ]);
+check('OrdersView does NOT carry reconstructable purchase proof into label/queue payloads',
+  !/selectedRateProof: buildSelectedRateProofPayload/.test(ordersView) &&
+    ordersView.includes('...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId),'));
 const rateProofHelper = read('web/src/components/Views/orders/best-rate/rate-proof.ts');
-checkPatterns('rate proof helper returns backend rateQuoteId and selectedRateKey refs', rateProofHelper, [
+checkPatterns('rate proof helper returns ONLY the opaque backend-minted selectionRef', rateProofHelper, [
   /export function buildRateQuoteRefForOrder/,
-  /rateQuoteId/,
-  /selectedRateKey/,
+  /\): \{ selectionRef\?: string \}/,
+  /rateQuoteRefFromCandidates\(/,
 ]);
 
 const apiClient = read('web/src/lib/v2-apiClient.ts');

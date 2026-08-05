@@ -81,14 +81,33 @@ check('lock helper uses non-blocking durable lease and explicit in-progress erro
     /DELETE FROM label_purchase_locks/.test(lockHelper) &&
     /LabelPurchaseInProgressError/.test(lockHelper) &&
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockHelper));
+// Repointed 2026-08-05. Required `return await createLabelV2Impl(body, scope)` with
+// exactly two arguments. It takes a third now -- `{ purchaseLock }` -- because the
+// 2026-07-25 change hands the opaque lease DOWN to nested canonical automation work so
+// nested work cannot try to re-acquire a non-reentrant lock. The outer owner still
+// releases it in the same finally. Strictly more careful than what this pinned, and
+// the handoff is now the more interesting property, so assert it rather than forbid it.
 check('createLabelV2 acquires and releases the purchase lock around impl',
   /acquireLabelPurchaseLock\(body\.orderId\)/.test(labels) &&
-    /return await createLabelV2Impl\(body, scope\)/.test(labels) &&
+    /return await createLabelV2Impl\(body, scope(?:, \{[^}]*purchaseLock[^}]*\})?\)/.test(labels) &&
     /finally \{\s*await purchaseLock\.release\(\)/.test(labels));
+check('the purchase lease is handed down to nested work instead of being re-acquired',
+  /createLabelV2Impl\(body, scope, \{[^}]*purchaseLock[^}]*\}\)/.test(labels));
+
+// The persist+lifecycle transaction is no longer opened inline as
+// `const localShipmentId = await db.transaction(async (tx) => ...)`. PS-423 moved it
+// under consumeFulfillmentOperation(operationId, async (tx, receipt) => ...), so the
+// durable provider RECEIPT is consumed in the same transaction as both projections: a
+// local fault rolls back shipment and lifecycle together, and the retry reuses the
+// receipt instead of buying a second label. That is a stronger invariant than "one
+// transaction", so anchor on it -- and require BOTH writes inside that callback rather
+// than merely present somewhere in a 3,500-line file, which is all the old regex asked.
+const durableTxStart = labels.indexOf('await consumeFulfillmentOperation(operationId, async (tx, receipt) =>');
+const durableTxSpan = durableTxStart >= 0 ? labels.slice(durableTxStart, durableTxStart + 4_000) : '';
 check('label persist and lifecycle command run in one transaction with tx plumbing',
-  /const localShipmentId = await db\.transaction\(async \(tx\) =>/.test(labels) &&
-    /persistCreatedLabel\(\{[\s\S]*tx,/.test(labels) &&
-    /applyOrderLifecycleCommandInTransaction\(tx, \{[\s\S]*shipmentId,[\s\S]*transition: 'shipped'/.test(labels));
+  durableTxStart >= 0 &&
+    /persistCreatedLabel\(\{[\s\S]*?\btx,/.test(durableTxSpan) &&
+    /applyOrderLifecycleCommandInTransaction\(tx, \{[\s\S]*?shipmentId,[\s\S]*?transition: 'shipped'/.test(durableTxSpan));
 check('PS-248 lock guard pins purchase lock mechanism',
   /migration owns durable label_purchase_locks/.test(lockGuard) &&
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockGuard) &&

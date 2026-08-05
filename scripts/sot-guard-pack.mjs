@@ -566,6 +566,50 @@ const REQUIRED_GUARDS = [
   'test:ps-324-inventory-writepath',
   'test:ps-325-sku-units',
   'test:ps-325-dashboard-inventory-snapshot',
+  // ── Batch 20: the label purchase boundary and its reversal ──
+  //
+  // Real postage. Five of fifteen were RED, and TWO of those were guards asserting a
+  // defect -- satisfying them would have cost real money:
+  //
+  //   ps-269 required `retryEligible = staleLabelAttempt || labelPurchaseInProgress || ...`,
+  //     i.e. an IN-FLIGHT label purchase presented to the operator as a retryable buy.
+  //     PS-444 flipped it to `&& !labelPurchaseInProgress`: "never presents an
+  //     active/unknown label purchase as a retryable buy. It is held for reconciliation
+  //     so a user retry cannot double-purchase." Making the code match this guard means
+  //     an operator can press retry mid-purchase and buy a second label.
+  //   ps-267/ps-269 required OrdersView to send buildSelectedRateProofPayload +
+  //     selectedRateProof. PS-422 removed exactly that: the FE now passes ONLY an opaque
+  //     backend-minted selectionRef, because reconstructable rate fields cannot be
+  //     purchase authority. PS-313 forbids the FE minting selected-rate proof, and SIX
+  //     other guards (ps-422, ps-098, ps-095, ps-105, ps-204,
+  //     selected-rate-proof-purchase-boundary) assert the NEGATIVE of what these required.
+  //
+  // The other three were ordinary rot, all from the same two changes: the print-queue
+  // label payload was hoisted to `const input = {...}`, and PS-444 added a durable
+  // receipt-resume branch ahead of the fresh buy -- so a guard demanding an
+  // unconditional createLabelV2 was demanding the double-buy path. ps-233 now also pins
+  // that the resume branch carries the SAME tenant scope; ps-285 now pins the
+  // purchase-lease handoff and that persist+lifecycle sit inside the PS-423 durable
+  // operation transaction; ps-211 was pure newline rot, re-pinned to also require the
+  // voided id derive from input.labelId rather than a shipment id.
+  //
+  // All six repaired assertions mutation-checked, including both defect-restoration
+  // mutations, with the mutation confirmed applied first.
+  'test:ps-248-label-purchase-lock',
+  'test:ps-285-label-purchase-evidence',
+  'test:ps-267-label-purchase-residual-audit',
+  'test:ps-269-print-queue-residual-audit',
+  'test:ps-261-hugrab-label-purchase-gate',
+  'test:ps-244-purchase-enforcement-canary',
+  'test:ps-289-multi-package-label-purchase-boundary',
+  'test:ps-211-universal-void',
+  'test:ps-263-void-confirmation-retract',
+  'test:ps-285-void-retract-evidence',
+  'test:ps-309-voided-label-display',
+  'test:ps-406-duplicate-label-audit',
+  'test:label-shipment-scope-enforcement',
+  'test:label-shipment-scope-review',
+  'test:ps-243-direct-label-shipment-id-namespace',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

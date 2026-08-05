@@ -205,7 +205,11 @@ const processBlock = blockBetween(
 checkPatterns('Print Queue worker owns existing-label, missing-label, recovery, normalization, and queue write sequence', processBlock, [
   /let existingLabelUrl = await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
   /const created = await timeQueueStep\(/,
-  /createLabelV2\(\{/,
+  // Repointed 2026-08-05: the inline literal was hoisted to `const input = {...}` and
+  // PS-444 added a receipt-resume branch ahead of the fresh buy. Both branches must take
+  // the same scoped input; demanding an unconditional createLabelV2 would demand the
+  // double-buy path.
+  /resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/,
   /const labelInput = order\.label/,
   /\.\.\.labelInput/,
   /labelUrl = created\.labelUrl/,
@@ -215,9 +219,11 @@ checkPatterns('Print Queue worker owns existing-label, missing-label, recovery, 
   /const queueableLabelUrl = normalizePrintQueueLabelUrl\(labelUrl\)/,
   /timeQueueStep\([\s\S]*?addToQueue\(\{/,
 ]);
+// Repointed 2026-08-05: `createLabelV2({` -> `createLabelV2(input, labelPurchaseScope)`.
+// The ordering invariant (look for an existing label BEFORE buying one) is unchanged.
 check('Print Queue worker checks existing label before createLabelV2',
   processBlock.indexOf('findExistingQueueSendLabel(order)') >= 0 &&
-  processBlock.indexOf('createLabelV2({') > processBlock.indexOf('findExistingQueueSendLabel(order)'));
+  processBlock.indexOf('createLabelV2(input, labelPurchaseScope)') > processBlock.indexOf('findExistingQueueSendLabel(order)'));
 
 checkPatterns('Print Queue addToQueue owns duplicate queue idempotency and confirmation repair', printQueue, [
   /export async function addToQueue/,
@@ -251,10 +257,23 @@ checkPatterns('Print Queue job reports structural retry eligibility instead of r
   /classifyLabelPurchaseRetry\(err\)/,
   /const staleLabelAttempt = isQueueSendStaleLabelAttemptError\(err\)/,
   /const labelPurchaseInProgress = isLabelPurchaseInProgressError\(err\)/,
-  /const retryEligible = staleLabelAttempt \|\| labelPurchaseInProgress \|\| retry\.retryEligible/,
-  /const retryReason = staleLabelAttempt\s*\?\s*err\.retryReason\s*:\s*labelPurchaseInProgress\s*\?\s*'label_purchase_in_progress'\s*:\s*retry\.retryReason/,
+  // ── Repointed 2026-08-05, and this one was INVERTED, not merely stale. ──
+  //
+  // It required:  const retryEligible = staleLabelAttempt || labelPurchaseInProgress || retry.retryEligible
+  // i.e. an in-flight label purchase made the job RETRYABLE and offered the operator a
+  // retry button. PS-444 flipped that to `&& !labelPurchaseInProgress` for the reason
+  // stated at the site: "PS-444 never presents an active/unknown label purchase as a
+  // retryable buy. It is held for reconciliation so a user retry cannot double-purchase."
+  //
+  // So the guard was pinning a real money defect -- satisfying it means an operator can
+  // press retry on a purchase that is still in flight and buy a second label with real
+  // postage. Third guard in this sweep found asserting the defect rather than the fix,
+  // and the most expensive of the three. Flipped to require the exclusion, and to require
+  // that every reconciliation-pending condition is excluded rather than only this one.
+  /const retryEligible = ![\s\S]{0,400}?&& !labelPurchaseInProgress[\s\S]{0,400}?&& \(staleLabelAttempt \|\| retry\.retryEligible\)/,
+  /const retryReason = [\s\S]{0,600}?'label_purchase_reconciliation_required'/,
   /retryEligible,\s*retryReason,/,
-  /state: retryEligible \? 'failed_retryable' : 'failed_terminal'/,
+  /retryEligible\s*\?\s*'failed_retryable'\s*:\s*'failed_terminal'/,
   /blockedReason: retryReason \?\? null/,
   /persistQueueSendJobSnapshot\(job, \{ required: true \}\)/,
 ]);
@@ -290,7 +309,10 @@ checkPatterns('createLabelV2 remains the missing-label purchase owner for queue-
   /export async function createLabelV2/,
   /await assertOrderSafeToShip\(order, \{ entryPoint: 'createLabelV2' \}\)/,
   /await assertLabelPurchaseRateSelection\(\{/,
-  /purchaseShippingProviderId: body\.shippingProviderId/,
+  // Repointed 2026-08-05 (same as ps-267): PS-422 replaced the request-body rate facts at
+  // the purchase boundary with one opaque backend-minted selectionRef, and moved the
+  // purchaseShippingProviderId binding into the canonical rate-fingerprint owner.
+  /assertLabelPurchaseRateSelection\(\{\s*selectionRef: body\.selectionRef,?\s*\}\)/,
   /resolveHugrabLabelPurchasePreflight\(\{/,
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/,
   /createDirectCarrierLabelForOrder\(\{/,
@@ -321,13 +343,19 @@ const ordersViewCode = stripComments(ordersView);
 check('frontend direct-carrier buy remains deleted from OrdersView',
   !ordersViewCode.includes('createDirectCarrierLabelThenQueue') &&
   !/createDirectCarrierLabel(ThenQueue|ForOrder)?\s*\(/.test(ordersViewCode));
+// Repointed 2026-08-05 (same finding as ps-267): PS-422 removed the FE-built semantic
+// rate proof in favour of an opaque backend-minted selectionRef, because reconstructable
+// rate fields cannot be purchase authority. PS-313 forbids the frontend minting
+// selected-rate proof, and ps-422's own guard asserts the NEGATIVE of what this required.
 checkIncludesAll('OrdersView sends Print Queue intent to the backend job owner', ordersView, [
   'function buildQueueSendOrderPayload',
   'sendOrdersToQueueBackend',
   'backendJobOrders',
-  'buildSelectedRateProofPayload',
   'buildRateQuoteRefForOrder',
 ]);
+check('OrdersView Print Queue intent carries no reconstructable purchase proof',
+  !/selectedRateProof: buildSelectedRateProofPayload/.test(ordersView) &&
+    !/function buildQueueSendOrderPayload\([\s\S]*?selectedRateProof: buildSelectedRateProofPayload/.test(ordersView));
 
 check('obsolete frontend route-plan bridge remains deleted',
   !existsSync('web/src/lib/resolve-backend-route-plan.ts') &&

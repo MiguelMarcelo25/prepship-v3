@@ -148,8 +148,15 @@ check('label mutation routes use requireInternalPermission', count(labelsRoute, 
 // 6. PS-422: the durable worker preserves the initiating tenant scope.
 check('print-queue worker derives labelPurchaseScope from the queued route scope',
   /const labelPurchaseScope = queueWorkerClientStoreScope\(scope\)/.test(printQueueSvc));
+// Repointed 2026-08-05: the inline object literal was hoisted to `const input = {...}`,
+// so `createLabelV2({...}, labelPurchaseScope)` no longer matches. The scope argument is
+// the point, not how the payload is spelled -- and PS-444 added a second purchase-adjacent
+// entry point (receipt resume) that must carry the SAME tenant scope, or a recovery could
+// resume a purchase outside the initiating tenant. Pin both.
 check('print-queue worker passes labelPurchaseScope to createLabelV2',
-  /createLabelV2\(\{[\s\S]*?\}, labelPurchaseScope\)/.test(printQueueSvc));
+  /createLabelV2\([A-Za-z_$][\w$]*, labelPurchaseScope\)/.test(printQueueSvc));
+check('the durable receipt-resume path carries the SAME tenant scope as a fresh purchase',
+  /resumeLabelV2FromDurableReceipt\([A-Za-z_$][\w$]*, labelPurchaseScope\)/.test(printQueueSvc));
 check('print-queue worker does not import or pass GLOBAL_SCOPE',
   !printQueueSvc.includes("import { GLOBAL_SCOPE }") &&
   !printQueueSvc.includes('}, GLOBAL_SCOPE);'));
