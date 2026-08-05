@@ -646,6 +646,43 @@ const REQUIRED_GUARDS = [
   'test:print-queue-client-scope',
   'test:print-queue-worker-offload',
   'test:label-operation-log',
+  // ── Batch 22: auth, scope, RBAC, RLS ──
+  //
+  // 19 of 19 clean, which is unusual enough in this sweep to be worth checking rather
+  // than trusting. Two things were verified before promoting them:
+  //
+  //   Vacuity. ps-230 and ps-285-auth-scope-evidence read files through a soft read()
+  //   that returns '' when the path is missing -- which would make every negative
+  //   assertion pass vacuously. All 14 paths across both resolve, so neither is hollow.
+  //
+  //   Teeth. Two mutations against the real auth surface: forcing strictClaims false in
+  //   verify-supabase-jwt, and making scopeFromContext return an unscoped global scope.
+  //   Caught by ps-246-jwt-audit-soak and ps-250-rates-scope-enforcement respectively --
+  //   one guard each, so coverage is narrow but the invariants are held.
+  //
+  // authz-guard-behavioral-ratchet has no assert/check calls by design: it is a
+  // META-guard that counts how many authz guards actually RUN authz logic versus merely
+  // grepping text, and fails when a new one is added substring-only. It enforces the
+  // same standard this sweep has been applying by hand, so it is worth gating on its own.
+  'test:auth-coverage',
+  'test:rbac-permissions',
+  'test:portal-internal-auth-boundary',
+  'test:orders-manifests-scope',
+  'test:ps-228-rls-regression',
+  'test:ps-230-jwt-strict-claims',
+  'test:ps-246-financials-write-permission',
+  'test:ps-246-behavioral-rls-matrix',
+  'test:ps-246-jwt-audit-soak',
+  'test:authz-guard-behavioral-ratchet',
+  'test:ps-252-catalog-mutation-authz',
+  'test:ps-249-billing-write-permission',
+  'test:ps-285-auth-scope-evidence',
+  'test:ps-250-rates-scope-enforcement',
+  'test:ps-242-marketplace-fee-scope-selectors',
+  'test:jwt-session-policy',
+  'test:auth-logout',
+  'test:frontend-auth-cache',
+  'test:worker-status-role-snapshot',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
