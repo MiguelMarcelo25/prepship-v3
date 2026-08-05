@@ -228,9 +228,16 @@ const ratesRouteSrc = read('src/routes/rates.ts');
 const rateBrowseProducerSrc = read('src/services/rate-browse-response-producer.ts');
 check(
   'Browse Rates enriches state/city from the backend order row before building the rate key',
+  // Repointed 2026-08-05, same narrowing already handled in ps-390. The producer used
+  // `rest.toState ?? orderForBrowse?.shipToState` -- frontend value first, order row as a
+  // fallback. It is now `orderForBrowse ? readText(orderRawShipTo.state) ?? ... : rest.toState`:
+  // when the order loaded, the CANONICAL ship-to wins and the frontend value is not
+  // consulted at all. That inverts the precedence in the safe direction, which is exactly
+  // what "enriches from the backend order row" was asking for, so the old spelling was
+  // pinning the weaker version of its own rule.
   /produceRateBrowsePayload/.test(ratesRouteSrc) &&
-    /toState:\s*rest\.toState\s*\?\?\s*orderForBrowse\?\.shipToState/.test(rateBrowseProducerSrc) &&
-    /toCity:\s*rest\.toCity\s*\?\?\s*orderForBrowse\?\.shipToCity/.test(rateBrowseProducerSrc),
+    /toState: orderForBrowse[\s\S]{0,120}?orderRawShipTo\.state/.test(rateBrowseProducerSrc) &&
+    /toCity: orderForBrowse[\s\S]{0,120}?orderRawShipTo\.city/.test(rateBrowseProducerSrc),
 );
 
 const ratesServiceSrc = read('src/services/rates.ts');

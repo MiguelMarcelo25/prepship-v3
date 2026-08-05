@@ -233,7 +233,10 @@ check('proof gate runs before every provider purchase branch',
 const printQueueService = read('src/services/print-queue.ts');
 checkPatterns('Print Queue worker delegates label creation to createLabelV2 and reports retry eligibility structurally', printQueueService, [
   /const labelInput = order\.label;/,
-  /createLabelV2\(\{\s*\.\.\.labelInput,/,
+  // Repointed 2026-08-05: payload hoisted to `const input = {...}`, and PS-444 added the
+  // durable receipt-resume branch ahead of the fresh buy. Both branches must take the
+  // same scoped input; an unconditional createLabelV2 is the double-buy path.
+  /resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/,
   /classifyLabelPurchaseRetry\(err\)/,
   /const retryEligible =[\s\S]*?retry\.retryEligible/,
   /const retryReason =[\s\S]*?retry\.retryReason/,

@@ -131,8 +131,21 @@ check('any carrier ERROR -> NOT complete',
   const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
   check('new awaiting imports durably enqueue targeted backend rate work',
     /await enqueueBackfillBestRatesForOrderIds\([\s\S]{0,120}'rate-on-ingest'/.test(importOwner), true);
+  // Repointed 2026-08-05: PS-436 moved backfill ownership out of the scheduler. A cron
+  // row is now only a wake-up -- the scheduler calls runDurableRateBackfillJob() and the
+  // durable owner in rates-backfill.ts decides whether to start work or coalesce into the
+  // active generation ("rate backfill cadence coalesced into the active durable
+  // generation"). The idempotency is stronger than before: generation-scoped and durable
+  // rather than an in-process flag that a restart would clear. Assert it at the owner it
+  // moved to, and that the scheduler delegates rather than keeping its own copy.
+  const backfillOwner = readFileSync('src/services/rates-backfill.ts', 'utf8');
   check('rate backfill is idempotent (skips when a job is already running)',
-    /getActiveBackfillJob\(\)/.test(scheduler) && /startBackfillBestRates\(/.test(scheduler), true);
+    /export function getActiveBackfillJob\(\)/.test(backfillOwner)
+    && /const active = getActiveBackfillJob\(\)/.test(backfillOwner)
+    && /export function startBackfillBestRates\(/.test(backfillOwner), true);
+  check('the scheduler only wakes the durable backfill owner (owns no second start path)',
+    /runDurableRateBackfillJob\(payload, signal\)/.test(scheduler)
+    && !/startBackfillBestRates\(/.test(scheduler), true);
   check('scheduled sweep remains gated by ENABLE_RATE_BACKFILL_SCHEDULER (opt-in, bounded)',
     /env\.ENABLE_RATE_BACKFILL_SCHEDULER && !env\.DISABLE_RATE_BACKFILL_SCHEDULER/.test(queue)
     && /isRateBackfillSchedulerEnabled\(\)/.test(queue), true);

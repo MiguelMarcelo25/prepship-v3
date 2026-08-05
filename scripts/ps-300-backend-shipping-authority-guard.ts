@@ -209,16 +209,30 @@ check('createLabelV2 runs selected-rate proof gate before choosing direct vs Shi
   directBranchIndex > proofGateIndex &&
   directCreateIndex > proofGateIndex &&
   shipstationCreateIndex > proofGateIndex);
-check('createLabelV2 passes rateQuoteId, selectedRateKey, selectedRateProof, and purchase account to proof gate',
-  /rateQuoteId:\s*body\.rateQuoteId/.test(labels) &&
-  /selectedRateKey:\s*body\.selectedRateKey/.test(labels) &&
-  /selectedRateProof:\s*body\.selectedRateProof/.test(labels) &&
-  /purchaseShippingProviderId:\s*body\.shippingProviderId/.test(labels));
+// Repointed 2026-08-05. This required the purchase boundary to be fed the four semantic
+// proof fields from the request body. PS-422 replaced all of them with ONE opaque
+// backend-minted selectionRef, precisely because reconstructable rate facts cannot be
+// purchase authority -- labels.ts states it at the boundary: "legacy carried quote ids,
+// keys, and proof never authorize postage." PS-313 forbids the frontend minting
+// selected-rate proof, so this assertion described the world that rule exists to end.
+// Fourth guard in this sweep found pinning the pre-PS-422 shape (after ps-267, ps-269,
+// and ps-300's own sibling below).
+check('createLabelV2 authorizes purchase from the opaque backend selectionRef alone',
+  /assertLabelPurchaseRateSelection\(\{\s*selectionRef: body\.selectionRef,?\s*\}\)/.test(labels) &&
+  !/rateQuoteId:\s*body\.rateQuoteId/.test(labels) &&
+  !/selectedRateProof:\s*body\.selectedRateProof/.test(labels));
 
 const rateStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
+// Repointed 2026-08-05: the gate was `if (!(body.rateQuoteId && body.selectedRateKey))`,
+// two client-supplied fields. It now parses the opaque selectionRef and takes BOTH from
+// inside it (ref.rateQuoteId / ref.selectedRateKey), so a caller can no longer present a
+// quote id and a rate key that were never issued together. Same requirement -- purchase
+// needs a backend snapshot id and key -- sourced somewhere the client cannot forge.
 check('label purchase proof owner requires backend snapshot id and key',
-  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(rateStore) &&
-  /resolveRateQuoteForPurchase\(\{[\s\S]{0,120}snapshot: input\.snapshot,[\s\S]{0,120}selectedRateKey,[\s\S]{0,120}\}\)/.test(rateStore));
+  /const ref = parseShippingQuoteSelectionRef\(body\.selectionRef\)/.test(rateStore) &&
+  /if \(!ref\) \{[\s\S]{0,200}?throwStrictRateQuoteError\('backend_rate_quote_required'\)/.test(rateStore) &&
+  /loadRateQuoteSnapshot\(ref\.rateQuoteId\)/.test(rateStore) &&
+  /selectedRateKey: ref\.selectedRateKey/.test(rateStore));
 check('label purchase proof owner blocks not-final snapshots',
   /reason === 'snapshot_not_final'/.test(rateStore) &&
   /if \(!resolved\.ok\) throwStrictRateQuoteError\(resolved\.reason\)/.test(rateStore) &&
@@ -239,8 +253,12 @@ check('print queue batch-send forwards proof and snapshot ids to the worker labe
   /selectedRateKey:\s*order\.label\.selectedRateKey/.test(printQueueRoute));
 
 const printQueueService = read('src/services/print-queue.ts');
+// Repointed 2026-08-05: payload hoisted to `const input = {...}` and PS-444 added the
+// durable receipt-resume branch. Both branches must take the same scoped input; an
+// unconditional createLabelV2 is the double-buy path.
 check('print queue worker uses createLabelV2 for missing labels, preserving label payload fields',
-  /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,/.test(printQueueService));
+  /const labelInput = order\.label;[\s\S]*?const input = \{[\s\S]{0,300}?\.\.\.labelInput,/.test(printQueueService) &&
+  /resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/.test(printQueueService));
 
 const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workflow.md');
 check('workflow doc records PS-300 backend authority guard',

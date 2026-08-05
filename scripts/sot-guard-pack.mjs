@@ -766,6 +766,68 @@ const REQUIRED_GUARDS = [
   'test:ps-220-house-margin',
   'test:ps-355-other-cost-rate-comparison',
   'test:manifest-csv',
+  // ── Batch 25: best-rate authority + selected-rate proof (the PS-313 core) ──
+  //
+  // 8 of 22 red. Six repaired; two left RED and NOT gated, documented below.
+  //
+  // Three were the print-queue pair this sweep keeps meeting -- payload hoisted to
+  // `const input = {...}` plus PS-444's durable receipt-resume branch (an unconditional
+  // createLabelV2 IS the double-buy path), and retryEligible flipped from OR-ing IN
+  // labelPurchaseInProgress to excluding it so a user retry cannot double-purchase:
+  //   ps-266 (was pinning the retry defect), ps-319, ps-300.
+  //
+  // ps-300 was also the FOURTH guard found pinning the pre-PS-422 proof shape, requiring
+  // rateQuoteId/selectedRateKey/selectedRateProof/purchaseShippingProviderId from the
+  // request body. The purchase gate now parses ONE opaque backend-minted selectionRef and
+  // takes the quote id and rate key from INSIDE it, so a caller can no longer present a
+  // pair that was never issued together.
+  //
+  // ps-111: PS-436 moved backfill ownership out of the scheduler -- a cron row is only a
+  // wake-up now, and the durable owner decides whether to start or coalesce into the
+  // active generation. Idempotency is stronger (generation-scoped and durable, not an
+  // in-process flag a restart would clear). Asserted at the owner, plus the scheduler
+  // owning no second start path.
+  //
+  // ps-333: same narrowing already fixed in ps-390 -- `rest.toState ?? order.shipToState`
+  // became `orderForBrowse ? canonical : rest.toState`, so the canonical ship-to wins
+  // outright instead of being a fallback. The old spelling pinned the weaker version of
+  // its own rule.
+  //
+  // ps-260: required TWO emit sites (a testMode immediate emit + the gated one). There is
+  // one, and the immediate one is what went -- PS-345/346 deleted the cached probe it
+  // lived on. For a guard whose entire point is "no premature best rate", requiring the
+  // ungated emit back is backwards. Tightened to one call site, gated on both the backend
+  // emission decision and backend completeness, reached only through the single funnel.
+  //
+  // All six mutation-checked against green baselines, plus a no-op control edit to prove
+  // the guards fail on substance rather than on any edit at all.
+  'test:ps-079-best-rate-source-of-truth',
+  'test:ps-302-apply-best-rate-authority',
+  'test:ps-302-apply-best-rate-owner',
+  'test:ps-302-apply-best-rate-behavior',
+  'test:ps-111-backend-rate-authority',
+  'test:ps-300-backend-shipping-authority',
+  'test:ps-266-best-rate-residual-audit',
+  'test:ps-260-premature-best-rate',
+  'test:ps-271-best-rate-ratchet',
+  'test:ps-279-rate-browser-no-fallback-best',
+  'test:ps-244-rate-finalization-single-owner',
+  'test:ps-319-rate-convergence-certification',
+  'test:ps-333-345-rate-apply-convergence',
+  'test:ps-333-hugrab-current-rate-sot',
+  'test:ps-339-rate-wrapper-sot',
+  'test:ps-352-shipping-workflow-sot-map',
+  'test:ps-356-best-rate-c-shipping-sot',
+  'test:ps-103-remove-frontend-fingerprint-authority',
+  'test:best-rate-final-column',
+  'test:ps-best-rate-charge-basis-behavior',
+  // NOT gated, still RED, needs investigation rather than a repoint:
+  //   test:ps-340-backend-rate-engine  -- the bounded-backfill / background-priority chain
+  //     spans rates-backfill.ts and a policy module; several clauses moved together and
+  //     which of them is now authoritative is not obvious from the diff.
+  //   test:ps-345-rate-loading-sot     -- the OrdersView retry action no longer mentions
+  //     runBatchRecalculateOrder OR the passive-effect nonces the guard forbids, so the
+  //     retry path was reshaped entirely and needs tracing before being re-pinned.
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

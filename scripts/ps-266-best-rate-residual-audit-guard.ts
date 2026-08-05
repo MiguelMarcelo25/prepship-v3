@@ -203,13 +203,22 @@ check('label purchase proof gate still runs before direct-carrier and ShipStatio
 
 const printQueueService = read('src/services/print-queue.ts');
 checkPatterns('Print Queue delegates missing-label creation and retry classification to backend label/proof owners', printQueueService, [
-  /import \{ createLabelV2/,
-  /import \{ classifyLabelPurchaseRetry \}/,
-  // Repointed (guard rot): createLabelV2 is wrapped in timeQueueStep() timing and
-  // retryEligible OR-s in staleLabelAttempt — the delegation is unchanged.
-  /const created = await timeQueueStep\([\s\S]*?await createLabelV2\(\{/,
+  // The import list grew past one line when PS-444 added the resume entry points, so
+  // `import { createLabelV2` no longer sits on a single line. Match across the braces.
+  /import \{[\s\S]{0,300}?\bcreateLabelV2,/,
+  /import \{[\s\S]{0,300}?\bclassifyLabelPurchaseRetry\b/,
+  // Repointed 2026-08-05. Two changes, the same pair already fixed in ps-261/267/269/303:
+  //  - the label payload was hoisted to `const input = {...}` and PS-444 added a durable
+  //    receipt-resume branch, so demanding an unconditional createLabelV2 demands the
+  //    DOUBLE-BUY path: on a resume the postage already exists and only the response was
+  //    lost, which is exactly what resuming from the receipt avoids paying for twice.
+  //  - retryEligible used to OR IN labelPurchaseInProgress, presenting an in-flight
+  //    purchase to the operator as a retryable buy. PS-444 flipped it to an exclusion so
+  //    a user retry cannot double-purchase. This guard was pinning that defect.
+  /const created = await timeQueueStep\(/,
+  /resumeLabelV2FromDurableReceipt\(input, labelPurchaseScope\)[\s\S]*?createLabelV2\(input, labelPurchaseScope\)/,
   /classifyLabelPurchaseRetry\(err\)/,
-  /const retryEligible = staleLabelAttempt \|\| labelPurchaseInProgress \|\| retry\.retryEligible/,
+  /const retryEligible = ![\s\S]{0,400}?&& !labelPurchaseInProgress\b/,
 ]);
 
 const modal = read('web/src/components/RateBrowserModal.tsx');

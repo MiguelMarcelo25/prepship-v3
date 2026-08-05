@@ -41,10 +41,22 @@ check('onBestRateResolved emission is gated behind !cachedProbeHasIncompleteCove
 // 3. Exactly two onBestRateResolved(applied) sites: the testMode immediate emit (no live
 //    fan-out ever follows it — uncoveredPids stays empty in that branch) and the gated
 //    real-path emission. No third, ungated bypass in the live path.
-check('only the testMode immediate emit + the gated real-path emit exist (no ungated bypass)',
-  (modal.match(/emitBestRateResolved\(applied\)/g) ?? []).length === 2
-  && /if \(applied\) emitBestRateResolved\(applied\);/.test(modal)
-  && !/onBestRateResolved\(applied\)/.test(modal));
+// Repointed 2026-08-05. This required exactly TWO emit call sites: a testMode immediate
+// emit plus the gated real-path emit. There is one now, and the one that went is the
+// IMMEDIATE one -- PS-345/346 deleted the modal-open cached probe it lived on (the note
+// further down in this file already records that deletion). The survivor is the gated
+// path: decision.kind === 'emit' && rateIsBackendComplete(decision.rate).
+//
+// Losing an ungated immediate emit is the safe direction for a guard whose entire point
+// is "no premature best rate", so requiring two would be requiring the bypass back.
+// Tightened instead: ONE call site, it must be gated on both the backend emission
+// decision and backend completeness, and the parent callback must only ever be reached
+// through the single emitBestRateResolved funnel.
+check('the only best-rate emit is the gated one (no ungated bypass)',
+  (modal.match(/emitBestRateResolved\(applied\)/g) ?? []).length === 1
+  && /decision\.kind === 'emit' && rateIsBackendComplete\(decision\.rate\)[\s\S]{0,400}?emitBestRateResolved\(applied\)/.test(modal)
+  && (modal.match(/onBestRateResolved\?\.\(applied\)/g) ?? []).length === 1
+  && /function emitBestRateResolved\([\s\S]{0,300}?onBestRateResolved\?\.\(applied\)/.test(modal));
 
 // 4. Repointed (guard rot): PS-345/346 supersede the PS-241 coverage-driven escalation —
 //    the modal-open cached probe was deleted and open now loads ALL rates live via the
