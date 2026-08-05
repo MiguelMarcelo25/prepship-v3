@@ -323,7 +323,14 @@ const shippingBlock = sliceBetween(transformBlock, 'const shipping = shippingMod
 const rateBackendProofBlock = sliceBetween(modal, 'function rateBackendProof(', '\n\n  function rateIsBackendComplete');
 const autoEmissionBlock = sliceBetween(modal, 'if (!cachedProbeHasIncompleteCoverage && onBestRateResolved', '\n\n    finishBrowseRequest');
 const combinedAllBlock = sliceBetween(modal, 'const combinedAll: RateRow[] = useMemo(', '\n\n  const totalCarriersAvailable');
-const savedBestRateBlock = sliceBetween(rateProof, 'export function getSavedBestRateRecord(', '\n\n// PS-204');
+// PS-422 cleanup (2026-08-05): the END anchor was '\n\n// PS-204' — the comment header of the
+// legacy semantic-proof builder that followed getSavedBestRateRecord. That builder (and its
+// comment) were deleted, so the anchor moves to the next block header, '\n\n// PS-422'.
+// sliceBetween returns '' on a missing anchor and this check's regex is POSITIVE, so a stale
+// anchor here would have failed loudly rather than passing vacuously — but it would have
+// failed for the wrong reason. (Anchor keeps the '\n\n' form: ps-339's read() normalizes
+// \r\n -> \n, unlike the raw readers in ps-095/ps-103/recalculate-best-rate-strict.)
+const savedBestRateBlock = sliceBetween(rateProof, 'export function getSavedBestRateRecord(', '\n\n// PS-422');
 const metadataBlock = sliceBetween(rateProof, 'export function withRateRequestMetadata(', '\n\nexport function getSavedBestRateRecord');
 const secondBestReaderBlock = sliceBetween(rowDisplay, 'function getCachedSecondBestRate(', '\n\nexport function getBestRateBaseCost');
 const secondBestAmountBlock = sliceBetween(rowDisplay, 'function readRateTotalAmount(', '\n\nfunction getCachedSecondBestRate');

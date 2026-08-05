@@ -6,7 +6,6 @@ import {
   BACKEND_RATE_PROOF_SOURCE,
   hasBackendIssuedRateProof,
   rateProofFingerprint,
-  selectProofFromCandidates,
   rateQuoteRefFromCandidates,
 } from '../../../../lib/rate-proof';
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION } from '../../../../../../src/lib/shipping-service-eligibility';
@@ -100,19 +99,20 @@ export function getSavedBestRateRecord(order: OrderSummaryDto) {
   return toRecord(order.bestRate);
 }
 
-// PS-204: optional forShippingProviderId filters the candidates to the account the payload
-// charges — cross-account proofs are excluded at the source (rate-proof.ts owns the rule).
-export function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown) {
-  return selectProofFromCandidates([
-    toRecord(candidate),
-    toRecord(order.bestRate),
-    toRecord(order.selectedRate),
-    getSavedBestRateRecord(order),
-  ], { forShippingProviderId });
-}
-
 // PS-422: pass through the backend-minted opaque selectionRef. The frontend
 // cannot reconstruct purchase authority from displayed rate fields.
+// PS-204: optional forShippingProviderId filters the candidates to the account the payload
+// charges — cross-account proofs are excluded at the source (lib/rate-proof.ts owns the rule).
+//
+// PS-422 cleanup (2026-08-05): the legacy semantic-proof builder that used to sit here was
+// deleted. It had zero call sites once PS-422 replaced the reconstructable proof payload with
+// this opaque ref, and survived only because three guards sliced its body as a proxy for the
+// proof-selection rules. Those rules are pinned AT THEIR OWNER, web/src/lib/rate-proof.ts —
+// by text in ps-095 / ps-103 / recalculate-best-rate-strict, and executed against real inputs
+// by ps-198 / ps-204 / ps-302. Nothing was weakened: every negative assertion forbidding the
+// frontend from minting purchase proof asserts exactly what it did before.
+// NB: the deleted symbol names are deliberately NOT repeated here — several guards match this
+// file as raw text, so a name in a comment would satisfy an `includes()` pin vacuously.
 export function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown): { selectionRef?: string } {
   return rateQuoteRefFromCandidates([
     toRecord(candidate),

@@ -26,7 +26,8 @@
  * Pins:
  *   1-6. rateQuoteRefFromCandidates behavior (ids-only ref, candidate order, legacy
  *        fallback unchanged, {} when nothing backend-issued — never synthesized).
- *   7-8. selectProofFromCandidates legacy semantics untouched.
+ *   7-8. Scan rule: a non-qualifying candidate is skipped, never terminal (repointed
+ *        from the retired semantic proof selector — see the block comment at the checks).
  *   9-13. Source pins: modal lift helper + both apply spreads, translation pass-through,
  *        manual estimate stays unstamped, withRateRequestMetadata does not strip ids.
  *
@@ -34,10 +35,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import {
-  rateQuoteRefFromCandidates,
-  selectProofFromCandidates,
-} from '../web/src/lib/rate-proof';
+import { rateQuoteRefFromCandidates } from '../web/src/lib/rate-proof';
 
 let failures = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -100,17 +98,27 @@ check(
   {},
 );
 
-// ── 7-8. selectProofFromCandidates legacy semantics untouched ─────────────────
+// ── 7-8. PS-422 retirement (2026-08-05): the legacy SEMANTIC proof selector these
+// two checks exercised was deleted from web/src/lib/rate-proof.ts — zero application
+// callers, and unable to authorize postage even if called (createLabelV2 takes authority
+// only from selectionRef and wipes selectedRateProof before dispatch). What they actually
+// protected was a SCAN rule: a non-qualifying candidate is SKIPPED, not treated as
+// terminal. That rule is repointed here onto the live opaque selector, where it was
+// otherwise untested — checks 1-6 above only ever pass a FIRST candidate that already
+// qualifies or a list where none does, so neither exercises shadowing.
 check(
-  'legacy proof selection still requires backend proofSource + fingerprint',
-  selectProofFromCandidates([{ requestFingerprint: 'fp_x' }]) === undefined,
-  true,
+  'a blank selectionRef is not emitted and does not shadow a later valid ref',
+  rateQuoteRefFromCandidates([{ selectionRef: '' }, { selectionRef: 'sqa_later' }]),
+  { selectionRef: 'sqa_later' },
 );
-{
-  const proven = { proofSource: 'backend_rate_response', requestFingerprint: 'fp_y', serviceCode: 's' };
-  const got = selectProofFromCandidates([{ rateQuoteId: 'rq_only', selectedRateKey: 'srk_only' }, proven]);
-  check('ids-only candidate does NOT satisfy the legacy proof payload', got?.requestFingerprint, 'fp_y');
-}
+check(
+  'a legacy-proven candidate does not shadow a later backend-issued ref',
+  rateQuoteRefFromCandidates([
+    { proofSource: 'backend_rate_response', requestFingerprint: 'fp_y', serviceCode: 's' },
+    { selectionRef: 'sqa_after_legacy' },
+  ]),
+  { selectionRef: 'sqa_after_legacy' },
+);
 
 // ── 9-11. Modal source pins: lift helper exists and feeds BOTH apply paths ────
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');

@@ -17,9 +17,10 @@ const directRates = readFileSync('api/carriers/rates.ts', 'utf8');
 // buildSelectedRateProofPayload into web/src/lib/rate-proof.ts (selectProofFromCandidates),
 // which OrdersView now delegates to. Read it so the proof-marker check pins the live owner.
 const rateProof = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
-// PS-317: withRateRequestMetadata + buildSelectedRateProofPayload + getBackendRateResponseFingerprint
-// moved to ./orders/best-rate/rate-proof.ts (call sites stay in OrdersView). The body slices for
-// those two functions now read the new owner. applyStrictBestRateResponse STAYS in OrdersView.
+// PS-317: withRateRequestMetadata + getBackendRateResponseFingerprint moved to
+// ./orders/best-rate/rate-proof.ts (call sites stay in OrdersView), joined by the PS-422
+// payload builder. The body slices for those functions read this file.
+// applyStrictBestRateResponse STAYS in OrdersView.
 const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 
 let failures = 0;
@@ -39,12 +40,15 @@ const metadataEnd = bestRateProof.indexOf('\nexport function getSavedBestRateRec
 const metadataBlock = metadataStart >= 0 && metadataEnd > metadataStart
   ? bestRateProof.slice(metadataStart, metadataEnd)
   : '';
-// PS-317: buildSelectedRateProofPayload moved to best-rate/rate-proof.ts; its body runs to the
-// next top-level function buildRateQuoteRefForOrder.
-const proofBuilderStart = bestRateProof.indexOf('function buildSelectedRateProofPayload(');
-const proofBuilderEnd = bestRateProof.indexOf('\nexport function buildRateQuoteRefForOrder', proofBuilderStart);
-const proofBuilderBlock = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
-  ? bestRateProof.slice(proofBuilderStart, proofBuilderEnd)
+// PS-422 cleanup (2026-08-05): the legacy semantic-proof builder was DELETED from
+// best-rate/rate-proof.ts (zero call sites; it survived only as a guard slice target). The
+// live payload builder is buildRateQuoteRefForOrder; its body runs to the next top-level
+// function getRateBaseAmount. Single-\n anchor is deliberate — this file is CRLF and read
+// RAW, so a '\n\n' anchor would return -1 and yield an empty slice.
+const quoteRefBuilderStart = bestRateProof.indexOf('function buildRateQuoteRefForOrder(');
+const quoteRefBuilderEnd = bestRateProof.indexOf('\nexport function getRateBaseAmount', quoteRefBuilderStart);
+const quoteRefBuilderBlock = quoteRefBuilderStart >= 0 && quoteRefBuilderEnd > quoteRefBuilderStart
+  ? bestRateProof.slice(quoteRefBuilderStart, quoteRefBuilderEnd)
   : '';
 const strictApplyStart = ordersView.indexOf('async function applyStrictBestRateResponse(');
 const strictApplyEnd = ordersView.indexOf('\n  async function runStrictBestRateRecalculation', strictApplyStart);
@@ -66,16 +70,19 @@ check(
 );
 check(
   'frontend proof builder requires backend proof marker before returning selectedRateProof',
-  // PS-135 re-anchor: buildSelectedRateProofPayload delegates to selectProofFromCandidates
-  // (web/src/lib/rate-proof.ts), which ONLY selects a rate carrying a backend-issued proof
-  // marker + fingerprint — so the FE still cannot fabricate proof authority. Property unchanged.
-  // PS-317: the builder's delegating call moved with it to best-rate/rate-proof.ts; assert the
-  // delegation inside the re-sliced body (TEETH: require a non-empty slice so a missing builder
-  // fails LOUD instead of a vacuous pass).
-  /export function hasBackendIssuedRateProof/.test(rateProof) &&
-    /list\.find\(\(rate\) => hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)\)/.test(rateProof) &&
-    proofBuilderStart >= 0 && proofBuilderBlock.length > 0 &&
-    proofBuilderBlock.includes('return selectProofFromCandidates('),
+  // PS-422 retirement (2026-08-05): the marker requirement USED to be owned by the legacy
+  // semantic proof selector in web/src/lib/rate-proof.ts, now deleted (zero application
+  // callers). The requirement itself is untouched and still executes on every rate — it is
+  // the conjunction in the live consumer best-rate/rate-proof.ts, which gates the fingerprint
+  // read on the backend-issued marker. The predicate is still DEFINED in the lib (first pin),
+  // and now APPLIED in the consumer (second pin), so the FE still cannot fabricate authority.
+  /export function hasBackendIssuedRateProof\(/.test(rateProof) &&
+    /hasBackendIssuedRateProof\(rate \?\? null\) \? rateProofFingerprint\(rate \?\? null\) : null/.test(bestRateProof) &&
+    // PS-422: the deleted wrapper's "delegate, never mint" property now rides on the LIVE
+    // builder. TEETH: require a non-empty slice so a missing builder or a rotted anchor fails
+    // LOUD instead of passing vacuously on an empty string.
+    quoteRefBuilderStart >= 0 && quoteRefBuilderBlock.length > 0 &&
+    quoteRefBuilderBlock.includes('return rateQuoteRefFromCandidates('),
 );
 check(
   'strict recalculation stamps proof from backend response request key only',

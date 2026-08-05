@@ -247,9 +247,11 @@ checkPatterns('Print Queue route preserves selectionRef into the worker intent',
 
 const rateProof = read('web/src/lib/rate-proof.ts');
 const rateProofCode = stripComments(rateProof);
+// PS-422 retirement (2026-08-05): the legacy semantic-proof selector was deleted from this
+// file (zero application callers). Its pin is dropped rather than repointed — the opaque
+// selector below already carries the pass-through claim this check makes.
 checkPatterns('frontend rate-proof helper remains pass-through over backend-issued proof/ref fields', rateProof, [
-  /export function selectProofFromCandidates/,
-  /export function rateQuoteRefFromCandidates/,
+  /export function rateQuoteRefFromCandidates\(/,
   /hasBackendIssuedRateProof/,
   /rateProofFingerprint/,
 ]);

@@ -9,9 +9,13 @@ import fs from 'node:fs';
 const ordersView = fs.readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-135: the proof helpers moved to the canonical lib; OrdersView delegates to it.
 const rateProof = fs.readFileSync('web/src/lib/rate-proof.ts', 'utf8');
-// PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts
-// (its call sites stay in OrdersView). Re-slice its body from the new owner; the END
-// anchor is the next top-level function buildRateQuoteRefForOrder.
+// PS-422 cleanup (2026-08-05): the legacy semantic-proof builder in this file was DELETED —
+// it had zero call sites and existed only for guards like this one to slice. The delegation
+// property this guard cares about ("the FE payload builder asks the canonical selector; it
+// never mints authority locally") now lives on buildRateQuoteRefForOrder, which is the
+// builder that actually runs. Re-slice THAT; the END anchor is the next top-level function
+// getRateBaseAmount. The selection RULES themselves are asserted against their owner
+// (web/src/lib/rate-proof.ts) in the same check below — those pins are unchanged.
 const bestRateProof = fs.readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 const rateSyncGuard = fs.readFileSync('scripts/ps-081-rate-sync-guard.ts', 'utf8');
 const proofBoundaryGuard = fs.readFileSync('scripts/selected-rate-proof-purchase-boundary-guard.ts', 'utf8');
@@ -32,13 +36,18 @@ function check(name: string, condition: boolean): void {
   }
 }
 
-// PS-317: buildSelectedRateProofPayload now lives in best-rate/rate-proof.ts; its body runs
-// to the next top-level function buildRateQuoteRefForOrder. (hasAnySavedBestRateForDisplay
-// moved to a DIFFERENT file — rate-display-predicates.ts — so it is no longer the END anchor.)
-const proofBuilderStart = bestRateProof.indexOf('function buildSelectedRateProofPayload');
-const proofBuilderEnd = bestRateProof.indexOf('function buildRateQuoteRefForOrder', proofBuilderStart);
-const proofBuilder = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
-  ? bestRateProof.slice(proofBuilderStart, proofBuilderEnd)
+// PS-422: buildRateQuoteRefForOrder is the live payload builder in best-rate/rate-proof.ts;
+// its body runs to the next top-level function getRateBaseAmount. NOTE the single-\n anchor
+// form: this file is CRLF and read RAW (no \r\n normalization), so a '\n\n' anchor would
+// silently return -1 and hand every downstream assertion an empty slice.
+// The trailing '(' is load-bearing: without it this anchor PREFIX-matches a renamed
+// buildRateQuoteRefForOrderAnything, the slice still resolves, and the rename sails through.
+// (Caught by mutation test M2 during the PS-422 cleanup — ps-103 and
+// recalculate-best-rate-strict already used the paren form.)
+const quoteRefBuilderStart = bestRateProof.indexOf('function buildRateQuoteRefForOrder(');
+const quoteRefBuilderEnd = bestRateProof.indexOf('\nexport function getRateBaseAmount', quoteRefBuilderStart);
+const quoteRefBuilder = quoteRefBuilderStart >= 0 && quoteRefBuilderEnd > quoteRefBuilderStart
+  ? bestRateProof.slice(quoteRefBuilderStart, quoteRefBuilderEnd)
   : '';
 
 check(
@@ -53,15 +62,22 @@ check(
 );
 
 check(
-  // PS-135: the "omit proof when no backend fingerprint" logic now lives in
-  // selectProofFromCandidates (rate-proof.ts); OrdersView's builder delegates to it.
-  'frontend clears proof by omitting selectedRateProof when no backend fingerprint exists',
-  // TEETH: require the re-sliced buildSelectedRateProofPayload body (from best-rate/rate-proof.ts)
-  // to be non-empty so a missing/renamed definition fails LOUD instead of silently passing.
-  proofBuilderStart >= 0 && proofBuilder.length > 0 &&
-    rateProof.includes('const requestFingerprint = rateProofFingerprint(selectedRate)') &&
-    rateProof.includes('if (!selectedRate || !requestFingerprint) return undefined') &&
-    proofBuilder.includes('selectProofFromCandidates('),
+  // PS-422 retirement (2026-08-05): the legacy SEMANTIC proof selector whose body these pins
+  // used to read was deleted from web/src/lib/rate-proof.ts — zero application callers.
+  'frontend clears proof by omitting the selection ref when no backend-issued value exists',
+  // The RULE — "emit nothing unless the backend issued something" — did not move out of the
+  // lib, it moved onto the surviving opaque selector, whose final line IS that rule. The
+  // companion rule ("a backend marker gates the fingerprint") relocated to the live consumer
+  // best-rate/rate-proof.ts, so it is pinned there rather than being dropped. Between them
+  // these three pins assert exactly what the two deleted-body pins asserted.
+  rateProof.includes('const selectionRef = toStr(list.find((rate) => toStr(rate.selectionRef))?.selectionRef)') &&
+    rateProof.includes('return selectionRef ? { selectionRef } : {}') &&
+    bestRateProof.includes('hasBackendIssuedRateProof(rate ?? null) ? rateProofFingerprint(rate ?? null) : null') &&
+    // TEETH: require the LIVE builder's re-sliced body to be non-empty and to delegate, so a
+    // missing/renamed definition — or an anchor rotted by a future edit — fails LOUD instead
+    // of handing this check an empty string that a negative assertion would pass vacuously.
+    quoteRefBuilderStart >= 0 && quoteRefBuilder.length > 0 &&
+    quoteRefBuilder.includes('rateQuoteRefFromCandidates('),
 );
 
 check(

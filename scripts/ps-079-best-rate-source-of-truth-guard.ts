@@ -144,9 +144,14 @@ check('Awaiting shipping-account column prefers the bestRate account nickname',
 
 // ── (4) PS-135: proof helpers are canonical-lib-owned; no FE client-side best-rate selector ─
 const rateProofLib = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
+// PS-422 retirement (2026-08-05): the legacy semantic-proof selector was deleted from the
+// canonical lib (zero application callers). The claim here is unchanged — proof helpers live
+// in the lib, not in OrdersView — so the pin moves to the surviving selection helper. The
+// trailing '(' is load-bearing: without it these anchors PREFIX-match a renamed
+// rateProofFingerprintAnything and the rename sails through.
 check('PS-135: rate-proof helpers live in the canonical lib (rate-proof.ts)',
-  /export function rateProofFingerprint/.test(rateProofLib) &&
-    /export function selectProofFromCandidates/.test(rateProofLib) &&
+  /export function rateProofFingerprint\(/.test(rateProofLib) &&
+    /export function rateQuoteRefFromCandidates\(/.test(rateProofLib) &&
     ordersView.includes("from '../../lib/rate-proof'"));
 check('PS-135: frontend has no client-side pickBestRate selector (backend owns selection)',
   !existsSync('web/src/utils/markups.ts'));

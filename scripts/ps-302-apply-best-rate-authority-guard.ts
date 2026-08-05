@@ -7,10 +7,7 @@
  * no DB, no network, no providers, no labels, no postage, no marketplace calls.
  */
 import { readFileSync } from 'node:fs';
-import {
-  rateQuoteRefFromCandidates,
-  selectProofFromCandidates,
-} from '../web/src/lib/rate-proof';
+import { rateQuoteRefFromCandidates } from '../web/src/lib/rate-proof';
 
 let failures = 0;
 
@@ -55,8 +52,19 @@ check('frontend proof helper does not synthesize a snapshot ref from legacy proo
 check('frontend proof helper rejects half refs instead of fabricating the missing key',
   JSON.stringify(rateQuoteRefFromCandidates([{ rateQuoteId: 'rq_half' }, legacyProof])) ===
     JSON.stringify({}));
-check('frontend legacy proof helper only selects backend-stamped proof',
-  selectProofFromCandidates([{ requestFingerprint: 'fp_without_source' }, legacyProof])?.requestFingerprint === 'fp_legacy_302');
+// PS-422 retirement (2026-08-05): this check exercised the legacy SEMANTIC proof selector,
+// now deleted from web/src/lib/rate-proof.ts. Its point was that Apply can take authority
+// from nothing but backend-stamped proof. With the semantic route gone the stronger claim is
+// that Apply has exactly ONE selection route and the second cannot return — so the behavioural
+// check becomes an anti-reintroduction pin. TEETH: the positive clause fails loud if the read
+// returns '' (rotted path), which would otherwise let both negatives pass vacuously; the
+// return-shape negative catches a reintroduction under a different name; and the trailing '('
+// stops the anchor prefix-matching a longer identifier.
+const rateProofLib = read('web/src/lib/rate-proof.ts');
+check('frontend exposes exactly ONE selection route — the legacy semantic-proof selector stays retired',
+  /export function rateQuoteRefFromCandidates\(/.test(rateProofLib) &&
+  !/export function selectProofFromCandidates\(/.test(rateProofLib) &&
+  !/\{ requestFingerprint: string; selectedRate: Rec \}/.test(rateProofLib));
 check('frontend account filter prevents applying proof from a different account',
   JSON.stringify(rateQuoteRefFromCandidates([
     { ...backendIssued, shippingProviderId: 111111 },

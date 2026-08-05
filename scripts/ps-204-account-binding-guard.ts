@@ -35,7 +35,6 @@ import { buildSsLabelRequestBody, assertSsCarrierIdIsNotSynthetic } from '../src
 import {
   rateBelongsToProviderAccount,
   rateProviderAccountKey,
-  selectProofFromCandidates,
   rateQuoteRefFromCandidates,
 } from '../web/src/lib/rate-proof';
 import { classifyQueueOrderRouteServer } from '../src/services/print-queue/queue-route-orchestrator';
@@ -141,10 +140,21 @@ check('proof identity readable from raw + shippingProviderId forms',
     rateBelongsToProviderAccount(ssProofRate, 10000025) === false &&
     rateBelongsToProviderAccount(ssProofRate, 565377) === true &&
     rateBelongsToProviderAccount({ cost: 7.66 }, 565377) === null);
-  check('selectProofFromCandidates excludes cross-account proof when bound to an account',
-    selectProofFromCandidates([ssProofRate], { forShippingProviderId: 10000025 }) === undefined);
-  check('selectProofFromCandidates unchanged without binding (legacy callers)',
-    selectProofFromCandidates([ssProofRate])?.selectedRate === ssProofRate);
+  // PS-422 retirement (2026-08-05): these two checks exercised the legacy SEMANTIC proof
+  // selector, now deleted from web/src/lib/rate-proof.ts (zero application callers, and it
+  // could not authorize postage regardless — createLabelV2 takes authority only from
+  // selectionRef and overwrites selectedRateProof before provider dispatch). The rule they
+  // proved is the ACCOUNT FILTER, which is SHARED code: filterCandidatesForAccount serves the
+  // live opaque selector on the identical path. So the rule is repointed onto that selector
+  // here, on the two behaviours the snapRef check below does NOT reach — identity-less
+  // pass-through, and filtering happening BEFORE selection rather than after.
+  check('account filter keeps identity-less candidates when bound (legacy rows pass, matching the backend binding skip)',
+    rateQuoteRefFromCandidates([{ selectionRef: 'qsel_no_identity' }], { forShippingProviderId: 10000025 }).selectionRef === 'qsel_no_identity');
+  check('account filter drops a cross-account ref BEFORE selection, so a later same-account ref wins',
+    rateQuoteRefFromCandidates([
+      { selectionRef: 'qsel_wrong_account', carrier_id: 'se-565377' },
+      { selectionRef: 'qsel_right_account', carrier_id: 'se-10000025' },
+    ], { forShippingProviderId: 10000025 }).selectionRef === 'qsel_right_account');
   const snapRef = { selectionRef: 'qsel_opaque', carrier_id: 'se-565377' };
   check('rateQuoteRefFromCandidates excludes cross-account opaque ref when bound',
     Object.keys(rateQuoteRefFromCandidates([snapRef], { forShippingProviderId: 10000025 })).length === 0 &&

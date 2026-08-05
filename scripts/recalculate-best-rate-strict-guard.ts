@@ -100,10 +100,10 @@ check('missing service blocks update',
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-135: proof candidate-selection logic moved to the canonical lib; OrdersView delegates.
 const rateProof = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
-// PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts (its call sites
-// stay in OrdersView). The recalculateBestRate / runStrictBestRateRecalculation /
-// applyStrictBestRateResponse / refreshPanelBestRate / handleBatchAction slices below STAY in
-// OrdersView and are NOT repointed — only the buildSelectedRateProofPayload slice moves.
+// PS-422 cleanup (2026-08-05): the FE payload-builder slice below reads
+// ./orders/best-rate/rate-proof.ts. The recalculateBestRate / runStrictBestRateRecalculation /
+// applyStrictBestRateResponse / refreshPanelBestRate / handleBatchAction slices STAY in
+// OrdersView and are NOT repointed — only the payload-builder slice reads this file.
 const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 const recalcStart = ordersView.indexOf('async function recalculateBestRate(');
 const recalcEnd = ordersView.indexOf('\n  function applyRateSelection', recalcStart);
@@ -128,13 +128,14 @@ const applierEnd = ordersView.indexOf('\n  async function runStrictBestRateRecal
 const applierBlock = applierStart >= 0 && applierEnd > applierStart
   ? ordersView.slice(applierStart, applierEnd)
   : '';
-// PS-317: buildSelectedRateProofPayload moved to best-rate/rate-proof.ts; its body runs to the
-// next top-level function buildRateQuoteRefForOrder (hasAnySavedBestRateForDisplay moved to a
-// DIFFERENT file — rate-display-predicates.ts — so it is no longer the END anchor).
-const proofBuilderStart = bestRateProof.indexOf('function buildSelectedRateProofPayload(');
-const proofBuilderEnd = bestRateProof.indexOf('\nexport function buildRateQuoteRefForOrder', proofBuilderStart);
-const proofBuilderBlock = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
-  ? bestRateProof.slice(proofBuilderStart, proofBuilderEnd)
+// PS-422 cleanup (2026-08-05): the legacy semantic-proof builder was DELETED from
+// best-rate/rate-proof.ts — zero call sites; it stayed alive only because guards sliced it.
+// The live payload builder is buildRateQuoteRefForOrder; its body runs to the next top-level
+// function getRateBaseAmount. Single-\n anchor is deliberate (CRLF file, read RAW).
+const quoteRefBuilderStart = bestRateProof.indexOf('function buildRateQuoteRefForOrder(');
+const quoteRefBuilderEnd = bestRateProof.indexOf('\nexport function getRateBaseAmount', quoteRefBuilderStart);
+const quoteRefBuilderBlock = quoteRefBuilderStart >= 0 && quoteRefBuilderEnd > quoteRefBuilderStart
+  ? bestRateProof.slice(quoteRefBuilderStart, quoteRefBuilderEnd)
   : '';
 const panelRefreshStart = ordersView.indexOf('async function refreshPanelBestRate(');
 const panelRefreshEnd = ordersView.indexOf('\n  async function persistShipmentDetails', panelRefreshStart);
@@ -159,12 +160,17 @@ check('Recalculate does not use fetchRates', !/apiClient\.fetchRates/.test(stric
 check('Recalculate does not pick a client-side fallback best rate', !/pickBestPanelRate/.test(strictPathBlock));
 check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(applierBlock) && /decision\.entry/.test(applierBlock));
 check('Selected-rate proof only accepts backend-issued proof metadata',
-  // PS-135: candidate selection lives in selectProofFromCandidates (rate-proof.ts); the
-  // builder delegates to it. PS-317: the builder moved to best-rate/rate-proof.ts.
-  // TEETH: require the re-sliced builder body to be non-empty so a missing builder fails LOUD.
-  /hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)/.test(rateProof) &&
-    proofBuilderStart >= 0 && proofBuilderBlock.length > 0 &&
-    /selectProofFromCandidates\(/.test(proofBuilderBlock));
+  // PS-422 retirement (2026-08-05): candidate selection USED to be owned by the legacy
+  // semantic proof selector in web/src/lib/rate-proof.ts, now deleted (zero application
+  // callers). The "backend-issued metadata only" rule is unchanged and still runs on every
+  // rate — it is the marker-gated fingerprint read in the live consumer
+  // best-rate/rate-proof.ts, so this pin follows the rule to where it now executes.
+  /hasBackendIssuedRateProof\(rate \?\? null\) \? rateProofFingerprint\(rate \?\? null\) : null/.test(bestRateProof) &&
+    // PS-422: the FE payload builder that delegates to the owner is now
+    // buildRateQuoteRefForOrder. TEETH: non-empty slice required so a missing builder or a
+    // rotted anchor fails LOUD rather than passing on an empty string.
+    quoteRefBuilderStart >= 0 && quoteRefBuilderBlock.length > 0 &&
+    /rateQuoteRefFromCandidates\(/.test(quoteRefBuilderBlock));
 check('Panel refreshed best rate is stamped with request fingerprint metadata before label proof',
   /const bestRateWithMetadata = autoRequest\s*\?\s*withRateRequestMetadata\(bestRate, autoRequest/.test(panelRefreshBlock) &&
     /setPanelRatePreview\(\[bestRateWithMetadata\]\)/.test(panelRefreshBlock) &&

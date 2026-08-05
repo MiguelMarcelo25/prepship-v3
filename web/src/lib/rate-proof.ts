@@ -128,21 +128,20 @@ function filterCandidatesForAccount(list: Rec[], options?: ProofCandidateOptions
   });
 }
 
-/**
- * Pick the first candidate that carries a backend-issued proof + fingerprint and return the
- * selected-rate proof payload. Callers pass the ordered candidate list (e.g. [explicit
- * candidate, order.bestRate, order.selectedRate, savedBestRate]).
- */
-export function selectProofFromCandidates(
-  candidates: Array<Rec | null | undefined>,
-  options?: ProofCandidateOptions,
-): { requestFingerprint: string; selectedRate: Rec } | undefined {
-  const list = filterCandidatesForAccount(candidates.filter(Boolean) as Rec[], options);
-  const selectedRate = list.find((rate) => hasBackendIssuedRateProof(rate) && rateProofFingerprint(rate)) ?? null;
-  const requestFingerprint = rateProofFingerprint(selectedRate);
-  if (!selectedRate || !requestFingerprint) return undefined;
-  return { requestFingerprint, selectedRate };
-}
+// PS-422 retirement (2026-08-05): the legacy SEMANTIC proof selector that used to sit here
+// was deleted. It returned a { requestFingerprint, selectedRate } payload reconstructed from
+// displayed rate fields; PS-422 replaced that route with the opaque backend-minted
+// selectionRef below. It had zero application callers once the frontend payload builder was
+// removed, and the backend cannot be authorized by it either: createLabelV2 takes purchase
+// authority ONLY from assertLabelPurchaseRateSelection({ selectionRef }) and then explicitly
+// overwrites `selectedRateProof: undefined` on the body before any provider dispatch
+// (src/services/labels.ts). A frontend builder for that field could not influence a purchase
+// under any input, so it was not a safety net — it was a re-wiring hazard under PS-313/PS-316.
+// The rules it carried did not vanish: the account filter it shared is directly below and
+// still load-bearing, and the "backend marker gates the fingerprint" rule lives in the live
+// consumer (components/Views/orders/best-rate/rate-proof.ts).
+// NB: the retired symbol name is deliberately NOT written here — several guards read this
+// file as raw text, so a name in a comment would satisfy an includes() pin vacuously.
 
 /**
  * PS-135: identity key for matching a backend-selected bestRate to its corresponding modal
