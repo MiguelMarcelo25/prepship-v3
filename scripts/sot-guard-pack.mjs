@@ -442,6 +442,36 @@ const REQUIRED_GUARDS = [
   // anchored on insertedStorageLines specifically. That flaw predated this sweep;
   // the mutation check is the only reason it surfaced.
   'test:ps-383-billing-storage-proof-migration',
+  // ── Batch 16: carrier eligibility, recipient identity, billing detail ──
+  //
+  // Two repaired, both single-token rot:
+  //   ps-106 required the literal `if (body.orderId)`. It became
+  //     `if (body.orderId && orderForBrowse)` -- a narrowing, so eligibility runs
+  //     only when the order actually loaded rather than on an id alone. The
+  //     fail-open try/catch it pins is untouched.
+  //   carrier-safe-recipient-name required `const carrierShipTo`. It is `let` now
+  //     because the payload is reassigned further down. The binding keyword is not
+  //     the property; name and company still come from carrierRecipient.
+  // Both mutation-checked with the mutation confirmed applied first, after the
+  // CRLF no-op traps earlier today.
+  //
+  // NOT admitted, not traced:
+  //   test:ps-377-cancelled-billing-rows -- "empty billing message no longer says
+  //     HUGRAB-only cancelled". A NEGATIVE assertion failing means the string it
+  //     forbids is present again, or its target moved. Those are opposite
+  //     conclusions and only a trace separates them.
+  //   test:billing-line-item-warning-summary -- expects an exact JSX line
+  //     including both props; needs the component read to know what replaced it.
+  'test:ps-106-carrier-family-eligibility',
+  'test:carrier-safe-recipient-name',
+  'test:ps-363-billing-no-box-cost-alert',
+  'test:billing-detail-ps040',
+  'test:billing-edit-draft-cache',
+  'test:carrier-suppression',
+  'test:carrier-test-mode-seam',
+  'test:carrier-fixture-schema',
+  'test:awaiting-carrier-badge-nickname-fallback',
+  'test:carrier-assigned-badge-palette',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

@@ -58,9 +58,13 @@ assert.match(
   /const carrierRecipient = resolveCarrierRecipientName\(\{[\s\S]*?customerEmail: order\.customerEmail/s,
   'createLabelV2 should resolve a carrier-safe recipient using the loaded order email',
 );
+// Repointed 2026-08-04: `const carrierShipTo` became `let`, because the payload
+// is reassigned further down (labels.ts:2381 declares, :2475 reassigns). The
+// binding keyword is not the property -- name and company still come from
+// carrierRecipient, which is the whole point of this check.
 assert.match(
   labels,
-  /const carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/s,
+  /(?:const|let) carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/s,
   'createLabelV2 should build a separate carrierShipTo payload',
 );
 assert.match(

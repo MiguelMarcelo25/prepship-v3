@@ -142,8 +142,12 @@ async function sliceTwoChecks() {
     /shipStationBlocked/.test(browseProducer) && /filtered\s*=\s*shipStationBlocked\s*\?\s*\[\]/.test(browseProducer));
   check('browse surfaces carrierEligibility on the response payload',
     /carrierEligibility,/.test(browseProducer));
+  // Repointed 2026-08-04: the condition became `if (body.orderId && orderForBrowse)`,
+  // a NARROWING -- the eligibility lookup now runs only when the order actually
+  // loaded, instead of on an id alone. The try/catch this check exists to pin is
+  // untouched. Allow additional conditions on the guard clause.
   check('browse eligibility is best-effort / fail-open (wrapped in try-catch)',
-    /if \(body\.orderId\)[\s\S]{0,400}?try \{[\s\S]{0,800}?\} catch/.test(browseProducer));
+    /if \(body\.orderId[^)]*\)[\s\S]{0,400}?try \{[\s\S]{0,800}?\} catch/.test(browseProducer));
 }
 
 await sliceTwoChecks();
