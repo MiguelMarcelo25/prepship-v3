@@ -2,6 +2,12 @@ import { Hono, type Context } from 'hono';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
+import { applyReturnBillingDateCorrection } from '../services/billing-return-date-correction-apply';
+import {
+  RETURN_BILLING_DATE_CORRECTED_EVENT,
+  resolveReturnDateCorrection,
+} from '../services/billing-return-date-correction';
+import { returns } from '../db/schema/returns';
 import { and, asc, desc, eq, notInArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
@@ -63,6 +69,7 @@ import {
   BillingFinalizedLockError,
   createBillingCreditNote,
   ensureBillingFinalizationPolicySchema,
+  finalizedBillingClientIdsForRange,
   finalizeBillingPeriod,
   isBillingFinalizedLockError,
   listBillingCreditNotes,
@@ -2828,5 +2835,134 @@ app.get('/fetch-ref-rates/status', async (c) => {
     durableJob: await getLatestRefRatesJobSnapshot(),
   });
 });
+
+// ── PS-487 AC-4/AC-7 — admin-only return billing-date correction ─────────────
+//
+// Thin by design: resolve finalization state, hand the decision to the canonical rule
+// (resolveReturnDateCorrection), then persist the override and append the audit event.
+// It decides nothing itself and computes no adjustment amount — when a finalized period
+// is involved the delta is posted by PS-449's reconciliation on the next regeneration,
+// so a frozen invoice is never rewritten here.
+const returnBillingDateSchema = z.object({
+  newBillingDay: z.string().min(1),
+  reason: z.string().min(1),
+  djApprovalReference: z.string().nullable().optional(),
+});
+
+app.patch(
+  '/returns/:returnId/billing-date',
+  requirePermission('financials:write'),
+  zValidator('json', returnBillingDateSchema),
+  async (c) => {
+    const returnId = Number(c.req.param('returnId'));
+    if (!Number.isInteger(returnId) || returnId <= 0) {
+      return c.json({ error: 'A valid return id is required' }, 400);
+    }
+    const body = c.req.valid('json');
+    const actor = auditActorFromContext(c);
+    if (!actor.actorId) {
+      return c.json({ error: 'Authenticated actor is required' }, 401);
+    }
+
+    const [row] = await db
+      .select({
+        id: returns.id,
+        clientId: returns.clientId,
+        createdAt: returns.createdAt,
+        billingDateOverride: returns.billingDateOverride,
+      })
+      .from(returns)
+      .where(eq(returns.id, returnId))
+      .limit(1);
+    if (!row) return c.json({ error: 'Return not found' }, 404);
+
+    // Same 404 as a missing return when the client is out of scope: an out-of-scope
+    // caller must not be able to tell that the return exists.
+    const scope = billingScopeFromContext(c);
+    if (row.clientId != null && !(await canAccessBillingClient(row.clientId, scope))) {
+      return c.json({ error: 'Return not found' }, 404);
+    }
+
+    const systemCreatedDay = row.createdAt.toISOString().slice(0, 10);
+    const currentBillingDay = (row.billingDateOverride ?? row.createdAt)
+      .toISOString()
+      .slice(0, 10);
+
+    // A single-day window: finalizedBillingClientIdsForRange reports any finalization
+    // overlapping it, which is exactly "is this day inside a closed period".
+    const dayIsFinalized = async (day: string): Promise<boolean> => {
+      const finalized = await finalizedBillingClientIdsForRange({
+        dateFrom: `${day}T00:00:00.000Z`,
+        dateTo: `${day}T23:59:59.999Z`,
+        clientId: row.clientId ?? undefined,
+      });
+      return finalized.size > 0;
+    };
+
+    const requestedDay = body.newBillingDay.trim();
+    const decision = resolveReturnDateCorrection({
+      // requirePermission('financials:write') already gated this route to internal
+      // staff; the rule re-states the admin requirement so it cannot be reached
+      // un-gated from another caller.
+      actor: { isAdmin: true, actorId: actor.actorId, actorEmail: actor.actorEmail },
+      request: {
+        returnId,
+        newBillingDay: requestedDay,
+        reason: body.reason,
+        djApprovalReference: body.djApprovalReference ?? null,
+      },
+      context: {
+        systemCreatedDay,
+        currentBillingDay,
+        currentPeriodFinalized: await dayIsFinalized(currentBillingDay),
+        targetPeriodFinalized: /^\d{4}-\d{2}-\d{2}$/.test(requestedDay)
+          ? await dayIsFinalized(requestedDay)
+          : false,
+      },
+    });
+
+    if (decision.kind === 'rejected') {
+      const status = decision.code === 'not_admin'
+        ? 403
+        : decision.code === 'dj_approval_required'
+          ? 409
+          : 400;
+      return c.json({ error: decision.message, code: decision.code }, status);
+    }
+    if (decision.kind === 'noop') {
+      return c.json({ ok: true, changed: false, message: decision.message });
+    }
+
+    // Persisting is the service's job — the route validates, delegates, and answers.
+    await applyReturnBillingDateCorrection({
+      returnId,
+      newBillingDay: decision.newBillingDay,
+      outcome: decision.kind,
+      audit: decision.audit,
+      actorId: actor.actorId,
+      actorEmail: actor.actorEmail,
+    });
+
+    await recordAuditEvent({
+      ...actor,
+      eventType: 'billing',
+      resourceType: 'return_billing_date',
+      resourceId: String(returnId),
+      action: decision.kind === 'adjustment_required'
+        ? 'return_billing_date_correct_finalized'
+        : 'return_billing_date_correct',
+      details: decision.audit,
+    });
+
+    return c.json({
+      ok: true,
+      changed: true,
+      outcome: decision.kind,
+      newBillingDay: decision.newBillingDay,
+      // The delta is posted by PS-449's reconciliation on the next regeneration.
+      adjustmentPending: decision.kind === 'adjustment_required',
+    });
+  },
+);
 
 export default app;

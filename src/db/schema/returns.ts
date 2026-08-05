@@ -60,3 +60,19 @@ export const returns = pgTable('returns', {
 });
 
 export type ReturnRow = typeof returns.$inferSelect;
+
+// PS-487 AC-7 — the append-only audit trail. Already exists in the shared database
+// (owned by the Client Portal); PrepShip appends a 'billing_date_corrected' event when
+// an admin moves a return's billing day, and never edits or deletes one.
+export const returnActivityEvents = pgTable('return_activity_events', {
+  id: serial().primaryKey(),
+  returnId: integer('return_id').notNull(),
+  shipmentId: integer('shipment_id'),
+  eventType: text('event_type').notNull(),
+  status: text(),
+  detail: text(),
+  actorType: text('actor_type').notNull(),
+  actorEmail: text('actor_email'),
+  eventAt: timestamp('event_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});

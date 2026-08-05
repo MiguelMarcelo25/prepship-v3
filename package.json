@@ -920,7 +920,8 @@
     "test:ps-487-return-billing-contract": "tsx scripts/ps-487-return-billing-contract-guard.ts",
     "test:ps-487-return-line-planner": "tsx scripts/ps-487-return-line-planner-guard.ts",
     "test:ps-487-return-billing-wiring": "tsx scripts/ps-487-return-billing-wiring-guard.ts",
-    "test:ps-487-return-date-correction": "tsx scripts/ps-487-return-date-correction-guard.ts"
+    "test:ps-487-return-date-correction": "tsx scripts/ps-487-return-date-correction-guard.ts",
+    "test:ps-487-return-date-route": "tsx scripts/ps-487-return-date-route-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
