@@ -224,9 +224,16 @@ check(
 
 check(
   'rates route exposes additive backend workflow start and status endpoints',
-  /import \{\s*getRateBrowseWorkflow,\s*startRateBrowseWorkflow,\s*\} from ['"]\.\.\/services\/rate-browse-workflow['"]/.test(ratesRoute) &&
-    /app\.post\('\/browse\/workflow', zValidator\('json', browseBody\), async \(c\) =>/.test(ratesRoute) &&
-    /app\.get\('\/browse\/workflow\/:jobId', async \(c\) =>/.test(ratesRoute) &&
+  // Repointed 2026-08-05. These required the routes with NO middleware between the path
+  // and the handler. Both have since gained authorization:
+  //   POST /browse/workflow      -> requireBusinessRoutePolicy('rates.browse.workflow.start')
+  //   GET  /browse/workflow/:jobId -> requirePermission('rates:quote')
+  // and the POST declaration went multi-line to fit it. So the old patterns describe the
+  // UNPROTECTED form, and "make the code match the guard" here means deleting route
+  // authorization. Require the middleware instead of merely tolerating it.
+  /import \{[\s\S]{0,200}?getRateBrowseWorkflow,[\s\S]{0,200}?startRateBrowseWorkflow,[\s\S]{0,200}?\} from ['"]\.\.\/services\/rate-browse-workflow['"]/.test(ratesRoute) &&
+    /app\.post\(\s*'\/browse\/workflow',\s*requireBusinessRoutePolicy\('rates\.browse\.workflow\.start'\),\s*zValidator\('json', browseBody\),/.test(ratesRoute) &&
+    /app\.get\('\/browse\/workflow\/:jobId', requirePermission\('rates:quote'\), async \(c\) =>/.test(ratesRoute) &&
     /job_id: snapshot\.jobId/.test(ratesRoute) &&
     /status: snapshot\.phase/.test(ratesRoute),
 );
@@ -278,7 +285,11 @@ check(
 
 check(
   'existing final-response /rates/browse compatibility route remains in place',
-  /app\.post\('\/browse', zValidator\('json', browseBody\), async \(c\) =>/.test(ratesRoute) &&
+  // Repointed 2026-08-05, same reason: /browse gained
+  // requireBusinessRoutePolicy('rates.browse') and went multi-line. Require the policy so
+  // the compatibility route cannot quietly lose its authorization while still counting as
+  // "in place".
+  /app\.post\(\s*'\/browse',\s*requireBusinessRoutePolicy\('rates\.browse'\),\s*zValidator\('json', browseBody\),/.test(ratesRoute) &&
     /return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute),
 );
 

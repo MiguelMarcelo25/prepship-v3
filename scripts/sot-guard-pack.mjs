@@ -919,6 +919,51 @@ const REQUIRED_GUARDS = [
   'test:ps-365-shipment-sync-cron-safety-net',
   'test:ps-359-shipment-sync-busy-defer',
   'test:ps-222b-no-charge-box',
+  // ── Batch 28: rate-engine durability — job lanes, reapers, limiters, singleflight ──
+  //
+  // What stops runaway provider calls and stuck queues. 2 of 24 red.
+  //
+  //   ps-346 required POST /browse and POST /browse/workflow with NOTHING between the
+  //     path and the validator, and GET /browse/workflow/:jobId with nothing between the
+  //     path and the handler. All three have since gained authorization --
+  //     requireBusinessRoutePolicy('rates.browse'),
+  //     requireBusinessRoutePolicy('rates.browse.workflow.start'), and
+  //     requirePermission('rates:quote') -- so the pinned patterns describe the
+  //     UNPROTECTED form and "make the code match the guard" means deleting route
+  //     authorization. Now REQUIRES the middleware rather than tolerating it, which turns
+  //     the rot into a strengthening: the compatibility route can no longer quietly lose
+  //     its policy while still counting as "in place".
+  //
+  //   ps-256 was a local rename (opts.signal -> requestSignal) in v1-client. Widened, and
+  //     added the clause it was missing: a caller that PASSES a signal to a bucket that
+  //     IGNORES it satisfies the old assertion while never actually cancelling a wait, so
+  //     the bucket is now required to act on the signal too.
+  //
+  // Both mutation-checked against green baselines, with a control edit.
+  'test:ps-256-durable-rate-limiter',
+  'test:ps-256-durable-worker-status',
+  'test:ps-272-stuck-job-reaper',
+  'test:ps-272-reaper-onpath',
+  'test:ps-360-stale-cadence-reaper',
+  'test:ps-120-reap-stale-rate-jobs',
+  'test:ps-350-backend-rate-jobs',
+  'test:ps-346-shipment-sync-worker-lanes',
+  'test:ps-356-manual-order-sync-job-lane',
+  'test:ps-346-orders-refetch-coordinator',
+  'test:ps-346-rate-order-slow-paths',
+  'test:ps-346-rate-browse-partial-workflow',
+  'test:rate-browse-worker-fail-closed',
+  'test:ps-346-rate-browser-partial-finalizing',
+  'test:ps-346-rate-browser-open-live-workflow',
+  'test:ps-335-rate-browser-singleflight',
+  'test:ps-241-rate-browser-fanout',
+  'test:rate-backfill-durable',
+  'test:rate-backfill-db-pool-concurrency',
+  'test:ref-rates-durable',
+  'test:durable-jobs-plan',
+  'test:ps-rate-limiter-priority-behavior',
+  'test:ps-191-retry-eligibility',
+  'test:ps-443-durable-selected-recalculate',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes

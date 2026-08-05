@@ -61,10 +61,20 @@ check('v2 limiter waits and retries honor caller cancellation',
   /acquireShipStationV2Budget\(key, opts\.priority \?\? 'interactive', requestSignal\)/.test(v2) &&
     /abortableDelay\(backoffMs, requestSignal\)/.test(v2));
 
+const rateLimiter = readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8');
 check('rate-limiter exports the shared RateBucket interface',
-  /export interface RateBucket \{[\s\S]*acquire\(options\?: \{ signal\?: AbortSignal \}\): Promise<void>/.test(readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8')));
+  /export interface RateBucket \{[\s\S]*acquire\(options\?: \{ signal\?: AbortSignal \}\): Promise<void>/.test(rateLimiter));
+// Repointed 2026-08-05: the local was renamed opts.signal -> requestSignal in
+// v1-client.ts. Same call, same signal plumbed through; only the binding moved. Accept
+// any signal-carrying acquire so a future rename does not re-break it, and additionally
+// require the limiter itself to still honour the signal -- an acquire that PASSES a
+// signal to a bucket that ignores it would satisfy the old assertion while never
+// actually cancelling a wait.
 check('v1 limiter waits honor worker cancellation',
-  /bucket\.acquire\(\{ signal: opts\.signal \}\)/.test(v1));
+  /bucket\.acquire\(\{ signal: \w+ \}\)/.test(v1));
+check('the shared bucket actually acts on the signal it is given',
+  /options\.signal\?\.throwIfAborted\(\)/.test(rateLimiter) &&
+    /abortableDelay\(waitMs, options\.signal\)/.test(rateLimiter));
 
 check('package.json wires test:ps-256-durable-rate-limiter',
   /test:ps-256-durable-rate-limiter/.test(readFileSync('package.json', 'utf8')));
