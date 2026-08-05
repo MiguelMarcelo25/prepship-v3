@@ -1796,6 +1796,10 @@ export async function generateLineItems(input: GenerateInput) {
   // returns can never be swept into an invoice by turning the flag on.
   let returnLinesGenerated = 0;
   let returnLinesSkipped = 0;
+  let returnLinesIntoFinalizedAdjustment = 0;
+  // Return amounts whose order is already finalized — folded into the PS-449
+  // reconciliation below instead of being written into the frozen period.
+  const finalizedReturnTotalsByClient = new Map<number, Map<number, number>>();
   if (env.RETURN_BILLING_ENABLED) {
     const returnRows = await db
       .select({
@@ -1835,6 +1839,30 @@ export async function generateLineItems(input: GenerateInput) {
       ),
     });
     returnLinesSkipped = returnPlan.skipped.length;
+
+    // AC-6. A return whose order sits in a FINALIZED period must not be inserted there —
+    // that would add to a frozen invoice. Split it out and let PS-449's canonical
+    // reconciliation owner handle it exactly like a finalized order line: it locks the
+    // client, compares against the immutable finalized rows AND prior signed
+    // corrections, then appends only the remaining delta to the backend-selected open
+    // period. Building a second override/adjustment path here would be a duplicate owner
+    // of the rule PS-449 already owns.
+    const openReturnLines = returnPlan.lines.filter((l) => !finalizedOrderIds.has(l.orderId));
+    for (const line of returnPlan.lines) {
+      if (!finalizedOrderIds.has(line.orderId)) continue;
+      returnLinesIntoFinalizedAdjustment += 1;
+      let clientTotals = finalizedReturnTotalsByClient.get(line.clientId);
+      if (!clientTotals) {
+        clientTotals = new Map<number, number>();
+        finalizedReturnTotalsByClient.set(line.clientId, clientTotals);
+      }
+      clientTotals.set(
+        line.orderId,
+        roundMoney((clientTotals.get(line.orderId) ?? 0) + toNum(line.totalCost)),
+      );
+    }
+    returnPlan.lines.length = 0;
+    returnPlan.lines.push(...openReturnLines);
 
     if (returnPlan.lines.length) {
       await db.transaction(async (tx) => {
@@ -1892,6 +1920,19 @@ export async function generateLineItems(input: GenerateInput) {
       finalizedCandidateTotalsByClient.set(row.clientId, clientTotals);
     }
     clientTotals.set(row.orderId, roundMoney((clientTotals.get(row.orderId) ?? 0) + toNum(row.totalCost)));
+  }
+  // AC-6: fold finalized-period return amounts into the SAME candidate set, so the
+  // reconciliation owner sees one total per order and appends a single delta rather
+  // than the return being handled by a parallel adjustment path.
+  for (const [clientId, returnTotals] of finalizedReturnTotalsByClient) {
+    let clientTotals = finalizedCandidateTotalsByClient.get(clientId);
+    if (!clientTotals) {
+      clientTotals = new Map<number, number>();
+      finalizedCandidateTotalsByClient.set(clientId, clientTotals);
+    }
+    for (const [orderId, amount] of returnTotals) {
+      clientTotals.set(orderId, roundMoney((clientTotals.get(orderId) ?? 0) + amount));
+    }
   }
 
   let finalizedAdjustmentCount = 0;

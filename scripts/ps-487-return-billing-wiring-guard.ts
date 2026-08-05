@@ -107,6 +107,36 @@ check('the returns schema maps only columns that exist in production', () => {
   }
 });
 
+// ── 5. AC-6: a finalized period is never written, only adjusted ──────────────
+check('a return on a FINALIZED order is excluded from the insert', () => {
+  assert.match(
+    billing,
+    /const openReturnLines = returnPlan\.lines\.filter\(\(l\) => !finalizedOrderIds\.has\(l\.orderId\)\)/,
+    'return lines for finalized orders must not be inserted into the frozen period',
+  );
+});
+
+check('finalized return amounts are folded into the PS-449 reconciliation candidates', () => {
+  assert.match(billing, /finalizedReturnTotalsByClient/);
+  // They must reach the SAME candidate map the order lines use, so the owner emits one
+  // delta per order rather than a parallel return-specific adjustment.
+  const fold = billing.indexOf('for (const [clientId, returnTotals] of finalizedReturnTotalsByClient)');
+  const recon = billing.indexOf('reconcileFinalizedBillingOrderAdjustments({');
+  assert.ok(fold >= 0, 'finalized return totals must be folded in');
+  assert.ok(recon > fold, 'the fold must happen BEFORE reconciliation runs');
+});
+
+check('AC-6 builds NO second adjustment path — it delegates to the canonical owner', () => {
+  // The credit-note/adjustment writer is billing-finalization-policy's. A return-specific
+  // insert into billing_credit_notes here would be a duplicate source of truth.
+  assert.doesNotMatch(
+    billing,
+    /insert\(billingCreditNotes\)/,
+    'adjustments belong to createBillingCreditNote / reconcileFinalizedBillingOrderAdjustments',
+  );
+  assert.match(billing, /reconcileFinalizedBillingOrderAdjustments\(\{/);
+});
+
 check('PrepShip only READS returns — the generator never writes that table', () => {
   assert.doesNotMatch(
     billing,
