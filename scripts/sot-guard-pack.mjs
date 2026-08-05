@@ -969,6 +969,10 @@ const REQUIRED_GUARDS = [
   // and a missing country must not be invented into "international" (293 orders in the
   // last 120 days carry none). The FE renders the emitted badge and compares no codes.
   'test:billing-destination-international',
+  // PS-487 slice 1 — the canonical return billing event contract (date + idempotency +
+  // customer-rate fence). Pure and inert: nothing imports it yet, slice 2 wires the
+  // generator. Gated now so the contract cannot drift before its consumer exists.
+  'test:ps-487-return-billing-contract',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes

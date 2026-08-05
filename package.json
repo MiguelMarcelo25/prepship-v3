@@ -916,7 +916,8 @@
     "test:ps-467-unattributed-audit": "tsx scripts/ps-467-unattributed-audit-guard.ts",
     "test:ps-469-run-retention": "tsx scripts/ps-469-run-retention-guard.ts",
     "test:billing-destination-international": "tsx scripts/billing-destination-international-guard.ts",
-    "test:billing-international-destination:browser": "playwright test web/e2e/billing-international-destination.spec.js --reporter=line"
+    "test:billing-international-destination:browser": "playwright test web/e2e/billing-international-destination.spec.js --reporter=line",
+    "test:ps-487-return-billing-contract": "tsx scripts/ps-487-return-billing-contract-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
