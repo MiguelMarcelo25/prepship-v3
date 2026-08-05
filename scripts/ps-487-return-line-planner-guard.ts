@@ -157,13 +157,49 @@ check('processing and shipping descriptions differ (they are separate unique row
   );
 });
 
-check('an unconfigured client fee plans $0.00 rather than crashing or skipping', () => {
-  // Every client currently has return_processing_fee = 0.00, so this is the live shape.
+check('an unconfigured client fee emits NO processing line', () => {
+  // Every client currently has return_processing_fee = 0.00, so this is the live shape:
+  // DJ's shipping-only policy (2026-08-05). A $0.00 row on every invoice says nothing,
+  // because $0 here means "no fee configured" rather than a finding about this return.
   const { lines } = planReturnBillingLines({
     returns: [row({ clientId: 9 })],
     returnProcessingFeeByClientId: new Map(),
   });
-  assert.equal(lines.find((l) => l.lineType === 'return_processing')!.totalCost, '0.00');
+  assert.equal(lines.find((l) => l.lineType === 'return_processing'), undefined,
+    'a $0.00 fee must not put a processing line on the invoice');
+  assert.ok(lines.some((l) => l.lineType === 'return_label'),
+    'suppressing the fee line must not take the shipping line with it');
+});
+
+check('a configured fee DOES still emit a processing line', () => {
+  // The suppression is about $0, not about the feature. Setting a real fee must bring
+  // the line back without any other change.
+  const { lines } = planReturnBillingLines({
+    returns: [row({ clientId: 9 })],
+    returnProcessingFeeByClientId: new Map([[9, 2.5]]),
+  });
+  assert.equal(lines.find((l) => l.lineType === 'return_processing')!.totalCost, '2.50');
+});
+
+check('a return worth nothing is RECORDED, never silently dropped', () => {
+  // No fee and no captured shipping means no lines at all. That is the one case where
+  // suppressing the $0 row could hide a real return, so it must surface as a skip.
+  const { lines, skipped } = planReturnBillingLines({
+    returns: [row({ clientId: 9, returnCustomerShippingRate: null })],
+    returnProcessingFeeByClientId: new Map(),
+  });
+  assert.equal(lines.length, 0);
+  assert.equal(skipped[0]?.reason, 'no_billable_amount');
+});
+
+check('with a fee set, a missing shipping rate keeps its own distinct reason', () => {
+  // The return is still on the invoice here, so the skip explains ONE missing line —
+  // a different fact from "this return produced nothing".
+  const { skipped } = planReturnBillingLines({
+    returns: [row({ clientId: 9, returnCustomerShippingRate: null })],
+    returnProcessingFeeByClientId: new Map([[9, 2.5]]),
+  });
+  assert.equal(skipped[0]?.reason, 'no_customer_shipping_rate');
 });
 
 if (failures > 0) {

@@ -55,7 +55,13 @@ export type ReturnBillingSkip = {
     | 'before_cutover'
     | 'not_eligible'
     | 'no_client'
-    | 'no_customer_shipping_rate';
+    | 'no_customer_shipping_rate'
+    /**
+     * Billable in policy terms, but every line came to nothing: no processing fee
+     * configured AND no customer shipping captured. Recorded rather than dropped —
+     * see the note on planReturnBillingLines about invisible returns.
+     */
+    | 'no_billable_amount';
 };
 
 /**
@@ -82,10 +88,19 @@ export function returnLineDescription(input: {
  *   return_processing — as soon as the return exists, with no shipment/label needed;
  *   return_label      — only when a customer return-shipping rate is configured.
  *
- * A $0.00 configured amount still produces a line. That is deliberate and matches how
- * this codebase already treats cancelled orders (PS-377 emits visible $0 rows): a $0
- * line means "we looked and it is free", while no line means "nothing happened here".
- * Collapsing the two would hide a real return from the invoice entirely.
+ * A $0.00 processing fee produces NO processing line (DJ, 2026-08-05). Every client's
+ * return_processing_fee is 0.00 and the chosen policy is shipping-only, so emitting the
+ * line would put a $0.00 row on every invoice that says nothing.
+ *
+ * This reverses the original rationale here, which argued a $0 row means "we looked and
+ * it is free" the way PS-377 does for cancelled orders. The counter-argument holds for
+ * cancelled orders because $0 IS the finding; here $0 only means "no fee is configured",
+ * which is true of every client and so tells the reader nothing.
+ *
+ * The cost of collapsing them is that a return with no fee AND no captured shipping
+ * produces nothing at all and would vanish from the invoice. That case is therefore
+ * recorded as a 'no_billable_amount' skip rather than dropped silently — the return
+ * stays visible to reporting even when it is worth nothing.
  */
 export function planReturnBillingLines(input: {
   returns: ReturnBillingSourceRow[];
@@ -126,7 +141,7 @@ export function planReturnBillingLines(input: {
     const orderNumber = row.orderNumber ?? null;
 
     const fee = input.returnProcessingFeeByClientId.get(row.clientId) ?? 0;
-    lines.push({
+    if (fee > 0) lines.push({
       clientId: row.clientId,
       orderId: row.orderId,
       orderNumber,
@@ -148,7 +163,13 @@ export function planReturnBillingLines(input: {
       returnCustomerShippingRate: row.returnCustomerShippingRate,
     });
     if (shipping == null) {
-      skipped.push({ returnId: row.id, reason: 'no_customer_shipping_rate' });
+      // With a fee configured the return is still on the invoice, so the skip explains
+      // one missing line. With no fee it produced NOTHING, which is the case that would
+      // make a real return invisible — name it differently so reporting can find it.
+      skipped.push({
+        returnId: row.id,
+        reason: fee > 0 ? 'no_customer_shipping_rate' : 'no_billable_amount',
+      });
       continue;
     }
     lines.push({
