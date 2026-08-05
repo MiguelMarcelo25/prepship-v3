@@ -94,8 +94,23 @@ assert.ok(health.includes('externalShippedClassifier') &&
 assert.ok(envTs.includes('ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER') &&
   envTs.includes('ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY'),
   'the classifier env flags must stay defined');
-assert.ok(scheduler.includes('external-shipped classifier disabled'),
-  'the scheduler must keep logging when the classifier is disabled');
+// Repointed 2026-08-05. The string 'external-shipped classifier disabled' exists nowhere
+// in src/ any more, and its absence is the improvement: the classifier used to be
+// scheduled unconditionally and log "disabled" on every tick. The flag is now consumed by
+// reconcileDurableSchedule in sync-job-queue.ts, so when it is off the durable schedule is
+// simply never reconciled and no tick fires at all. Not scheduling beats scheduling and
+// skipping, so requiring the log back would be requiring the wasted tick back.
+//
+// Pin what actually matters: the flag still gates the schedule, and it is still
+// observable at /health so an operator can tell whether the classifier is on.
+const jobQueue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
+assert.match(
+  jobQueue,
+  /reconcileDurableSchedule\(\s*JOBS\.externalShippedClassifier,[\s\S]{0,200}?env\.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER,/,
+  'the classifier schedule must stay gated on ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER',
+);
+assert.ok(scheduler.includes('external-shipped classifier already running - skipping tick'),
+  'the classifier tick must stay re-entrancy guarded');
 assert.ok(existsSync('docs/runbooks/ps-215-external-shipped-remediation.md'),
   'the PS-215 remediation runbook must exist');
 const runbook = read('docs/runbooks/ps-215-external-shipped-remediation.md');

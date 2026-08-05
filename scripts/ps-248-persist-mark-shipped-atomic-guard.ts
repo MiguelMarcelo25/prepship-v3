@@ -23,8 +23,16 @@ check('persistCreatedLabel accepts a tx handle', /tx\?: DbTx;/.test(labels));
 check('persistCreatedLabel runs the shipment insert on the tx executor (not the bare pool)',
   /const exec = \(args\.tx \?\? db\) as DbTx;/.test(labels) &&
   /const \[row\] = await exec\s*\.insert\(shipments\)/.test(labels));
+// Repointed 2026-08-05 (same dead anchor already fixed in ps-285). PS-423 moved the
+// persist+lifecycle transaction under consumeFulfillmentOperation(operationId, async
+// (tx, receipt) => ...), so the durable provider RECEIPT is consumed in the same
+// transaction as both projections. That is a stronger atomicity guarantee than the one
+// this asserted: a local fault rolls back shipment and lifecycle together AND the retry
+// reuses the receipt instead of buying a second label. localShipmentId is now derived
+// from the consumed result rather than being the transaction's return value.
 check('the label flow persists + applies lifecycle inside ONE db.transaction',
-  /const localShipmentId = await db\.transaction\(async \(tx\) =>/.test(labels));
+  /await consumeFulfillmentOperation\(operationId, async \(tx, receipt\) =>/.test(labels) &&
+  /const localShipmentId = Number\(consumed\.localResult\?\.shipmentId \?\? 0\)/.test(labels));
 check('persistCreatedLabel is invoked WITH the tx inside that transaction',
   /insuredValue: options\.insuredValue,\s*tx,/.test(labels));
 check('canonical lifecycle command is invoked WITH the tx and persisted shipment id',

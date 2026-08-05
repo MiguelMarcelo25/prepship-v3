@@ -864,6 +864,61 @@ const REQUIRED_GUARDS = [
   'test:ps-334-house-rate-column',
   'test:ps-357-best-rate-house-single-line',
   'test:ps-295-house-customer-rate-closeout',
+  // ── Batch 27: shipment write-path integrity ──
+  //
+  // Atomic mark-shipped, the provider operation ledger, bundles, external-shipped
+  // reconciliation, sync freshness. 4 of 22 red, all rot from ownership moves:
+  //
+  //   ps-248 + ps-312: both anchored on `const localShipmentId = await db.transaction`,
+  //     dead since PS-423 moved the ship transaction under consumeFulfillmentOperation so
+  //     the durable provider RECEIPT commits with both projections. Stronger than what
+  //     they asserted: a local fault rolls back shipment and lifecycle together AND the
+  //     retry reuses the receipt instead of buying a second label.
+  //
+  //   ps-312 also sliced a function that no longer exists anywhere in src/
+  //     (recordFulfillmentDeductions, absorbed by PS-424's lifecycle command). Its slice
+  //     ran from -1 and produced ''. NOTE the guard caught its own broken anchor, because
+  //     the author paired the negative with `recordFn.length > 0` -- without that,
+  //     `!''.includes(...)` passes VACUOUSLY and the check sits green asserting nothing.
+  //     That pairing is worth copying anywhere a negative runs over a sliced block.
+  //     Restated positionally: the fan-out must come after the committed txn AND after
+  //     the stamp it chains to, so it can never observe a half-linked bundle.
+  //
+  //   ps-215 required the scheduler to log "external-shipped classifier disabled". That
+  //     string is gone, and its absence IS the improvement -- the flag is now consumed by
+  //     reconcileDurableSchedule, so when the classifier is off no tick is scheduled at
+  //     all rather than firing and logging "disabled" every three minutes. Requiring the
+  //     log back would require the wasted tick back. Re-pinned on the flag still gating
+  //     the schedule and the tick staying re-entrancy guarded.
+  //
+  //   ps-400 broke on fair scheduling: the loop header became
+  //     `for (const accountProgressEntry of fairAccounts)` with the account unpacked on
+  //     the next line, so the budget check sits one line further down. It still guards
+  //     every iteration. Now allows the unpack between header and check.
+  //
+  // All four mutation-checked against green baselines, plus a no-op control.
+  'test:ps-248-persist-mark-shipped-atomic',
+  'test:ps-423-provider-operation-ledger',
+  'test:ps-425-multi-shipment-cardinality',
+  'test:ps-312-shipment-bundle-schema',
+  'test:ps-312-deduct-bundle-members-integration',
+  'test:ps-312-bundle-billing-policy',
+  'test:ps-312-bundle-inventory-policy',
+  'test:ps-312-bundle-link-on-label',
+  'test:ps-312-resolve-scoped-bundles-integration',
+  'test:external-shipped-reconcile',
+  'test:ps-056-auto-external-shipped',
+  'test:ps-215-shipped-display-state',
+  'test:shipstation-fulfillment-backfill',
+  'test:shipstation-label-url',
+  'test:shipstation-sync-window',
+  'test:shopify-order-sync',
+  'test:sync-provider-status',
+  'test:ps-397-order-sync-freshness',
+  'test:ps-400-sync-freshness',
+  'test:ps-365-shipment-sync-cron-safety-net',
+  'test:ps-359-shipment-sync-busy-defer',
+  'test:ps-222b-no-charge-box',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes

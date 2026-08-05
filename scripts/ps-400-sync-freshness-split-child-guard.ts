@@ -72,7 +72,13 @@ assert.match(
 );
 assert.match(
   shipmentSync,
-  /for \(const acct of accounts\) \{\s*if \(opts\.signal\?\.aborted \|\| syncRunBudgetTimeExhausted\(budget\)\) break;/,
+  // Repointed 2026-08-05: accounts are now ordered for fairness before the loop
+  // (orderShipmentSyncAccountsByWatermark), so the header became
+  // `for (const accountProgressEntry of fairAccounts)` with the account unpacked on the
+  // next line. The budget check still guards every iteration, one line further down.
+  // Allow the unpack between the header and the check; what matters is that no account
+  // starts without the budget being consulted.
+  /for \(const \w+ of \w+\) \{\s*(?:const \w+ = [^\n]*\n\s*)?if \(opts\.signal\?\.aborted \|\| syncRunBudgetTimeExhausted\(budget\)\) break;/,
   'shipment sync must check the run budget before starting another account',
 );
 

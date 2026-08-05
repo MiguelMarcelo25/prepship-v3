@@ -39,7 +39,11 @@ const gateIdx = labels.indexOf('if (env.BUNDLE_LINK_ON_LABEL)');
 check('createLabelV2 gates the bundle stamp on env.BUNDLE_LINK_ON_LABEL', gateIdx !== -1);
 
 // (3) it runs AFTER the committed ship txn (not inside the locked persist transaction)
-const txnIdx = labels.indexOf('const localShipmentId = await db.transaction');
+// Repointed 2026-08-05: PS-423 moved the ship transaction under
+// consumeFulfillmentOperation, so `const localShipmentId = await db.transaction` is gone.
+// Anchor on the point the transaction has COMMITTED and its shipment id is available --
+// which is exactly what "outside the locked txn" means for this check.
+const txnIdx = labels.indexOf('const localShipmentId = Number(consumed.localResult');
 check('the bundle stamp runs AFTER the committed ship txn (outside the locked txn)', txnIdx !== -1 && gateIdx > txnIdx);
 
 // (4) best-effort: the link+deduct task runs in a timer.background with a .catch handler — a stamp or
@@ -81,13 +85,26 @@ check(
   'the bundle deduct-once is CHAINED after the link stamp (no race), gated on BUNDLE_DEDUCT_ONCE',
   deductCallIdx !== -1 && linkCallIdx !== -1 && deductCallIdx > linkCallIdx && /env\.BUNDLE_DEDUCT_ONCE/.test(labels),
 );
-const recordFn = labels.slice(
-  labels.indexOf('async function recordFulfillmentDeductions'),
-  labels.indexOf('export async function createLabelV2'),
+// Repointed 2026-08-05. `recordFulfillmentDeductions` no longer exists ANYWHERE in src/ --
+// PS-424's lifecycle command absorbed it -- so this slice ran from -1 and produced an
+// empty string. Note the guard caught its own broken anchor: without the
+// `recordFn.length > 0` clause, `!''.includes(...)` would have passed VACUOUSLY and this
+// would have sat green while asserting nothing. Worth keeping that pattern.
+//
+// The property is unchanged: the bundle member fan-out must not run anywhere it could
+// race the stamp. State it positionally against the same committed-transaction anchor
+// used above -- the fan-out must come AFTER the ship txn commits, and after the stamp it
+// is chained to, so it can never observe a half-linked bundle.
+const fanoutIdx = labels.indexOf('await deductBundleMembersOnce(');
+const stampIdx = labels.indexOf('await linkBundleShipment(');
+check(
+  'the bundle member fan-out cannot race the stamp (it runs after the committed txn, chained after the stamp)',
+  fanoutIdx !== -1 && stampIdx !== -1 && txnIdx !== -1 &&
+    stampIdx > txnIdx && fanoutIdx > stampIdx,
 );
 check(
-  'recordFulfillmentDeductions does NOT run the bundle member fan-out (it would race the stamp)',
-  recordFn.length > 0 && !recordFn.includes('deductBundleMembersOnce('),
+  'the fan-out stays behind its own default-OFF flag',
+  /if \(env\.BUNDLE_DEDUCT_ONCE\) \{[\s\S]{0,200}?await deductBundleMembersOnce\(/.test(labels),
 );
 
 if (failures > 0) {
