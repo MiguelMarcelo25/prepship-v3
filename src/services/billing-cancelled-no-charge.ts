@@ -1,7 +1,16 @@
 import { sql, type SQL } from 'drizzle-orm';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled', 'upstream_cancelled']);
-const RETURN_LINE_TYPES = new Set(['return', 'return_label', 'return_processing']);
+// PS-488 AC-4: both vocabularies. The portal writes return_postage /
+// return_processing_fee into the same table; omitting them here would let a cancelled
+// order strip a return charge it should have kept.
+const RETURN_LINE_TYPES = new Set([
+  'return',
+  'return_label',
+  'return_processing',
+  'return_postage',
+  'return_processing_fee',
+]);
 
 function normalizedText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -50,7 +59,7 @@ export function cancelledNoChargeBillingLinePredicateSql(input: {
   // Billing lines are read-model no-charge rows. Return line types are excluded
   // so return fees/credits remain independently billable.
   return sql`(
-    ${input.lineType} not in ('return', 'return_label', 'return_processing')
+    ${input.lineType} not in ('return', 'return_label', 'return_processing', 'return_postage', 'return_processing_fee')
     and (
       lower(coalesce(${input.orderStatus}, '')) in ('cancelled', 'canceled')
       or lower(coalesce(${input.canonicalStatus}, '')) in ('cancelled', 'canceled')

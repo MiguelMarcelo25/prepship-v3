@@ -42,10 +42,10 @@ check('a return with no shipment/label still produces its processing line', () =
     returns: [row({ returnCustomerShippingRate: null })],
     returnProcessingFeeByClientId: FEE,
   });
-  const processing = lines.filter((l) => l.lineType === 'return_processing');
+  const processing = lines.filter((l) => l.lineType === 'return_processing_fee');
   assert.equal(processing.length, 1);
   assert.equal(processing[0]!.totalCost, '3.50');
-  assert.equal(lines.filter((l) => l.lineType === 'return_label').length, 0);
+  assert.equal(lines.filter((l) => l.lineType === 'return_postage').length, 0);
 });
 
 check('exactly ONE processing line per return (never two)', () => {
@@ -53,7 +53,7 @@ check('exactly ONE processing line per return (never two)', () => {
     returns: [row(), row({ id: 101, orderId: 901 })],
     returnProcessingFeeByClientId: FEE,
   });
-  assert.equal(lines.filter((l) => l.lineType === 'return_processing').length, 2);
+  assert.equal(lines.filter((l) => l.lineType === 'return_processing_fee').length, 2);
   const keys = lines.map((l) => l.eventKey);
   assert.equal(new Set(keys).size, keys.length, 'every planned line must be uniquely keyed');
 });
@@ -64,7 +64,7 @@ check('return shipping bills the configured CUSTOMER rate', () => {
     returns: [row({ returnCustomerShippingRate: '8.64' })],
     returnProcessingFeeByClientId: FEE,
   });
-  const shipping = lines.find((l) => l.lineType === 'return_label')!;
+  const shipping = lines.find((l) => l.lineType === 'return_postage')!;
   assert.equal(shipping.totalCost, '8.64');
 });
 
@@ -75,7 +75,7 @@ check('a configured $0.00 return still produces a VISIBLE $0 line', () => {
     returns: [row({ returnCustomerShippingRate: '0.00' })],
     returnProcessingFeeByClientId: FEE,
   });
-  const shipping = lines.find((l) => l.lineType === 'return_label');
+  const shipping = lines.find((l) => l.lineType === 'return_postage');
   assert.ok(shipping, 'a $0.00 configured rate must still emit a line');
   assert.equal(shipping!.totalCost, '0.00');
   assert.equal(skipped.length, 0);
@@ -86,7 +86,7 @@ check('NO configured customer rate bills no shipping line, and says why', () => 
     returns: [row({ returnCustomerShippingRate: null })],
     returnProcessingFeeByClientId: FEE,
   });
-  assert.equal(lines.filter((l) => l.lineType === 'return_label').length, 0);
+  assert.equal(lines.filter((l) => l.lineType === 'return_postage').length, 0);
   assert.deepEqual(skipped, [{ returnId: 100, reason: 'no_customer_shipping_rate' }]);
 });
 
@@ -145,15 +145,15 @@ check('a date correction does NOT change the description (so it MOVES, not dupli
 });
 
 check('the description carries the canonical event key the DB dedupes on', () => {
-  const d = returnLineDescription({ kind: 'return_processing', returnId: 42, returnReference: '42-RETURN' });
-  assert.ok(d.includes(returnBillingEventKey({ returnId: 42, kind: 'return_processing' })));
+  const d = returnLineDescription({ kind: 'return_processing_fee', returnId: 42, returnReference: '42-RETURN' });
+  assert.ok(d.includes(returnBillingEventKey({ returnId: 42, kind: 'return_processing_fee' })));
   assert.ok(d.startsWith('Return processing'), 'invoices stay human-readable');
 });
 
 check('processing and shipping descriptions differ (they are separate unique rows)', () => {
   assert.notEqual(
-    returnLineDescription({ kind: 'return_processing', returnId: 7 }),
-    returnLineDescription({ kind: 'return_label', returnId: 7 }),
+    returnLineDescription({ kind: 'return_processing_fee', returnId: 7 }),
+    returnLineDescription({ kind: 'return_postage', returnId: 7 }),
   );
 });
 
@@ -165,9 +165,9 @@ check('an unconfigured client fee emits NO processing line', () => {
     returns: [row({ clientId: 9 })],
     returnProcessingFeeByClientId: new Map(),
   });
-  assert.equal(lines.find((l) => l.lineType === 'return_processing'), undefined,
+  assert.equal(lines.find((l) => l.lineType === 'return_processing_fee'), undefined,
     'a $0.00 fee must not put a processing line on the invoice');
-  assert.ok(lines.some((l) => l.lineType === 'return_label'),
+  assert.ok(lines.some((l) => l.lineType === 'return_postage'),
     'suppressing the fee line must not take the shipping line with it');
 });
 
@@ -178,7 +178,7 @@ check('a configured fee DOES still emit a processing line', () => {
     returns: [row({ clientId: 9 })],
     returnProcessingFeeByClientId: new Map([[9, 2.5]]),
   });
-  assert.equal(lines.find((l) => l.lineType === 'return_processing')!.totalCost, '2.50');
+  assert.equal(lines.find((l) => l.lineType === 'return_processing_fee')!.totalCost, '2.50');
 });
 
 check('a return worth nothing is RECORDED, never silently dropped', () => {

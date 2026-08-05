@@ -14,9 +14,23 @@
 //     been written. Return billing does not exist yet — this is a build, not a repair.
 //   - admin_override has never been used, and requested_at == created_at on all 8.
 
-/** Billing line types the return workflow owns. */
-export const RETURN_PROCESSING_LINE_TYPE = 'return_processing';
-export const RETURN_SHIPPING_LINE_TYPE = 'return_label';
+/**
+ * Billing line types the return workflow owns.
+ *
+ * These MUST match what the Client Portal reads, because both applications share one
+ * `billing_line_items` table. The portal's invoice read-model sums exactly
+ * `return_postage` and `return_processing_fee`, and its customer-shipping-rate rules key
+ * off `return_postage` for historical rows — so those names are the established canonical
+ * ones and this side is the side that has to match.
+ *
+ * They were originally written here as 'return_processing' / 'return_label'. Nothing had
+ * billed yet, so no rows carry the wrong names, but had a return billed the portal would
+ * have summed both to $0.00: PrepShip showing the charge and the client's invoice showing
+ * nothing. Two names for one fact in one table is not a naming preference, it is a
+ * divergence that only appears as missing money.
+ */
+export const RETURN_PROCESSING_LINE_TYPE = 'return_processing_fee';
+export const RETURN_SHIPPING_LINE_TYPE = 'return_postage';
 
 /**
  * Forward-only cutover. DJ's decision, 2026-08-05: the returns that pre-date PS-487 are

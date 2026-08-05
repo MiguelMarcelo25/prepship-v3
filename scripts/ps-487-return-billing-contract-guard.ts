@@ -6,6 +6,7 @@
  * no-shipment-required eligibility, and the customer-rate fence.
  */
 import assert from 'node:assert/strict';
+import { isBillingReturnLineType } from '../src/services/billing-row-status';
 import { readFileSync } from 'node:fs';
 import {
   RETURN_BILLING_CUTOVER_DAY,
@@ -72,7 +73,11 @@ check('the event key is stable across repeated regeneration', () => {
   const a = returnBillingEventKey({ returnId: 4, kind: RETURN_PROCESSING_LINE_TYPE });
   const b = returnBillingEventKey({ returnId: '4', kind: RETURN_PROCESSING_LINE_TYPE });
   assert.equal(a, b);
-  assert.equal(a, 'return:4:return_processing');
+  // The literal is spelled out so a change to the line-type constants is caught HERE
+  // rather than discovered as missing money. It changed once already: PrepShip wrote
+  // return_processing while the Client Portal — same billing_line_items table — sums
+  // return_processing_fee, so the portal would have totalled every return to $0.00.
+  assert.equal(a, 'return:4:return_processing_fee');
 });
 
 check('processing and shipping are DISTINCT events on the same return', () => {
@@ -183,3 +188,22 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log('\nPASS PS-487 return billing contract guard');
+
+// ── PS-488 AC-4: the two applications must name the same charge the same way ──
+check('the line types match what the Client Portal reads from the SAME table', () => {
+  // PrepShip and the Client Portal both write billing_line_items. The portal's invoice
+  // read-model sums exactly these two strings; if this side drifts, the portal totals
+  // every return to $0.00 while PrepShip shows the charge. That failure is invisible —
+  // no error, just money missing from the client's invoice — so it is pinned literally.
+  assert.equal(RETURN_PROCESSING_LINE_TYPE, 'return_processing_fee');
+  assert.equal(RETURN_SHIPPING_LINE_TYPE, 'return_postage');
+});
+
+check('PrepShip billing classifiers recognise BOTH vocabularies', () => {
+  // Historical PrepShip rows carry return_label / return_processing and frozen billing
+  // rows are never rewritten, so recognition is additive rather than a migration.
+  for (const t of ['return', 'return_label', 'return_processing', 'return_postage', 'return_processing_fee']) {
+    assert.ok(isBillingReturnLineType(t), `${t} must classify as a return line`);
+  }
+  assert.ok(!isBillingReturnLineType('shipping'), 'an outbound line is not a return line');
+});

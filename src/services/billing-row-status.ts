@@ -8,6 +8,8 @@ export type BillingLifecycleStatus =
   | 'return'
   | 'return_label'
   | 'return_processing'
+  | 'return_postage'
+  | 'return_processing_fee'
   | 'needs_review'
   | 'manual_adjustment'
   | 'waived';
@@ -64,9 +66,24 @@ function normalizedLineTypes(input: BillingRowStatusInput): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+/**
+ * PS-488 AC-4: recognise the CANONICAL Client Portal line types alongside PrepShip's
+ * historical ones. Both applications write to one billing_line_items table; the portal
+ * emits return_postage / return_processing_fee, PrepShip historically emitted
+ * return_label / return_processing. A classifier that knows only one vocabulary silently
+ * drops the other side's return rows out of every return-aware branch — which is how
+ * return charges disappear from a projection rather than erroring.
+ *
+ * Both are accepted rather than one being migrated: historical rows carry the old names
+ * and rewriting frozen billing rows is forbidden.
+ */
 export function isBillingReturnLineType(lineType: unknown): boolean {
   const value = normalizedText(lineType)?.toLowerCase();
-  return value === 'return' || value === 'return_label' || value === 'return_processing';
+  return value === 'return'
+    || value === 'return_label'
+    || value === 'return_processing'
+    || value === 'return_postage'
+    || value === 'return_processing_fee';
 }
 
 function result(

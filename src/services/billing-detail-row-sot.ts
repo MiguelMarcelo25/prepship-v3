@@ -161,7 +161,11 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   const lineTotal = numberValue(row.totalCost);
   const pickPack = numberValue(
     row.pickpackTotal ??
-      (lineType === 'pick_pack' || lineType === 'pickpack' || lineType === 'return_processing' ? lineTotal : 0),
+      // PS-488 AC-4: return_processing_fee is the canonical portal name for the same
+      // charge as return_processing. Missing it here sends the fee to no total at all.
+      (lineType === 'pick_pack' || lineType === 'pickpack'
+        || lineType === 'return_processing' || lineType === 'return_processing_fee'
+        ? lineTotal : 0),
   );
   const additional = numberValue(
     row.additionalTotal ??
@@ -171,7 +175,9 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
     row.packageTotal ?? (lineType === 'package_cost' ? lineTotal : 0),
   );
   const shipping = numberValue(
-    row.shippingTotal ?? (lineType === 'shipping' || lineType === 'return_label' || lineType === 'return' ? lineTotal : 0),
+    // PS-488 AC-4: return_postage is the canonical portal name for return_label.
+    row.shippingTotal ?? (lineType === 'shipping' || lineType === 'return_label'
+      || lineType === 'return_postage' || lineType === 'return' ? lineTotal : 0),
   );
   const storage = numberValue(
     row.storageTotal ?? (lineType === 'storage' ? lineTotal : 0),
