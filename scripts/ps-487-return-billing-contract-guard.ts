@@ -6,10 +6,13 @@
  * no-shipment-required eligibility, and the customer-rate fence.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
+  RETURN_BILLING_CUTOVER_DAY,
   RETURN_PROCESSING_LINE_TYPE,
   RETURN_SHIPPING_LINE_TYPE,
   isReturnProcessingFeeEligible,
+  isReturnWithinBillingCutover,
   resolveReturnBillingEventDate,
   resolveReturnCustomerShippingAmount,
   returnBillingEventKey,
@@ -91,15 +94,54 @@ check('the key does NOT include the date — a correction MOVES an event, never 
 // ── AC-1: no shipment/label required ─────────────────────────────────────────
 check('a return with NO shipment, label, tracking or PDF is already fee-eligible', () => {
   assert.equal(
-    isReturnProcessingFeeEligible({ returnId: 12, clientId: 4, createdAt: '2026-07-16' }),
+    isReturnProcessingFeeEligible({ returnId: 12, clientId: 4, createdAt: '2026-08-06' }),
     true,
   );
 });
 
 check('eligibility requires an identified return, a client, and a date', () => {
-  assert.equal(isReturnProcessingFeeEligible({ returnId: null, clientId: 4, createdAt: '2026-07-16' }), false);
-  assert.equal(isReturnProcessingFeeEligible({ returnId: 12, clientId: null, createdAt: '2026-07-16' }), false);
+  assert.equal(isReturnProcessingFeeEligible({ returnId: null, clientId: 4, createdAt: '2026-08-06' }), false);
+  assert.equal(isReturnProcessingFeeEligible({ returnId: 12, clientId: null, createdAt: '2026-08-06' }), false);
   assert.equal(isReturnProcessingFeeEligible({ returnId: 12, clientId: 4, createdAt: null }), false);
+});
+
+// ── forward-only cutover (DJ, 2026-08-05): no retroactive billing ────────────
+check('the cutover constant is the decided day', () => {
+  assert.equal(RETURN_BILLING_CUTOVER_DAY, '2026-08-05');
+});
+
+check('EVERY return that existed when the decision was made is excluded', () => {
+  // The exact 8 production returns (client 4), read read-only on 2026-08-05. If the
+  // generator ever bills one of these, a real client gets a backdated July charge.
+  const historic: Array<[number, string]> = [
+    [1, '2026-07-06'], [2, '2026-07-08'], [3, '2026-07-09'], [4, '2026-07-16'],
+    [6, '2026-07-16'], [7, '2026-07-17'], [8, '2026-07-20'], [9, '2026-07-20'],
+  ];
+  for (const [returnId, createdAt] of historic) {
+    assert.equal(
+      isReturnWithinBillingCutover({ createdAt }), false,
+      `return ${returnId} (${createdAt}) pre-dates the cutover and must never bill`,
+    );
+    assert.equal(
+      isReturnProcessingFeeEligible({ returnId, clientId: 4, createdAt }), false,
+      `return ${returnId} must not be fee-eligible`,
+    );
+  }
+});
+
+check('a return created ON the cutover day bills (the boundary is inclusive)', () => {
+  assert.equal(isReturnWithinBillingCutover({ createdAt: '2026-08-05' }), true);
+  assert.equal(isReturnWithinBillingCutover({ createdAt: '2026-08-04' }), false);
+});
+
+check('the cutover is a hard constant, not an env flag that can be flipped by accident', () => {
+  const src = readFileSync('src/services/billing-return-event-contract.ts', 'utf8');
+  assert.match(src, /export const RETURN_BILLING_CUTOVER_DAY = '\d{4}-\d{2}-\d{2}'/);
+  assert.doesNotMatch(
+    src,
+    /process\.env|RETURN_BILLING_CUTOVER[A-Z_]*\s*(?:\?\?|\|\|)\s*process/,
+    'the cutover must not be env-overridable — a flipped flag bills already-invoiced work',
+  );
 });
 
 // ── AC-2: the customer-rate fence ────────────────────────────────────────────

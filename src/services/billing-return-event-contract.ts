@@ -18,6 +18,40 @@
 export const RETURN_PROCESSING_LINE_TYPE = 'return_processing';
 export const RETURN_SHIPPING_LINE_TYPE = 'return_label';
 
+/**
+ * Forward-only cutover. DJ's decision, 2026-08-05: the returns that pre-date PS-487 are
+ * NOT billed retroactively.
+ *
+ * At the time of the decision production held 8 returns (client 4, 2026-07-06..20)
+ * carrying ~$30 of captured customer return shipping and no billing lines at all. Once
+ * the generator goes live it would otherwise sweep them up and post an unexpected
+ * backdated charge to a real client's July invoice. A return created strictly BEFORE
+ * this day is permanently out of scope.
+ *
+ * This is deliberately a hard constant rather than an env flag or a "first run" marker:
+ * a flag can be flipped by accident and a marker drifts if the generator is re-run, and
+ * either mistake bills a customer for work already invoiced.
+ */
+export const RETURN_BILLING_CUTOVER_DAY = '2026-08-05';
+
+/**
+ * Is this return within the forward-only billing window?
+ *
+ * Separate from eligibility so the reason a return is skipped stays legible — "before
+ * the cutover" is a policy decision, not missing data, and callers/reporting should be
+ * able to tell those apart.
+ */
+export function isReturnWithinBillingCutover(input: {
+  createdAt: unknown;
+  /** Override only for tests; production always uses the constant. */
+  cutoverDay?: string;
+}): boolean {
+  const created = toIsoDay(input.createdAt);
+  if (!created) return false;
+  const cutover = input.cutoverDay ?? RETURN_BILLING_CUTOVER_DAY;
+  return created >= cutover;
+}
+
 export type ReturnBillingEventKind =
   | typeof RETURN_PROCESSING_LINE_TYPE
   | typeof RETURN_SHIPPING_LINE_TYPE;
@@ -69,10 +103,17 @@ export function isReturnProcessingFeeEligible(input: {
   returnId: unknown;
   clientId: unknown;
   createdAt: unknown;
+  /** Override only for tests; production always uses the constant. */
+  cutoverDay?: string;
 }): boolean {
   if (input.returnId == null || input.returnId === '') return false;
   if (input.clientId == null || input.clientId === '') return false;
-  return toIsoDay(input.createdAt) != null;
+  if (toIsoDay(input.createdAt) == null) return false;
+  // Forward-only: pre-cutover returns are never billed (DJ, 2026-08-05).
+  return isReturnWithinBillingCutover({
+    createdAt: input.createdAt,
+    cutoverDay: input.cutoverDay,
+  });
 }
 
 /**
