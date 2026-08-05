@@ -62,12 +62,39 @@ for (const type of decrementOnly) {
     assert.equal(movementDirectionError(type, -5), null);
   });
 }
-for (const type of ['adjust', 'receive', 'return'] as InventoryMovementType[]) {
-  check(`${type} is a free direction (allowed either way)`, () => {
+// Repointed 2026-08-05. This grouped receive/return with adjust as free directions.
+// They are not, and have not been since INCREMENT_ONLY was added: the owner's own
+// header states the rule as "ship / pick / damage can only REMOVE stock; a manual
+// `adjust` is a free correction and receive/return add stock". The guard was written
+// when only DECREMENT_ONLY existed and never caught up.
+//
+// The strictness is right. A negative "receive" is a removal recorded as a receipt --
+// it corrupts what the movement TYPE means, and receive rows are what inbound reports
+// and cost layers read, so it would mint a negative cost layer. `adjust` stays free
+// precisely so corrections in either direction have an honest home.
+//
+// This does NOT contradict PS-224 (negative stock is intentional; it means backorder).
+// PS-224 is about the resulting stock LEVEL being allowed below zero -- you can still
+// ship more than you hold. This rule constrains the SIGN OF A MOVEMENT RELATIVE TO ITS
+// TYPE. Different axis: no direction rule here forbids a negative balance.
+const incrementOnly: InventoryMovementType[] = ['receive', 'return'];
+for (const type of incrementOnly) {
+  check(`${type} with a NEGATIVE qty is rejected (must add stock)`, () => {
+    assert.ok(movementDirectionError(type, -5), 'expected an error string');
+  });
+  check(`${type} with a ZERO qty is rejected (qty <= 0)`, () => {
+    assert.ok(movementDirectionError(type, 0), 'expected an error string');
+  });
+  check(`${type} with a POSITIVE qty is allowed`, () => {
     assert.equal(movementDirectionError(type, 5), null);
-    assert.equal(movementDirectionError(type, -5), null);
   });
 }
+
+// `adjust` is the ONLY free direction -- the escape hatch for corrections either way.
+check('adjust is a free direction (allowed either way)', () => {
+  assert.equal(movementDirectionError('adjust', 5), null);
+  assert.equal(movementDirectionError('adjust', -5), null);
+});
 
 if (failures > 0) {
   console.error(`\nPS-324 inventory write-path test FAILED with ${failures} failure(s).`);

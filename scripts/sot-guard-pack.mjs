@@ -533,6 +533,39 @@ const REQUIRED_GUARDS = [
   'test:ps-206-rate-browser-full-coverage',
   'test:ps-216-rate-browser-account-labels',
   'test:ps-403-rate-browser-provider-timeouts',
+  // ── Batch 19: the inventory source-of-truth cluster ──
+  //
+  // Stock levels, the movement ledger, deduction atomicity, and the read models the
+  // dashboard and InventoryView render. All of it money-adjacent (cost layers, COGS)
+  // and none of it gating.
+  //
+  // ps-324-inventory-writepath was RED, and it is the SECOND guard in this sweep that
+  // was asserting the LOOSER behavior -- it grouped receive/return with adjust as "free
+  // directions, allowed either way". They are not free, and have not been since
+  // INCREMENT_ONLY was added; the owner's own header states the rule as "ship / pick /
+  // damage can only REMOVE stock; a manual `adjust` is a free correction and
+  // receive/return add stock". The guard predates that set and never caught up.
+  //
+  // The strictness is right: a negative "receive" is a removal recorded as a receipt,
+  // which corrupts what the movement TYPE means -- receive rows are what inbound
+  // reports and cost layers read, so it would mint a negative cost layer. Note this
+  // does NOT contradict PS-224 (negative stock is intentional = backorder): PS-224
+  // governs the resulting stock LEVEL, this governs the SIGN OF A MOVEMENT RELATIVE TO
+  // ITS TYPE. Repaired to mirror the decrement-only loop, mutation-checked three ways.
+  'test:ps-439-inventory-sot',
+  'test:ps-462-inventory-forward-rollback',
+  'test:ps-462-inventory-preparation-rollout',
+  'test:ps-462-inventory-correction-cutover',
+  'test:inventory-source-of-truth',
+  'test:inventory-reconciliation-dry-run',
+  'test:ps-133-stock-math',
+  'test:ps-052-sku-composition',
+  'test:ps-247-inventory-deduct-atomic',
+  'test:ps-247-inventory-route-scope',
+  'test:ps-324-inventory-readmodel',
+  'test:ps-324-inventory-writepath',
+  'test:ps-325-sku-units',
+  'test:ps-325-dashboard-inventory-snapshot',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a
