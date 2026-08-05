@@ -821,6 +821,56 @@ const REQUIRED_GUARDS = [
   'test:ps-103-remove-frontend-fingerprint-authority',
   'test:best-rate-final-column',
   'test:ps-best-rate-charge-basis-behavior',
+  // ── Batch 26: insurance, markup, carrier identity — and a real HOLE ──
+  //
+  // All 22 candidates were green and none were vacuous (69 referenced paths across the
+  // 12 soft-read guards all resolve). But probing the REAL money math rather than the
+  // guards' own anchors found something the sweep had not seen before:
+  //
+  //   Deleting `applyMarkups` from the direct-rate pricing path -- which undercharges the
+  //   customer on EVERY direct-carrier rate -- passed the entire 393-entry gate. So did
+  //   forcing the EasyPost insurance premium to 0, giving insurance away free.
+  //
+  // The rules were covered; the CALL SITE was not. ps-307-direct-rate-markup-behavior
+  // drives the real applyMarkups as a unit, ps-177 proves rates.ts delegates to the
+  // canonical markup math, ps-261 proves the premium is EasyPost-only and insured-only.
+  // Nothing pinned that applyDirectRatePricing actually INVOKES them. A unit-tested
+  // function whose only caller can be deleted silently is not protected.
+  //
+  // test:direct-rate-pricing-wiring (new, scripts/direct-rate-pricing-wiring-guard.ts)
+  // closes exactly that and nothing else -- the math stays owned by the guards above, so
+  // it should not need touching when a rate or premium changes. It catches all four money
+  // mutations the full gate missed, and stays green under a no-op control edit.
+  'test:direct-rate-pricing-wiring',
+  'test:ps-262b-direct-carrier-insurance',
+  'test:ps-262-direct-carrier-parcelguard-fix',
+  'test:ps-264-cached-rate-insurance-enrich',
+  'test:ps-274-shipp-insurance-certainty',
+  'test:ps-290-hugrab-insurance-coverage-badge',
+  'test:ps-290-hugrab-insurance-coverage-badge-closeout',
+  'test:ps-307-marked-rate-comparison',
+  'test:ps-307-marked-rate-comparison-closeout',
+  'test:ps-307-direct-rate-markup-behavior',
+  'test:ps-308-rate-cost-columns',
+  'test:ps-308-fe-rate-cost-column',
+  'test:ps-308-rate-browser-no-tuple',
+  'test:ps-308-rate-cost-columns-closeout',
+  'test:ps-326-carrier-account-identity-certification',
+  'test:shipstation-carrier-account-identity',
+  'test:ps-229-carrier-error-sanitization',
+  'test:direct-carrier-labels',
+  'test:direct-carrier-queue-route',
+  'test:ps-289-multi-package-carrier-adapter',
+  'test:ps-334-house-rate-column',
+  'test:ps-357-best-rate-house-single-line',
+  'test:ps-295-house-customer-rate-closeout',
+  // NOT gated, currently BROKEN rather than merely failing:
+  //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
+  //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes
+  //     before asserting anything. Throwing is the right design (contrast the silent
+  //     truncation fixed in 898ca713), but the anchor needs repointing before it can gate.
+  //     Worth noting it always exits non-zero, so it can look like a "catch" in any
+  //     mutation probe that does not first confirm a green baseline.
   // NOT gated, still RED, needs investigation rather than a repoint:
   //   test:ps-340-backend-rate-engine  -- the bounded-backfill / background-priority chain
   //     spans rates-backfill.ts and a policy module; several clauses moved together and
