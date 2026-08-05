@@ -44,6 +44,7 @@
     "migrate:ps-423-external-operations": "tsx scripts/apply-ps-423-external-operations-migration.ts",
     "migrate:ps-452-print-queue-lifecycle": "tsx scripts/apply-ps-452-print-queue-lifecycle-migration.ts",
     "migrate:ps-449-current-period-adjustments": "tsx scripts/apply-ps-449-current-period-adjustments-migration.ts",
+    "migrate:ps-487-returns-billing-date-override": "tsx scripts/apply-ps-487-returns-billing-date-override.ts",
     "migrate:ps-465-466-rollout": "tsx scripts/apply-ps-465-466-migrations.ts",
     "migrate:ps-465-466-hazmat-0083-0087": "tsx scripts/apply-ps-465-466-hazmat-0083-0087.ts",
     "migrate:ps-424-order-lifecycle": "tsx scripts/apply-ps-424-order-lifecycle-migration.ts",

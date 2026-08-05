@@ -10,6 +10,7 @@ import {
 import { returns } from '../db/schema/returns';
 import { and, asc, desc, eq, notInArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
+import { ensureReturnsBillingDateOverrideColumns } from '../db/ensure-returns-billing-date-override';
 import {
   billingBoxResolutions,
   billingConfig,
@@ -2863,6 +2864,11 @@ app.patch(
     if (!actor.actorId) {
       return c.json({ error: 'Authenticated actor is required' }, 401);
     }
+
+    // Migration 0088 owns the three override columns. This is the only route that reads
+    // them, so it is the boundary that must fail closed when a deploy lands ahead of the
+    // migration — otherwise the select below 500s with a raw column-does-not-exist.
+    await ensureReturnsBillingDateOverrideColumns();
 
     const [row] = await db
       .select({
