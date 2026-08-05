@@ -472,6 +472,31 @@ const REQUIRED_GUARDS = [
   'test:carrier-fixture-schema',
   'test:awaiting-carrier-badge-nickname-fallback',
   'test:carrier-assigned-badge-palette',
+  // ── Batch 17: billing overrides, status column, store connectors ──
+  //
+  // ps-393 was RED on two assertions, both worth recording:
+  //   the CSV check restated 'Ship Date/Time (Los Angeles)' as a literal. PS-434
+  //     renamed that header to 'Billing / Activity Date (Los Angeles)' when it
+  //     split actual activity day from billing effective day. Second guard PS-434
+  //     broke, after ps-067. Now imports INVOICE_SHIP_DATE_HEADER instead of
+  //     restating it -- PS-393 owns the column ORDER, not the first column's name.
+  //   the storage-key check pinned billing_detail_cols_v6 exactly. It is v7 now
+  //     because a later column change bumped it, which is CORRECT: bumping resets
+  //     saved column configs so a new column is visible rather than hidden behind
+  //     stale localStorage. Pinning a literal turns the right action into a red,
+  //     and bumping the guard to v7 would just defer the same break. Now asserts
+  //     the key stays versioned and never regresses below the PS-393 reset.
+  // Both mutation-checked with the mutation confirmed applied.
+  'test:ps-393-billing-status-column',
+  'test:ps-392-manual-billing-overrides',
+  'test:ps-394-billing-qty-shipping-display',
+  'test:ps-395-billing-review-resolution',
+  'test:ps-396-cancelled-billing-no-charge',
+  'test:ps-398-billing-custom-box-override',
+  'test:ps-054-walmart-workflow',
+  'test:shopify-store-connector',
+  'test:ebay-nosku-title-fallback-grouping',
+  'test:ps-405-shopify-shipping-spike',
   // PS-467/468 shipment attribution. Both tickets require this in the pack, for
   // the reason the tickets exist: a shipment that could not be attributed used
   // to be persisted with a bare NULL order_id and no signal, which is how a

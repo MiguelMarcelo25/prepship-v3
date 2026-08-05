@@ -17,6 +17,12 @@ import {
   resolveBillingRowStatus,
   type BillingRowStatusResult,
 } from '../src/services/billing-row-status';
+// Import the header constant rather than restating its text. PS-434 renamed it
+// from 'Ship Date/Time (Los Angeles)' to 'Billing / Activity Date (Los Angeles)'
+// when it split actual activity day from billing effective day, and this guard
+// broke on the wording. What PS-393 owns is the COLUMN ORDER -- status text near
+// the left of each row -- not the first column's label.
+import { INVOICE_SHIP_DATE_HEADER } from '../src/routes/billing-invoice-text';
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
@@ -132,7 +138,7 @@ check('PS-393: collapsed detail DTO carries explicit status fields and keeps can
 
 check('PS-393: CSV export includes backend status text near the left of each row', () => {
   assert.deepEqual(INVOICE_CSV_HEADERS.slice(0, 3), [
-    'Ship Date/Time (Los Angeles)',
+    INVOICE_SHIP_DATE_HEADER,
     'Order #',
     'Status',
   ]);
@@ -148,7 +154,21 @@ check('PS-393: UI exposes a default-visible Billing Status column after Order #'
     'Billing Status must be ordered between Order # and Ship Date',
   );
   assert.ok(/DEFAULT_BILLING_DETAIL_COLUMN_IDS[\s\S]{0,120}'billingStatus'/.test(parity));
-  assert.ok(/billing_detail_cols_v6/.test(parity), 'column storage key must reset to v6');
+  // Repointed 2026-08-04. This pinned billing_detail_cols_v6 exactly. The key is
+  // v7 now, because a later column change bumped it -- which is the correct thing
+  // to do: bumping resets every operator's saved column config so a new column is
+  // actually visible instead of hidden behind stale localStorage.
+  //
+  // Pinning a literal version turns that correct action into a red, and the
+  // tempting repair is to bump the guard to v7, which just defers the same break
+  // to the next column change. What PS-393 needs is that the key stays VERSIONED
+  // and never regresses below the reset it introduced.
+  const colsKey = /billing_detail_cols_v(\d+)/.exec(parity);
+  assert.ok(colsKey, 'column storage key must stay versioned (billing_detail_cols_vN)');
+  assert.ok(
+    Number(colsKey[1]) >= 6,
+    `column storage key must not regress below the PS-393 reset (found v${colsKey[1]})`,
+  );
 });
 
 check('PS-393: BillingDetailTable renders backend status label and row treatment', () => {
