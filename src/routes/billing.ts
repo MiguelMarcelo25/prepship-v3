@@ -1894,6 +1894,9 @@ type InvoiceDetailRow = {
   additional_amt: string;
   shipping_amt: string;
   storage_amt: string;
+  /** PS-488 AC-6 stopgap — return money on the invoice export. */
+  return_postage_amt: string;
+  return_processing_amt: string;
   row_total: string;
   billing_status_label: string;
   item_names: string | null;
@@ -2013,6 +2016,8 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then ${detailAmount} else 0 end), 0)::text as additional_amt,
       coalesce(sum(case when b.line_type = 'shipping' then ${detailAmount} else 0 end), 0)::text as shipping_amt,
       coalesce(sum(case when b.line_type = 'storage' then ${detailAmount} else 0 end), 0)::text as storage_amt,
+      coalesce(sum(case when b.line_type in ('return_postage', 'return_label') then ${detailAmount} else 0 end), 0)::text as return_postage_amt,
+      coalesce(sum(case when b.line_type in ('return_processing_fee', 'return_processing') then ${detailAmount} else 0 end), 0)::text as return_processing_amt,
       max(coalesce(nullif(s.label_carrier, ''), nullif(s.carrier_code, ''), nullif(s.carrier_provider, ''))) as carrier_code,
       -- PS-217: the BILLED box cost is the generated package_cost line value for
       -- this order in the period — never the current package price table, and
@@ -2119,6 +2124,8 @@ async function billingInvoiceData(
       additional_amt: r.additional_amt,
       shipping_amt: r.shipping_amt,
       storage_amt: r.storage_amt,
+      return_postage_amt: r.return_postage_amt,
+      return_processing_amt: r.return_processing_amt,
       row_total: r.row_total,
       billing_status_label: billingStatus.billingStatusLabel,
       item_names: r.adjustment_description ?? itemSummary.itemNames,
@@ -2405,6 +2412,14 @@ export async function renderInvoiceXlsx(args: {
     { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
     { header: 'Total', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
     { header: 'Shipment #', key: 'shipmentId', width: 14 },
+    // PS-488 AC-6 STOPGAP — appended LAST on purpose. ps-425 pins invoice cells by
+    // POSITION, so inserting anywhere earlier shifts what existing assertions read.
+    // These reconcile with the Billing table's columns but are computed by THIS query
+    // rather than the canonical DTO: the invoice builder still has its own read path.
+    // Type and Destination are absent because this export groups by ORDER and has no
+    // row-type concept — those need the DTO cutover.
+    { header: 'Return Postage', key: 'returnPostage', width: 14, style: { numFmt: NUMBER_FMT } },
+    { header: 'Return Processing', key: 'returnProcessing', width: 16, style: { numFmt: NUMBER_FMT } },
   ];
   invoice.getRow(1).font = { bold: true };
   for (const d of details) {
@@ -2440,6 +2455,8 @@ export async function renderInvoiceXlsx(args: {
       qty: baseQty + addlQty,
       pickPackFee: pickPackFeeAmt,
       additional: addlQty > 0 ? Number(d.additional_amt) : 0,
+      returnPostage: Number(d.return_postage_amt ?? 0),
+      returnProcessing: Number(d.return_processing_amt ?? 0),
       boxCost: packageCostAmt,
       boxSize: invoiceOneLineCell(d.box_label),
       shipping: shippingAmt,

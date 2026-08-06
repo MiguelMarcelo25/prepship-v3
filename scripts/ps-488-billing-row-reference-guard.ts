@@ -204,6 +204,32 @@ check('the Billing table renders backend values and computes none of them', () =
     'the Needs Review string is a backend value, not an FE literal');
 });
 
+
+// ── AC-6 STOPGAP: return money on the invoice export ────────────────────────
+check('the invoice xlsx carries Return Postage and Return Processing', () => {
+  const billing = readFileSync('src/routes/billing.ts', 'utf8');
+  assert.ok(/header: 'Return Postage'/.test(billing));
+  assert.ok(/header: 'Return Processing'/.test(billing));
+  // Both vocabularies, or frozen rows carrying the old spelling export as 0.00.
+  assert.ok(/'return_postage', 'return_label'/.test(billing),
+    'the export aggregate must accept both return-postage spellings');
+  assert.ok(/'return_processing_fee', 'return_processing'/.test(billing),
+    'the export aggregate must accept both return-processing spellings');
+});
+
+check('the export is STILL a second read path — this is a stopgap, not AC-6', () => {
+  // Deliberately asserts the DEFECT, so it cannot be quietly forgotten. AC-6 requires
+  // the invoice to reconcile from the canonical DTO; today it runs its own query, so
+  // the table and the invoice are two independent derivations of the same money that
+  // merely agree. When the export is routed through toBillingDetailOrderRows this
+  // check flips and must be rewritten — that is the signal AC-6 is actually done.
+  const billing = readFileSync('src/routes/billing.ts', 'utf8');
+  const usesCanonicalDto = /toBillingDetailOrderRows/.test(billing);
+  assert.equal(usesCanonicalDto, false,
+    'export now uses the canonical DTO — remove this stopgap assertion and close AC-6');
+  assert.ok(/PS-488 AC-6 STOPGAP/.test(billing),
+    'the stopgap must stay labelled in the code it applies to');
+});
 if (failures > 0) {
   console.error(`\nFAIL PS-488 billing row reference guard (${failures} failing)`);
   process.exit(1);
