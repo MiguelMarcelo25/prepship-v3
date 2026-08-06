@@ -29,13 +29,20 @@ function check(name: string, fn: () => void): void {
 
 // ── the pure rule ────────────────────────────────────────────────────────────
 check('a foreign destination is international', () => {
-  assert.deepEqual(classifyDestinationCountry('CA'), { countryCode: 'CA', isInternational: true });
+  assert.deepEqual(classifyDestinationCountry('CA'), {
+    countryCode: 'CA',
+    isInternational: true,
+    destination: 'International',
+  });
   assert.equal(classifyDestinationCountry('GB').isInternational, true);
 });
 
 check('US and its USPS-domestic territories are NOT international', () => {
   // PR is the case a naive `country !== 'US'` gets wrong.
-  for (const code of ['US', 'PR', 'VI', 'GU', 'AS', 'MP', 'UM', 'FM', 'MH', 'PW']) {
+  // PS-488 AC-2 enumerates exactly these. FM/MH/PW were removed: they ship at USPS
+  // domestic rates but are sovereign nations, not US territories, and the AC does not
+  // list them. Postal-rate domesticity and billing classification are separate facts.
+  for (const code of ['US', 'PR', 'VI', 'GU', 'AS', 'MP', 'UM']) {
     assert.equal(
       classifyDestinationCountry(code).isInternational,
       false,
@@ -117,6 +124,41 @@ check('the frontend renders the backend decision and does not re-derive it', () 
     /destinationCountry\s*(?:!==|===|!=|==)\s*['"]/,
     'the frontend must not compare country codes; the backend owns the rule',
   );
+});
+
+// ── PS-488 AC-2: the Destination COLUMN, three states ────────────────────────
+check('a missing or unparseable country is Needs Review, never guessed Domestic', () => {
+  // The AC's sharpest clause. 293 orders in the last 120 days carry no country; calling
+  // those Domestic would present a gap as a verified US address on a money surface.
+  for (const bad of [null, undefined, '', '   ', 'N/A', '-', '90210', 'X', 'USAA', 123, {}]) {
+    assert.equal(
+      classifyDestinationCountry(bad).destination, 'Needs Review', String(bad),
+    );
+    assert.equal(classifyDestinationCountry(bad).countryCode, null, String(bad));
+  }
+});
+
+check('every AC-2 domestic code renders Domestic, with no territory label leaking', () => {
+  // AC-2: territories must be indistinguishable from US in Billing — no separate PR/GU
+  // labels. The column value is what renders, and it is the same string for all of them.
+  for (const code of ['US', 'PR', 'VI', 'GU', 'AS', 'MP', 'UM']) {
+    assert.equal(classifyDestinationCountry(code).destination, 'Domestic', code);
+  }
+});
+
+check('sovereign nations are International even when USPS calls them domestic', () => {
+  for (const code of ['FM', 'MH', 'PW', 'CA', 'GB', 'AU', 'MX']) {
+    assert.equal(classifyDestinationCountry(code).destination, 'International', code);
+  }
+});
+
+check('the badge stays two-state while the column is three-state', () => {
+  // isInternational drives the existing badge and MUST NOT start firing on unknowns —
+  // an absent country is not evidence of a foreign destination.
+  assert.equal(classifyDestinationCountry(null).isInternational, false);
+  assert.equal(classifyDestinationCountry(null).destination, 'Needs Review');
+  assert.equal(classifyDestinationCountry('US').isInternational, false);
+  assert.equal(classifyDestinationCountry('US').destination, 'Domestic');
 });
 
 if (failures > 0) {
