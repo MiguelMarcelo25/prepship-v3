@@ -125,7 +125,54 @@ check('every change carries full audit evidence', () => {
     actorEmail: 'dj@drprepperusa.com',
     reason: 'Corrected receipt date',
     djApprovalReference: null,
+    // AC-7 affected periods. deepEqual is deliberate here: it fails when a field is ADDED
+    // as well as changed, so audit evidence cannot grow or shrink without being read.
+    fromPeriod: '2026-08',
+    toPeriod: '2026-09',
+    adjustmentRequired: false,
   });
+});
+
+check('AC-7: the affected periods are recorded, not left to be re-derived', () => {
+  // "Which periods did this touch" is the first question an auditor asks. Recording only
+  // the days makes every reader re-derive it, and a reader using a different month
+  // boundary gets a different answer from the same evidence.
+  const d = resolveReturnDateCorrection({
+    actor: admin, request: req({ newBillingDay: '2026-09-02' }), context: ctx(),
+  }) as never as { audit: { fromPeriod: string; toPeriod: string } };
+  assert.equal(d.audit.fromPeriod, '2026-08', 'the period the return moves OUT of');
+  assert.equal(d.audit.toPeriod, '2026-09', 'the period it moves INTO');
+});
+
+check('AC-7: a within-period correction records the SAME period on both sides', () => {
+  // Not a no-op — the day changed. The periods matching is the evidence that no money
+  // crossed a period boundary, which is a different fact from "nothing happened".
+  const d = resolveReturnDateCorrection({
+    actor: admin, request: req({ newBillingDay: '2026-08-27' }), context: ctx(),
+  }) as never as { audit: { fromPeriod: string; toPeriod: string; adjustmentRequired: boolean } };
+  assert.equal(d.audit.fromPeriod, '2026-08');
+  assert.equal(d.audit.toPeriod, '2026-08');
+  assert.equal(d.audit.adjustmentRequired, false);
+});
+
+check('AC-7: adjustmentRequired is recorded on EVERY outcome, not only when true', () => {
+  // An absent field would be ambiguous between "no adjustment" and "nobody checked".
+  const move = resolveReturnDateCorrection({
+    actor: admin, request: req({ newBillingDay: '2026-09-02' }), context: ctx(),
+  }) as never as { audit: { adjustmentRequired: boolean } };
+  assert.equal(move.audit.adjustmentRequired, false);
+});
+
+check('AC-7: the adjustment ID is NOT claimed at decision time', () => {
+  // PS-449 mints it when the next open period is reconciled, which has not happened yet.
+  // Recording an id we have never seen would be worse evidence than an honest pending
+  // linkage — it would read as a verified reference to something that does not exist.
+  const d = resolveReturnDateCorrection({
+    actor: admin, request: req({ newBillingDay: '2026-09-02' }), context: ctx(),
+  }) as never as { audit: Record<string, unknown> };
+  for (const forbidden of ['adjustmentId', 'billingAdjustmentId', 'creditNoteId']) {
+    assert.ok(!(forbidden in d.audit), `${forbidden} cannot be known at decision time`);
+  }
 });
 
 check('the ORIGINAL system-created day survives a second correction', () => {

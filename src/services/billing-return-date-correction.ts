@@ -64,7 +64,31 @@ export type ReturnDateCorrectionAudit = {
   actorEmail: string | null;
   reason: string;
   djApprovalReference: string | null;
+  /**
+   * AC-7 affected periods — the billing month the return moves OUT of and INTO.
+   *
+   * Derived here rather than read back later because they are a pure function of the two
+   * days, and because "which periods did this touch" is the question an auditor asks
+   * first. Recording only the days would make every reader re-derive it, and a reader
+   * using a different month boundary would get a different answer.
+   */
+  fromPeriod: string;
+  toPeriod: string;
+  /**
+   * Whether the correction crosses a finalized period and therefore produces a PS-449
+   * adjustment rather than an in-place move.
+   *
+   * The adjustment's own id is deliberately NOT recorded here: it does not exist yet at
+   * decision time — PS-449 mints it when the next open period is reconciled. Claiming an
+   * id we have not seen would be worse evidence than admitting the linkage is pending.
+   */
+  adjustmentRequired: boolean;
 };
+
+/** The billing period a day falls in. One definition, so no caller invents another. */
+export function billingPeriodOf(day: string): string {
+  return day.slice(0, 7);
+}
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -130,6 +154,8 @@ export function resolveReturnDateCorrection(input: {
     return { kind: 'noop', message: 'The return already bills on that day.' };
   }
 
+  const touchesFinalized = context.currentPeriodFinalized || context.targetPeriodFinalized;
+
   const audit: ReturnDateCorrectionAudit = {
     returnId: request.returnId,
     oldBillingDay: context.currentBillingDay,
@@ -139,9 +165,13 @@ export function resolveReturnDateCorrection(input: {
     actorEmail: actor.actorEmail ?? null,
     reason,
     djApprovalReference: request.djApprovalReference?.trim() || null,
+    // AC-7 affected periods, from the canonical helper so no caller re-derives them.
+    fromPeriod: billingPeriodOf(context.currentBillingDay),
+    toPeriod: billingPeriodOf(newDay),
+    // Recorded on EVERY outcome, including a plain move where it is false. An absent
+    // field would be ambiguous between "no adjustment" and "nobody checked".
+    adjustmentRequired: touchesFinalized,
   };
-
-  const touchesFinalized = context.currentPeriodFinalized || context.targetPeriodFinalized;
   if (!touchesFinalized) {
     return { kind: 'move', newBillingDay: newDay, audit };
   }
