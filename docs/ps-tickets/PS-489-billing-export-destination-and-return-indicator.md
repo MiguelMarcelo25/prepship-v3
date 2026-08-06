@@ -67,9 +67,19 @@ Coverage check on production: 5,065 of 5,067 orders in the last 60 days carry a 
 
 ### What is genuinely missing
 
-**Neither field appears in any of the three export surfaces.** Grep for `destination` in
+**Both fields are already rendered in the UI — and in none of the three exports.**
+
+PS-488 AC-6 (`aa8324c3`) added **Type** and **Destination** columns to
+`web/src/components/Views/BillingDetailTable.tsx`, plus the supporting fields on
+`billing-detail-row-sot.ts` and `billing-parity.ts`. It did **not** touch any export
+route. Verified at HEAD `4a055403` with a clean tree: grep for `destination` in
 `billing-invoice-csv.ts`, `billing-invoice-xlsx-layout.ts` and `billing-invoice-text.ts`
-returns zero matches. That is the whole of this card.
+returns **zero matches in all three**.
+
+So the operator can see Destination on screen and cannot get it out of an export — which
+is precisely the gap DJ reported. **This card is the export surfaces only**, and the UI
+table is the reference implementation to mirror: same vocabulary, same source fields, no
+new derivation.
 
 ## Decisions locked in with DJ (2026-08-01)
 
@@ -132,4 +142,15 @@ exists precisely so that cannot happen. DJ reconfirmed keeping all three on 2026
   they survive into the invoice DTO rather than only the billing-detail read model — that
   is the one unverified link in this plan.
 
-Filed 2026-08-01 after investigation. Head at filing: `0f822600`.
+- **Mirror the UI table, do not invent.** `BillingDetailTable.tsx` already renders Type
+  and Destination from the DTO. The exports should read the same fields and use the same
+  words, so screen and export cannot disagree — a billing surface that says two different
+  things about one order is worse than one that says nothing.
+
+Filed 2026-08-01 after investigation. Head at filing: `4a055403`.
+
+> **Concurrency note.** This branch is being worked by more than one agent session. While
+> tonight's PS-431/467/469/477/484/485 work was in flight, a concurrent session pushed 68
+> commits of PS-487/PS-488 billing work on top of it. Everything is intact and linear —
+> but re-read the export files at current HEAD before implementing, because this card's
+> findings were taken at `4a055403` and that area is actively moving.
