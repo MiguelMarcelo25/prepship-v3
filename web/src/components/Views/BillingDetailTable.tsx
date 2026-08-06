@@ -72,6 +72,12 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
     case 'totalQty': return billingDetailQtySortValue(row)
+    // PS-488 AC-6: sort on the backend value. No fallback chain — an absent field
+    // must sort as absent, not be reconstructed from shipping/pickpack.
+    case 'rowType': return (row.rowType as string) ?? ''
+    case 'destination': return (row.destination as string) ?? ''
+    case 'returnPostage': return Number(row.returnPostageTotal ?? 0)
+    case 'returnProcessing': return Number(row.returnProcessingTotal ?? 0)
     case 'pickpack': return metrics.pickPack
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
@@ -490,6 +496,31 @@ export function BillingDetailTable({
                     )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                   </div>
                 )
+              }
+              // ── PS-488 AC-6 ──────────────────────────────────────────────
+              // All four render backend-owned values verbatim. No country test, no
+              // reference assembly, no summing: PrepShip decides, this displays.
+              case 'rowType':
+                return <span>{(row.rowType as string) ?? '—'}</span>
+              case 'destination':
+                // 'Needs Review' is a real backend answer, shown as-is rather than
+                // softened to a dash — a gap on a money surface should look like one.
+                return (
+                  <span data-billing-destination={(row.destination as string) ?? ''}>
+                    {(row.destination as string) ?? '—'}
+                  </span>
+                )
+              case 'returnPostage':
+              case 'returnProcessing': {
+                const value = column.id === 'returnPostage'
+                  ? row.returnPostageTotal
+                  : row.returnProcessingTotal
+                // AC-5: not-yet-billable return money is blank, never a fabricated
+                // $0.00 — an invented zero reads as a decision that was never made.
+                if (value === null || value === undefined) {
+                  return <span style={{ color: 'var(--text4)' }}>—</span>
+                }
+                return <span>${Number(value).toFixed(2)}</span>
               }
               case 'totalQty':
                 return <span>{billingDetailQtyDisplay(row)}</span>

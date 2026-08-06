@@ -96,6 +96,10 @@ export interface BillingConfigDraft {
 export type BillingDetailColumnId =
   | 'actions'
   | 'orderNumber'
+  | 'rowType'
+  | 'destination'
+  | 'returnPostage'
+  | 'returnProcessing'
   | 'billingStatus'
   | 'shipDate'
   | 'carrierNickname'
@@ -167,6 +171,11 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
   { id: 'billingStatus', label: 'Status', align: 'left', always: false },
+  // PS-488 AC-6. All four render backend-owned values verbatim; none is computed here.
+  { id: 'rowType', label: 'Type', align: 'left', always: false },
+  { id: 'destination', label: 'Destination', align: 'left', always: false },
+  { id: 'returnPostage', label: 'Return Postage', align: 'right', always: false },
+  { id: 'returnProcessing', label: 'Return Processing', align: 'right', always: false },
   { id: 'shipDate', label: 'Billing Date', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
@@ -195,6 +204,10 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
   'orderNumber',
   'billingStatus',
+  'rowType',
+  'destination',
+  'returnPostage',
+  'returnProcessing',
   'shipDate',
   'carrierNickname',
   'itemNames',

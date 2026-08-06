@@ -70,6 +70,9 @@ export interface BillingDetailRowDto {
    * is two-state: a badge cannot say "we don't know", a column can and must.
    */
   destination?: BillingDestination;
+  /** PS-488 AC-6 — return money in its own columns, never inferred by the FE. */
+  returnPostageTotal?: number;
+  returnProcessingTotal?: number;
   /** PS-488 AC-1 — Outbound or Return, from the relational returnId. */
   rowType?: BillingRowType;
   /** PS-488 AC-1 — `#1234` or `#1234-RETURN`. Display/search identity, never a key. */
@@ -168,7 +171,11 @@ function duplicateOrderNumbers(rows: BillingDetailReadModelRow[]): Set<string> {
 // missing totals fall back to the lineType inference exactly as before.
 function billingLineMetrics(row: BillingDetailReadModelRow) {
   if (isCancelledNoChargeBillingRow(row)) {
-    return { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, adjustment: 0, total: 0 };
+    // A cancelled no-charge row bills nothing, return money included (PS-377).
+    return {
+      pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, adjustment: 0, total: 0,
+      returnPostage: 0, returnProcessing: 0,
+    };
   }
 
   const lineType = row.lineType;
@@ -207,7 +214,14 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   const total = explicitTotal ??
     pickPack + additional + packageCost + shipping + storage + adjustment;
 
-  return { pickPack, additional, packageCost, shipping, storage, adjustment, total };
+  // PS-488 AC-6: dedicated buckets so the Billing columns render a backend number
+  // rather than the FE inferring return money out of shipping/pickpack. Both the
+  // canonical portal names and PrepShip's historical ones count, since frozen rows
+  // carry the old spelling and are never rewritten.
+  const returnPostage = lineType === 'return_postage' || lineType === 'return_label' ? lineTotal : 0;
+  const returnProcessing = lineType === 'return_processing_fee' || lineType === 'return_processing' ? lineTotal : 0;
+
+  return { pickPack, additional, packageCost, shipping, storage, adjustment, total, returnPostage, returnProcessing };
 }
 
 function rowKey(row: BillingDetailReadModelRow, orderNumberKey: Map<string, string>): string {
@@ -437,6 +451,8 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         additionalTotal: metrics.additional,
         packageTotal: metrics.packageCost,
         shippingTotal: metrics.shipping,
+        returnPostageTotal: metrics.returnPostage,
+        returnProcessingTotal: metrics.returnProcessing,
         storageTotal: metrics.storage,
         adjustmentTotal: metrics.adjustment,
         pickPackFeeTotal: metrics.pickPack + metrics.additional,
@@ -456,6 +472,8 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     existing.additionalTotal = numberValue(existing.additionalTotal) + metrics.additional;
     existing.packageTotal = numberValue(existing.packageTotal) + metrics.packageCost;
     existing.shippingTotal = numberValue(existing.shippingTotal) + metrics.shipping;
+    existing.returnPostageTotal = numberValue(existing.returnPostageTotal) + metrics.returnPostage;
+    existing.returnProcessingTotal = numberValue(existing.returnProcessingTotal) + metrics.returnProcessing;
     existing.storageTotal = numberValue(existing.storageTotal) + metrics.storage;
     existing.adjustmentTotal = numberValue(existing.adjustmentTotal) + metrics.adjustment;
     existing.pickPackFeeTotal = existing.pickpackTotal + existing.additionalTotal;
