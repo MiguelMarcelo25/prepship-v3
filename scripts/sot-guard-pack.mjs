@@ -982,6 +982,9 @@ const REQUIRED_GUARDS = [
   // protects is 'PrepShip never mints a -RETURN suffix': a second generator would give
   // one return two visible identities across two screens.
   'test:ps-488-billing-row-reference',
+  // PS-488 AC-6 — invoice reconciliation projection. Gated because it protects frozen
+  // outbound shipment rows and the once-only placement of return money.
+  'test:ps-488-invoice-reconcile',
   // PS-487 slice 3 — the generator wiring. Pins that RETURN_BILLING_ENABLED defaults
   // OFF, that the write is fenced by billingLineItemIsEditablePredicate() so a
   // finalized period is never rewritten, and that the generator delegates amounts to
