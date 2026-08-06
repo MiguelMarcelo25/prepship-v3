@@ -4,7 +4,9 @@ import { isBillingReturnLineType } from './billing-row-status';
 import {
   INTERNATIONAL_BILLING_BADGE,
   classifyDestinationCountry,
+  type BillingDestination,
 } from './billing-destination-international';
+import { billingRowIdentity, type BillingRowType } from './billing-row-reference';
 
 // PS-368 — the TYPED canonical billing detail order-row boundary.
 //
@@ -62,8 +64,20 @@ export interface BillingDetailRowDto {
   destinationCountry?: string | null;
   /** Backend-owned: true only for destinations outside the US domestic postal area. */
   destinationIsInternational?: boolean;
+  /**
+   * PS-488 AC-2 — what the Destination COLUMN shows: Domestic / International /
+   * Needs Review. Distinct from `destinationIsInternational`, which drives the badge and
+   * is two-state: a badge cannot say "we don't know", a column can and must.
+   */
+  destination?: BillingDestination;
+  /** PS-488 AC-1 — Outbound or Return, from the relational returnId. */
+  rowType?: BillingRowType;
+  /** PS-488 AC-1 — `#1234` or `#1234-RETURN`. Display/search identity, never a key. */
+  displayReference?: string | null;
   relatedOrderId?: number | string | null;
   returnId?: number | string | null;
+  /** returns.return_reference as persisted by the Client Portal (AC-1). */
+  returnReference?: string | null;
   manualBillingOverrideLineTypes?: string[];
   manualBillingOverrideLabels?: string[];
 }
@@ -362,15 +376,33 @@ function applyDestinationInternational(row: BillingDetailRowDto): void {
   // provider value projected from orders.raw->'shipTo'->>'country' — it is carried onto
   // the DTO so operators can see WHICH country, but the international decision itself
   // comes from the canonical classifier, never from a comparison at a call site.
-  const { countryCode, isInternational } = classifyDestinationCountry(row.destinationCountry);
+  const { countryCode, isInternational, destination } = classifyDestinationCountry(row.destinationCountry);
   row.destinationCountry = countryCode;
   row.destinationIsInternational = isInternational;
+  // AC-2: the column value. `Needs Review` is a real answer, not an absent one — the
+  // badge above still stays off for it, because an unknown country is not evidence of a
+  // foreign destination.
+  row.destination = destination;
   if (isInternational) appendBillingBadge(row, INTERNATIONAL_BILLING_BADGE);
+}
+
+function applyRowIdentity(row: BillingDetailRowDto): void {
+  // PS-488 AC-1. Read from the canonical owner rather than assembled here, so the
+  // "PrepShip never mints a -RETURN suffix" rule has exactly one home.
+  const { rowType, displayReference } = billingRowIdentity({
+    orderNumber: nonEmpty(row.orderNumber) ? String(row.orderNumber) : null,
+    orderId: typeof row.orderId === 'number' ? row.orderId : Number(row.orderId) || null,
+    returnId: typeof row.returnId === 'number' ? row.returnId : Number(row.returnId) || null,
+    returnReference: nonEmpty(row.returnReference) ? String(row.returnReference) : null,
+  });
+  row.rowType = rowType;
+  row.displayReference = displayReference;
 }
 
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
   applyCancelledNoCharge(row);
   applyDestinationInternational(row);
+  applyRowIdentity(row);
   row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
   const orderNumber = orderNumberValue(row);
   if (orderNumber && duplicatedOrderNumbers.has(orderNumber)) {

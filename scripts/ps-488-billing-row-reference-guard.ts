@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { billingRowIdentity } from '../src/services/billing-row-reference';
+import { toBillingDetailOrderRows } from '../src/services/billing-detail-row-sot';
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
@@ -90,6 +91,38 @@ check('the display reference is NOT used as an idempotency key anywhere', () => 
   const planner = readFileSync('src/services/billing-return-line-planner.ts', 'utf8');
   assert.ok(!/billingRowIdentity|displayReference/.test(planner),
     'the line planner must not key on a display reference');
+});
+
+// ── AC-6 slice 1: the fields actually reach the DTO ──────────────────────────
+
+const base = {
+  lineType: 'pick_pack', orderId: 4242, orderNumber: '1234',
+  clientId: 1, qty: 1, totalCost: '2.50',
+};
+
+check('an outbound row carries rowType/displayReference/destination on the DTO', () => {
+  // A rule nothing reads is not a feature. AC-1 and AC-2 are only real once they are on
+  // the row the Billing columns and CP-059 consume.
+  const [row] = toBillingDetailOrderRows([{ ...base, destinationCountry: 'US' }]);
+  assert.equal(row.rowType, 'Outbound');
+  assert.equal(row.displayReference, '#1234');
+  assert.equal(row.destination, 'Domestic');
+});
+
+check('a return row carries its own reference and Return type', () => {
+  const [row] = toBillingDetailOrderRows([
+    { ...base, returnId: 7, returnReference: '1234-RETURN', destinationCountry: 'CA' },
+  ]);
+  assert.equal(row.rowType, 'Return');
+  assert.equal(row.displayReference, '#1234-RETURN');
+  assert.equal(row.destination, 'International');
+});
+
+check('an unknown-country row reaches the DTO as Needs Review, not Domestic', () => {
+  const [row] = toBillingDetailOrderRows([{ ...base, destinationCountry: null }]);
+  assert.equal(row.destination, 'Needs Review');
+  // The badge must still stay off — unknown is not evidence of a foreign destination.
+  assert.equal(row.destinationIsInternational, false);
 });
 
 if (failures > 0) {
