@@ -978,6 +978,10 @@ const REQUIRED_GUARDS = [
   // bills nobody. The generator wiring is NOT written; when it is, it goes behind a
   // default-OFF flag like every other money-path cutover in this repo.
   'test:ps-487-return-line-planner',
+  // PS-488 AC-1 — Billing row visible reference/type. Gated because the rule it
+  // protects is 'PrepShip never mints a -RETURN suffix': a second generator would give
+  // one return two visible identities across two screens.
+  'test:ps-488-billing-row-reference',
   // PS-487 slice 3 — the generator wiring. Pins that RETURN_BILLING_ENABLED defaults
   // OFF, that the write is fenced by billingLineItemIsEditablePredicate() so a
   // finalized period is never rewritten, and that the generator delegates amounts to
