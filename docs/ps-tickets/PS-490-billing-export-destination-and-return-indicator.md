@@ -1,4 +1,4 @@
-# PS-489 — Billing exports: Destination column + Return/Repl indicator on Order #
+# PS-490 — Billing exports: Destination column + Return/Repl indicator on Order #
 
 **Assignee:** Lawrence
 **Priority:** P2 — operator-facing billing surface, no money math changes
@@ -7,7 +7,8 @@
 **Closely related:** PS-488 (AC-1 return identity, AC-2 Destination) — the backend half of
 this card is already built there. This card is the export surfaces only.
 
-> Card number is provisional — 488 was the highest seen on the board; confirm before filing.
+> Numbered PS-490: PS-489 was already taken by "International orders ship without a shipment
+> record, so they bill $0 shipping" (raised 2026-08-06).
 
 ## SHIP GATE
 
@@ -108,7 +109,7 @@ exists precisely so that cannot happen. DJ reconfirmed keeping all three on 2026
 3. **`src/routes/billing-invoice-xlsx-layout.ts`** — same column and same Order # suffix,
    in the Line Items sheet; keep column widths/formatting consistent with neighbours.
 4. **`src/routes/billing-invoice-text.ts`** — same, in the text Export.
-5. **Guard** — new `test:ps-489-billing-export-destination-return`, wired into
+5. **Guard** — new `test:ps-490-billing-export-destination-return`, wired into
    `test:sot-guard-pack`. Pin: all three surfaces emit the column; all three use the
    SHARED label rule rather than re-deriving; `Needs Review` is never rendered as
    Domestic; an unknown suffix leaves Order # untouched; and no total/amount changes.
@@ -147,7 +148,8 @@ exists precisely so that cannot happen. DJ reconfirmed keeping all three on 2026
   words, so screen and export cannot disagree — a billing surface that says two different
   things about one order is worse than one that says nothing.
 
-Filed 2026-08-01 after investigation. Head at filing: `4a055403`.
+Filed on Trello 2026-08-01 as PS-490: https://trello.com/c/9osbmAlm (Lawrence To-Do List).
+Head at filing: `a148f6b4`.
 
 > **Concurrency note.** This branch is being worked by more than one agent session. While
 > tonight's PS-431/467/469/477/484/485 work was in flight, a concurrent session pushed 68
