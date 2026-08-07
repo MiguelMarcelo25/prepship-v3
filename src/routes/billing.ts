@@ -33,6 +33,12 @@ import {
 import { billingInvoiceHeaderTotals } from '../services/billing-invoice-totals';
 // PS-491: duplicated order numbers must not be charged twice on the invoice.
 import { loadDuplicateOrderDecisions } from '../services/billing-duplicate-order-loader';
+// PS-495: shipped orders that never reached billing at all.
+import {
+  loadBillingCoverageGaps,
+  summarizeBillingCoverageGaps,
+  groupBillingCoverageGapsByClient,
+} from '../services/billing-coverage-gap';
 // PS-490: Destination column + Return indicator, both from their canonical owners.
 import {
   classifyDestinationCountry,
@@ -776,6 +782,32 @@ app.get('/generate/status', zValidator('query', generateSchema), async (c) => {
     })),
   );
   return c.json(result);
+});
+
+/**
+ * PS-495: shipped orders that were never billed at all.
+ *
+ * Read-only diagnostic. It reports the gap and deliberately does NOT repair it —
+ * regeneration writes money against orders shipped as long ago as 2024, which is an
+ * operator decision. See billing-coverage-gap.ts for the cause (shipments syncing into a
+ * period that had already been generated).
+ */
+app.get('/coverage-gaps', async (c) => {
+  const rows = await loadBillingCoverageGaps();
+  const scoped = billingScopeFromContext(c);
+  const visible = [];
+  for (const row of rows) {
+    // Same client scoping every other billing endpoint applies — a gap report must not
+    // become a way to enumerate another client's orders.
+    if (await canAccessBillingClient(row.clientId, scoped)) visible.push(row);
+  }
+  return c.json({
+    data: {
+      summary: summarizeBillingCoverageGaps(visible),
+      byClient: groupBillingCoverageGapsByClient(visible),
+      orders: visible,
+    },
+  });
 });
 
 app.get('/summary', zValidator('query', generateSchema), async (c) => {

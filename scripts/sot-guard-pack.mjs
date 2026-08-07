@@ -1067,6 +1067,14 @@ const REQUIRED_GUARDS = [
   // builder can express per-item origins. Also pins that the connector never re-reads
   // customs items itself: adapters translate, they do not decide a declarable fact.
   'test:ps-494-customs-origin',
+  // PS-495: shipped orders that never reached billing at all. Pinned for the two
+  // EXCLUSIONS, which are what make the number usable: orders after the client's billing
+  // frontier are ordinary generation lag (6 of 454 when measured), and clients who have
+  // never been billed are not billing clients (two production stores carry 26,495 and 226
+  // orders with zero billing between them). Drop either and the alert is permanently
+  // non-zero, therefore ignored. Also pins that the detector never writes -- regeneration
+  // bills orders shipped as far back as 2024 and is an operator decision.
+  'test:ps-495-billing-coverage-gap',
   'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having
   // rotted unnoticed precisely because they were not in this pack. In every case
