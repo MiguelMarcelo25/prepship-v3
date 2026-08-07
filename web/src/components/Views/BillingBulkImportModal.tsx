@@ -102,9 +102,10 @@ export function BillingBulkImportModal({
         </div>
 
         <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '4px 0 6px' }}>
-          Paste three columns from your sheet: <strong>Order #</strong>, <strong>Box</strong>,{' '}
-          <strong>Shipping</strong>. Leave a cell blank to leave that field alone. Each row is saved
-          as a normal invoice-line edit with the reason below.
+          One order per line: <strong>Order #</strong>, <strong>Box</strong>,{' '}
+          <strong>Shipping</strong> — separated by tabs (a paste from Sheets), commas, or spaces.
+          Leave the box or the amount out to leave that field alone. Each row is saved as a normal
+          invoice-line edit with the reason below.
         </p>
 
         <textarea

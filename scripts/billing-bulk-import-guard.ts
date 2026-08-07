@@ -51,6 +51,37 @@ check('a Google Sheets tab paste parses into order/box/shipping', () => {
   assert.equal(rows[1]!.shippingRaw, '$20.72');
 });
 
+check('a space-separated line parses (typed by hand, not pasted)', () => {
+  // The first real use typed "2555   12x10x3 20.72" instead of pasting tabs, and
+  // the whole line became the order number.
+  const rows = parseBulkImportText('2555   12x10x3 20.72');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.orderNumberRaw, '2555');
+  assert.equal(rows[0]!.boxRaw, '12x10x3');
+  assert.equal(rows[0]!.shippingRaw, '20.72');
+});
+
+check('a spaced box name survives space separation', () => {
+  const rows = parseBulkImportText('2555 Custom 12x10x3 20.72');
+  assert.equal(rows[0]!.orderNumberRaw, '2555');
+  assert.equal(rows[0]!.boxRaw, 'Custom 12x10x3', 'the middle tokens are the box');
+  assert.equal(rows[0]!.shippingRaw, '20.72');
+});
+
+check('space separation with no trailing amount is a box, not a shipping', () => {
+  const rows = parseBulkImportText('2555 12x10x3');
+  assert.equal(rows[0]!.boxRaw, '12x10x3');
+  assert.equal(rows[0]!.shippingRaw, '');
+});
+
+check('a space-separated line resolves end to end', () => {
+  const rows = resolveBulkImportRows(parseBulkImportText('2515 9x6x3 20.83'), DETAILS, PACKAGES);
+  assert.equal(rows[0]!.status, 'ready');
+  assert.equal(rows[0]!.orderId, 501);
+  assert.equal(rows[0]!.packageId, 11);
+  assert.equal(rows[0]!.shipping, 20.83);
+});
+
 check('a pasted header row is skipped, blank lines ignored', () => {
   const rows = parseBulkImportText('ORDER #\tBOX\tSHIPPING\n\n2515\t9x6x3\t20.83\n');
   assert.equal(rows.length, 1);

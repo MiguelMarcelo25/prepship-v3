@@ -68,13 +68,43 @@ export function parseImportMoney(raw: string): number | null {
  * Column order is fixed: Order #, Box, Shipping. Box and Shipping may be blank —
  * a blank column means "leave that field alone".
  */
+/**
+ * Split one line into [order, box, shipping].
+ *
+ * Tabs and commas are unambiguous separators. Plain spaces are not — a box can
+ * legitimately be "Custom 12x10x3" — so for a space-separated line we anchor on
+ * the ends instead: first token is the order, a trailing money-looking token is
+ * the shipping, and whatever remains in the middle is the box.
+ */
+function splitImportLine(line: string): [string, string, string] {
+  if (line.includes('\t')) {
+    const [a = '', b = '', c = ''] = line.split('\t').map((cell) => cell.trim())
+    return [a, b, c]
+  }
+  if (line.includes(',')) {
+    const [a = '', b = '', c = ''] = line.split(',').map((cell) => cell.trim())
+    return [a, b, c]
+  }
+
+  const tokens = line.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return ['', '', '']
+  const order = tokens[0]!
+  const rest = tokens.slice(1)
+  if (rest.length === 0) return [order, '', '']
+
+  const last = rest[rest.length - 1]!
+  if (parseImportMoney(last) != null) {
+    return [order, rest.slice(0, -1).join(' '), last]
+  }
+  return [order, rest.join(' '), '']
+}
+
 export function parseBulkImportText(text: string): BulkImportParsedRow[] {
   const out: BulkImportParsedRow[] = []
   const lines = String(text ?? '').split(/\r?\n/)
   lines.forEach((line, index) => {
     if (!line.trim()) return
-    const cells = (line.includes('\t') ? line.split('\t') : line.split(',')).map((cell) => cell.trim())
-    const [orderNumberRaw = '', boxRaw = '', shippingRaw = ''] = cells
+    const [orderNumberRaw, boxRaw, shippingRaw] = splitImportLine(line)
     // Skip a pasted header row.
     if (index === 0 && /order/i.test(orderNumberRaw) && !/^\d+$/.test(orderNumberRaw)) return
     if (!orderNumberRaw) return
