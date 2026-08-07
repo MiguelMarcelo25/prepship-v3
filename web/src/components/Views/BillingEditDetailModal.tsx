@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Loader2, X } from 'lucide-react'
 import type { PackageDto } from '../../types/api'
 import type { BillingEditDraft } from './billing-edit-draft-cache'
@@ -111,7 +111,17 @@ export function BillingEditDetailModal({
   const prepTotal = moneyDraft(draft.pickPack) + moneyDraft(draft.additional)
   const manualOverrideLabels = manualBillingOverrideLabels(row)
 
+  // One control: clicking opens the full grouped list, typing filters it.
+  const [boxOpen, setBoxOpen] = useState(false)
   const [boxFilter, setBoxFilter] = useState('')
+  const [boxActive, setBoxActive] = useState(0)
+  const boxWrapRef = useRef<HTMLDivElement | null>(null)
+
+  const selectedPackageName = useMemo(() => {
+    const selected = packages.find((pkg) => packageOptionId(pkg) === String(draft.packageId))
+    if (selected) return selected.name || packageOptionId(selected)
+    return row.packageName ? `${row.packageName} (shipment box)` : ''
+  }, [packages, draft.packageId, row.packageName])
 
   // This client's priced boxes first, everything else still reachable. Hard-filtering
   // the rest out would strand the "Box needs review" flow below, which exists exactly
@@ -130,7 +140,87 @@ export function BillingEditDetailModal({
   }, [packages, clientPricedPackageIds, boxFilter])
 
   const clientBoxLabel = clientName ? `${clientName} boxes` : 'Client boxes'
-  const noBoxMatches = boxFilter.trim().length > 0 && clientBoxes.length === 0 && otherBoxes.length === 0
+  // Flat order the keyboard walks; the rendered list re-splits it into groups.
+  const boxOptions = useMemo(() => [...clientBoxes, ...otherBoxes], [clientBoxes, otherBoxes])
+  const noBoxMatches = boxOpen && boxOptions.length === 0
+
+  useEffect(() => {
+    setBoxActive(0)
+  }, [boxFilter, boxOpen])
+
+  // Close on an outside mousedown. The modal backdrop stops propagation, so a
+  // document listener is the only thing that sees clicks elsewhere in the modal.
+  useEffect(() => {
+    if (!boxOpen) return
+    function onDocMouseDown(event: MouseEvent) {
+      if (!boxWrapRef.current?.contains(event.target as Node)) {
+        setBoxOpen(false)
+        setBoxFilter('')
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [boxOpen])
+
+  function commitBox(pkg: PackageDto | undefined) {
+    if (!pkg) return
+    onPackageChange(packageOptionId(pkg))
+    setBoxOpen(false)
+    setBoxFilter('')
+  }
+
+  function onBoxKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!boxOpen) {
+        setBoxOpen(true)
+        return
+      }
+      if (!boxOptions.length) return
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      setBoxActive((current) => (current + step + boxOptions.length) % boxOptions.length)
+      return
+    }
+    if (event.key === 'Enter') {
+      if (!boxOpen) return
+      event.preventDefault()
+      commitBox(boxOptions[boxActive])
+      return
+    }
+    if (event.key === 'Escape' && boxOpen) {
+      event.preventDefault()
+      setBoxOpen(false)
+      setBoxFilter('')
+    }
+  }
+
+  function renderBoxOption(pkg: PackageDto, flatIndex: number) {
+    const id = packageOptionId(pkg)
+    const isActive = flatIndex === boxActive
+    const isSelected = id === String(draft.packageId)
+    return (
+      <li
+        key={id}
+        id={`billing-box-option-${id}`}
+        role="option"
+        aria-selected={isSelected}
+        onMouseEnter={() => setBoxActive(flatIndex)}
+        onMouseDown={(event) => {
+          event.preventDefault()
+          commitBox(pkg)
+        }}
+        style={{
+          padding: '4px 8px',
+          fontSize: 12,
+          cursor: 'pointer',
+          fontWeight: isSelected ? 700 : 500,
+          background: isActive ? 'var(--bg2)' : 'transparent',
+        }}
+      >
+        {pkg.name || id}
+      </li>
+    )
+  }
 
   return (
     <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !saving && onClose()}>
@@ -169,46 +259,90 @@ export function BillingEditDetailModal({
           <div><span>SKU</span><strong>{fallbackText(row.itemSkus)}</strong></div>
           <div>
             <span>Box Size</span>
-            <input
-              className="ship-input billing-edit-box-filter"
-              style={{ width: '100%', fontSize: 12, marginBottom: 4 }}
-              type="search"
-              value={boxFilter}
-              disabled={saving}
-              placeholder="Type to filter, e.g. 12x10"
-              aria-label="Filter box sizes"
-              onChange={(event) => setBoxFilter(event.target.value)}
-            />
-            <select
-              className="ship-select billing-edit-box-select"
-              style={{ width: '100%', fontSize: 12, fontWeight: 600 }}
-              value={draft.packageId}
-              disabled={saving}
-              onChange={(event) => onPackageChange(event.target.value)}
-            >
-              <option value="">{row.packageName ? `${row.packageName} (shipment box)` : '- (shipment box)'}</option>
-              {clientBoxes.length ? (
-                <optgroup label={clientBoxLabel}>
-                  {clientBoxes.map((pkg) => {
-                    const id = packageOptionId(pkg)
-                    return <option key={id} value={id}>{pkg.name || id}</option>
-                  })}
-                </optgroup>
+            <div ref={boxWrapRef} style={{ position: 'relative' }}>
+              <input
+                className="ship-input billing-edit-box-select"
+                style={{ width: '100%', fontSize: 12, fontWeight: 600 }}
+                type="text"
+                role="combobox"
+                aria-expanded={boxOpen}
+                aria-controls="billing-box-listbox"
+                aria-autocomplete="list"
+                aria-activedescendant={
+                  boxOpen && boxOptions[boxActive] ? `billing-box-option-${packageOptionId(boxOptions[boxActive])}` : undefined
+                }
+                autoComplete="off"
+                disabled={saving}
+                // Closed: shows the current box. Open: shows what you type.
+                value={boxOpen ? boxFilter : selectedPackageName}
+                placeholder={row.packageName ? `${row.packageName} (shipment box)` : '- (shipment box)'}
+                onChange={(event) => {
+                  setBoxFilter(event.target.value)
+                  if (!boxOpen) setBoxOpen(true)
+                }}
+                onFocus={() => setBoxOpen(true)}
+                onMouseDown={() => setBoxOpen(true)}
+                onKeyDown={onBoxKeyDown}
+              />
+              {boxOpen ? (
+                <ul
+                  id="billing-box-listbox"
+                  role="listbox"
+                  aria-label="Box size"
+                  style={{
+                    position: 'absolute',
+                    zIndex: 40,
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    margin: '2px 0 0',
+                    padding: 0,
+                    listStyle: 'none',
+                    maxHeight: 240,
+                    overflowY: 'auto',
+                    background: 'var(--bg)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.12)',
+                  }}
+                >
+                  <li
+                    role="option"
+                    aria-selected={!draft.packageId}
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      onPackageChange('')
+                      setBoxOpen(false)
+                      setBoxFilter('')
+                    }}
+                    style={{ padding: '4px 8px', fontSize: 12, cursor: 'pointer', color: 'var(--muted)' }}
+                  >
+                    {row.packageName ? `${row.packageName} (shipment box)` : '- (shipment box)'}
+                  </li>
+                  {clientBoxes.length ? (
+                    <>
+                      <li role="presentation" style={{ padding: '4px 8px', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--muted)' }}>
+                        {clientBoxLabel}
+                      </li>
+                      {clientBoxes.map((pkg, index) => renderBoxOption(pkg, index))}
+                    </>
+                  ) : null}
+                  {otherBoxes.length ? (
+                    <>
+                      <li role="presentation" style={{ padding: '4px 8px', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--muted)' }}>
+                        {clientBoxes.length ? 'All other boxes' : 'All boxes'}
+                      </li>
+                      {otherBoxes.map((pkg, index) => renderBoxOption(pkg, clientBoxes.length + index))}
+                    </>
+                  ) : null}
+                  {noBoxMatches ? (
+                    <li role="presentation" style={{ padding: '6px 8px', fontSize: 11, color: '#b45309' }}>
+                      No box matches “{boxFilter}”.
+                    </li>
+                  ) : null}
+                </ul>
               ) : null}
-              {otherBoxes.length ? (
-                <optgroup label={clientBoxes.length ? 'All other boxes' : 'All boxes'}>
-                  {otherBoxes.map((pkg) => {
-                    const id = packageOptionId(pkg)
-                    return <option key={id} value={id}>{pkg.name || id}</option>
-                  })}
-                </optgroup>
-              ) : null}
-            </select>
-            {noBoxMatches ? (
-              <div style={{ fontSize: 11, color: '#b45309', marginTop: 2 }}>
-                No box matches “{boxFilter}”.
-              </div>
-            ) : null}
+            </div>
           </div>
           <div><span>Selected Rate</span><strong>{formatBillingMoney(row.selectedRateCost ?? row.selected_rate_cost, { dashIfZero: true })}</strong></div>
           <div><span>UPS SS</span><strong>{formatBillingMoney(row.refUpsRate ?? row.ref_ups_rate, { dashIfZero: true })}</strong></div>
