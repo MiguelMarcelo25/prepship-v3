@@ -200,6 +200,8 @@ import {
 import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost';
 // PS-494: country of origin is backend truth, not a connector constant.
 import { resolveOrderCustomsOrigin, singleCustomsOriginOrNull } from './customs-origin';
+// PS-492: PrepShip cannot originate an international label; refuse before any provider call.
+import { assertInternationalOriginationSupported } from './shipping-workflow/international-origination-policy';
 // PS-274 / PS-261 (Per user override unlock shipped data on 2026-06-17): the backend-owned
 // insurance-CERTAINTY resolver. Used at persist time so a Shipp-brokered label NEVER records
 // insuranceProvenance='carrier_declared_value' (we cannot prove the carrier applied declared
@@ -2514,6 +2516,18 @@ async function createLabelV2Impl(
       residential: labelResidential,
     };
   }
+
+  // PS-492: refuse an international destination BEFORE any provider call, test label or
+  // durable operation. This guard chain had no destination check at all, so an operator
+  // could start a purchase that cannot succeed — no international service is configured
+  // and no customs declaration can be built. Checked against carrierShipTo, the SEALED
+  // address actually sent to the carrier, so an authorized quote carrying a different
+  // country than the request body cannot slip past it.
+  //
+  // Zero blast radius: 0 of 1,101 PrepShip-originated labels are international. An UNKNOWN
+  // country is deliberately allowed through — 293 orders carry none and are overwhelmingly
+  // domestic. See international-origination-policy.ts.
+  assertInternationalOriginationSupported({ toCountry: carrierShipTo.country });
 
   if (body.testLabel === true) {
     const fakeShipmentId = generateFakeShipmentId();

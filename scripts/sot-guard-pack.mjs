@@ -1059,6 +1059,12 @@ const REQUIRED_GUARDS = [
   // destination: the old optional third argument defaulted to 'US', so an omitted country
   // was indistinguishable from a stated one and every insured non-US label persisted the
   // wrong premium while the rate had quoted the right one.
+  // PS-492: PrepShip cannot originate an international label, and the purchase funnel now
+  // says so before any provider call. Pinned for the two cases that would BREAK real
+  // shipping if the rule drifted: US territories (PR/VI/GU are not 'US' but ship
+  // domestically) and an UNKNOWN country (293 production orders carry none). Refusing
+  // either would reject working domestic labels to prevent a hypothetical one.
+  'test:ps-492-international-origination',
   'test:ps-493-parcelguard-destination-tier',
   // PS-494: country of origin declared to the Shipp broker. Pinned for the MIXED case —
   // PrepShip is a 3PL, a carton can hold US and KR goods, and the request carries ONE
