@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import { Check, Loader2, X } from 'lucide-react'
 import type { PackageDto } from '../../types/api'
 import type { BillingEditDraft } from './billing-edit-draft-cache'
@@ -23,6 +24,12 @@ type ZeroShippingDecision = 'waived' | 'not_waived'
 type BillingEditDetailModalProps = {
   modal: BillingEditModalViewState
   packages: PackageDto[]
+  /**
+   * Package ids this client has a saved price row for, derived from the backend
+   * package-pricing owner. Display grouping only — the charge itself still comes
+   * from that owner via onPackageChange.
+   */
+  clientPricedPackageIds: number[]
   noBoxCostRows: BillingDetailDto[]
   clientId: number | null
   clientName: string
@@ -47,6 +54,20 @@ function fallbackText(value: unknown) {
   return text || '-'
 }
 
+function packageOptionId(pkg: PackageDto): string {
+  return String(pkg.packageId ?? pkg.id)
+}
+
+/**
+ * Loose match so "12x10" and "12 x 10" both find "Custom 12x10x3": compare on
+ * alphanumerics only.
+ */
+function matchesBoxFilter(pkg: PackageDto, needle: string): boolean {
+  if (!needle) return true
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return normalize(String(pkg.name || packageOptionId(pkg))).includes(normalize(needle))
+}
+
 function moneyDraft(value: string) {
   const amount = Number(value || 0)
   return Number.isFinite(amount) ? amount : 0
@@ -67,6 +88,7 @@ function manualBillingOverrideLabels(row: BillingDetailDto): string[] {
 export function BillingEditDetailModal({
   modal,
   packages,
+  clientPricedPackageIds,
   noBoxCostRows,
   clientId,
   clientName,
@@ -88,6 +110,27 @@ export function BillingEditDetailModal({
   const { row, draft, saving, error } = modal
   const prepTotal = moneyDraft(draft.pickPack) + moneyDraft(draft.additional)
   const manualOverrideLabels = manualBillingOverrideLabels(row)
+
+  const [boxFilter, setBoxFilter] = useState('')
+
+  // This client's priced boxes first, everything else still reachable. Hard-filtering
+  // the rest out would strand the "Box needs review" flow below, which exists exactly
+  // for a shipped box that matched no priced package.
+  const { clientBoxes, otherBoxes } = useMemo(() => {
+    const priced = new Set(clientPricedPackageIds)
+    const mine: PackageDto[] = []
+    const rest: PackageDto[] = []
+    for (const pkg of packages) {
+      if (!matchesBoxFilter(pkg, boxFilter)) continue
+      const id = Number(pkg.packageId ?? pkg.id)
+      if (Number.isFinite(id) && priced.has(id)) mine.push(pkg)
+      else rest.push(pkg)
+    }
+    return { clientBoxes: mine, otherBoxes: rest }
+  }, [packages, clientPricedPackageIds, boxFilter])
+
+  const clientBoxLabel = clientName ? `${clientName} boxes` : 'Client boxes'
+  const noBoxMatches = boxFilter.trim().length > 0 && clientBoxes.length === 0 && otherBoxes.length === 0
 
   return (
     <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !saving && onClose()}>
@@ -126,6 +169,16 @@ export function BillingEditDetailModal({
           <div><span>SKU</span><strong>{fallbackText(row.itemSkus)}</strong></div>
           <div>
             <span>Box Size</span>
+            <input
+              className="ship-input billing-edit-box-filter"
+              style={{ width: '100%', fontSize: 12, marginBottom: 4 }}
+              type="search"
+              value={boxFilter}
+              disabled={saving}
+              placeholder="Type to filter, e.g. 12x10"
+              aria-label="Filter box sizes"
+              onChange={(event) => setBoxFilter(event.target.value)}
+            />
             <select
               className="ship-select billing-edit-box-select"
               style={{ width: '100%', fontSize: 12, fontWeight: 600 }}
@@ -134,11 +187,28 @@ export function BillingEditDetailModal({
               onChange={(event) => onPackageChange(event.target.value)}
             >
               <option value="">{row.packageName ? `${row.packageName} (shipment box)` : '- (shipment box)'}</option>
-              {packages.map((pkg) => {
-                const id = String(pkg.packageId ?? pkg.id)
-                return <option key={id} value={id}>{pkg.name || id}</option>
-              })}
+              {clientBoxes.length ? (
+                <optgroup label={clientBoxLabel}>
+                  {clientBoxes.map((pkg) => {
+                    const id = packageOptionId(pkg)
+                    return <option key={id} value={id}>{pkg.name || id}</option>
+                  })}
+                </optgroup>
+              ) : null}
+              {otherBoxes.length ? (
+                <optgroup label={clientBoxes.length ? 'All other boxes' : 'All boxes'}>
+                  {otherBoxes.map((pkg) => {
+                    const id = packageOptionId(pkg)
+                    return <option key={id} value={id}>{pkg.name || id}</option>
+                  })}
+                </optgroup>
+              ) : null}
             </select>
+            {noBoxMatches ? (
+              <div style={{ fontSize: 11, color: '#b45309', marginTop: 2 }}>
+                No box matches “{boxFilter}”.
+              </div>
+            ) : null}
           </div>
           <div><span>Selected Rate</span><strong>{formatBillingMoney(row.selectedRateCost ?? row.selected_rate_cost, { dashIfZero: true })}</strong></div>
           <div><span>UPS SS</span><strong>{formatBillingMoney(row.refUpsRate ?? row.ref_ups_rate, { dashIfZero: true })}</strong></div>

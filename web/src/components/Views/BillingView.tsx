@@ -529,6 +529,12 @@ export default function BillingView() {
     }
     return map
   }, [billingEditPackagePricesQuery.data])
+  // Same backend-owned rows, as ids: the edit modal groups this client's priced
+  // boxes first. Display order only — the charge still comes from the map above.
+  const billingEditPricedPackageIds = useMemo(
+    () => Object.keys(billingEditPackagePrices).map(Number).filter(Number.isFinite),
+    [billingEditPackagePrices],
+  )
 
   const packagePricingRows = useMemo(
     () => buildBillingPackagePriceRows(savedPackagePrices, packagePriceDrafts),
@@ -1892,6 +1898,7 @@ export default function BillingView() {
         <BillingEditDetailModal
           modal={billingEditModal}
           packages={packages}
+          clientPricedPackageIds={billingEditPricedPackageIds}
           noBoxCostRows={billingNoBoxCostRows}
           clientId={detailState.clientId}
           clientName={detailState.clientName}
