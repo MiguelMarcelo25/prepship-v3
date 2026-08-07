@@ -51,7 +51,7 @@ export function BillingBulkImportModal({
   const [fields, setFields] = useState<ImportField[]>(() => [emptyField(), emptyField(), emptyField()])
   const [reason, setReason] = useState('')
   const [applying, setApplying] = useState(false)
-  const [progress, setProgress] = useState({ done: 0, total: 0 })
+  const [progress, setProgress] = useState({ done: 0, total: 0, current: '', failed: 0 })
   const [outcomes, setOutcomes] = useState<BulkImportApplyOutcome[] | null>(null)
 
   const resolved = useMemo(
@@ -114,15 +114,18 @@ export function BillingBulkImportModal({
     if (!canApply) return
     setApplying(true)
     setOutcomes(null)
-    setProgress({ done: 0, total: ready.length })
+    setProgress({ done: 0, total: ready.length, current: ready[0]?.orderNumberRaw ?? '', failed: 0 })
     const results: BulkImportApplyOutcome[] = []
     // Sequential on purpose: each row is an independent audited invoice-line edit,
     // exactly as if typed by hand. A partial failure stays readable.
-    for (const row of ready) {
+    for (const [index, row] of ready.entries()) {
+      setProgress((current) => ({ ...current, current: row.orderNumberRaw }))
+      let ok = true
       try {
         await onApplyRow(row, reason.trim())
         results.push({ lineNumber: row.lineNumber, orderNumberRaw: row.orderNumberRaw, ok: true, message: 'Applied' })
       } catch (err) {
+        ok = false
         results.push({
           lineNumber: row.lineNumber,
           orderNumberRaw: row.orderNumberRaw,
@@ -130,7 +133,11 @@ export function BillingBulkImportModal({
           message: err instanceof Error ? err.message : 'Failed',
         })
       }
-      setProgress((current) => ({ ...current, done: current.done + 1 }))
+      setProgress((current) => ({
+        ...current,
+        done: index + 1,
+        failed: current.failed + (ok ? 0 : 1),
+      }))
     }
     setOutcomes(results)
     setApplying(false)
@@ -276,8 +283,28 @@ export function BillingBulkImportModal({
         </label>
 
         {applying ? (
-          <div style={{ fontSize: 12, marginBottom: 8 }}>
-            <Loader2 size={12} className="spin" aria-hidden="true" /> Applying {progress.done} of {progress.total}…
+          <div style={{ fontSize: 12, marginBottom: 8 }} role="status" aria-live="polite">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Loader2 size={12} className="spin" aria-hidden="true" />
+              <span>
+                Applying <strong>{progress.done}</strong> of {progress.total}
+                {progress.current ? <> · order {progress.current}</> : null}
+                {progress.failed ? <> · <span style={{ color: '#b91c1c' }}>{progress.failed} failed</span></> : null}
+              </span>
+            </div>
+            <div style={{ height: 4, background: 'var(--bg2)', borderRadius: 999, marginTop: 4, overflow: 'hidden' }}>
+              <div
+                style={{
+                  height: '100%',
+                  width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%`,
+                  background: 'var(--brand, #2563eb)',
+                  transition: 'width 120ms linear',
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              Saved one order at a time — leave this open until it finishes.
+            </div>
           </div>
         ) : null}
 

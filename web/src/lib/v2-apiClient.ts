@@ -2751,12 +2751,25 @@ export const apiClient = {
     return api.get<any>(`/billing/storage-proof${qs({ dateFrom, dateTo, clientId })}`);
   },
 
-  updateBillingDetail(orderId: number, clientId: number, data: Record<string, unknown>): Promise<any> {
+  /**
+   * `deferReads` suppresses the post-write read invalidation for callers that
+   * apply many rows in a row (the paste import). Refetching the summary and
+   * shipping-margin queries after every single PATCH turns an 85-row apply into
+   * 85 refetches of the whole billing range, which stalls the UI. Those callers
+   * invalidate once when the batch finishes. Default stays eager so every
+   * existing single-edit caller is unchanged.
+   */
+  updateBillingDetail(
+    orderId: number,
+    clientId: number,
+    data: Record<string, unknown>,
+    options?: { deferReads?: boolean },
+  ): Promise<any> {
     return api.patch<any>(`/billing/details/${orderId}`, {
       clientId,
       ...data,
     }).then((res) => {
-      invalidateBillingReads({ summary: true, shippingMargin: true });
+      if (!options?.deferReads) invalidateBillingReads({ summary: true, shippingMargin: true });
       return res;
     });
   },

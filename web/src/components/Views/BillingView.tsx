@@ -1474,7 +1474,7 @@ export default function BillingView() {
         ? row.packageId
         : (current?.packageId ? Number(current.packageId) : null),
       reason,
-    })
+    }, { deferReads: true })
   }
 
   async function handleBulkImportFinished() {

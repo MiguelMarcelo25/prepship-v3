@@ -234,6 +234,25 @@ check('the import writes through the existing audited detail PATCH', () => {
   assert.match(view, /handleBulkImportRow[\s\S]{0,1600}reason,/, 'every imported row carries a reason');
 });
 
+check('the import defers read invalidation until the batch finishes', () => {
+  // Invalidating after every PATCH refetched the whole billing range once per
+  // row, which stalled an 85-row apply. The batch invalidates once at the end.
+  const view = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
+  assert.match(view, /handleBulkImportRow[\s\S]{0,1700}deferReads: true/);
+  assert.match(
+    view,
+    /handleBulkImportFinished[\s\S]{0,600}invalidateQueries/,
+    'the batch must still refresh the reads once when it completes',
+  );
+
+  const client = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+  assert.match(
+    client,
+    /updateBillingDetail\([\s\S]{0,400}if \(!options\?\.deferReads\) invalidateBillingReads/,
+    'single-edit callers must keep the eager invalidation',
+  );
+});
+
 check('a pasted box takes that box\'s saved client price', () => {
   // Same rule as the manual Box Size change; otherwise an imported box keeps the
   // previous box's cost and the invoice is quietly wrong.
