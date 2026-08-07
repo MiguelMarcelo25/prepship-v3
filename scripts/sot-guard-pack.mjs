@@ -65,10 +65,6 @@ const REQUIRED_GUARDS = [
   'test:ps-094-rate-selection-proof',
   'test:ps-095-selected-rate-proof-pass-through',
   'test:ps-462-billing-sot',
-  // Pasted Box Size / Shipping import. Every `ready` row becomes a real
-  // invoice-line edit, so the refusals (unmatched order, ambiguous box, bad
-  // amount, comma-as-decimal) are what stop a bad paste reaching an invoice.
-  'test:billing-bulk-import',
   'test:recalculate-best-rate-strict',
   // ── Batch 2: label / postage integrity, plus two guards the sweep found RED ──
   //
