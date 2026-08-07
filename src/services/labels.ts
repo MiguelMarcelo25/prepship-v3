@@ -631,6 +631,22 @@ async function currentAuthorizedShipFrom(
   };
 }
 
+/**
+ * PS-493: the ship-to country as the provider recorded it, or null when the order has
+ * none.
+ *
+ * There is no country COLUMN on `orders` — it lives only inside the retained provider
+ * payload, the same place billing reads it from. Deliberately returns null rather than
+ * defaulting to 'US': the insurance tier owner distinguishes "unknown" from "US", and a
+ * silent 'US' here would re-create the exact defect this ticket fixes one layer up.
+ */
+export function orderShipToCountryFromRaw(rawOrder: { raw: unknown } | null | undefined): string | null {
+  const raw = (rawOrder?.raw ?? {}) as Record<string, unknown>;
+  const shipTo = (raw.shipTo as Record<string, unknown> | undefined) ?? {};
+  const country = shipTo.country;
+  return typeof country === 'string' && country.trim() !== '' ? country : null;
+}
+
 function orderShipToFromRaw(rawOrder: {
   raw: Record<string, unknown>;
   shipToName: string | null;
@@ -1142,6 +1158,18 @@ export async function persistCreatedLabel(args: {
   source: string;
   insuranceProvider?: string | null;
   insuredValue?: number | null;
+  /**
+   * PS-493: the ship-to country, REQUIRED.
+   *
+   * Neither `args` nor `created` carried a destination, and there is no country column on
+   * `shipments`, so the ParcelGuard schedule premium computed below silently priced every
+   * label at the DOMESTIC tier. Required rather than optional so the compiler refuses a
+   * caller that has not considered the destination — the previous optional third argument
+   * on parcelGuardScheduledPremium typechecked fine at both call sites and was the bug.
+   *
+   * Pass null to state explicitly that the country is unknown.
+   */
+  toCountry: string | null;
   selectedRateJsonExtra?: Record<string, unknown> | null;
   tx?: DbTx;
 }): Promise<number> {
@@ -1168,7 +1196,10 @@ export async function persistCreatedLabel(args: {
       ? parcelGuardScheduledPremium(insuredValue, {
           carrier_code: created.carrierCode ?? null,
           service_code: created.serviceCode ?? null,
-        }) ?? 0
+        // PS-493: the destination decides the tier ($1.39/$100 international vs
+        // $0.99/$1.09 domestic). Omitting it defaulted to 'US' and persisted the domestic
+        // premium on every insured non-US label, disagreeing with the rate-time quote.
+        }, args.toCountry) ?? 0
       : 0;
   const insuranceCost = reportedInsuranceCost > 0 ? reportedInsuranceCost : scheduledPremium;
   // PS-274 (Per user override unlock shipped data on 2026-06-17): identity FIRST. A Shipp-brokered
@@ -1496,6 +1527,10 @@ async function persistShopifyPurchasedLabel(input: {
       source: SHOPIFY_SHIPPING_PROVIDER,
       insuranceProvider: 'none',
       insuredValue: null,
+      // PS-493: inert here — this path hardcodes insuranceProvider 'none', so the
+      // ParcelGuard schedule branch never runs. Supplied anyway so the destination is
+      // stated rather than defaulted, and so it stays correct if Shopify ever insures.
+      toCountry: orderShipToCountryFromRaw(input.order),
       selectedRateJsonExtra: {
         provider: SHOPIFY_SHIPPING_PROVIDER,
         fulfillmentOrderId: input.fulfillmentOrderId,
@@ -2676,7 +2711,11 @@ async function createLabelV2Impl(
       ? parcelGuardScheduledPremium(preflightInsuredValue, {
           carrier_code: body.carrierCode ?? null,
           service_code: body.serviceCode,
-        }) ?? 0
+        // PS-493: carrierShipTo is the address actually sent to the provider, and on an
+        // authorized purchase it is the SEALED quote-time address — so this is the same
+        // country the rate was priced against. body.shipTo would be wrong on that path,
+        // because the authorized quote deliberately overrides it.
+        }, carrierShipTo.country ?? null) ?? 0
       : 0;
   const preflightProvider = body.carrierCode ?? serviceDescriptor.provider ?? null;
   const preflightAccountIdentity = body.carrierName ?? null;
@@ -3070,6 +3109,9 @@ async function createLabelV2Impl(
       length,
       width,
       height,
+      // PS-493: the same sealed address the provider was given, so the persisted premium
+      // is priced against the destination the rate was quoted for.
+      toCountry: carrierShipTo.country ?? null,
       // PS-221 (Per user override unlock shipped data on 2026-06-13): persist the
       // package that was actually RESOLVED + deducted (resolvedPackageId, line ~1482),
       // not the raw body.customPackageId. Previously the real path dropped the

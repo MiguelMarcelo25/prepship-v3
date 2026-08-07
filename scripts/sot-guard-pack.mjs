@@ -1053,6 +1053,13 @@ const REQUIRED_GUARDS = [
   // that a missing country renders `Needs Review` rather than Domestic: 293 orders carry
   // no country, and a gap must not look like a verified US address on an invoice.
   'test:ps-490-billing-export-destination',
+  // PS-493: the ParcelGuard tier. Pinned for the territories — PR/VI/GU are not 'US' but
+  // ship at USPS DOMESTIC rates, and the naive `country !== 'US'` this replaced billed
+  // them the $1.39 international tier. Also pins that all four label-path sites THREAD the
+  // destination: the old optional third argument defaulted to 'US', so an omitted country
+  // was indistinguishable from a stated one and every insured non-US label persisted the
+  // wrong premium while the rate had quoted the right one.
+  'test:ps-493-parcelguard-destination-tier',
   'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having
   // rotted unnoticed precisely because they were not in this pack. In every case

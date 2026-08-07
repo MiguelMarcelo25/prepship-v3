@@ -15,6 +15,8 @@ import {
   createdLabelFromOperationReceipt,
   marketplaceConfirmationPayload,
   persistCreatedLabel,
+  // PS-493: destination country for the insurance tier — see the toCountry note below.
+  orderShipToCountryFromRaw,
   type CreateLabelResponseDto,
 } from './labels';
 import {
@@ -159,6 +161,11 @@ export async function resumeVerifiedShipStationForwardLabel(
       source: 'prepship_v2',
       insuranceProvider: durableFacts.insuranceProvider,
       insuredValue: durableFacts.insuredValue,
+      // PS-493: this recovery path can carry insuranceProvider 'parcelguard', so it is a
+      // real premium-persistence site, not just a replay. The durable receipt facts hold
+      // no destination, so the country comes from the order's retained provider payload —
+      // null when absent, never an assumed 'US'.
+      toCountry: orderShipToCountryFromRaw(order),
       tx,
     });
     await applyLifecycle(tx, {

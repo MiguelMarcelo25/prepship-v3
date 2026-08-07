@@ -18,6 +18,10 @@
 //     insurance_cost / v1 otherCost), which remains the final source of truth.
 // HUGRAB defaults to ParcelGuard / insured value 100 upstream (services/rates.ts).
 import { CARRIER_DECLARED_VALUE_FREE_CAP, DIRECT_UPS_CARRIER_INSURANCE_VERIFIED } from '../../lib/carrier-account-registry';
+// PS-493: the ONE owner of "is this destination international". Named for billing because
+// that is where it landed (PS-488 AC-2), but the rule is domain-neutral — insurance
+// delegates to it rather than keeping a second, weaker copy that mis-classified PR.
+import { classifyDestinationCountry } from '../billing-destination-international';
 
 export type InsuranceCostProvenance =
   | 'none'
@@ -119,12 +123,30 @@ function isPostalEconomyParcelGuardService(rate?: RateLike | null): boolean {
   return blob.includes('groundeconomy') || blob.includes('smartpost');
 }
 
+/**
+ * PS-493. This used to read `country !== 'US' && country !== 'USA'`, which is the exact
+ * mistake `billing-destination-international.ts` warns about in its own header: Puerto
+ * Rico carries country code 'PR', is NOT 'US', and ships at USPS DOMESTIC rates. Under
+ * the old test every PR/VI/GU/AS/MP/UM shipment priced at the $1.39 international tier.
+ *
+ * "Is this destination international?" is one business rule with one owner, confirmed by
+ * DJ on 2026-08-05. Insurance delegates to it rather than keeping a second, weaker copy
+ * (PS-316). The owner's `billing-` prefix is historical — it answers a destination
+ * question, not a billing one; renaming it is deferred rather than duplicating the set.
+ *
+ * An UNKNOWN country ('Needs Review') prices DOMESTIC. That is a deliberate choice, not
+ * an oversight: 71,985 of 72,444 orders are US, only 155 are truly international, and
+ * per PS-492 PrepShip cannot originate an international label at all today — so an
+ * unknown country is overwhelmingly a US order with a missing field. Billing can afford
+ * to surface "Needs Review" in a column; a premium has to be a number.
+ */
 function parcelGuardPerHundred(
   rate?: RateLike | null,
   toCountry?: string | null,
 ): number | null {
-  const country = String(toCountry ?? 'US').trim().toUpperCase();
-  if (country && country !== 'US' && country !== 'USA') return PARCELGUARD_INTERNATIONAL_PER_HUNDRED;
+  if (classifyDestinationCountry(toCountry).destination === 'International') {
+    return PARCELGUARD_INTERNATIONAL_PER_HUNDRED;
+  }
   const carrierCode = normalizeCarrierCode(rate);
   if (!carrierCode) return null;
   // PS-171: USPS AND postal/economy-tier services (FedEx Ground Economy / SmartPost) bill at $1.09/$100.
@@ -140,8 +162,20 @@ function parcelGuardPerHundred(
  */
 export function parcelGuardScheduledPremium(
   insuredValue: number,
-  rate?: RateLike | null,
-  toCountry?: string | null,
+  rate: RateLike | null | undefined,
+  /**
+   * PS-493: the ship-to country. REQUIRED, deliberately.
+   *
+   * It used to be optional and defaulted to 'US' inside, so a caller that simply forgot
+   * it was indistinguishable from a caller stating a US destination. Both label-path call
+   * sites in labels.ts had forgotten it, and every insured non-US label therefore
+   * persisted the DOMESTIC premium while the rate path had quoted the international one.
+   * A two-argument call typechecked cleanly, so nothing caught it.
+   *
+   * Making it required means the compiler refuses a caller that has not considered the
+   * destination. Pass null to state explicitly that the country is unknown.
+   */
+  toCountry: string | null,
 ): number | null {
   const value = finite(insuredValue);
   if (value == null || value <= 0) return null;
@@ -258,7 +292,9 @@ export function resolveRateInsurancePremium(
   // PS-126: ShipStation returns 0 for ParcelGuard, so supply the rate-time premium
   // from the verified carrier/country schedule (the value ShipStation actually bills).
   if (isParcelGuard(provider)) {
-    const premium = parcelGuardScheduledPremium(insuredValue, rate, ctx.toCountry);
+    // PS-493: ctx.toCountry is optional on the rate context; an absent one is explicitly
+    // unknown, not implicitly US.
+    const premium = parcelGuardScheduledPremium(insuredValue, rate, ctx.toCountry ?? null);
     if (premium != null && premium > 0) {
       return {
         status: 'resolved',

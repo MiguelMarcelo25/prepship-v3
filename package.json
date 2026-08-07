@@ -917,6 +917,7 @@
     "test:ps-467-unattributed-audit": "tsx scripts/ps-467-unattributed-audit-guard.ts",
     "test:ps-469-run-retention": "tsx scripts/ps-469-run-retention-guard.ts",
     "test:ps-490-billing-export-destination": "tsx scripts/ps-490-billing-export-destination-guard.ts",
+    "test:ps-493-parcelguard-destination-tier": "tsx scripts/ps-493-parcelguard-destination-tier-guard.ts",
     "test:ps-491-duplicate-order-billing": "tsx scripts/ps-491-duplicate-order-billing-guard.ts",
     "test:billing-destination-international": "tsx scripts/billing-destination-international-guard.ts",
     "test:billing-international-destination:browser": "playwright test web/e2e/billing-international-destination.spec.js --reporter=line",
