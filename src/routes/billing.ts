@@ -33,6 +33,12 @@ import {
 import { billingInvoiceHeaderTotals } from '../services/billing-invoice-totals';
 // PS-491: duplicated order numbers must not be charged twice on the invoice.
 import { loadDuplicateOrderDecisions } from '../services/billing-duplicate-order-loader';
+// PS-490: Destination column + Return indicator, both from their canonical owners.
+import {
+  classifyDestinationCountry,
+  type BillingDestination,
+} from '../services/billing-destination-international';
+import { isBillingReturnLineType } from '../services/billing-row-status';
 import {
   duplicateOrderStatusLabel,
   isNonBillableDuplicate,
@@ -1916,6 +1922,18 @@ type InvoiceDetailRow = {
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
+  /**
+   * PS-490: Domestic / International / Needs Review, from classifyDestinationCountry.
+   * `Needs Review` is not a cosmetic third option — 293 orders carry no country at all,
+   * and the AC is explicit that a gap must never be rendered as Domestic.
+   */
+  destination: BillingDestination;
+  /**
+   * PS-490: the Order # cell, carrying a " - Return" suffix when the row includes return
+   * activity. Derived from the line types via isBillingReturnLineType (the canonical
+   * predicate), never by re-testing strings here.
+   */
+  order_number_label: string;
   // PS-275 (item 2): true when this order's prep/fulfillment fee was WAIVED ($0-shipping review).
   // A pure READ of billing_fee_waivers — the dollar columns already reflect the regenerate; this
   // flag only drives a visible "Waived" indicator in the exports. False on every non-waived order.
@@ -1924,8 +1942,10 @@ type InvoiceDetailRow = {
 
 // PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
 // fee_waived is NOT from the SQL aggregate (it's a separate billing_fee_waivers read) — omit it here.
-type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names' | 'billing_status_label'> & {
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names' | 'billing_status_label' | 'destination' | 'order_number_label'> & {
   billed_package_id: number | null;
+  /** PS-490: raw provider country; classified in TS, never compared in SQL. */
+  ship_to_country: string | null;
   box_cost_desc: string | null;
   box_review_reason: string | null;
   billing_line_types: unknown;
@@ -2049,6 +2069,11 @@ async function billingInvoiceData(
       array_agg(distinct b.line_type) as billing_line_types,
       max(o.order_status) as order_status,
       max(o.canonical_status) as canonical_status,
+      -- PS-490: destination country for the Destination column. There is NO country
+      -- column on the orders table -- it lives only inside the retained provider payload.
+      -- Selected raw and classified in TS by classifyDestinationCountry, the canonical
+      -- owner, so the export cannot invent a second definition of "international" (PS-316).
+      max(o.raw->'shipTo'->>'country') as ship_to_country,
       (
         select string_agg(oi.sku, ', ' order by oi.line_index)
         from order_items oi
@@ -2137,6 +2162,16 @@ async function billingInvoiceData(
     const duplicateLabel = duplicateDecision
       ? duplicateOrderStatusLabel(duplicateDecision)
       : null;
+    // PS-490: the Order # cell marks return activity, e.g. "0001 - Return". Adjustments
+    // keep their own label and are never suffixed — they are client-level money with no
+    // order identity.
+    const lineTypes = Array.isArray(r.billing_line_types) ? r.billing_line_types : [];
+    const baseOrderNumber = r.billing_adjustment_id
+      ? `Adjustment ${r.billing_adjustment_id.slice(0, 8)}`
+      : String(r.order_number ?? r.order_id ?? '');
+    const orderNumberLabel = !r.billing_adjustment_id && lineTypes.some(isBillingReturnLineType)
+      ? `${baseOrderNumber} - Return`
+      : baseOrderNumber;
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -2170,6 +2205,10 @@ async function billingInvoiceData(
       package_cost_amt: suppressed ? zero : r.package_cost_amt,
       box_label: cancelledNoCharge ? '—' : box_label,
       box_review: cancelledNoCharge ? false : box_review,
+      // PS-490: delegate to the canonical owner. An adjustment has no shipment and so no
+      // destination — Needs Review would imply a gap to chase, so it renders blank later.
+      destination: classifyDestinationCountry(r.ship_to_country).destination,
+      order_number_label: orderNumberLabel,
       fee_waived: r.order_id != null && feeWaiverByOrderId.get(r.order_id)?.decision === 'waived',
     };
   });
@@ -2257,7 +2296,7 @@ export function renderInvoiceHtml(args: {
       return `
       <tr>
         <td class="ship-date">${dateCell}</td>
-        <td class="mono">${escHtml(d.billing_adjustment_id ? `Adjustment ${d.billing_adjustment_id.slice(0, 8)}` : d.order_number ?? d.order_id ?? '')}</td>
+        <td class="mono">${escHtml(d.order_number_label)}</td>
         <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
@@ -2269,6 +2308,7 @@ export function renderInvoiceHtml(args: {
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
         <td class="mono">${escHtml(d.billing_adjustment_id ? 'Adjustment' : d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
+        <td>${escHtml(d.billing_adjustment_id ? '—' : d.destination)}</td>
       </tr>`;
     })
     .join('');
@@ -2358,6 +2398,9 @@ export function renderInvoiceHtml(args: {
         <th class="num">Storage</th>
         <th class="num">Total</th>
         <th>Shipment #</th>
+        <!-- PS-490: appended LAST on purpose. ps-425 and the layout guards pin invoice
+             cells by POSITION, so inserting a column earlier shifts what they read. -->
+        <th>Destination</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -2371,6 +2414,8 @@ export function renderInvoiceHtml(args: {
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
         <td class="num" style="font-size:14px">${fmt(grandTotal)}</td>
+        <td></td>
+        <!-- PS-490: matches the appended Destination column so the footer stays aligned. -->
         <td></td>
       </tr>
     </tfoot>
@@ -2447,10 +2492,16 @@ export async function renderInvoiceXlsx(args: {
     // POSITION, so inserting anywhere earlier shifts what existing assertions read.
     // These reconcile with the Billing table's columns but are computed by THIS query
     // rather than the canonical DTO: the invoice builder still has its own read path.
-    // Type and Destination are absent because this export groups by ORDER and has no
-    // row-type concept — those need the DTO cutover.
+    // Type is absent because this export groups by ORDER and has no row-type concept —
+    // that still needs the DTO cutover. (PS-490 since added Destination, which does not:
+    // it is a property of the order, not of a row type.)
     { header: 'Return Postage', key: 'returnPostage', width: 14, style: { numFmt: NUMBER_FMT } },
     { header: 'Return Processing', key: 'returnProcessing', width: 16, style: { numFmt: NUMBER_FMT } },
+    // PS-490: appended LAST for the same position-pinning reason as the AC-6 columns
+    // above. Unlike Type, Destination does NOT need the DTO cutover — it is a property of
+    // the order's destination country, which this per-order query can read directly, and
+    // it is classified by the canonical owner rather than re-derived here.
+    { header: 'Destination', key: 'destination', width: 14 },
   ];
   invoice.getRow(1).font = { bold: true };
   for (const d of details) {
@@ -2472,9 +2523,9 @@ export async function renderInvoiceXlsx(args: {
       storage: storageAmt,
     });
     invoice.addRow({
-      orderNumber: d.billing_adjustment_id
-        ? `Adjustment ${d.billing_adjustment_id.slice(0, 8)}`
-        : String(d.order_number ?? d.order_id ?? ''),
+      // PS-490: carries the " - Return" suffix; the adjustment label is already baked in
+      // by the same owner, so the branch that used to live here is gone.
+      orderNumber: d.order_number_label,
       status: d.billing_status_label || 'Fulfilled',
       shipDate: invoiceBillingActivityDateCell(
         d.ship_date,
@@ -2498,6 +2549,9 @@ export async function renderInvoiceXlsx(args: {
         : d.shipment_id == null
           ? 'External'
           : `#${d.shipment_id}`,
+      // PS-490: an adjustment has no shipment and therefore no destination. Blank rather
+      // than "Needs Review", which would imply a gap someone should chase.
+      destination: d.billing_adjustment_id ? '' : d.destination,
     });
   }
   if (details.length) {

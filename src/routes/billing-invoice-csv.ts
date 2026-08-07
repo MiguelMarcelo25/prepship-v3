@@ -46,6 +46,12 @@ export type InvoiceCsvDetailRow = {
   box_review: boolean;
   // PS-275: fee_waived is carried for route parity; the CSV line items no longer render it as a column.
   fee_waived: boolean;
+  /** PS-490: Domestic / International / Needs Review, already classified by the backend
+   *  owner (classifyDestinationCountry). The serializer renders it and never re-derives
+   *  "international" from a country string. */
+  destination?: string | null;
+  /** PS-490: the Order # cell including any " - Return" suffix, resolved backend-side. */
+  order_number_label?: string | null;
 };
 
 /** Column order mirrors the operator-facing invoice line item sheet. */
@@ -63,6 +69,9 @@ export const INVOICE_CSV_HEADERS = [
   'Storage',
   'Total',
   'Shipment #',
+  // PS-490: appended LAST. ps-468 pins CSV cells by position, same constraint as the
+  // XLSX sheet, so a column inserted earlier would shift every existing assertion.
+  'Destination',
 ] as const;
 
 /** RFC-4180 quote a field, with spreadsheet formula-injection neutralization:
@@ -106,9 +115,13 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
       row.ship_date,
       row.billing_effective_date,
     ),
-    row.billing_adjustment_id
-      ? `Adjustment ${row.billing_adjustment_id.slice(0, 8)}`
-      : String(row.order_number ?? row.order_id ?? ''),
+    // PS-490: the backend-resolved Order # cell, carrying any " - Return" suffix. Falls
+    // back to the previous derivation so a caller that has not been updated still emits a
+    // correct order number rather than a blank cell.
+    row.order_number_label
+      ?? (row.billing_adjustment_id
+        ? `Adjustment ${row.billing_adjustment_id.slice(0, 8)}`
+        : String(row.order_number ?? row.order_id ?? '')),
     row.billing_status_label || 'Fulfilled',
     invoiceOneLineCell(row.skus),
     invoiceOneLineCell(row.box_label),
@@ -124,6 +137,9 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
       : row.shipment_id == null
         ? 'External'
         : `#${row.shipment_id}`,
+    // PS-490: an adjustment has no shipment and therefore no destination — blank, not
+    // "Needs Review", which would imply a gap worth chasing.
+    row.billing_adjustment_id ? '' : (row.destination ?? ''),
   ];
   return cells.map(csvField).join(',');
 }

@@ -209,8 +209,11 @@ async function main(): Promise<void> {
     fulfillmentFeeTotal: 32,
   };
   const csv = renderInvoiceCsv(details);
-  assert.match(csv, /,12,0,12,#501\r?\n/);
-  assert.match(csv, /,20,0,20,#502/);
+  // PS-490: Destination is now the last CSV column, so the per-shipment row no longer
+  // ends at the Shipment # cell. These fixtures carry no destination, which renders as an
+  // empty trailing field — the shipment cardinality this guard exists to pin is unchanged.
+  assert.match(csv, /,12,0,12,#501,\r?\n/);
+  assert.match(csv, /,20,0,20,#502,/);
   const html = renderInvoiceHtml({
     clientName: 'Fixture',
     fromDay: '2026-07-01',

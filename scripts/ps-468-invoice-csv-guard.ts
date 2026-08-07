@@ -55,6 +55,9 @@ assert.deepEqual(
     'Storage',
     'Total',
     'Shipment #',
+    // PS-490: appended LAST, after Shipment #. This guard pins column ORDER by position,
+    // which is exactly why the new column goes on the end rather than beside Order #.
+    'Destination',
   ],
   'CSV columns must keep the operator-facing line item order and omit Prep Fee Waiver',
 );
@@ -80,6 +83,10 @@ const richRow: InvoiceCsvDetailRow = {
   box_label: 'Small (6x4x4)',
   box_review: false,
   fee_waived: false,
+  // PS-490: both new cells carry backend-resolved values. The serializer renders what the
+  // canonical owners decided — it never classifies a country or tests a line type itself.
+  destination: 'International',
+  order_number_label: 'PO-9001 - Return',
 };
 
 // An order with NO row_total (0) — the Total must fall back to
@@ -117,15 +124,28 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011',
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
+);
+
+// PS-490: a row from a caller that has not been updated must still emit a correct order
+// number and an empty Destination — never a blank Order # cell.
+assert.ok(
+  lines[2]?.includes(',PO-9002,'),
+  'a row without order_number_label falls back to the plain order number',
+);
+assert.ok(
+  lines[2]?.endsWith(','),
+  'a row without a destination ends with an empty Destination cell, not a missing column',
 );
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
 // pickPackFee(3) + package cost(2) + shipping(2) + storage(1) = 8. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021',
+  // PS-490: trailing empty cell is the Destination column — this fixture carries no
+  // country, and an unknown destination on a row with no order context renders blank.
+  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021,',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

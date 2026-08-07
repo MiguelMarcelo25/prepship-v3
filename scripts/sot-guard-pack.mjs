@@ -1046,6 +1046,13 @@ const REQUIRED_GUARDS = [
   // Also pins that the canonical totals owner APPLIES the suppression (not merely builds
   // it), because the first version of that check passed against a query that had stopped
   // using the predicate.
+  // PS-490: Destination on the billing exports. Pinned because the export has its own
+  // read path and the tempting shortcut -- `country !== 'US'` -- is WRONG: Puerto Rico
+  // carries 'PR' and ships domestically. classifyDestinationCountry is the one owner, and
+  // PS-493 documents a live instance of exactly that bug in insurance-cost.ts. Also pins
+  // that a missing country renders `Needs Review` rather than Domestic: 293 orders carry
+  // no country, and a gap must not look like a verified US address on an invoice.
+  'test:ps-490-billing-export-destination',
   'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having
   // rotted unnoticed precisely because they were not in this pack. In every case
