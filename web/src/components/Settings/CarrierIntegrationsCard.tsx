@@ -227,6 +227,10 @@ const PROVIDER_DEFS: ProviderDef[] = [
       { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
       { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
       { name: 'packageDescription', label: 'Package Description (optional)', required: false, placeholder: 'Merchandise' },
+      // PS-494: the goods DESCRIPTION was already correctable here while the country of
+      // origin was a hardcoded constant, which looked unintentional. Used only when the
+      // order's own customs items do not agree on a single origin.
+      { name: 'packageOriginCountry', label: 'Default Country of Origin (optional)', required: false, placeholder: 'US' },
     ],
   },
   {

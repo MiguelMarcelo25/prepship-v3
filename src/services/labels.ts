@@ -198,6 +198,8 @@ import {
 // PS-214: direct labels persist the PS-171 schedule premium when the
 // connector reports none (ParcelGuard is third-party — carriers don't bill it).
 import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost';
+// PS-494: country of origin is backend truth, not a connector constant.
+import { resolveOrderCustomsOrigin, singleCustomsOriginOrNull } from './customs-origin';
 // PS-274 / PS-261 (Per user override unlock shipped data on 2026-06-17): the backend-owned
 // insurance-CERTAINTY resolver. Used at persist time so a Shipp-brokered label NEVER records
 // insuranceProvenance='carrier_declared_value' (we cannot prove the carrier applied declared
@@ -2886,6 +2888,11 @@ async function createLabelV2Impl(
               shipFrom,
               shippingOptions: options,
               rawOrder: order.raw ?? null,
+              // PS-494: resolve the declarable country of origin from the order's own
+              // retained customs items. Null when the carton mixes origins or carries
+              // none — an explicit absence, so the connector applies its configured
+              // default instead of a constant standing in for a fact.
+              countryOfManufacture: singleCustomsOriginOrNull(resolveOrderCustomsOrigin(order)),
               signal,
               idempotencyKey,
               carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,

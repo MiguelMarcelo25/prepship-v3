@@ -206,6 +206,38 @@ function shippDateDays(deliveryDate: unknown, deliveryDay: unknown): number {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 }
 
+/**
+ * PS-494: the country of origin declared to Shipp.
+ *
+ * Order of preference, and the reasoning for each step:
+ *   1. The backend-resolved origin (`customs-origin.ts`), when the order's customs items
+ *      agree on one. This is a recorded fact, not an inference.
+ *   2. The operator's configured default, beside the existing packageDescription — the
+ *      goods description was already correctable and the origin was not, which looked
+ *      unintentional.
+ *   3. 'US', preserving the previous behaviour so no existing Shipp shipment changes.
+ *
+ * A MIXED carton lands on step 2/3 and that is a known limitation, not a decision: this
+ * request carries ONE synthetic package line item, so it has room for one origin. Declaring
+ * a mixed carton truthfully needs per-product line items, which belongs to the PS-492
+ * customs builder — restructuring this body would change what 246 live domestic shipments
+ * send, for a field with no customs meaning on a domestic lane.
+ */
+function shippCountryOfManufacture(
+  input: Record<string, unknown>,
+  creds: Record<string, unknown> | undefined,
+): string {
+  const resolved = input.countryOfManufacture;
+  if (typeof resolved === 'string' && /^[A-Za-z]{2}$/.test(resolved.trim())) {
+    return resolved.trim().toUpperCase();
+  }
+  const configured = creds?.packageOriginCountry;
+  if (typeof configured === 'string' && /^[A-Za-z]{2}$/.test(configured.trim())) {
+    return configured.trim().toUpperCase();
+  }
+  return 'US';
+}
+
 function shippRefNumber(input: Record<string, unknown>): string | undefined {
   const rawOrder = input.rawOrder as any;
   const candidates = [
@@ -507,7 +539,12 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
         // PS-083 — declare the insured value here (Shipp reads customsValue as
         // the declared/insured amount). 0 when the order is not insured.
         customsValue: shippCustomsValue(shippingOptions),
-        countryOfManufacture: 'US',
+        // PS-494 — was hardcoded 'US'. Country of origin is a declarable customs fact and
+        // a property of the ITEM, not of the business: PrepShip is a 3PL, and 22 of the
+        // 333 customs line items ShipStation has recorded are KR or CN client goods.
+        // The backend resolves it (customs-origin.ts); this only applies the operator's
+        // configured default when the order carries no single agreed origin.
+        countryOfManufacture: shippCountryOfManufacture(input, creds),
       },
     ],
   };

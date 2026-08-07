@@ -1060,6 +1060,13 @@ const REQUIRED_GUARDS = [
   // was indistinguishable from a stated one and every insured non-US label persisted the
   // wrong premium while the rate had quoted the right one.
   'test:ps-493-parcelguard-destination-tier',
+  // PS-494: country of origin declared to the Shipp broker. Pinned for the MIXED case —
+  // PrepShip is a 3PL, a carton can hold US and KR goods, and the request carries ONE
+  // synthetic line item with room for one origin. Reporting mixed instead of silently
+  // picking a winner is what keeps that limitation visible until the PS-492 customs
+  // builder can express per-item origins. Also pins that the connector never re-reads
+  // customs items itself: adapters translate, they do not decide a declarable fact.
+  'test:ps-494-customs-origin',
   'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having
   // rotted unnoticed precisely because they were not in this pack. In every case

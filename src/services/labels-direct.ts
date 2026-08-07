@@ -247,6 +247,16 @@ export type DirectLabelPurchaseArgs = {
   shipFrom: Record<string, unknown> | null;
   shippingOptions: NormalizedShippingOptions;
   rawOrder: unknown | null;
+  /**
+   * PS-494: the backend-resolved country of origin for this order's contents, or null when
+   * the carton mixes origins / carries no usable customs items.
+   *
+   * A resolved FACT or an explicit absence — never a guess. The connector applies its own
+   * credential-configured default when this is null, because credentials are the adapter's
+   * concern, but it no longer decides the origin. Before this, shipp.ts hardcoded
+   * `countryOfManufacture: 'US'` on every quote and label.
+   */
+  countryOfManufacture: string | null;
   signal?: AbortSignal;
   idempotencyKey?: string;
   /** Carrier test-mode passthrough (the orchestrator's $0 seam). */
@@ -299,6 +309,9 @@ export async function createDirectCarrierLabelForOrder(
     shipFrom: args.shipFrom,
     shipTo: args.shipTo,
     rawOrder: walmartContext?.rawOrder ?? args.rawOrder,
+    // PS-494: backend-resolved customs origin. Only the Shipp connector declares one
+    // today; the others ignore it, same as every other field they do not consume.
+    countryOfManufacture: args.countryOfManufacture,
     externalOrderId: args.externalOrderId,
     orderNumber: args.orderNumber,
     shippingOptions: args.shippingOptions,
