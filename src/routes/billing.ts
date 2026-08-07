@@ -31,6 +31,12 @@ import {
   upsertBillingConfig,
 } from '../services/billing';
 import { billingInvoiceHeaderTotals } from '../services/billing-invoice-totals';
+// PS-491: duplicated order numbers must not be charged twice on the invoice.
+import { loadDuplicateOrderDecisions } from '../services/billing-duplicate-order-loader';
+import {
+  duplicateOrderStatusLabel,
+  isNonBillableDuplicate,
+} from '../services/billing-duplicate-order-policy';
 import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
@@ -810,9 +816,14 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
   }));
+  // PS-491: the Billing table's total must suppress duplicate order copies exactly as the
+  // invoice does, or the screen and the invoice would quote different amounts.
   const totals = q.clientId == null
     ? null
-    : await billingInvoiceHeaderTotals(q.clientId, q.dateFrom!, q.dateTo!);
+    : await billingInvoiceHeaderTotals(
+        q.clientId, q.dateFrom!, q.dateTo!, db,
+        await loadDuplicateOrderDecisions(q.clientId, q.dateFrom!, q.dateTo!),
+      );
   return c.json({ data: rows, totals });
 });
 
@@ -1983,7 +1994,13 @@ async function billingInvoiceData(
   // PS-134/Audit 3.6: the invoice header and close workflow share this exact
   // frozen-total owner. The per-shipment breakdown stays here because the summary
   // service has no per-shipment representation to delegate to.
-  const totals = await billingInvoiceHeaderTotals(clientId, dateFrom, dateTo);
+  // PS-491: resolve which order copies the invoice may charge for BEFORE totals, and pass
+  // the same decisions into the totals owner. One load, one answer — the line items below
+  // and the header total are then incapable of disagreeing.
+  const duplicateDecisions = await loadDuplicateOrderDecisions(clientId, dateFrom, dateTo);
+  const totals = await billingInvoiceHeaderTotals(
+    clientId, dateFrom, dateTo, db, duplicateDecisions,
+  );
   const detailAmount = cancelledNoChargeBillingAmountSql({
     lineType: sql`b.line_type`,
     orderStatus: sql`o.order_status`,
@@ -2108,6 +2125,18 @@ async function billingInvoiceData(
       totalCost: r.row_total,
     });
     const cancelledNoCharge = billingStatus.billingLifecycleStatus === 'cancelled_no_charge';
+    // PS-491: a non-authoritative copy of a duplicated order number contributes no money.
+    // It is emitted as a $0 row rather than dropped, so the invoice still shows that the
+    // order was seen and names the copy that carries the charge — a vanished row would be
+    // indistinguishable from an order that was never fulfilled.
+    const duplicateDecision = r.order_id != null
+      ? duplicateDecisions.get(r.order_id)
+      : undefined;
+    const suppressed = isNonBillableDuplicate(duplicateDecision);
+    const zero = '0';
+    const duplicateLabel = duplicateDecision
+      ? duplicateOrderStatusLabel(duplicateDecision)
+      : null;
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -2120,14 +2149,16 @@ async function billingInvoiceData(
       adjustment_description: r.adjustment_description,
       base_qty: r.base_qty,
       addl_qty: r.addl_qty,
-      pickpack_amt: r.pickpack_amt,
-      additional_amt: r.additional_amt,
-      shipping_amt: r.shipping_amt,
-      storage_amt: r.storage_amt,
-      return_postage_amt: r.return_postage_amt,
-      return_processing_amt: r.return_processing_amt,
-      row_total: r.row_total,
-      billing_status_label: billingStatus.billingStatusLabel,
+      // PS-491: every money column of a suppressed copy goes to zero together. Zeroing a
+      // subset would leave row_total disagreeing with its own components.
+      pickpack_amt: suppressed ? zero : r.pickpack_amt,
+      additional_amt: suppressed ? zero : r.additional_amt,
+      shipping_amt: suppressed ? zero : r.shipping_amt,
+      storage_amt: suppressed ? zero : r.storage_amt,
+      return_postage_amt: suppressed ? zero : r.return_postage_amt,
+      return_processing_amt: suppressed ? zero : r.return_processing_amt,
+      row_total: suppressed ? zero : r.row_total,
+      billing_status_label: duplicateLabel ?? billingStatus.billingStatusLabel,
       item_names: r.adjustment_description ?? itemSummary.itemNames,
       // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
       // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
@@ -2136,7 +2167,7 @@ async function billingInvoiceData(
         ? `Original invoice ${r.source_finalization_id}`
         : itemSummary.itemSkus ?? r.skus,
       carrier_code: r.carrier_code,
-      package_cost_amt: r.package_cost_amt,
+      package_cost_amt: suppressed ? zero : r.package_cost_amt,
       box_label: cancelledNoCharge ? '—' : box_label,
       box_review: cancelledNoCharge ? false : box_review,
       fee_waived: r.order_id != null && feeWaiverByOrderId.get(r.order_id)?.decision === 'waived',

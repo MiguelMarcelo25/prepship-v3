@@ -61,6 +61,10 @@ async function main(): Promise<void> {
     '2026-07-01T00:00:00.000Z',
     '2026-08-01T00:00:00.000Z',
     conn,
+    // PS-491: this fixture has no duplicated order numbers, so nothing is suppressed.
+    // Stated explicitly rather than defaulted — the totals owner requires callers to
+    // decide, which is what stops a real caller from silently double-billing.
+    new Map(),
   );
 
   const first = await query();

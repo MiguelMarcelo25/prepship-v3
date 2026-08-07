@@ -1038,6 +1038,15 @@ const REQUIRED_GUARDS = [
   // reads, so pruning a row with matched_rule_version_ids would make a rule that really
   // ran silently deletable, audit trail and all. Those rows survive at any age.
   'test:ps-469-run-retention',
+  // PS-491: a duplicated order number becomes two `orders` rows, and the invoice charged
+  // for both. Pinned for the half that is easy to get wrong in the OPPOSITE direction:
+  // where two copies each carry paid shipping, 72 of 72 such groups in production have
+  // two distinct tracking numbers — real split shipments. Collapsing those would have
+  // erased ~$1,348 of legitimate postage revenue, so the rule must classify, never dedupe.
+  // Also pins that the canonical totals owner APPLIES the suppression (not merely builds
+  // it), because the first version of that check passed against a query that had stopped
+  // using the predicate.
+  'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having
   // rotted unnoticed precisely because they were not in this pack. In every case
   // the protection was intact and only the source-text assertion had gone stale

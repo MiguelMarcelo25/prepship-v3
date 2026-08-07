@@ -15,6 +15,8 @@ import {
   billingLineItems,
 } from '../db/schema/billing';
 import { billingInvoiceHeaderTotals } from './billing-invoice-totals.js';
+// PS-491: the finalized amount must exclude duplicate order copies, same as the invoice.
+import { loadDuplicateOrderDecisions } from './billing-duplicate-order-loader.js';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
 import { env } from '../lib/env.js';
 import {
@@ -440,11 +442,16 @@ export async function finalizeBillingPeriod(input: {
         }
       }
 
+      // PS-491: load the duplicate-order decisions on the SAME transaction that is about
+      // to stamp `invoiced = true`, so the snapshot cannot suppress a copy that another
+      // writer invoiced in between. The finalized amount must equal the invoice the
+      // customer receives.
       const totals = await billingInvoiceHeaderTotals(
         input.clientId,
         input.dateFrom,
         input.dateTo,
         tx,
+        await loadDuplicateOrderDecisions(input.clientId, input.dateFrom, input.dateTo, tx),
       );
       const lineIds = lines.map((line) => Number(line.id));
       await tx.execute(sql`

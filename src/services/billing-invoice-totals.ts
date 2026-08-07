@@ -1,8 +1,13 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { roundMoney } from '../lib/money.js';
+import { intArraySql } from '../lib/scope-sql.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
+import {
+  nonBillableDuplicateOrderIds,
+  type DuplicateOrderDecisions,
+} from './billing-duplicate-order-loader.js';
 
 export type BillingInvoiceHeaderTotals = {
   orderCount: number;
@@ -29,7 +34,33 @@ export async function billingInvoiceHeaderTotals(
   dateFrom: string,
   dateTo: string,
   conn: BillingTotalsExecutor = db,
+  /**
+   * PS-491: which order copies this period may charge for, from
+   * `loadDuplicateOrderDecisions`. REQUIRED, deliberately.
+   *
+   * An earlier version defaulted this by loading inside this function. That put a second
+   * query — and a dependency on four more `billing_line_items` columns — inside a hot
+   * owner that three separate integration fixtures call with a reduced table, and it made
+   * the suppression invisible at the call site. Requiring it instead means the COMPILER
+   * refuses a new caller that has not thought about duplicates, which is a stronger
+   * guarantee than any guard, and callers already inside a transaction (the close
+   * workflow) can load on that same `tx`.
+   *
+   * Pass an empty Map to state explicitly that no suppression applies.
+   */
+  duplicateDecisions: DuplicateOrderDecisions,
 ): Promise<BillingInvoiceHeaderTotals> {
+  // PS-491: a duplicated order number becomes two orders and therefore two sets of
+  // billing lines. Suppressing the non-authoritative copies here, in the canonical totals
+  // owner, is what stops the header total, the invoice line items, and the finalization
+  // snapshot from disagreeing about what the customer owes. Split shipments are NOT
+  // suppressed — see billing-duplicate-order-policy.ts for why that distinction is
+  // load-bearing.
+  const suppressedOrderIds = nonBillableDuplicateOrderIds(duplicateDecisions);
+  const notSuppressed = suppressedOrderIds.length
+    ? sql`and (b.order_id is null or b.order_id <> all(${intArraySql(suppressedOrderIds)}))`
+    : sql``;
+
   const invoiceAmount = cancelledNoChargeBillingAmountSql({
     lineType: sql`b.line_type`,
     orderStatus: sql`o.order_status`,
@@ -64,6 +95,7 @@ export async function billingInvoiceHeaderTotals(
     where b.client_id = ${clientId}
       and ${effectiveDay} >= ${dateFrom}::timestamptz
       and ${effectiveDay} < ${dateTo}::timestamptz
+      ${notSuppressed}
   `);
   const rows = Array.isArray(summaryRow)
     ? summaryRow
