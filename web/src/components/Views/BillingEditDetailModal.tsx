@@ -148,18 +148,29 @@ export function BillingEditDetailModal({
     setBoxActive(0)
   }, [boxFilter, boxOpen])
 
-  // Close on an outside mousedown. The modal backdrop stops propagation, so a
-  // document listener is the only thing that sees clicks elsewhere in the modal.
+  // Close on any mousedown outside the combobox.
+  //
+  // CAPTURE phase, deliberately. The modal container calls stopPropagation on
+  // mousedown, so a bubble-phase document listener never sees clicks inside the
+  // modal and the list stayed open when the operator clicked Shipping or Reason.
+  // Capture runs top-down before the target, so nothing downstream can stop it.
   useEffect(() => {
     if (!boxOpen) return
     function onDocMouseDown(event: MouseEvent) {
-      if (!boxWrapRef.current?.contains(event.target as Node)) {
-        setBoxOpen(false)
-        setBoxFilter('')
+      const target = event.target
+      if (boxWrapRef.current?.contains(target as Node)) return
+      setBoxOpen(false)
+      setBoxFilter('')
+      // A click on the backdrop closes the LIST only. Letting it through would
+      // also hit the backdrop's close handler and discard the whole edit, which
+      // is not what dismissing a dropdown should cost.
+      if (target instanceof Element && !target.closest('.billing-edit-modal')) {
+        event.stopPropagation()
+        event.preventDefault()
       }
     }
-    document.addEventListener('mousedown', onDocMouseDown)
-    return () => document.removeEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('mousedown', onDocMouseDown, true)
+    return () => document.removeEventListener('mousedown', onDocMouseDown, true)
   }, [boxOpen])
 
   function commitBox(pkg: PackageDto | undefined) {

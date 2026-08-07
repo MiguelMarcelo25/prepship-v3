@@ -263,6 +263,29 @@ check('editing an applied row clears its stale verdict', () => {
   assert.match(update, /delete next\[id\]/);
 });
 
+check('the Box Size list closes on an outside click, without discarding the edit', () => {
+  const modal = readFileSync('web/src/components/Views/BillingEditDetailModal.tsx', 'utf8');
+  // CAPTURE phase: the modal container calls stopPropagation on mousedown, so a
+  // bubble-phase document listener never sees clicks inside the modal and the
+  // list stayed open when the operator clicked Shipping or Reason.
+  assert.match(
+    modal,
+    /document\.addEventListener\('mousedown', onDocMouseDown, true\)/,
+    'the outside-click listener must be capture phase',
+  );
+  assert.match(
+    modal,
+    /document\.removeEventListener\('mousedown', onDocMouseDown, true\)/,
+    'and must be removed with the same capture flag or it leaks',
+  );
+  // Dismissing the list must not also close the edit modal and lose the draft.
+  assert.match(
+    modal,
+    /!target\.closest\('\.billing-edit-modal'\)[\s\S]{0,120}stopPropagation\(\)/,
+    'a backdrop click closes the list only',
+  );
+});
+
 check('the import defers read invalidation until the batch finishes', () => {
   // Invalidating after every PATCH refetched the whole billing range once per
   // row, which stalled an 85-row apply. The batch invalidates once at the end.
