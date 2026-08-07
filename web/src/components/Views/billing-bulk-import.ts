@@ -114,6 +114,25 @@ export function parseBulkImportText(text: string): BulkImportParsedRow[] {
 }
 
 /**
+ * Build parsed rows from the grid's own fields. No separator guessing is needed
+ * here — the operator already put each value in its own input.
+ */
+export function bulkImportRowsFromFields(
+  fields: Array<{ orderNumberRaw: string; boxRaw: string; shippingRaw: string }>,
+): BulkImportParsedRow[] {
+  const out: BulkImportParsedRow[] = []
+  fields.forEach((field, index) => {
+    const orderNumberRaw = String(field.orderNumberRaw ?? '').trim()
+    const boxRaw = String(field.boxRaw ?? '').trim()
+    const shippingRaw = String(field.shippingRaw ?? '').trim()
+    // A wholly empty row is the operator's blank line, not an error.
+    if (!orderNumberRaw && !boxRaw && !shippingRaw) return
+    out.push({ lineNumber: index + 1, orderNumberRaw, boxRaw, shippingRaw })
+  })
+  return out
+}
+
+/**
  * Match a pasted box name to exactly one package. Exact normalized name wins; a
  * unique substring match is accepted; anything ambiguous is reported, never picked.
  */

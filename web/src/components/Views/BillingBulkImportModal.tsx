@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import { Loader2, X } from 'lucide-react'
+import { Loader2, Plus, X } from 'lucide-react'
 import type { PackageDto } from '../../types/api'
 import type { BillingDetailDto } from './billing-parity'
 import {
   BULK_IMPORT_STATUS_LABEL,
   bulkImportReadyRows,
+  bulkImportRowsFromFields,
   parseBulkImportText,
   resolveBulkImportRows,
   type BulkImportReadyRow,
@@ -17,6 +18,13 @@ export type BulkImportApplyOutcome = {
   message: string
 }
 
+type ImportField = {
+  id: number
+  orderNumberRaw: string
+  boxRaw: string
+  shippingRaw: string
+}
+
 type BillingBulkImportModalProps = {
   clientName: string
   detailRows: BillingDetailDto[]
@@ -27,6 +35,11 @@ type BillingBulkImportModalProps = {
   onFinished: () => void
 }
 
+let nextFieldId = 1
+function emptyField(): ImportField {
+  return { id: nextFieldId++, orderNumberRaw: '', boxRaw: '', shippingRaw: '' }
+}
+
 export function BillingBulkImportModal({
   clientName,
   detailRows,
@@ -35,20 +48,67 @@ export function BillingBulkImportModal({
   onApplyRow,
   onFinished,
 }: BillingBulkImportModalProps) {
-  const [text, setText] = useState('')
+  const [fields, setFields] = useState<ImportField[]>(() => [emptyField(), emptyField(), emptyField()])
   const [reason, setReason] = useState('')
   const [applying, setApplying] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [outcomes, setOutcomes] = useState<BulkImportApplyOutcome[] | null>(null)
 
   const resolved = useMemo(
-    () => resolveBulkImportRows(parseBulkImportText(text), detailRows, packages),
-    [text, detailRows, packages],
+    () => resolveBulkImportRows(bulkImportRowsFromFields(fields), detailRows, packages),
+    [fields, detailRows, packages],
   )
+  // lineNumber is the 1-based index into `fields`, so status maps back to its row.
+  const statusByFieldIndex = useMemo(() => {
+    const map = new Map<number, (typeof resolved)[number]>()
+    for (const row of resolved) map.set(row.lineNumber - 1, row)
+    return map
+  }, [resolved])
+
   const ready = useMemo(() => bulkImportReadyRows(resolved), [resolved])
   const problems = useMemo(() => resolved.filter((row) => row.status !== 'ready'), [resolved])
-
   const canApply = ready.length > 0 && reason.trim().length >= 3 && !applying
+
+  function updateField(id: number, key: keyof Omit<ImportField, 'id'>, value: string) {
+    setFields((current) => current.map((field) => (field.id === id ? { ...field, [key]: value } : field)))
+  }
+
+  function addField() {
+    setFields((current) => [...current, emptyField()])
+  }
+
+  function removeField(id: number) {
+    setFields((current) => {
+      const next = current.filter((field) => field.id !== id)
+      return next.length ? next : [emptyField()]
+    })
+  }
+
+  /**
+   * Pasting multi-line text into any Order # cell fills the grid from that row
+   * down, so a straight copy out of Sheets still works.
+   */
+  function onPasteIntoOrder(index: number, event: React.ClipboardEvent<HTMLInputElement>) {
+    const text = event.clipboardData.getData('text')
+    if (!text || !/[\n\t,]/.test(text)) return
+    event.preventDefault()
+    const parsed = parseBulkImportText(text)
+    if (!parsed.length) return
+    setFields((current) => {
+      const next = [...current]
+      parsed.forEach((row, offset) => {
+        const target = index + offset
+        const incoming = {
+          orderNumberRaw: row.orderNumberRaw,
+          boxRaw: row.boxRaw,
+          shippingRaw: row.shippingRaw,
+        }
+        if (next[target]) next[target] = { ...next[target]!, ...incoming }
+        else next.push({ ...emptyField(), ...incoming })
+      })
+      return next
+    })
+  }
 
   async function apply() {
     if (!canApply) return
@@ -57,8 +117,7 @@ export function BillingBulkImportModal({
     setProgress({ done: 0, total: ready.length })
     const results: BulkImportApplyOutcome[] = []
     // Sequential on purpose: each row is an independent audited invoice-line edit,
-    // exactly as if typed by hand. Firing them in parallel would make a partial
-    // failure much harder to read back.
+    // exactly as if typed by hand. A partial failure stays readable.
     for (const row of ready) {
       try {
         await onApplyRow(row, reason.trim())
@@ -80,6 +139,7 @@ export function BillingBulkImportModal({
 
   const applied = outcomes?.filter((outcome) => outcome.ok).length ?? 0
   const failed = outcomes?.filter((outcome) => !outcome.ok).length ?? 0
+  const cell = { fontSize: 12, width: '100%' } as const
 
   return (
     <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !applying && onClose()}>
@@ -88,7 +148,7 @@ export function BillingBulkImportModal({
         role="dialog"
         aria-modal="true"
         aria-label="Import billing corrections"
-        style={{ maxWidth: 820 }}
+        style={{ maxWidth: 760 }}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="billing-edit-head">
@@ -101,50 +161,105 @@ export function BillingBulkImportModal({
           </button>
         </div>
 
-        <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '4px 0 6px' }}>
-          One order per line: <strong>Order #</strong>, <strong>Box</strong>,{' '}
-          <strong>Shipping</strong> — separated by tabs (a paste from Sheets), commas, or spaces.
-          Leave the box or the amount out to leave that field alone. Each row is saved as a normal
-          invoice-line edit with the reason below.
+        <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '4px 0 8px' }}>
+          Fill a row per order, or paste several rows straight into an Order # cell. Leave Box or
+          Shipping empty to leave that field alone. Each row is saved as a normal invoice-line edit
+          with the reason below.
         </p>
 
-        <textarea
-          value={text}
-          disabled={applying}
-          onChange={(event) => setText(event.target.value)}
-          placeholder={'2515\t9x6x3\t20.83\n2521\t12x10x3\t20.72'}
-          spellCheck={false}
-          style={{ width: '100%', minHeight: 120, fontFamily: 'monospace', fontSize: 12, padding: 8 }}
-        />
+        <div style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--muted)', fontSize: 10.5, textTransform: 'uppercase' }}>
+                <th style={{ padding: '2px 4px', width: '22%' }}>Order #</th>
+                <th style={{ padding: '2px 4px', width: '30%' }}>Box Size</th>
+                <th style={{ padding: '2px 4px', width: '20%' }}>Shipping</th>
+                <th style={{ padding: '2px 4px' }}>Status</th>
+                <th style={{ width: 28 }} aria-label="Remove row" />
+              </tr>
+            </thead>
+            <tbody>
+              {fields.map((field, index) => {
+                const status = statusByFieldIndex.get(index)
+                const isProblem = status && status.status !== 'ready'
+                return (
+                  <tr key={field.id}>
+                    <td style={{ padding: '2px 4px' }}>
+                      <input
+                        className="ship-input"
+                        style={cell}
+                        value={field.orderNumberRaw}
+                        disabled={applying}
+                        placeholder="2553"
+                        aria-label={`Order number, row ${index + 1}`}
+                        onPaste={(event) => onPasteIntoOrder(index, event)}
+                        onChange={(event) => updateField(field.id, 'orderNumberRaw', event.target.value)}
+                      />
+                    </td>
+                    <td style={{ padding: '2px 4px' }}>
+                      <input
+                        className="ship-input"
+                        style={cell}
+                        value={field.boxRaw}
+                        disabled={applying}
+                        placeholder="9x6x3"
+                        aria-label={`Box size, row ${index + 1}`}
+                        onChange={(event) => updateField(field.id, 'boxRaw', event.target.value)}
+                      />
+                    </td>
+                    <td style={{ padding: '2px 4px' }}>
+                      <input
+                        className="ship-input"
+                        style={cell}
+                        value={field.shippingRaw}
+                        disabled={applying}
+                        placeholder="20.72"
+                        inputMode="decimal"
+                        aria-label={`Shipping, row ${index + 1}`}
+                        onChange={(event) => updateField(field.id, 'shippingRaw', event.target.value)}
+                      />
+                    </td>
+                    <td style={{ padding: '2px 4px', fontSize: 11 }}>
+                      {status ? (
+                        <span style={{ color: isProblem ? '#b45309' : '#15803d' }}>
+                          {BULK_IMPORT_STATUS_LABEL[status.status]}
+                          {isProblem && status.detail ? ` — ${status.detail}` : ''}
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--muted)' }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '2px 4px', textAlign: 'right' }}>
+                      <button
+                        className="btn btn-ghost btn-xs"
+                        type="button"
+                        disabled={applying}
+                        aria-label={`Remove row ${index + 1}`}
+                        onClick={() => removeField(field.id)}
+                      >
+                        <X size={12} aria-hidden="true" />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
 
-        {resolved.length ? (
-          <div style={{ margin: '8px 0', fontSize: 12 }}>
-            <strong>{ready.length}</strong> ready
-            {problems.length ? <> · <strong style={{ color: '#b45309' }}>{problems.length}</strong> need attention</> : null}
-          </div>
-        ) : null}
-
-        {problems.length ? (
-          <div
-            style={{
-              maxHeight: 150,
-              overflowY: 'auto',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              padding: 6,
-              marginBottom: 8,
-              fontSize: 11.5,
-            }}
-          >
-            {problems.map((row) => (
-              <div key={`${row.lineNumber}-${row.orderNumberRaw}`} style={{ padding: '2px 0' }}>
-                <strong>Line {row.lineNumber}</strong> · {row.orderNumberRaw} ·{' '}
-                <span style={{ color: '#b45309' }}>{BULK_IMPORT_STATUS_LABEL[row.status]}</span>
-                {row.detail ? <> — {row.detail}</> : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <button className="btn btn-secondary btn-xs" type="button" disabled={applying} onClick={addField}>
+            <Plus size={12} aria-hidden="true" /> Add row
+          </button>
+          {resolved.length ? (
+            <span style={{ fontSize: 12 }}>
+              <strong>{ready.length}</strong> ready
+              {problems.length ? (
+                <> · <strong style={{ color: '#b45309' }}>{problems.length}</strong> need attention</>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
 
         <label style={{ display: 'block', fontSize: 11.5, marginBottom: 8 }}>
           <span style={{ display: 'block', marginBottom: 2 }}>
@@ -174,7 +289,7 @@ export function BillingBulkImportModal({
               <div style={{ maxHeight: 120, overflowY: 'auto', marginTop: 4, fontSize: 11.5 }}>
                 {outcomes.filter((outcome) => !outcome.ok).map((outcome) => (
                   <div key={`${outcome.lineNumber}-${outcome.orderNumberRaw}`}>
-                    Line {outcome.lineNumber} · {outcome.orderNumberRaw} — {outcome.message}
+                    Row {outcome.lineNumber} · {outcome.orderNumberRaw} — {outcome.message}
                   </div>
                 ))}
               </div>

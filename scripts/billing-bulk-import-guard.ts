@@ -17,6 +17,7 @@ import {
   resolveBulkImportRows,
   resolveImportPackage,
   bulkImportReadyRows,
+  bulkImportRowsFromFields,
 } from '../web/src/components/Views/billing-bulk-import';
 
 let failures = 0;
@@ -80,6 +81,42 @@ check('a space-separated line resolves end to end', () => {
   assert.equal(rows[0]!.orderId, 501);
   assert.equal(rows[0]!.packageId, 11);
   assert.equal(rows[0]!.shipping, 20.83);
+});
+
+check('grid fields resolve without any separator guessing', () => {
+  const rows = resolveBulkImportRows(
+    bulkImportRowsFromFields([
+      { orderNumberRaw: '2515', boxRaw: '9x6x3', shippingRaw: '20.83' },
+      { orderNumberRaw: ' 2521 ', boxRaw: ' 12x10x3 ', shippingRaw: ' $20.72 ' },
+    ]),
+    DETAILS,
+    PACKAGES,
+  );
+  assert.equal(bulkImportReadyRows(rows).length, 2, 'both grid rows resolve');
+  assert.equal(rows[1]!.shipping, 20.72, 'fields are trimmed');
+});
+
+check('a wholly empty grid row is ignored, not an error', () => {
+  const rows = resolveBulkImportRows(
+    bulkImportRowsFromFields([
+      { orderNumberRaw: '2515', boxRaw: '9x6x3', shippingRaw: '20.83' },
+      { orderNumberRaw: '', boxRaw: '', shippingRaw: '' },
+    ]),
+    DETAILS,
+    PACKAGES,
+  );
+  assert.equal(rows.length, 1, 'the blank row produces no finding at all');
+});
+
+check('a grid row keeps its position so status maps back to it', () => {
+  // The modal indexes status by lineNumber-1; a skipped blank row must not shift
+  // later rows onto the wrong line.
+  const parsed = bulkImportRowsFromFields([
+    { orderNumberRaw: '', boxRaw: '', shippingRaw: '' },
+    { orderNumberRaw: '2515', boxRaw: '9x6x3', shippingRaw: '20.83' },
+  ]);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]!.lineNumber, 2, 'row 2 reports as line 2, not line 1');
 });
 
 check('a pasted header row is skipped, blank lines ignored', () => {
