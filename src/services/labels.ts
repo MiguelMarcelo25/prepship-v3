@@ -202,6 +202,9 @@ import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost'
 import { resolveOrderCustomsOrigin, singleCustomsOriginOrNull } from './customs-origin';
 // PS-492: PrepShip cannot originate an international label; refuse before any provider call.
 import { assertInternationalOriginationSupported } from './shipping-workflow/international-origination-policy';
+// PS-497: real shipped lines, so a label purchase deducts inventory instead of parking a
+// review claim nothing consumes.
+import { loadWholeOrderShipmentLines } from './shipment-fulfillment-lines';
 // PS-274 / PS-261 (Per user override unlock shipped data on 2026-06-17): the backend-owned
 // insurance-CERTAINTY resolver. Used at persist time so a Shipp-brokered label NEVER records
 // insuranceProvenance='carrier_declared_value' (we cannot prove the carrier applied declared
@@ -3168,6 +3171,9 @@ async function createLabelV2Impl(
     // atomic owner. Test labels returned above never consume package stock.
     // Per user override unlock shipped data on 2026-07-16 (PS-424): one
     // command owns the terminal transition and both fulfillment ledgers.
+    // PS-497: loaded on the SAME tx as the lifecycle write, so the lines cannot change
+    // between being read and being claimed.
+    const shippedLines = await loadWholeOrderShipmentLines(order.id, tx);
     await timer.task('apply order lifecycle', () =>
       applyOrderLifecycleCommandInTransaction(tx, {
         orderId: order.id,
@@ -3178,10 +3184,22 @@ async function createLabelV2Impl(
         requireAwaitingOrderStatus: true,
         requireNoActiveOutboundShipment: true,
         effectiveAt: new Date(durableCreated.shipDate),
-        fulfillmentFacts: {
-          kind: 'unavailable',
-          description: 'Label purchase request did not identify shipped line quantities',
-        },
+        // PS-497: this hardcoded `unavailable` stopped ALL inventory deduction on the label
+        // path for 22 days — 1,193 orders shipped with zero `inventory_ledger` ship rows,
+        // because normalizeFulfillmentFacts stamps reviewReason on an unavailable receipt
+        // and the deduction enqueue requires `!line.reviewReason`.
+        //
+        // Reading the order's lines is sound HERE specifically: this same command asserts
+        // requireAwaitingOrderStatus AND requireNoActiveOutboundShipment (below), so the
+        // label is the order's SOLE outbound shipment and the shipment's scope equals the
+        // order's. When the lines are not certain the loader returns null and we emit the
+        // same review receipt as before — this narrows the gap, it does not weaken PS-424.
+        fulfillmentFacts: shippedLines?.length
+          ? { kind: 'exact', lines: shippedLines }
+          : {
+              kind: 'unavailable',
+              description: 'Label purchase request did not identify shipped line quantities',
+            },
         trackingNumber: durableCreated.trackingNumber,
         packageConsumption: {
           shipmentId,

@@ -1080,6 +1080,14 @@ const REQUIRED_GUARDS = [
   // orders with zero billing between them). Drop either and the alert is permanently
   // non-zero, therefore ignored. Also pins that the detector never writes -- regeneration
   // bills orders shipped as far back as 2024 and is an operator decision.
+  // PS-497: the label path must supply REAL shipped lines. Pinned because the hardcoded
+  // `unavailable` receipt it replaces stopped ALL inventory deduction for 22 days -- 1,193
+  // orders shipped, zero inventory_ledger ship rows, 2,651 claims parked in a review status
+  // nothing consumes -- and NOTHING caught it: ps-318 asserts `deductInventoryForOrder` is
+  // still present in labels.ts and passed throughout, because the symbol survived while the
+  // behaviour died. The fallback half matters as much as the fix: any uncertain line must
+  // still return null, since a partial deduction is harder to reconcile than none.
+  'test:ps-497-shipment-fulfillment-lines',
   'test:ps-495-billing-coverage-gap',
   'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having
