@@ -919,6 +919,7 @@
     "test:ps-490-billing-export-destination": "tsx scripts/ps-490-billing-export-destination-guard.ts",
     "test:ps-492-international-origination": "tsx scripts/ps-492-international-origination-guard.ts",
     "test:ps-493-parcelguard-destination-tier": "tsx scripts/ps-493-parcelguard-destination-tier-guard.ts",
+    "test:ps-497-shipstation-shipment-items": "tsx scripts/ps-497-shipstation-shipment-items-guard.ts",
     "test:ps-497-shipment-fulfillment-lines": "tsx scripts/ps-497-shipment-fulfillment-lines-guard.ts",
     "test:ps-495-billing-coverage-gap": "tsx scripts/ps-495-billing-coverage-gap-guard.ts",
     "test:ps-494-customs-origin": "tsx scripts/ps-494-customs-origin-guard.ts",

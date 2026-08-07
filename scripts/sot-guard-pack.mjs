@@ -65,6 +65,10 @@ const REQUIRED_GUARDS = [
   'test:ps-094-rate-selection-proof',
   'test:ps-095-selected-rate-proof-pass-through',
   'test:ps-462-billing-sot',
+  // Pasted Box Size / Shipping import. Every `ready` row becomes a real
+  // invoice-line edit, so the refusals (unmatched order, ambiguous box, bad
+  // amount, comma-as-decimal) are what stop a bad paste reaching an invoice.
+  'test:billing-bulk-import',
   'test:recalculate-best-rate-strict',
   // ── Batch 2: label / postage integrity, plus two guards the sweep found RED ──
   //
@@ -1088,6 +1092,15 @@ const REQUIRED_GUARDS = [
   // behaviour died. The fallback half matters as much as the fix: any uncertain line must
   // still return null, since a partial deduction is harder to reconcile than none.
   'test:ps-497-shipment-fulfillment-lines',
+  // PS-497 (sync half): ShipStation V1 GET /shipments defaults includeShipmentItems to
+  // FALSE and OMITS the array, so shipment-sync's `kind: 'exact'` branch -- written
+  // correctly all along -- never received data and 1,003 orders routed to review. Pinned
+  // on the request flag, on the exact/unavailable gate that keeps the fail-safe, and on
+  // NOT reusing the whole-order loader here: this path sets neither
+  // requireAwaitingOrderStatus nor requireNoActiveOutboundShipment and its commandKey is
+  // per-shipment, so it fires for partial and repeat shipments where order-scoped lines
+  // would OVER-deduct.
+  'test:ps-497-shipstation-shipment-items',
   'test:ps-495-billing-coverage-gap',
   'test:ps-491-duplicate-order-billing',
   // The three below were each found RED on a clean base on 2026-08-01, having

@@ -831,12 +831,26 @@ export async function syncShipments(
           page: String(page),
           sortBy: 'CreateDate',
           sortDir: 'ASC',
+          // PS-497: ShipStation V1 GET /shipments defaults includeShipmentItems to FALSE,
+          // which OMITS the shipmentItems array entirely rather than returning it empty.
+          // The `kind: 'exact'` branch below has therefore never had data: every row took
+          // the `unavailable` fallback, normalizeFulfillmentFacts stamped a reviewReason,
+          // and the inventory deduction enqueue could never fire. That is 1,003 of the
+          // 2,651 claims stranded in status='review' since 2026-07-16.
+          //
+          // These lines are SHIPMENT-scoped, which is what makes them the right answer
+          // here: this path has neither requireAwaitingOrderStatus nor
+          // requireNoActiveOutboundShipment, so it legitimately fires for partial and
+          // repeat shipments where the ORDER's lines would over-deduct.
+          includeShipmentItems: 'true',
         });
 
         const res = await listShipStationShipments<SSShipmentsList>(q, {
           apiKey: acct.apiKey,
           apiSecret: acct.apiSecret,
-          dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}`,
+          // PS-497: `items` in the key so a request made WITH shipment items can never be
+          // served by an in-flight request made without them.
+          dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}:items`,
           timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
           // Per user override unlock shipped data on 2026-07-14: the queue
           // deadline cancels the provider request instead of abandoning it.
