@@ -1807,6 +1807,7 @@ export async function generateLineItems(input: GenerateInput) {
         orderId: returns.orderId,
         clientId: returns.clientId,
         createdAt: returns.createdAt,
+        billingDateOverride: returns.billingDateOverride,
         returnCustomerShippingRate: returns.returnCustomerShippingRate,
         returnReference: returns.returnReference,
         orderNumber: orders.orderNumber,
@@ -1815,8 +1816,20 @@ export async function generateLineItems(input: GenerateInput) {
       .leftJoin(orders, eq(orders.id, returns.orderId))
       .where(
         and(
-          sql`${returns.createdAt} >= ${fromIso}::timestamptz`,
-          sql`${returns.createdAt} < ${toIso}::timestamptz`,
+          // AC-3/AC-5 — admit on the CANONICAL effective day, not created_at.
+          //
+          // This mirrors resolveReturnBillingEventDate(), which is
+          // coalesce(correctedDate, createdAt). Selecting by created_at alone meant
+          // an admin correction never moved a return between periods: the corrected
+          // month would not pick it up, and the original month still would. The
+          // event key is date-free, so a moved event replaces itself rather than
+          // duplicating.
+          //
+          // A pre-cutover return still cannot be dragged into scope by a
+          // correction: isReturnWithinBillingCutover() reads created_at only, and
+          // the planner rejects it before any line is produced.
+          sql`coalesce(${returns.billingDateOverride}, ${returns.createdAt}) >= ${fromIso}::timestamptz`,
+          sql`coalesce(${returns.billingDateOverride}, ${returns.createdAt}) < ${toIso}::timestamptz`,
           input.clientId !== undefined ? eq(returns.clientId, input.clientId) : undefined,
         ),
       );
@@ -1828,6 +1841,9 @@ export async function generateLineItems(input: GenerateInput) {
         orderNumber: r.orderNumber ?? null,
         clientId: r.clientId,
         createdAt: r.createdAt,
+        // The planner already supported this; the generator simply never passed
+        // it, so billingEffectiveDate always fell back to created_at.
+        billingDateOverride: r.billingDateOverride,
         returnCustomerShippingRate: r.returnCustomerShippingRate,
         returnReference: r.returnReference,
       })),

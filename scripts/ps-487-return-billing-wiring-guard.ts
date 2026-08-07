@@ -145,6 +145,61 @@ check('PrepShip only READS returns — the generator never writes that table', (
   );
 });
 
+// AC-3/AC-5 — the corrected date must reach the planner AND the row selector.
+//
+// The pure planner guards all passed while this was broken, because they build
+// planner inputs by hand. Only the generator can prove the column is actually
+// selected, passed, and used for range admission.
+check('the generator SELECTS the corrected billing date', () => {
+  assert.match(
+    billing,
+    /billingDateOverride: returns\.billingDateOverride/,
+    'returns.billingDateOverride must be in the generator select',
+  );
+});
+
+check('the corrected date is PASSED to the planner', () => {
+  assert.match(
+    billing,
+    /billingDateOverride: r\.billingDateOverride/,
+    'the planner input mapping must carry billingDateOverride',
+  );
+});
+
+check('range admission uses the effective day, not created_at alone', () => {
+  // Selecting by created_at meant a correction never moved a return between
+  // periods: the corrected month did not pick it up and the original still did.
+  // Must mirror resolveReturnBillingEventDate = coalesce(corrected, created).
+  assert.match(
+    billing,
+    /coalesce\(\$\{returns\.billingDateOverride\}, \$\{returns\.createdAt\}\) >= \$\{fromIso\}/,
+    'lower bound must coalesce the override over created_at',
+  );
+  assert.match(
+    billing,
+    /coalesce\(\$\{returns\.billingDateOverride\}, \$\{returns\.createdAt\}\) < \$\{toIso\}/,
+    'upper bound must coalesce the override over created_at',
+  );
+  assert.doesNotMatch(
+    billing,
+    /sql`\$\{returns\.createdAt\} >= \$\{fromIso\}/,
+    'the bare created_at lower bound must be gone, not merely supplemented',
+  );
+});
+
+check('the forward-only cutover still reads created_at, not the override', () => {
+  // Widening admission must not let a correction drag a pre-cutover return into
+  // scope. The cutover is a policy date about when the return really happened.
+  const contract = readFileSync('src/services/billing-return-event-contract.ts', 'utf8');
+  const fn = contract.slice(
+    contract.indexOf('export function isReturnWithinBillingCutover'),
+    contract.indexOf('export type ReturnBillingEventKind'),
+  );
+  assert.ok(fn.length > 0, 'cutover function must exist');
+  assert.match(fn, /toIsoDay\(input\.createdAt\)/);
+  assert.doesNotMatch(fn, /correctedDate|billingDateOverride/);
+});
+
 if (failures > 0) {
   console.error(`\nFAIL PS-487 return billing wiring guard (${failures} failing)`);
   process.exit(1);
