@@ -64,6 +64,16 @@ export type DuplicateOrderPolicyRow = {
   shipmentId: number | null;
   /** Adjustment rows are not orders and never participate. */
   billingAdjustmentId: string | null;
+  /**
+   * PS-491: ShipStation's OWN statement that this order was split or merged
+   * (`advancedOptions.mergedOrSplit` / `parentId`), when known.
+   *
+   * The paid-shipping test below infers split-vs-duplicate from an effect — whether two
+   * labels were bought. This is the cause, stated by the system that did the splitting, so
+   * it wins when present. Null means unknown, which is the case for every order ingested
+   * before raw-payload policy v2 started retaining these fields.
+   */
+  shipStationSplit?: boolean | null;
 };
 
 function finite(value: unknown): number {
@@ -89,7 +99,9 @@ export function classifyDuplicateOrderCopies(
   rows: readonly DuplicateOrderPolicyRow[],
 ): Map<number, DuplicateOrderDecision> {
   // Per order number: the set of order ids, and per order id the evidence we rank on.
-  const byOrderNumber = new Map<string, Map<number, { shipping: number; shipments: number }>>();
+  const byOrderNumber = new Map<string, Map<number, {
+    shipping: number; shipments: number; declaredSplit: boolean;
+  }>>();
 
   for (const row of rows) {
     // Adjustments are client-level money with no order identity; they are never duplicates.
@@ -103,11 +115,13 @@ export function classifyDuplicateOrderCopies(
       copies = new Map();
       byOrderNumber.set(orderNumber, copies);
     }
-    const evidence = copies.get(row.orderId) ?? { shipping: 0, shipments: 0 };
+    const evidence = copies.get(row.orderId)
+      ?? { shipping: 0, shipments: 0, declaredSplit: false };
     // One order can span several rows (multi-package); sum before ranking, or a
     // two-package order would look like two weaker candidates instead of one strong one.
     evidence.shipping += finite(row.shippingAmount);
     if (row.shipmentId != null) evidence.shipments += 1;
+    if (row.shipStationSplit === true) evidence.declaredSplit = true;
     copies.set(row.orderId, evidence);
   }
 
@@ -118,6 +132,16 @@ export function classifyDuplicateOrderCopies(
 
     const entries = [...copies.entries()];
     const paid = entries.filter(([, e]) => e.shipping > 0);
+
+    // PS-491, raw-payload policy v2. If ShipStation itself says any copy in this group was
+    // split or merged, that settles it — no inference required. This is strictly safer
+    // than the paid-shipping test that follows: it can only PREVENT a wrongful collapse,
+    // never cause one. Null/absent for orders ingested before v2, which is every order in
+    // the table today, so this branch is inert until the evidence accumulates.
+    if (entries.some(([, e]) => e.declaredSplit)) {
+      for (const [orderId] of entries) decisions.set(orderId, { kind: 'split_shipment' });
+      continue;
+    }
 
     // Case C. Two or more copies each bought postage — a split shipment, not a duplicate.
     // Charge all of them and mark them so a human confirms. Erring toward charging is

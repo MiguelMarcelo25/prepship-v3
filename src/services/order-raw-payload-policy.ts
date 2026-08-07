@@ -1,4 +1,8 @@
-export const ORDER_RAW_PAYLOAD_POLICY_VERSION = 1;
+/**
+ * v2 (PS-491): retain the ShipStation fields that identify an order across a re-ingest
+ * and distinguish a split/merge from a duplicate. See ORDER_IDENTITY_EVIDENCE_KEYS.
+ */
+export const ORDER_RAW_PAYLOAD_POLICY_VERSION = 2;
 
 const SHIPSTATION_RETAINED_KEYS = [
   // Operational address/package evidence not yet normalized into complete columns.
@@ -12,6 +16,17 @@ const SHIPSTATION_RETAINED_KEYS = [
   'confirmation',
   'customerUsername',
   'externallyFulfilled',
+
+  // PS-491: ShipStation's own key for the order. `orderId` is NOT stable — ShipStation
+  // reassigns it when an order is edited or re-created, which is exactly why order
+  // de-duplication on (source_provider, source_account_id, source_order_id) fails and the
+  // same order lands in `orders` twice. 367 of 369 duplicated order-number groups carry a
+  // different source_order_id per copy, so the unique index can never fire.
+  //
+  // This field was being discarded, which is why the question "is orderKey stable across
+  // the re-ingest?" could not be answered from stored data at all. Retaining it does not
+  // change any behaviour; it starts the evidence that a corrected identity rule needs.
+  'orderKey',
 
   // Historical/reconciliation evidence still read by backend workflows and repair tools.
   'orderId',
@@ -41,6 +56,16 @@ const SHIPSTATION_RETAINED_KEYS = [
   'test',
   'testing',
 ] as const;
+
+/**
+ * PS-491: the `advancedOptions` members that say whether ShipStation split or merged this
+ * order, and what it came from. `mergedOrSplit` is the flag, `parentId` names the order it
+ * was derived from, and `mergedIds` lists what was combined. Together with `orderKey` they
+ * are the evidence needed to tell a duplicate re-ingest from a legitimate split — the
+ * distinction the invoice-side fix (billing-duplicate-order-policy.ts) currently has to
+ * infer from whether two labels were bought.
+ */
+export const ORDER_IDENTITY_EVIDENCE_KEYS = ['mergedOrSplit', 'parentId', 'mergedIds'] as const;
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -79,9 +104,24 @@ export function retainOrderRawForPersistence(input: {
   }
 
   const advancedOptions = record(raw.advancedOptions);
+  const retainedAdvanced: Record<string, unknown> = {};
   if (advancedOptions.storeId !== undefined && advancedOptions.storeId !== null) {
-    retained.advancedOptions = { storeId: advancedOptions.storeId };
+    retainedAdvanced.storeId = advancedOptions.storeId;
   }
+  // PS-491: the split/merge discriminator. Two `orders` rows sharing an order number are
+  // either one order ingested twice (a bug) or a genuine ShipStation split (two real
+  // shipments, correctly billed twice). Nothing on the order row itself separates them —
+  // 354 of 369 duplicate groups match on provider, account, store, order date AND ship-to
+  // postal code. ShipStation knows the difference and says so in these three fields; the
+  // policy was dropping all of them, leaving the distinction unanswerable downstream.
+  //
+  // Kept individually rather than by spreading advancedOptions, because that object also
+  // carries unbounded operator text (customField1 is 4 KB in the guard fixture) and this
+  // projection exists to stay small.
+  for (const key of ORDER_IDENTITY_EVIDENCE_KEYS) {
+    if (advancedOptions[key] !== undefined) retainedAdvanced[key] = advancedOptions[key];
+  }
+  if (Object.keys(retainedAdvanced).length > 0) retained.advancedOptions = retainedAdvanced;
   return retained;
 }
 

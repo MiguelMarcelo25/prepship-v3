@@ -47,9 +47,10 @@ type Row = {
   shippingAmount: number;
   shipmentId: number | null;
   billingAdjustmentId: string | null;
+  shipStationSplit?: boolean | null;
 };
 const row = (o: Partial<Row> & { orderId: number | null; orderNumber: string | null }): Row => ({
-  shippingAmount: 0, shipmentId: null, billingAdjustmentId: null, ...o,
+  shippingAmount: 0, shipmentId: null, billingAdjustmentId: null, shipStationSplit: null, ...o,
 });
 
 // ── the ordinary case ───────────────────────────────────────────────────────
@@ -95,6 +96,40 @@ check('a single order for an order number produces no decision at all',
     !isNonBillableDuplicate(d.get(10)) && !isNonBillableDuplicate(d.get(11)));
   check('C: the invoice says why both rows are there',
     duplicateOrderStatusLabel(d.get(10)!) === 'Split shipment — review');
+}
+
+// ── ShipStation's own split statement outranks the inference ───────────────
+// The paid-shipping test infers split-vs-duplicate from an EFFECT (two labels bought).
+// raw-payload policy v2 retains the CAUSE — advancedOptions.mergedOrSplit / parentId.
+// When present it wins, and it can only prevent a wrongful collapse, never cause one.
+{
+  const d = classifyDuplicateOrderCopies([
+    // Looks exactly like a collapsible duplicate: only one copy has paid shipping.
+    row({ orderId: 1, orderNumber: 'D', shippingAmount: 20, shipmentId: 1, shipStationSplit: true }),
+    row({ orderId: 2, orderNumber: 'D', shippingAmount: 0 }),
+  ]);
+  check('an explicit ShipStation split is NOT collapsed, even when only one copy has postage',
+    d.get(1)?.kind === 'split_shipment' && d.get(2)?.kind === 'split_shipment', [d.get(1), d.get(2)]);
+  check('nothing is suppressed when ShipStation declared a split',
+    !isNonBillableDuplicate(d.get(1)) && !isNonBillableDuplicate(d.get(2)));
+}
+{
+  // Evidence on ANY copy settles the whole group — a split's sibling may not carry the flag.
+  const d = classifyDuplicateOrderCopies([
+    row({ orderId: 1, orderNumber: 'D2', shippingAmount: 20, shipmentId: 1 }),
+    row({ orderId: 2, orderNumber: 'D2', shippingAmount: 0, shipStationSplit: true }),
+  ]);
+  check('split evidence on either copy protects the whole group',
+    d.get(1)?.kind === 'split_shipment' && d.get(2)?.kind === 'split_shipment', [d.get(1), d.get(2)]);
+}
+{
+  // Absent/unknown evidence must fall back to the inference, not block collapsing.
+  const d = classifyDuplicateOrderCopies([
+    row({ orderId: 1, orderNumber: 'D3', shippingAmount: 20, shipmentId: 1, shipStationSplit: null }),
+    row({ orderId: 2, orderNumber: 'D3', shippingAmount: 0, shipStationSplit: false }),
+  ]);
+  check('unknown split evidence falls back to the paid-shipping rule (pre-v2 orders still collapse)',
+    d.get(1)?.kind === 'authoritative' && d.get(2)?.kind === 'duplicate', [d.get(1), d.get(2)]);
 }
 
 // ── bucket B: no copy carries paid shipping ────────────────────────────────

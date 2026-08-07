@@ -12,6 +12,9 @@ function read(path: string): string {
 
 const shipStationRaw = {
   orderId: 123,
+  // PS-491: ShipStation reassigns orderId across an edit/re-create; orderKey is its own
+  // key for the order and is the evidence a corrected identity rule needs.
+  orderKey: 'ss-order-key-abc',
   orderNumber: 'SS-123',
   orderStatus: 'shipped',
   shipDate: '2026-07-14',
@@ -36,6 +39,10 @@ const shipStationRaw = {
     storeId: 456,
     nonMachinable: false,
     customField1: 'x'.repeat(4_000),
+    // PS-491: the split/merge discriminator.
+    mergedOrSplit: true,
+    parentId: 98765,
+    mergedIds: [11, 22],
   },
   requestedShippingService: 'UPS 2nd Day Air',
   serviceCode: 'ups_2nd_day_air',
@@ -71,6 +78,7 @@ for (const key of [
   'customerUsername',
   'externallyFulfilled',
   'orderId',
+  'orderKey',
   'orderStatus',
   'shipDate',
   'fulfilledAt',
@@ -79,7 +87,34 @@ for (const key of [
 ]) {
   assert.deepEqual(retainedShipStation[key], shipStationRaw[key as keyof typeof shipStationRaw], `${key} remains available`);
 }
-assert.deepEqual(retainedShipStation.advancedOptions, { storeId: 456 });
+
+// PS-491. Two `orders` rows sharing an order number are either one order ingested twice
+// (a bug) or a real ShipStation split (two shipments, correctly billed twice). Nothing on
+// the order row separates them — 354 of 369 duplicate groups in production match on
+// provider, account, store, order date AND ship-to postal. ShipStation says which it is in
+// these three fields, and the policy used to drop all of them, so the question could not
+// be answered from stored data at all. They must survive the projection.
+assert.deepEqual(retainedShipStation.advancedOptions, {
+  storeId: 456,
+  mergedOrSplit: true,
+  parentId: 98765,
+  mergedIds: [11, 22],
+}, 'split/merge provenance survives the bounded projection');
+assert.equal(
+  (retainedShipStation.advancedOptions as Record<string, unknown>).customField1,
+  undefined,
+  'unbounded operator text is still dropped — the projection stays small',
+);
+
+// A ShipStation order with no advancedOptions at all must not gain an empty object.
+assert.equal(
+  'advancedOptions' in retainOrderRawForPersistence({
+    sourceProvider: 'shipstation',
+    raw: { orderId: 1, orderNumber: 'n' },
+  }),
+  false,
+  'absent advancedOptions stays absent',
+);
 for (const omitted of ['items', 'billTo', 'weight', 'internalNotes']) {
   assert.equal(omitted in retainedShipStation, false, `${omitted} is not duplicated in orders.raw`);
 }

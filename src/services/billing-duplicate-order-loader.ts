@@ -28,6 +28,7 @@ type EvidenceRow = {
   shipment_id: number | null;
   billing_adjustment_id: string | null;
   invoiced_lines: number;
+  ss_split: boolean | null;
 };
 
 type DuplicateLoaderExecutor = Pick<typeof db, 'execute'>;
@@ -61,8 +62,16 @@ export async function loadDuplicateOrderDecisions(
       coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
       b.shipment_id,
       b.billing_adjustment_id,
-      count(*) filter (where b.invoiced)::int as invoiced_lines
+      count(*) filter (where b.invoiced)::int as invoiced_lines,
+      -- PS-491 (raw payload policy v2): ShipStation's own split/merge statement, when the
+      -- order was ingested after v2 started retaining it. Compared as text rather than
+      -- cast to boolean so an unexpected value cannot throw inside the invoice path.
+      bool_or(
+        o.raw->'advancedOptions'->>'mergedOrSplit' = 'true'
+        or o.raw->'advancedOptions'->>'parentId' is not null
+      ) as ss_split
     from billing_line_items b
+    left join orders o on o.id = b.order_id
     where b.client_id = ${clientId}
       and ${effectiveDay} >= ${dateFrom}::timestamptz
       and ${effectiveDay} < ${dateTo}::timestamptz
@@ -90,6 +99,7 @@ export async function loadDuplicateOrderDecisions(
         shippingAmount: Number(row.shipping_amt ?? 0),
         shipmentId: row.shipment_id,
         billingAdjustmentId: row.billing_adjustment_id,
+        shipStationSplit: row.ss_split,
       })),
   );
 }

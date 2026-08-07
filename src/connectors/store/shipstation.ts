@@ -47,6 +47,12 @@ type SSOrder = {
   advancedOptions?: {
     storeId?: number | null;
     nonMachinable?: boolean | null;
+    // PS-491: ShipStation's split/merge provenance. Declared here because these decide
+    // whether two `orders` rows sharing an order number are one order ingested twice or a
+    // genuine split with two real shipments. Persisted via ORDER_IDENTITY_EVIDENCE_KEYS.
+    mergedOrSplit?: boolean | null;
+    parentId?: number | null;
+    mergedIds?: number[] | null;
   } | null;
 };
 
