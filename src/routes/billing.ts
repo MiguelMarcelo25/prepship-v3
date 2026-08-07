@@ -2986,6 +2986,13 @@ const returnBillingDateSchema = z.object({
 
 app.patch(
   '/returns/:returnId/billing-date',
+  // requireAdmin FIRST. financials:write alone is not an admin gate — PS-246
+  // grants it to `operator` so operators can run billing, so this route was
+  // reachable by a non-admin while the handler below asserts isAdmin: true to
+  // the decision service. AC-6 is explicit that only admins may correct a
+  // return's billing date. Matches /details/:orderId above, which already
+  // pairs requireAdmin with the same permission.
+  requireAdmin,
   requirePermission('financials:write'),
   zValidator('json', returnBillingDateSchema),
   async (c) => {

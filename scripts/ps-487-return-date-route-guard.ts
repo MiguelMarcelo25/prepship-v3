@@ -31,6 +31,20 @@ const rest = route.slice(start);
 const endRel = rest.search(/\napp\.(get|post|patch|put|delete)\(/);
 const block = endRel > 0 ? rest.slice(0, endRel) : rest;
 
+check('the route is ADMIN-gated, not merely permission-gated', () => {
+  // This guard previously pinned `requirePermission('financials:write')` alone and
+  // called that the gate. It is not one: PS-246 grants financials:write to
+  // `operator` so operators can run billing, so a non-admin operator could reach
+  // this mutation while the handler asserts isAdmin: true to the decision service.
+  // AC-6 says only admins may correct a return's billing date, so requireAdmin
+  // must come FIRST and the comment-proof position assertion below now pins both.
+  assert.match(
+    block,
+    /^'\/returns\/:returnId\/billing-date',[\s\S]{0,600}?requireAdmin,\s*requirePermission\('financials:write'\),\s*zValidator\(/,
+    'requireAdmin must precede requirePermission in the middleware list',
+  );
+});
+
 check('the route is permission-gated (client users cannot reach it)', () => {
   // Assert the MIDDLEWARE POSITION, not the mere presence of the string.
   //
@@ -43,7 +57,7 @@ check('the route is permission-gated (client users cannot reach it)', () => {
   // The gate must sit in the argument list — between the path and the validator.
   assert.match(
     block,
-    /^'\/returns\/:returnId\/billing-date',\s*requirePermission\('financials:write'\),\s*zValidator\(/,
+    /^'\/returns\/:returnId\/billing-date',[\s\S]{0,600}?requirePermission\('financials:write'\),\s*zValidator\(/,
     'the permission gate must be middleware between the path and the validator',
   );
 });
