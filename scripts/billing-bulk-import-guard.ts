@@ -234,6 +234,35 @@ check('the import writes through the existing audited detail PATCH', () => {
   assert.match(view, /handleBulkImportRow[\s\S]{0,1600}reason,/, 'every imported row carries a reason');
 });
 
+check('each row shows its own spinner, clears on success, keeps data on failure', () => {
+  const modal = readFileSync('web/src/components/Views/BillingBulkImportModal.tsx', 'utf8');
+  assert.match(
+    modal,
+    /setRowState\(\(current\) => \(\{ \.\.\.current, \[fieldId\]: \{ state: 'applying' \} \}\)\)/,
+    'the row being written must show as applying',
+  );
+  // A saved row empties out so what is left on screen is only what still needs work.
+  assert.match(
+    modal,
+    /state: 'done'[\s\S]{0,400}orderNumberRaw: '', boxRaw: '', shippingRaw: ''/,
+    'a saved row must clear its inputs',
+  );
+  // A failed row must NOT be cleared, or the operator loses what to retry.
+  const failBlock = modal.slice(modal.indexOf('} catch (err) {'), modal.indexOf('setProgress((current) => ({'));
+  assert.doesNotMatch(failBlock, /orderNumberRaw: ''/, 'a failed row keeps its values');
+  assert.match(modal, /state: 'failed', message/);
+  assert.match(modal, /rowState\[field\.id\]\?\.state === 'applying'/, 'status cell renders the per-row spinner');
+  assert.match(modal, /rowState\[field\.id\]\?\.state === 'done'/, 'status cell renders Saved');
+});
+
+check('editing an applied row clears its stale verdict', () => {
+  // Otherwise a retyped row still reads Saved and could be skipped or double-applied.
+  const modal = readFileSync('web/src/components/Views/BillingBulkImportModal.tsx', 'utf8');
+  const update = modal.slice(modal.indexOf('function updateField'), modal.indexOf('function addField'));
+  assert.match(update, /setRowState/);
+  assert.match(update, /delete next\[id\]/);
+});
+
 check('the import defers read invalidation until the batch finishes', () => {
   // Invalidating after every PATCH refetched the whole billing range once per
   // row, which stalled an 85-row apply. The batch invalidates once at the end.

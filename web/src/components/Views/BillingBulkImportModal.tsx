@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Loader2, Plus, X } from 'lucide-react'
+import { Check, Loader2, Plus, X } from 'lucide-react'
 import type { PackageDto } from '../../types/api'
 import type { BillingDetailDto } from './billing-parity'
 import {
@@ -53,6 +53,10 @@ export function BillingBulkImportModal({
   const [applying, setApplying] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0, current: '', failed: 0 })
   const [outcomes, setOutcomes] = useState<BulkImportApplyOutcome[] | null>(null)
+  /** Per-row apply state, keyed by field id, so each row shows its own outcome. */
+  const [rowState, setRowState] = useState<
+    Record<number, { state: 'applying' | 'done' | 'failed'; message?: string }>
+  >({})
 
   const resolved = useMemo(
     () => resolveBulkImportRows(bulkImportRowsFromFields(fields), detailRows, packages),
@@ -71,6 +75,14 @@ export function BillingBulkImportModal({
 
   function updateField(id: number, key: keyof Omit<ImportField, 'id'>, value: string) {
     setFields((current) => current.map((field) => (field.id === id ? { ...field, [key]: value } : field)))
+    // Editing a row that already ran clears its old verdict, so a retyped row is
+    // never shown as still Saved or still failed.
+    setRowState((current) => {
+      if (!current[id]) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
   }
 
   function addField() {
@@ -114,24 +126,38 @@ export function BillingBulkImportModal({
     if (!canApply) return
     setApplying(true)
     setOutcomes(null)
+    setRowState({})
     setProgress({ done: 0, total: ready.length, current: ready[0]?.orderNumberRaw ?? '', failed: 0 })
     const results: BulkImportApplyOutcome[] = []
+    // `fields` is the render snapshot lineNumber indexes into, so the id stays
+    // correct even as rows are cleared underneath.
+    const snapshot = fields
     // Sequential on purpose: each row is an independent audited invoice-line edit,
     // exactly as if typed by hand. A partial failure stays readable.
     for (const [index, row] of ready.entries()) {
+      const fieldId = snapshot[row.lineNumber - 1]?.id
       setProgress((current) => ({ ...current, current: row.orderNumberRaw }))
+      if (fieldId != null) setRowState((current) => ({ ...current, [fieldId]: { state: 'applying' } }))
       let ok = true
       try {
         await onApplyRow(row, reason.trim())
         results.push({ lineNumber: row.lineNumber, orderNumberRaw: row.orderNumberRaw, ok: true, message: 'Applied' })
+        if (fieldId != null) {
+          setRowState((current) => ({ ...current, [fieldId]: { state: 'done' } }))
+          // Saved rows empty out, so what is left on screen is only what still
+          // needs attention.
+          setFields((current) =>
+            current.map((field) =>
+              field.id === fieldId ? { ...field, orderNumberRaw: '', boxRaw: '', shippingRaw: '' } : field,
+            ),
+          )
+        }
       } catch (err) {
         ok = false
-        results.push({
-          lineNumber: row.lineNumber,
-          orderNumberRaw: row.orderNumberRaw,
-          ok: false,
-          message: err instanceof Error ? err.message : 'Failed',
-        })
+        const message = err instanceof Error ? err.message : 'Failed'
+        results.push({ lineNumber: row.lineNumber, orderNumberRaw: row.orderNumberRaw, ok: false, message })
+        // A failed row keeps its values so it can be corrected and re-applied.
+        if (fieldId != null) setRowState((current) => ({ ...current, [fieldId]: { state: 'failed', message } }))
       }
       setProgress((current) => ({
         ...current,
@@ -227,7 +253,19 @@ export function BillingBulkImportModal({
                       />
                     </td>
                     <td style={{ padding: '2px 4px', fontSize: 11 }}>
-                      {status ? (
+                      {rowState[field.id]?.state === 'applying' ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--muted)' }}>
+                          <Loader2 size={11} className="spin" aria-hidden="true" /> Saving…
+                        </span>
+                      ) : rowState[field.id]?.state === 'done' ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#15803d' }}>
+                          <Check size={11} aria-hidden="true" /> Saved
+                        </span>
+                      ) : rowState[field.id]?.state === 'failed' ? (
+                        <span style={{ color: '#b91c1c' }}>
+                          Failed — {rowState[field.id]?.message}
+                        </span>
+                      ) : status ? (
                         <span style={{ color: isProblem ? '#b45309' : '#15803d' }}>
                           {BULK_IMPORT_STATUS_LABEL[status.status]}
                           {isProblem && status.detail ? ` — ${status.detail}` : ''}
