@@ -84,6 +84,8 @@ import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
 import { ConfirmModal } from '../ui/ConfirmModal'
 import { BillingPackagePricingTable } from './BillingPackagePricingTable'
 import { BillingDetailModalStack } from './BillingDetailModalStack'
+import { BillingBulkImportModal } from './BillingBulkImportModal'
+import type { BulkImportReadyRow } from './billing-bulk-import'
 import {
   BillingCloseWorkflowPanel,
   type BillingCreditDraft,
@@ -335,6 +337,7 @@ export default function BillingView() {
   // PS-311: bulk box-cost modal — open when the operator chooses to apply a reviewed box cost to
   // EVERY order with that box in the current (client + date range).
   const [bulkBoxCostOpen, setBulkBoxCostOpen] = useState(false)
+  const [bulkImportOpen, setBulkImportOpen] = useState(false)
   // PS-311b: the needs-review box-cost sweep (date range picker + same-box-size apply).
   const [boxReviewSweepOpen, setBoxReviewSweepOpen] = useState(false)
   const [hugrabShippingFloorOpen, setHugrabShippingFloorOpen] = useState(false)
@@ -508,7 +511,10 @@ export default function BillingView() {
   // ['billing','package-prices', clientId] key with the pricing table above, so a
   // price save there is immediately visible here. Fetch fires when the edit modal
   // opens (the old handleOpenBillingEdit fetch), served from cache within staleTime.
-  const billingEditPricesClientId = billingEditModal && detailState.clientId != null ? Number(detailState.clientId) : null
+  // Also needed by the paste import, which applies the same box→price rule.
+  const billingEditPricesClientId = (billingEditModal || bulkImportOpen) && detailState.clientId != null
+    ? Number(detailState.clientId)
+    : null
   const billingEditPackagePricesQuery = useQuery<BillingPackagePriceDto[]>({
     queryKey: endpointQueryKeys.billingPackagePrices(billingEditPricesClientId),
     enabled: billingEditPricesClientId != null,
@@ -1442,6 +1448,43 @@ export default function BillingView() {
     })
   }
 
+  // PS — pasted Box Size / Shipping corrections. Each row goes through the SAME
+  // audited detail PATCH a manual edit uses, so finalized-invoice refusal,
+  // permissions and the before/after audit row are unchanged. The import adds no
+  // second write path; it only saves the operator typing each row by hand.
+  // clientId is a parameter, not a gate: the modal only renders with a client
+  // selected, and a resolved `ready` row has a non-null orderId by type. Nothing
+  // here decides whether the edit is permitted — the backend still does.
+  async function handleBulkImportRow(clientId: number, row: BulkImportReadyRow, reason: string) {
+    const current = detailRows.find((detail) => Number(detail.orderId ?? detail.order_id) === row.orderId)
+    await apiClient.updateBillingDetail(row.orderId, clientId, {
+      // Only the pasted fields move; everything else is resent at its current value.
+      pickPack: Number(current?.pickPack ?? current?.pick_pack ?? 0) || 0,
+      additional: Number(current?.additional ?? 0) || 0,
+      // Same rule the manual Box Size change applies: a new box takes that box's
+      // saved client price. Falls back to the current cost when the client has no
+      // price row for it, exactly as handleBillingEditPackageChange does.
+      packageCost: row.packageId != null && billingEditPackagePrices[row.packageId] != null
+        ? billingEditPackagePrices[row.packageId]
+        : Number(current?.packageCost ?? current?.package_cost ?? 0) || 0,
+      shipping: row.shipping != null
+        ? row.shipping
+        : Number(current?.shipping ?? 0) || 0,
+      packageId: row.packageId != null
+        ? row.packageId
+        : (current?.packageId ? Number(current.packageId) : null),
+      reason,
+    })
+  }
+
+  async function handleBulkImportFinished() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['billing', 'details'] }),
+      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.billingSummaryRoot }),
+      queryClient.invalidateQueries({ queryKey: endpointQueryKeys.shippingMarginRoot }),
+    ])
+  }
+
   async function handleSaveBillingEdit() {
     if (!billingEditModal || !detailState.clientId) return
     const orderId = Number(billingEditModal.row.orderId)
@@ -1787,6 +1830,19 @@ export default function BillingView() {
               onLoadDetails={handleLoadDetails as unknown as (clientId: number, clientName: string | null | undefined) => void}
             />
 
+            {detailState.clientId != null ? (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', margin: '6px 0' }}>
+                <button
+                  data-billing-bulk-import-trigger
+                  className="btn btn-secondary btn-xs"
+                  type="button"
+                  onClick={() => setBulkImportOpen(true)}
+                >
+                  Import Box Size &amp; Shipping...
+                </button>
+              </div>
+            ) : null}
+
             <BillingCloseWorkflowPanel
               clientName={detailState.clientName}
               dateFrom={from}
@@ -1916,6 +1972,17 @@ export default function BillingView() {
           onOpenBulkBoxCost={() => setBulkBoxCostOpen(true)}
           onZeroShippingReview={handleZeroShippingReview}
           onSave={handleSaveBillingEdit}
+        />
+      ) : null}
+
+      {bulkImportOpen && detailState.clientId != null ? (
+        <BillingBulkImportModal
+          clientName={detailState.clientName || ''}
+          detailRows={detailRows}
+          packages={packages}
+          onClose={() => setBulkImportOpen(false)}
+          onApplyRow={(row, reason) => handleBulkImportRow(detailState.clientId as number, row, reason)}
+          onFinished={handleBulkImportFinished}
         />
       ) : null}
 
