@@ -16,7 +16,13 @@
 // downstream consumer could mistake for "confirmed, free". 0 is reserved for an explicit,
 // positive-shaped fee that resolves to zero only if EasyPost ever sends one (it does not today).
 //
-// Pure + dependency-free → offline testable. No DB, no network, no postage mutation.
+// Pure → offline testable. No DB, no network, no postage mutation. Its one import is the
+// canonical cent-rounding owner, which is itself pure.
+
+// PS-457: cents round through the ONE owner. A local `Math.round(x * 100) / 100` disagrees
+// with it on float ties (1.005 -> 1.00 vs 1.01), so an insurance fee could be persisted a
+// cent below what EasyPost charged.
+import { roundMoney } from '../../lib/money.js';
 
 /** A single EasyPost Fee line as it appears on a bought Shipment. */
 type EasyPostFee = {
@@ -52,14 +58,14 @@ export function parseEasyPostInsuranceCost(purchased: unknown): number | null {
       if (!raw || typeof raw !== 'object') continue;
       if (String(raw.type ?? '').toLowerCase() !== 'insurancefee') continue;
       const amount = parseDollars(raw.amount);
-      if (amount != null && amount > 0) return Math.round(amount * 100) / 100;
+      if (amount != null && amount > 0) return roundMoney(amount);
     }
   }
 
   // 2) Fallback: the shipment `insurance` value (insured value as a String). Only a positive
   // number counts — never coerce an absent/empty/zero value into a confirmed $0 cost.
   const insurance = parseDollars(shipment.insurance);
-  if (insurance != null && insurance > 0) return Math.round(insurance * 100) / 100;
+  if (insurance != null && insurance > 0) return roundMoney(insurance);
 
   return null;
 }

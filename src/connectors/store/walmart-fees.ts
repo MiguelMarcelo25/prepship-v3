@@ -29,6 +29,8 @@
 
 import type postgres from 'postgres';
 import { fetchWithTimeout } from '../../lib/fetch-timeout.js';
+// PS-457: fee cents round through the ONE owner, not a local Math.round(x * 100) / 100.
+import { roundMoney } from '../../lib/money.js';
 
 // Per user override unlock shipped data on 2026-07-23: bound and cancel
 // provider transport only. Fee matching/update semantics and historical order
@@ -241,9 +243,9 @@ function aggregateFeesByOrder(transactions: WalmartTransaction[]): Map<string, {
   }
   // Round to 2 decimals for stable storage.
   for (const v of map.values()) {
-    v.total = Math.round(v.total * 100) / 100;
+    v.total = roundMoney(v.total);
     for (const k of Object.keys(v.breakdown)) {
-      v.breakdown[k] = Math.round((v.breakdown[k] ?? 0) * 100) / 100;
+      v.breakdown[k] = roundMoney(v.breakdown[k] ?? 0);
     }
   }
   return map;
@@ -344,7 +346,7 @@ export async function syncWalmartFeesForAccount(
       fetched: fetchedCount,
       ordersUpdated: updated,
       ordersMissing: Math.max(customerOrderIds.length - updated, 0),
-      totalFeesUsd: Math.round(totalFees * 100) / 100,
+      totalFeesUsd: roundMoney(totalFees),
       fromDate,
       toDate,
     };

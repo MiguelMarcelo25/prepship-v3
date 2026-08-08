@@ -25,6 +25,8 @@ import {
   reconcileMarketplaceOrderStatuses,
 } from '../../services/marketplace-status-reconciliation';
 import { sendInternalServerError } from '../safe-error';
+// PS-457: per-unit price is money and rounds through the ONE owner.
+import { roundMoney } from '../money.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -232,7 +234,7 @@ export default async function handler(
       return lines.map((line: any) => {
         const quantity = Number(line?.quantity ?? 1) || 1;
         const lineTotal = Number(line?.lineItemCost?.value ?? 0);
-        const unitPrice = quantity > 0 ? Math.round((lineTotal / quantity) * 100) / 100 : lineTotal;
+        const unitPrice = quantity > 0 ? roundMoney(lineTotal / quantity) : lineTotal;
         const sku = line?.sku ? String(line.sku) : null;
         // Prefer eBay's response image if it ever returns one (most don't);
         // fall back to the inventory lookup. Without this, direct-pulled

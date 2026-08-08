@@ -29,6 +29,11 @@ import {
   reconcileMarketplaceOrderStatuses,
 } from '../../services/marketplace-status-reconciliation';
 import { sendInternalServerError } from '../safe-error';
+// PS-457: order money rounds through the ONE owner. This matters here beyond float ties —
+// Walmart charge amounts are NOT clamped, so a refund/adjustment can make these negative,
+// and Math.round() rounds a negative tie toward +Infinity (-1.005 -> -1.00) while the owner
+// rounds symmetrically away from zero (-1.01). The old rule under-credited a refund by a cent.
+import { roundMoney } from '../money.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -210,7 +215,7 @@ export default async function handler(
         const chargeAmount = Number(line?.charges?.charge?.[0]?.chargeAmount?.amount ?? 0);
         // Per-unit price for OrdersView's totals math.
         const unitPrice = quantity > 0
-          ? Math.round((chargeAmount / quantity) * 100) / 100
+          ? roundMoney(chargeAmount / quantity)
           : chargeAmount;
         return {
           sku: line?.item?.sku ?? null,
@@ -247,10 +252,10 @@ export default async function handler(
         }
       }
       return {
-        subtotal: Math.round(subtotal * 100) / 100,
-        tax: Math.round(tax * 100) / 100,
-        shipping: Math.round(shipping * 100) / 100,
-        total: Math.round((subtotal + tax + shipping) * 100) / 100,
+        subtotal: roundMoney(subtotal),
+        tax: roundMoney(tax),
+        shipping: roundMoney(shipping),
+        total: roundMoney(subtotal + tax + shipping),
         currency,
       };
     };

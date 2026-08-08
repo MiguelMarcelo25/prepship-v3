@@ -9,6 +9,8 @@
  */
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
+// PS-457: cents round through the ONE owner, not a local Math.round(x * 100) / 100.
+import { roundMoney } from '../lib/money';
 import { settings } from '../db/schema/settings';
 import type { MarketplaceFeeRule } from './shipping-workflow/rate-money';
 
@@ -149,7 +151,7 @@ export function computeProductSubtotal(items: unknown): number {
     const explicitLine = num(item.lineTotal ?? item.line_total ?? item.total);
     total += explicitLine != null ? Math.max(0, explicitLine) : unitPrice * qty;
   }
-  return Math.round(total * 100) / 100;
+  return roundMoney(total);
 }
 
 /** Load the configured rules from the settings KV (empty array on miss/parse fail). */

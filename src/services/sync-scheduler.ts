@@ -1,5 +1,7 @@
 import { env } from '../lib/env';
 import { sql as pg } from '../db/client';
+// PS-457: cents round through the ONE owner, not a local Math.round(x * 100) / 100.
+import { roundMoney } from '../lib/money';
 import { syncShopifyOrders } from './shopify-order-sync';
 import { runDurableRateBackfillJob } from './rates-backfill';
 import { buildCadenceRateBackfillJobPayload } from './rate-backfill-job-types';
@@ -368,7 +370,7 @@ export async function runWalmartFeesTick(): Promise<void> {
           totals.errors += 1;
         }
       }
-      totals.totalFeesUsd = Math.round(totals.totalFeesUsd * 100) / 100;
+      totals.totalFeesUsd = roundMoney(totals.totalFeesUsd);
       return totals;
     });
     if (!result) return;

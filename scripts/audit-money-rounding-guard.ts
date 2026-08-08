@@ -163,6 +163,60 @@ const competingMoneyOwners = sourceFiles('src').filter(
 );
 check('src has one named cent-rounding owner', competingMoneyOwners.length === 0, competingMoneyOwners);
 
+// PS-457: the check above only catches a competing owner DECLARED with one of the four names
+// in localOwnerPattern. It was green while eleven money sites did the arithmetic INLINE —
+// `Math.round(x * 100) / 100` — which disagrees with the owner on float ties (1.005 -> 1.00
+// vs 1.01) and on negatives (-1.005 -> -1.00 vs -1.01, the refund case). An assertion that
+// only a specific spelling can trip is not a rounding guard.
+//
+// So: no inline hundredths-rounding anywhere in src, except values that are NOT money.
+// Every exemption is listed by path with the unit it rounds; a new one must be justified
+// here rather than added silently.
+const inlineCentRoundingLine = /Math\.round\s*\([^\n]*\*\s*100\s*\)\s*\/\s*100/;
+
+// Exemptions are per-LINE, not per-file: ebay-orders.ts and walmart-orders.ts each round a
+// weight AND a unit price, so a file-level pass would have hidden the money one. Each entry
+// must match the exempt line itself and name the unit it rounds.
+const NON_MONEY_ROUNDING_EXEMPTIONS: Record<string, Array<{ match: RegExp; unit: string }>> = {
+  'src/connectors/carrier/shipp.ts': [{ match: /weightLb/, unit: 'pounds' }],
+  'src/connectors/carrier/usps.ts': [{ match: /weightLb/, unit: 'pounds' }],
+  'src/lib/imported-handlers/ebay-orders.ts': [{ match: /weightOzForOrder/, unit: 'ounces' }],
+  'src/lib/imported-handlers/walmart-orders.ts': [{ match: /weightOzForOrder/, unit: 'ounces' }],
+  'src/lib/standard-package-dimensions.ts': [{ match: /return Math\.round\(parsed/, unit: 'parcel dimension' }],
+  'src/services/local-tariff-calibration.ts': [{ match: /maxDriftPercent/, unit: 'percent' }],
+  'src/services/shopify-shipping-labels.ts': [{ match: /function roundWeight|return Math\.round\(value/, unit: 'grams' }],
+};
+
+/** Comments describe the rule; only code can violate it. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+const inlineCentRounders: string[] = [];
+const exemptionsHit = new Set<string>();
+for (const path of sourceFiles('src')) {
+  if (path === canonicalMoneyPath) continue;
+  const allowed = NON_MONEY_ROUNDING_EXEMPTIONS[path] ?? [];
+  stripComments(read(path)).split(/\r?\n/).forEach((line, index) => {
+    if (!inlineCentRoundingLine.test(line)) return;
+    const exemption = allowed.find((entry) => entry.match.test(line));
+    if (exemption) { exemptionsHit.add(`${path}::${exemption.unit}`); return; }
+    inlineCentRounders.push(`${path}:${index + 1}`);
+  });
+}
+check(
+  'no money path rounds cents inline instead of delegating to roundMoney',
+  inlineCentRounders.length === 0,
+  inlineCentRounders,
+);
+
+// An exemption that matches nothing is stale, and a stale allowlist entry is how the next
+// real money site slips through unnoticed.
+const staleExemptions = Object.entries(NON_MONEY_ROUNDING_EXEMPTIONS).flatMap(([path, entries]) =>
+  entries.filter((entry) => !exemptionsHit.has(`${path}::${entry.unit}`)).map((entry) => `${path} (${entry.unit})`),
+);
+check('every non-money rounding exemption is still load-bearing', staleExemptions.length === 0, staleExemptions);
+
 const billingSource = read('src/services/billing.ts');
 check('billing amount serialization rounds through owner first',
   /unitCost:\s*roundMoney\(pickPackFee\)\.toFixed\(2\)/.test(billingSource) &&

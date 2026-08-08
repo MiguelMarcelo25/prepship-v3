@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { eq, like, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+// PS-457: the shipping margin is money and rounds through the ONE owner. It can be negative
+// when a markup rule prices below provider cost, and Math.round() rounds a negative tie the
+// wrong way (-1.005 -> -1.00 instead of -1.01).
+import { roundMoney } from '../lib/money';
 import { clients } from '../db/schema/clients';
 import { carrierAccountClients, carrierAccounts } from '../db/schema/carrier-accounts';
 import { rateCache } from '../db/schema/rates';
@@ -227,7 +231,7 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
     const marked = applyMarkupToAmount(providerAllIn, m);
     const rateAdjustmentKind = markupRuleAdjustmentKind(m);
     const selectedRateCost = isTrueCostUpliftMarkup(m) ? marked : providerAllIn;
-    const shippingMarginAmount = Math.round((marked - selectedRateCost) * 100) / 100;
+    const shippingMarginAmount = roundMoney(marked - selectedRateCost);
     const shippingMarginPct =
       Math.abs(shippingMarginAmount) >= 0.005 && marked > 0
         ? Math.round((shippingMarginAmount / marked) * 1000) / 10
