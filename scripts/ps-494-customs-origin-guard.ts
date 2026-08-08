@@ -38,7 +38,7 @@ const {
   customsItemsFromOrderRaw,
   resolveOrderCustomsOrigin,
   singleCustomsOriginOrNull,
-  declaredCountryOfManufacture,
+  decideDeclaredOrigin,
 } = await import('../src/services/customs-origin');
 
 // ── the resolution rule ────────────────────────────────────────────────────
@@ -103,14 +103,23 @@ check('a MIXED carton is passed as an explicit ABSENCE, not a guess',
 check('an unknown carton is passed as an explicit absence',
   singleCustomsOriginOrNull({ kind: 'unknown' }) === null);
 
-// ── the fallback chain ─────────────────────────────────────────────────────
+// ── the declaration decision ───────────────────────────────────────────────
+// PS-494 correction. These three checks used to assert the OPPOSITE: that a mixed carton
+// and an unknown origin both fell back to the operator default or 'US'. The audit's finding
+// was that pinning that behaviour made the guard approve the defect instead of catching it
+// — the fallback WAS the guessed declaration this card exists to remove. The rule now turns
+// on whether the field is really a customs declaration, so the checks turn with it.
 check('a resolved origin beats the configured default',
-  declaredCountryOfManufacture({ kind: 'single', country: 'KR' }, 'US') === 'KR');
-check('a mixed carton falls back to the operator default',
-  declaredCountryOfManufacture({ kind: 'mixed', countries: ['KR', 'US'] }, 'CA') === 'CA');
-check('with no default configured the previous behaviour is preserved exactly',
-  declaredCountryOfManufacture({ kind: 'unknown' }, null) === 'US'
-  && declaredCountryOfManufacture({ kind: 'unknown' }, 'garbage') === 'US');
+  (() => { const d = decideDeclaredOrigin({ resolution: { kind: 'single', country: 'KR' }, destination: 'Domestic', configuredDefault: 'US' });
+    return d.kind === 'declare' && d.country === 'KR'; })());
+check('a mixed carton REFUSES — a fallback here would be a guessed declaration',
+  decideDeclaredOrigin({ resolution: { kind: 'mixed', countries: ['KR', 'US'] }, destination: 'Domestic', configuredDefault: 'CA' }).kind === 'refuse');
+check('unknown + non-domestic REFUSES rather than asserting US',
+  decideDeclaredOrigin({ resolution: { kind: 'unknown' }, destination: 'International' }).kind === 'refuse'
+  && decideDeclaredOrigin({ resolution: { kind: 'unknown' }, destination: 'Needs Review' }).kind === 'refuse');
+check('unknown + DOMESTIC still declares a default, but as one explicit named branch',
+  (() => { const d = decideDeclaredOrigin({ resolution: { kind: 'unknown' }, destination: 'Domestic' });
+    return d.kind === 'declare' && d.country === 'US' && d.basis === 'domestic_default'; })());
 
 // ── placement: the connector no longer decides ─────────────────────────────
 const shipp = readFileSync('src/connectors/carrier/shipp.ts', 'utf8').replace(/\r\n/g, '\n');
@@ -128,7 +137,12 @@ check('the connector no longer hardcodes an origin',
 check('the connector applies the resolved value',
   /countryOfManufacture: shippCountryOfManufacture\(input, creds\)/.test(shippCode));
 check('the backend resolves the origin and threads it through the direct-label args',
-  /countryOfManufacture: singleCustomsOriginOrNull\(resolveOrderCustomsOrigin\(order\)\)/.test(labels));
+  /const declaredShippOrigin = assertDeclarableOrigin\(\{/.test(labels)
+  && /countryOfManufacture: declaredShippOrigin/.test(labels));
+// PS-494 correction: the label path must REFUSE an undeclarable origin before the provider
+// call, not hand the connector an absence and let it default.
+check('the label path refuses an undeclarable origin before any provider call',
+  !/singleCustomsOriginOrNull/.test(labels));
 check('the direct-label orchestrator forwards it to the connector input',
   /countryOfManufacture: args\.countryOfManufacture,/.test(direct));
 check('the connector never reads customs items itself (adapters translate, they do not decide)',

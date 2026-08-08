@@ -1077,6 +1077,7 @@ const REQUIRED_GUARDS = [
   // builder can express per-item origins. Also pins that the connector never re-reads
   // customs items itself: adapters translate, they do not decide a declarable fact.
   'test:ps-494-customs-origin',
+  'test:ps-494-shipp-origin-request-body',
   // PS-495: shipped orders that never reached billing at all. Pinned for the two
   // EXCLUSIONS, which are what make the number usable: orders after the client's billing
   // frontier are ordinary generation lag (6 of 454 when measured), and clients who have

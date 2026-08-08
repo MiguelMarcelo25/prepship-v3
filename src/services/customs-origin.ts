@@ -24,6 +24,10 @@
  * decide what the answer is.
  */
 
+// Type-only: the destination rule keeps its single owner. This module consumes that
+// classification, it never re-derives "is this international" from a country comparison.
+import type { BillingDestination } from './billing-destination-international';
+
 /** How confident we are about a single declarable origin for the whole package. */
 export type CustomsOriginResolution =
   /** Every customs item agrees. `country` is that ISO-2 code. */
@@ -104,24 +108,109 @@ export function singleCustomsOriginOrNull(resolution: CustomsOriginResolution): 
 }
 
 /**
- * The origin to declare to a provider, given the resolution and the operator's configured
- * default.
+ * What origin may be declared to a provider — a FACT, or a refusal.
  *
- * `mixed` and `unknown` both fall back, and that is a KNOWN limitation rather than a
- * decision: one synthetic package line item has room for one origin, so a mixed carton
- * cannot be declared truthfully in this shape at all. Fixing that means per-product line
- * items, which belongs to the customs builder in PS-492 — restructuring the Shipp request
- * body would change what 246 live domestic shipments send, for a field that carries no
- * customs meaning on a domestic lane.
+ * PS-494 correction. The previous `declaredCountryOfManufacture` collapsed `mixed` and
+ * `unknown` into the configured default (or `'US'`) unconditionally, which is how a guessed
+ * origin reached the broker on every quote. The audit's objection was exact: reporting
+ * `mixed` internally does not make the transmitted request truthful.
  *
- * Returning the fallback rather than throwing is deliberate: origin is irrelevant on the
- * domestic lane that is the only lane PrepShip can actually ship today (PS-492), so
- * refusing the label would break real shipments to fix a declaration nobody reads.
+ * The decision now turns on whether the field is actually a customs declaration:
+ *
+ *  - `single`  — a resolved fact. Declare it, wherever it is going.
+ *  - `mixed`   — REFUSE. One synthetic package line item has room for one origin, so a
+ *                carton mixing US and KR goods cannot be declared truthfully in this shape.
+ *                Refusing before provider HTTP is the honest outcome; per-product line items
+ *                are the alternative and belong to PS-492's customs builder, which would
+ *                change the body shape 246 live domestic shipments send against a provider
+ *                contract this repo has never verified.
+ *  - `unknown` + DOMESTIC destination — declare the operator default (or `'US'`). Country of
+ *                origin carries no customs significance on a domestic lane; no declaration is
+ *                filed with any authority. This is the one guess that is allowed, and it is
+ *                allowed EXPLICITLY, here, in one named branch — not silently at the bottom
+ *                of a connector helper.
+ *  - `unknown` + anything else — REFUSE. A missing country (`Needs Review`) counts as "not
+ *                domestic": fail closed, because the whole point is to stop asserting an
+ *                origin we do not know onto a real cross-border declaration.
+ *
+ * Pure: takes the destination classification rather than re-deriving it, so the destination
+ * rule keeps its single owner in `billing-destination-international.ts`.
  */
-export function declaredCountryOfManufacture(
-  resolution: CustomsOriginResolution,
-  configuredDefault: string | null | undefined,
-): string {
-  if (resolution.kind === 'single') return resolution.country;
-  return isoCountry(configuredDefault) ?? 'US';
+export type CustomsOriginDecision =
+  | { kind: 'declare'; country: string; basis: 'resolved' | 'domestic_default' }
+  | { kind: 'refuse'; reason: string };
+
+export function decideDeclaredOrigin(input: {
+  resolution: CustomsOriginResolution;
+  /** From `classifyDestinationCountry(...).destination` — this module never re-derives it. */
+  destination: BillingDestination;
+  configuredDefault?: string | null;
+}): CustomsOriginDecision {
+  const { resolution, destination } = input;
+
+  if (resolution.kind === 'single') {
+    return { kind: 'declare', country: resolution.country, basis: 'resolved' };
+  }
+
+  if (resolution.kind === 'mixed') {
+    return {
+      kind: 'refuse',
+      reason:
+        `This order mixes goods from ${resolution.countries.join(', ')}. A single package line ` +
+        'item cannot declare more than one country of origin, so no truthful origin can be sent. ' +
+        'Resolve the customs items or use a provider path that supports per-item declarations.',
+    };
+  }
+
+  if (destination === 'Domestic') {
+    return {
+      kind: 'declare',
+      country: isoCountry(input.configuredDefault) ?? 'US',
+      basis: 'domestic_default',
+    };
+  }
+
+  return {
+    kind: 'refuse',
+    reason:
+      'No country of origin is recorded for this order and the destination is not domestic ' +
+      `(${destination}), so the origin would be a guess on a real customs declaration. ` +
+      'Record customs items on the order before quoting or buying this label.',
+  };
+}
+
+/**
+ * Thrown when no truthful origin can be declared.
+ *
+ * `status` is set deliberately: `main.ts` reads `err.status` and returns the message verbatim
+ * only for a 4xx, replacing anything else with "Internal server error". Without it, an
+ * operator would see a generic 500 for a refusal that has a precise, actionable reason —
+ * the exact failure PS-472 was raised to fix.
+ */
+export class CustomsOriginUndeclarableError extends Error {
+  readonly code = 'CUSTOMS_ORIGIN_UNDECLARABLE';
+  readonly status = 422;
+
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'CustomsOriginUndeclarableError';
+  }
+}
+
+/**
+ * Assert a declarable origin, for callers that should refuse outright (the label-purchase
+ * funnel). Returns the resolved country, or `null` on the domestic-inert branch where the
+ * connector may apply its configured default.
+ *
+ * Rate browsing does NOT use this — it needs the reason as a per-carrier diagnostic so the
+ * other carriers still quote, so it consumes `decideDeclaredOrigin` directly.
+ */
+export function assertDeclarableOrigin(input: {
+  resolution: CustomsOriginResolution;
+  destination: BillingDestination;
+  configuredDefault?: string | null;
+}): string | null {
+  const decision = decideDeclaredOrigin(input);
+  if (decision.kind === 'refuse') throw new CustomsOriginUndeclarableError(decision.reason);
+  return decision.basis === 'resolved' ? decision.country : null;
 }

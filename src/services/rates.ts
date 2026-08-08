@@ -5,6 +5,18 @@ import { db } from '../db/client';
 // when a markup rule prices below provider cost, and Math.round() rounds a negative tie the
 // wrong way (-1.005 -> -1.00 instead of -1.01).
 import { roundMoney } from '../lib/money';
+// PS-494 correction: ordinary rate browsing reached the Shipp broker with NO origin, so the
+// connector fell through to its configured default or 'US'. Only the label-purchase pre-quote
+// was threaded. The card's defect is "transmitted on every quote", and browsing is every
+// quote minus one.
+import {
+  decideDeclaredOrigin,
+  resolveOrderCustomsOrigin,
+  type CustomsOriginDecision,
+  type CustomsOriginResolution,
+} from './customs-origin';
+import { classifyDestinationCountry } from './billing-destination-international';
+import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
 import { carrierAccountClients, carrierAccounts } from '../db/schema/carrier-accounts';
 import { rateCache } from '../db/schema/rates';
@@ -2811,6 +2823,39 @@ function writeDirectRatesToCache(
   });
 }
 
+/**
+ * PS-494 correction: what origin may this Shipp quote declare?
+ *
+ * Loads the order's retained customs items and delegates the ruling to the canonical owner
+ * (`decideDeclaredOrigin`) with the canonical destination classification. Nothing is decided
+ * here — this only fetches the two inputs the pure policy needs.
+ *
+ * With no order id there is nothing to resolve, which is the ad-hoc/estimate case: treat it
+ * as unknown and let the policy rule on it against the destination.
+ */
+async function resolveShippDeclaredOrigin(input: RateInput): Promise<CustomsOriginDecision> {
+  const destination = classifyDestinationCountry(input.toCountry).destination;
+  let resolution: CustomsOriginResolution = { kind: 'unknown' };
+  if (input.orderId != null && Number.isFinite(input.orderId)) {
+    try {
+      const [row] = await db
+        .select({ raw: orders.raw })
+        .from(orders)
+        .where(eq(orders.id, Number(input.orderId)))
+        .limit(1);
+      if (row) resolution = resolveOrderCustomsOrigin(row);
+    } catch (err) {
+      // A lookup failure is NOT permission to guess: leave the resolution unknown and let
+      // the policy decide, which refuses on any non-domestic destination.
+      console.warn(
+        '[rates] PS-494 customs-origin lookup failed; treating as unknown:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return decideDeclaredOrigin({ resolution, destination });
+}
+
 export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
   options: { cachedOnly?: boolean; cacheFirst?: boolean; priority?: RateFetchPriority } = {},
@@ -3010,6 +3055,52 @@ export async function getDirectCarrierRatesForRateInput(
               'rates',
             )
           : null;
+      // PS-494 correction: Shipp transmits a country of origin on EVERY quote, so browsing
+      // needs the same resolved answer the label path already gets. Resolved here, in the
+      // backend, and handed to the connector — the adapter never decides it (PS-316).
+      //
+      // A refusal is emitted directly rather than thrown, because the catch below runs every
+      // error through `sanitizeRateProviderError`, which would collapse this into "Carrier
+      // rate request failed" — indistinguishable from a provider outage. That is precisely
+      // the defect PS-472 exists to prevent: a blocked thing must say why it is blocked.
+      let shippOrigin: string | null = null;
+      if (normalizeProviderKey(account.provider) === 'shipp') {
+        const decision = await resolveShippDeclaredOrigin(input);
+        if (decision.kind === 'refuse') {
+          return {
+            rates: [] as Rate[],
+            errors: [{
+              accountId: account.id,
+              shippingProviderId,
+              sourceTable: account.sourceTable,
+              provider: normalizeProviderKey(account.provider),
+              label,
+              message: decision.reason,
+              meta: null,
+            }],
+            metas: [] as DirectCarrierRateMeta[],
+            authorizationAccounts: [] as ShippingQuoteAccountAuthorization[],
+            diagnostic: {
+              carrierId: `se-${shippingProviderId}`,
+              accountId: String(account.id),
+              carrierCode: normalizeProviderKey(account.provider),
+              nickname: label,
+              status: 'failed' as CarrierRateDiagnosticStatus,
+              rateCount: 0,
+              durationMs: Date.now() - startedAt,
+              limiterWaitMs: 0,
+              attempts: 0,
+              error: decision.reason,
+              transient: false,
+              retryable: false,
+            },
+            // No provider call was made — refused before HTTP, which is the point.
+            providerFetches: 0,
+            usedCachedRates: false,
+          };
+        }
+        shippOrigin = decision.basis === 'resolved' ? decision.country : null;
+      }
       // PS-206: bounded per-carrier quoting — one slow/hung provider becomes a
       // per-account 'failed' diagnostic (caught below) instead of holding the
       // whole combined /browse response open while every other carrier waits.
@@ -3039,6 +3130,10 @@ export async function getDirectCarrierRatesForRateInput(
         ...(walmartPo?.rawOrder != null ? { rawOrder: walmartPo.rawOrder }
           : normalizeProviderKey(account.provider) === 'ebay_shipping' && input.rawOrder != null ? { rawOrder: input.rawOrder }
           : {}),
+        // PS-494 correction: a RESOLVED origin only. `null` means the backend decided this
+        // is the domestic-inert case, where the connector may apply its configured default;
+        // mixed and unknown-international never reach here, they were refused above.
+        ...(shippOrigin != null ? { countryOfManufacture: shippOrigin } : {}),
         shipFrom: resolvedShipFrom,
         // PS-127/PS-135(a): direct carriers rate under the SAME backend-resolved residential
         // classification as ShipStation (classifyRateInputResidential above), NOT the raw FE

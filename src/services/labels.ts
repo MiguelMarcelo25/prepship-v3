@@ -199,7 +199,8 @@ import {
 // connector reports none (ParcelGuard is third-party — carriers don't bill it).
 import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost';
 // PS-494: country of origin is backend truth, not a connector constant.
-import { resolveOrderCustomsOrigin, singleCustomsOriginOrNull } from './customs-origin';
+import { assertDeclarableOrigin, resolveOrderCustomsOrigin } from './customs-origin';
+import { classifyDestinationCountry } from './billing-destination-international';
 // PS-492: PrepShip cannot originate an international label; refuse before any provider call.
 import { assertInternationalOriginationSupported } from './shipping-workflow/international-origination-policy';
 // PS-497: real shipped lines, so a label purchase deducts inventory instead of parking a
@@ -2532,6 +2533,18 @@ async function createLabelV2Impl(
   // domestic. See international-origination-policy.ts.
   assertInternationalOriginationSupported({ toCountry: carrierShipTo.country });
 
+  // PS-494 correction: rule on the declarable origin BEFORE any provider call, in the same
+  // place the destination gate sits, and against the same sealed address. A mixed carton
+  // cannot be declared truthfully through one synthetic package line item, and an unknown
+  // origin must not be guessed onto a non-domestic declaration — both refuse here rather
+  // than reaching the broker with a fabricated country.
+  // `null` on the domestic-inert branch: the connector may apply its configured default
+  // there, and only there. Anything undeclarable throws a 422 carrying the reason.
+  const declaredShippOrigin = assertDeclarableOrigin({
+    resolution: resolveOrderCustomsOrigin(order),
+    destination: classifyDestinationCountry(carrierShipTo.country).destination,
+  });
+
   if (body.testLabel === true) {
     const fakeShipmentId = generateFakeShipmentId();
     const fakeTracking = generateFakeTrackingNumber();
@@ -2905,11 +2918,13 @@ async function createLabelV2Impl(
               shipFrom,
               shippingOptions: options,
               rawOrder: order.raw ?? null,
-              // PS-494: resolve the declarable country of origin from the order's own
-              // retained customs items. Null when the carton mixes origins or carries
-              // none — an explicit absence, so the connector applies its configured
-              // default instead of a constant standing in for a fact.
-              countryOfManufacture: singleCustomsOriginOrNull(resolveOrderCustomsOrigin(order)),
+              // PS-494 correction: a RESOLVED origin only. The ruling is made above by the
+              // canonical owner and refuses outright on a mixed carton or an unknown origin
+              // bound anywhere non-domestic, so by here the only remaining cases are a real
+              // fact or the domestic-inert one, where `null` lets the connector apply its
+              // configured default. Previously `mixed` and `unknown` both silently became
+              // that default — which is the guess this card exists to remove.
+              countryOfManufacture: declaredShippOrigin,
               signal,
               idempotencyKey,
               carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,
