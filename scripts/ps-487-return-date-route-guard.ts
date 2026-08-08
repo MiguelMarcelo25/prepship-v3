@@ -100,16 +100,53 @@ check('the route DELEGATES persistence instead of writing inline', () => {
 });
 
 check('the service writes the override and its audit event in ONE transaction', () => {
-  const tx = applyService.indexOf('await db.transaction(async (tx) => {');
+  // The affected-row read joined this transaction in PS-488 M2. It must stay inside it:
+  // rows gathered outside could describe a different set than the correction moved.
+  const tx = applyService.indexOf('db.transaction(async (tx) => {');
+  const affected = applyService.indexOf('.from(billingLineItems)');
   const update = applyService.indexOf('.update(returns)');
   const event = applyService.indexOf('.insert(returnActivityEvents)');
-  assert.ok(tx >= 0 && update > tx && event > update,
+  assert.ok(tx >= 0, 'the write must be in a transaction');
+  assert.ok(affected > tx, 'affected-row evidence must be gathered inside the transaction');
+  assert.ok(update > tx && event > update,
     'a correction applied without its audit row would defeat AC-7');
 });
 
 check('the audit event is the canonical append-only type', () => {
   assert.match(applyService, /eventType: RETURN_BILLING_DATE_CORRECTED_EVENT/);
-  assert.match(applyService, /detail: JSON\.stringify\(input\.audit\)/);
+  // Persists the SUPERSET, not the bare decision audit: the detail must carry the
+  // affected billing rows, otherwise AC-7 records the decision but not what it touched.
+  assert.match(applyService, /detail: JSON\.stringify\(persisted\)/);
+  assert.match(applyService, /\.\.\.input\.audit,/, 'the decision audit must be carried through intact');
+});
+
+check('AC-7 affected rows are RELATIONAL, never inferred', () => {
+  // The whole point of PS-488 M1/M2. Parsing the event key out of `description`, or
+  // matching order_id + line_type, mis-attributes as soon as an order has two returns.
+  assert.match(
+    applyService,
+    /affectedBillingLineItemIds: affected\.map\(\(row\) => row\.id\)/,
+    'affected rows must come from the query result',
+  );
+  assert.match(
+    applyService,
+    /\.where\(eq\(billingLineItems\.returnId, input\.returnId\)\)/,
+    'affected rows must be selected by return_id',
+  );
+  assert.doesNotMatch(
+    applyService,
+    /affectedBillingLineItemIds[\s\S]{0,200}description/,
+    'affected rows must not be derived from the description key',
+  );
+});
+
+check('an incomplete affected-row list is admitted, not hidden', () => {
+  // Every line written before M2 carries return_id NULL, so an empty list can mean
+  // "cannot attribute" rather than "nothing affected". Recording the gap is what stops
+  // a partial list reading as a complete one.
+  assert.match(applyService, /unattributedLegacyReturnLines/);
+  assert.match(applyService, /isNull\(billingLineItems\.returnId\)/,
+    'the gap count must look for unattributed rows');
 });
 
 check('the original created_at is never overwritten', () => {

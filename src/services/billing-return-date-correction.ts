@@ -85,6 +85,35 @@ export type ReturnDateCorrectionAudit = {
   adjustmentRequired: boolean;
 };
 
+/**
+ * AC-7 evidence that can only be gathered against the database.
+ *
+ * Kept separate from ReturnDateCorrectionAudit so the decision module stays pure: it
+ * decides, this records what the write actually touched. The apply service assembles it
+ * inside the same transaction as the override, so the evidence cannot drift from the
+ * change it describes.
+ */
+export type PersistedReturnDateCorrectionAudit = ReturnDateCorrectionAudit & {
+  /**
+   * billing_line_items.id for every row relationally attributed to this return via
+   * PS-488 M2's return_id. This is the "affected billing rows" AC-7 asks for.
+   */
+  affectedBillingLineItemIds: number[];
+  /**
+   * Return-typed lines on the same order carrying return_id NULL.
+   *
+   * Every line generated before PS-488 M2 shipped is unattributed, so a non-zero count
+   * means affectedBillingLineItemIds may be INCOMPLETE. Recorded rather than presenting
+   * a partial list as whole — an audit trail that looks more certain than it is, is
+   * worse than one that admits the gap. Zero means the list is trustworthy.
+   *
+   * Deliberately a count, not an attribution: guessing which of these belong to this
+   * return is exactly the description-parsing/order-id matching that M1 existed to
+   * replace.
+   */
+  unattributedLegacyReturnLines: number;
+};
+
 /** The billing period a day falls in. One definition, so no caller invents another. */
 export function billingPeriodOf(day: string): string {
   return day.slice(0, 7);

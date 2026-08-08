@@ -1,8 +1,14 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { billingLineItems } from '../db/schema/billing';
 import { returnActivityEvents, returns } from '../db/schema/returns';
 import {
+  RETURN_PROCESSING_LINE_TYPE,
+  RETURN_SHIPPING_LINE_TYPE,
+} from './billing-return-event-contract';
+import {
   RETURN_BILLING_DATE_CORRECTED_EVENT,
+  type PersistedReturnDateCorrectionAudit,
   type ReturnDateCorrectionAudit,
 } from './billing-return-date-correction';
 
@@ -16,6 +22,15 @@ import {
 // and is testable with no database. This one only writes what that one decided; it
 // re-derives nothing and takes no view on whether the correction was allowed.
 
+/** Legacy spellings kept alongside the canonical two, so the gap count cannot miss rows. */
+const RETURN_LINE_TYPES = [
+  RETURN_PROCESSING_LINE_TYPE,
+  RETURN_SHIPPING_LINE_TYPE,
+  'return_processing',
+  'return_label',
+  'return',
+] as const;
+
 export async function applyReturnBillingDateCorrection(input: {
   returnId: number;
   newBillingDay: string;
@@ -25,10 +40,49 @@ export async function applyReturnBillingDateCorrection(input: {
   actorId: string;
   actorEmail?: string | null;
   now?: Date;
-}): Promise<void> {
+}): Promise<PersistedReturnDateCorrectionAudit> {
   const now = input.now ?? new Date();
-  // One transaction: a correction applied without its audit row would defeat AC-7.
-  await db.transaction(async (tx) => {
+  // One transaction: a correction applied without its audit row would defeat AC-7, and
+  // affected-row evidence gathered outside it could describe a different set of rows
+  // than the one the correction actually moved.
+  return db.transaction(async (tx) => {
+    // AC-7 affected rows. Relational, via PS-488 M2's return_id — not by parsing the
+    // event key out of `description`, and not by matching order_id + line_type, which
+    // mis-attributes as soon as an order has a second return.
+    const affected = await tx
+      .select({ id: billingLineItems.id })
+      .from(billingLineItems)
+      .where(eq(billingLineItems.returnId, input.returnId));
+
+    // How much of this return's billing history predates M2 and therefore cannot be
+    // attributed. Scoped to this return's own order so the count means something; still
+    // only a count, never an attribution.
+    const [ret] = await tx
+      .select({ orderId: returns.orderId })
+      .from(returns)
+      .where(eq(returns.id, input.returnId))
+      .limit(1);
+    let unattributedLegacyReturnLines = 0;
+    if (ret?.orderId != null) {
+      const [gap] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(billingLineItems)
+        .where(
+          and(
+            eq(billingLineItems.orderId, ret.orderId),
+            isNull(billingLineItems.returnId),
+            inArray(billingLineItems.lineType, [...RETURN_LINE_TYPES]),
+          ),
+        );
+      unattributedLegacyReturnLines = Number(gap?.n ?? 0);
+    }
+
+    const persisted: PersistedReturnDateCorrectionAudit = {
+      ...input.audit,
+      affectedBillingLineItemIds: affected.map((row) => row.id),
+      unattributedLegacyReturnLines,
+    };
+
     await tx
       .update(returns)
       .set({
@@ -43,11 +97,13 @@ export async function applyReturnBillingDateCorrection(input: {
       returnId: input.returnId,
       eventType: RETURN_BILLING_DATE_CORRECTED_EVENT,
       status: input.outcome,
-      detail: JSON.stringify(input.audit),
+      detail: JSON.stringify(persisted),
       actorType: 'admin',
       actorEmail: input.actorEmail ?? null,
       eventAt: now,
       createdAt: now,
     });
+
+    return persisted;
   });
 }
