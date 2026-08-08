@@ -200,6 +200,50 @@ check('the forward-only cutover still reads created_at, not the override', () =>
   assert.doesNotMatch(fn, /correctedDate|billingDateOverride/);
 });
 
+// PS-488 M2 — relational return identity on every return billing line.
+check('the planner emits returnId on every return line', () => {
+  const planner = readFileSync('src/services/billing-return-line-planner.ts', 'utf8');
+  // Required, not optional: a line that cannot name its return is the AC-7 gap.
+  assert.match(planner, /^\s*returnId: number;$/m, 'ReturnBillingLinePlan.returnId must be required');
+  // Count INSIDE each lines.push block. `returnId: row.id` also appears in skip
+  // pushes and helper calls, so a file-wide occurrence count proves nothing.
+  const blocks: string[] = [];
+  let from = planner.indexOf('lines.push({');
+  while (from !== -1) {
+    const end = planner.indexOf('});', from);
+    blocks.push(planner.slice(from, end === -1 ? planner.length : end));
+    from = planner.indexOf('lines.push({', from + 1);
+  }
+  assert.ok(blocks.length > 0, 'planner must emit lines');
+  // Anchor on the push's OWN indentation (6 spaces). returnLineDescription({ ...
+  // returnId: row.id ... }) is nested inside the same block at 8 spaces, so a loose
+  // match stayed green when the top-level field was deleted — caught by mutation.
+  blocks.forEach((block, i) => {
+    assert.match(
+      block,
+      /^ {6}returnId: row\.id,$/m,
+      `lines.push #${i + 1} must carry returnId as its own field, not only inside a nested call`,
+    );
+  });
+});
+
+check('the generator WRITES returnId on the return insert', () => {
+  assert.match(
+    billing,
+    /returnId: line\.returnId/,
+    'the return billing insert must persist the relational return id',
+  );
+});
+
+check('the return insert is the ONLY writer of return line types', () => {
+  // M2 is only trustworthy if nothing else inserts return lines without an id. CP reads
+  // these rows but never writes them; the other two inserts here are outbound and
+  // storage. If a third writer appears, it must carry returnId too.
+  const inserts = billing.match(/\.insert\(billingLineItems\)/g) ?? [];
+  assert.equal(inserts.length, 3, `expected 3 billingLineItems inserts, found ${inserts.length}`);
+  assert.match(billing, /lineType: 'storage'/, 'storage insert still identified');
+});
+
 if (failures > 0) {
   console.error(`\nFAIL PS-487 return billing wiring guard (${failures} failing)`);
   process.exit(1);

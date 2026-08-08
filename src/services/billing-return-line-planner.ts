@@ -36,6 +36,15 @@ export type ReturnBillingLinePlan = {
   clientId: number;
   orderId: number;
   orderNumber: string | null;
+  /**
+   * PS-488 M2 — relational return identity, written to billing_line_items.return_id.
+   *
+   * Required, not optional: a return line that cannot say which return it belongs to is
+   * exactly the gap AC-7 could not close. The alternatives were parsing the event key
+   * out of `description`, or matching order_id + line_type — the latter mis-attributes
+   * the first time an order has a second return.
+   */
+  returnId: number;
   lineType: ReturnBillingEventKind;
   description: string;
   qty: string;
@@ -145,6 +154,7 @@ export function planReturnBillingLines(input: {
       clientId: row.clientId,
       orderId: row.orderId,
       orderNumber,
+      returnId: row.id,
       lineType: RETURN_PROCESSING_LINE_TYPE,
       description: returnLineDescription({
         kind: RETURN_PROCESSING_LINE_TYPE,
@@ -176,6 +186,7 @@ export function planReturnBillingLines(input: {
       clientId: row.clientId,
       orderId: row.orderId,
       orderNumber,
+      returnId: row.id,
       lineType: RETURN_SHIPPING_LINE_TYPE,
       description: returnLineDescription({
         kind: RETURN_SHIPPING_LINE_TYPE,

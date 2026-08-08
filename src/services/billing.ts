@@ -1907,6 +1907,13 @@ export async function generateLineItems(input: GenerateInput) {
               orderId: line.orderId,
               orderNumber: line.orderNumber,
               shipmentId: null,
+              // PS-488 M2 — relational return identity (migration 0089).
+              //
+              // This is the ONLY writer of return billing lines: CP reads them but never
+              // inserts, and the other two inserts in this file are outbound lines and
+              // storage. So populating it here is what makes return_id trustworthy
+              // enough for PS-487 AC-7 to record which rows a correction touched.
+              returnId: line.returnId,
               lineType: line.lineType,
               description: line.description,
               qty: line.qty,
