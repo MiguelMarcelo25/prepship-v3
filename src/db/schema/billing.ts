@@ -16,6 +16,7 @@ import { clients } from './clients.js';
 import { orders } from './orders.js';
 import { shipments } from './shipments.js';
 import { packages } from './packages.js';
+import { returns } from './returns.js';
 
 // Source-of-truth note: billing_config owns mutable billing rules. Generated
 // billing_line_items should be treated as frozen billable records.
@@ -54,6 +55,18 @@ export const billingLineItems = pgTable(
     orderId: integer().references(() => orders.id),
     orderNumber: text(),
     shipmentId: integer().references(() => shipments.id),
+    // PS-488 M1 — relational return identity (migration 0089).
+    //
+    // NULL means "not yet attributed", NOT "not a return line". Every row predates M2,
+    // so readers must not infer anything from NULL until M2 writers have shipped and
+    // been proved. PS-487 AC-7 needs this to record which billing rows a date
+    // correction touched; parsing the event key out of `description` is not relational
+    // identity, and order_id + line_type mis-attributes the moment an order has a
+    // second return.
+    //
+    // ON DELETE SET NULL: a billing line is financial history and must outlive the
+    // return record it came from.
+    returnId: integer('return_id').references(() => returns.id, { onDelete: 'set null' }),
     shipDate: timestamp({ withTimezone: true }),
     // PS-434: shipDate remains the actual activity calendar day. This nullable
     // field is the invoice/range bucket; NULL preserves all legacy rows through
@@ -113,6 +126,12 @@ export const billingLineItems = pgTable(
       .on(t.billingAdjustmentId)
       .where(sql`${t.billingAdjustmentId} is not null`),
     index('billing_li_source_finalization_idx').on(t.sourceFinalizationId),
+    // PS-488 M1 (migration 0089). Partial: the only question this column answers is
+    // "which billing rows belong to this return", and NULL is never that answer —
+    // neither for pre-M2 rows nor for non-return lines.
+    index('billing_li_return_id_idx')
+      .on(t.returnId)
+      .where(sql`${t.returnId} is not null`),
   ]
 );
 
