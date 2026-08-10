@@ -15,16 +15,75 @@ import { shipments } from './shipments.js';
 
 // Per user override unlock shipped data on 2026-07-16: PS-424 adds a
 // review-only JSON snapshot reason; no orders/shipments column is changed.
-export type FulfilledLineSnapshot = {
+
+/**
+ * PS-497: what the provider actually sent, when it could not be used as a quantity.
+ *
+ * The previous normalizer discarded the offending value and persisted a fabricated `1`, so
+ * the one fact needed to diagnose an occurrence was the one fact thrown away. Production
+ * carries exactly one `invalid_quantity` claim and its raw value is unrecoverable.
+ *
+ * Encoding is deliberately lossy for anything that could carry PII. Numbers and
+ * numeric-looking strings are diagnostically useful and safe, so they are kept verbatim;
+ * arbitrary strings are hashed, and objects and arrays are reduced to a type marker. This
+ * value must never appear in webhook or watchdog alert text.
+ */
+export type QuantityEvidence = {
+  inputType: 'missing' | 'number' | 'string' | 'boolean' | 'object' | 'array';
+  /** The literal token when safe, a redaction marker when not, null when nothing arrived. */
+  token: string | null;
+  redacted: boolean;
+  /** Length of the original string, kept when the content itself is not. */
+  originalLength?: number;
+  /** Correlates repeat occurrences of the same unsafe value without storing it. */
+  sha256?: string;
+};
+
+export type FulfilledLineQuantityReviewReason =
+  | 'missing_quantity'
+  | 'zero_quantity'
+  | 'invalid_quantity';
+
+/** A line whose quantity was proved to be a positive integer. Only these deduct. */
+type ExactFulfilledLineSnapshot = {
   lineKey: string;
   sku: string | null;
   name: string | null;
   quantity: number;
-  reviewReason?:
-    | 'missing_quantity'
-    | 'invalid_quantity'
-    | 'fulfillment_lines_unavailable';
+  reviewReason?: never;
+  quantityEvidence?: never;
 };
+
+/**
+ * A line the provider sent whose quantity could not be used.
+ *
+ * `quantity: null` rather than a fabricated number, and `quantityEvidence` is REQUIRED by the
+ * type — not optional — so a future edit cannot quietly drop the evidence and leave the next
+ * occurrence as undiagnosable as this one was.
+ */
+type QuantityReviewFulfilledLineSnapshot = {
+  lineKey: string;
+  sku: string | null;
+  name: string | null;
+  quantity: null;
+  reviewReason: FulfilledLineQuantityReviewReason;
+  quantityEvidence: QuantityEvidence;
+};
+
+/** No per-line facts were available at all, so there is no quantity to evidence. */
+type UnavailableFulfilledLineSnapshot = {
+  lineKey: string;
+  sku: null;
+  name: string | null;
+  quantity: null;
+  reviewReason: 'fulfillment_lines_unavailable';
+  quantityEvidence?: never;
+};
+
+export type FulfilledLineSnapshot =
+  | ExactFulfilledLineSnapshot
+  | QuantityReviewFulfilledLineSnapshot
+  | UnavailableFulfilledLineSnapshot;
 
 /**
  * PS-424 source of truth: an immutable receipt for one normalized order
@@ -67,7 +126,12 @@ export const fulfillmentLineClaims = pgTable(
     lineKey: text().notNull(),
     sku: text(),
     name: text(),
-    quantity: integer().notNull(),
+    // PS-497: nullable, because an unusable provider quantity must stay unknown rather than
+    // be invented. The NOT NULL plus `CHECK (quantity > 0)` is precisely what forced the old
+    // normalizer to coerce a bad value to 1. Migration 0090 replaces both with a state check:
+    // a null quantity is legal ONLY on a review claim, so nothing pending, applied,
+    // superseded or reversed can carry an unknown quantity into an inventory movement.
+    quantity: integer(),
     direction: text().notNull(),
     originalClaimId: integer().references((): AnyPgColumn => fulfillmentLineClaims.id),
     inventoryId: integer().references(() => inventory.id),

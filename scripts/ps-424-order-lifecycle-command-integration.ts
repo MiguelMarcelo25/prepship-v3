@@ -131,6 +131,12 @@ async function main(): Promise<void> {
       ON inventory_ledger (source_entity, source_id, inventory_id, type);
   `);
   await client.exec(readFileSync('drizzle/0070_order_lifecycle_commands.sql', 'utf8'));
+  // PS-497: the real migration chain, in order. 0070 creates the claims table with
+  // `quantity integer NOT NULL CHECK (quantity > 0)`; 0090 widens it so an unusable provider
+  // quantity can be recorded as unknown instead of fabricated as 1. Running both here means
+  // this suite exercises the same schema production will have, rather than a hand-written
+  // approximation that could drift from either migration.
+  await client.exec(readFileSync('drizzle/0090_fulfillment_claim_nullable_quantity.sql', 'utf8'));
   const pg = drizzle(client, { schema, casing: 'snake_case' });
   const stockQuantity = async (sku: string): Promise<number> => {
     const [row] = await pg
@@ -678,6 +684,78 @@ async function main(): Promise<void> {
   assert.equal(new Set(ledger.map((row) => row.idempotencyKey)).size, ledger.length);
   outbox = await pg.select().from(fulfillmentOutbox);
   assert.equal(new Set(outbox.map((row) => row.dedupeKey)).size, outbox.length);
+
+  // ── PS-497: the executor refuses an unusable quantity ──────────────────────
+  //
+  // Migration 0090 should make this state unreachable, so it is forced directly: a pending
+  // claim is written with the constraint deferred long enough to plant it. This proves the
+  // executor is an INDEPENDENT gate, not a restatement of the constraint — legacy rows,
+  // manual intervention, or a future constraint regression all land here.
+  {
+    const inventoryBefore = (await pg.select().from(inventory)).length;
+    const ledgerBefore = (await pg.select().from(inventoryLedger)).length;
+
+    // null is what the new normalizer writes. 0 and a negative are what a legacy row or a
+    // manual UPDATE could leave behind — the executor must refuse all three, otherwise it is
+    // just a restatement of the NOT NULL half of the constraint.
+    const UNUSABLE: Array<[string, number | null]> = [
+      ['null', null],
+      ['zero', 0],
+      ['negative', -3],
+    ];
+
+    await client.query(`alter table fulfillment_line_claims drop constraint fulfillment_line_claims_quantity_state_check`);
+    const planted: Array<[string, number]> = [];
+    for (const [label, quantity] of UNUSABLE) {
+      const [row] = await pg
+        .insert(fulfillmentLineClaims)
+        .values({
+          lifecycleEventId: first.lifecycleEventId,
+          orderId: 11,
+          lineKey: `ps497-unusable-${label}`,
+          // A SKU that exists in NO inventory row. If the guard ran after the SKU lookup, the
+          // lookup would create one as a side effect before refusing — so the inventory row
+          // count below proves the guard fires first.
+          sku: `PS497-NEVER-SEEN-${label.toUpperCase()}`,
+          name: 'Unusable quantity line',
+          quantity,
+          direction: 'deduct',
+          status: 'pending',
+          idempotencyKey: `ps497:unusable:${label}`,
+        })
+        .returning({ id: fulfillmentLineClaims.id });
+      planted.push([label, row!.id]);
+    }
+
+    await applyInventoryClaimsForLifecycleEvent(first.lifecycleEventId, pg as never);
+
+    for (const [label, id] of planted) {
+      const [after] = await pg
+        .select()
+        .from(fulfillmentLineClaims)
+        .where(eq(fulfillmentLineClaims.id, id));
+      assert.equal(after!.status, 'review', `a ${label}-quantity claim must be sent back to review`);
+      assert.notEqual(after!.quantity, 1, `a ${label} quantity must NOT be repaired with an invented 1`);
+    }
+    assert.equal(
+      (await pg.select().from(inventoryLedger)).length, ledgerBefore,
+      'no inventory movement may be written for a quantity nobody measured',
+    );
+    assert.equal(
+      (await pg.select().from(inventory)).length, inventoryBefore,
+      'and the guard must fire BEFORE the SKU lookup, which creates an inventory row',
+    );
+    console.log('ok   PS-497 the executor refuses null, zero and negative quantities before touching inventory');
+
+    // Restoring the constraint SUCCEEDS only because the executor moved every planted row to
+    // review. While they were pending it rejected the table outright — which is itself proof
+    // the two gates agree on what is legal. The zero and negative rows are cleared first:
+    // the encoding for "unknown" is NULL, and the constraint rightly refuses a literal 0.
+    await client.query(
+      `update fulfillment_line_claims set quantity = null where status = 'review' and quantity <= 0`,
+    );
+    await client.query(`alter table fulfillment_line_claims add constraint fulfillment_line_claims_quantity_state_check check ((quantity is not null and quantity > 0) or (quantity is null and status = 'review'))`);
+  }
 
   await client.close();
   console.log('PASS PS-424 order lifecycle command integration');

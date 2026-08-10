@@ -215,6 +215,34 @@ export async function applyInventoryClaimsForLifecycleEvent(
     let applied = 0;
     let alreadyApplied = 0;
     for (const claim of claims) {
+      // Per user override unlock shipped data on 2026-08-11: PS-497 defense in depth.
+      //
+      // A claim may move stock only when the lifecycle owner PROVED a positive integer.
+      // `fulfillmentQuantity` now records an unusable provider quantity as NULL instead of
+      // fabricating a 1, and migration 0090 forbids a null quantity on anything but a review
+      // claim — so this state should be unreachable. It is checked anyway, because the two
+      // things that made this defect possible were a schema that could not express "unknown"
+      // and a single unguarded arithmetic site.
+      //
+      // Reachable in practice only via legacy rows, manual intervention, or a future
+      // constraint regression. In all three cases the claim goes back to review rather than
+      // deducting a quantity nobody measured.
+      //
+      // This tightens deduction only. It does not touch `deductInventoryForOrder`,
+      // `deductPackageForShipment`, or the INVENTORY_AUTO_DEDUCT kill switch, and it removes
+      // no shipped/cancelled protection.
+      if (claim.quantity === null || !Number.isInteger(claim.quantity) || claim.quantity <= 0) {
+        await tx
+          .update(fulfillmentLineClaims)
+          .set({
+            status: 'review',
+            lastError: claim.lastError ?? 'invalid_quantity',
+            updatedAt: new Date(),
+          })
+          .where(eq(fulfillmentLineClaims.id, claim.id));
+        continue;
+      }
+
       let inventoryId = claim.inventoryId;
       if (claim.direction === 'deduct') {
         if (!claim.sku) {

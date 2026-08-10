@@ -108,9 +108,16 @@ check('THE enqueue predicate is TRUE for a synced ShipStation shipment',
 check('an item with no sku still yields a review line, not a silent deduction',
   normalizeFulfilledLines([{ orderItemId: 1, quantity: 1 }] as never)
     .every((l) => !l.sku));
-check('a zero quantity is flagged rather than deducted as 1',
+// A zero quantity still must not deduct — that has not changed. What changed is that it now
+// carries its OWN reason: "the provider shipped nothing on this line" is a different fact from
+// "the provider sent something unparseable", and collapsing them loses the distinction that
+// would tell a provider bug apart from a shipped-nothing line.
+check('a zero quantity never becomes a deductable quantity',
+  normalizeFulfilledLines([{ orderItemId: 1, sku: 'S', quantity: 0 }] as never)[0]?.quantity === null,
+  'the old rule coerced this to 1 — a unit nobody shipped');
+check('a zero quantity is classified as zero_quantity, not generic invalid_quantity',
   normalizeFulfilledLines([{ orderItemId: 1, sku: 'S', quantity: 0 }] as never)[0]?.reviewReason
-    === 'invalid_quantity');
+    === 'zero_quantity');
 check('an empty item array normalizes to nothing (caller falls back to unavailable)',
   normalizeFulfilledLines([] as never).length === 0);
 

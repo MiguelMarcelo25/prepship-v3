@@ -6,12 +6,15 @@
  * durable inventory intent are committed together. Callers only normalize
  * provider facts and delegate here; no shipped/cancelled protection is removed.
  */
+import { createHash } from 'node:crypto';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   fulfillmentLineClaims,
   orderLifecycleEvents,
+  type FulfilledLineQuantityReviewReason,
   type FulfilledLineSnapshot,
+  type QuantityEvidence,
 } from '../db/schema/order-lifecycle.js';
 import { orderOverrides, orders } from '../db/schema/orders.js';
 import { shipments } from '../db/schema/shipments.js';
@@ -79,17 +82,107 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function fulfillmentQuantity(value: unknown): {
-  quantity: number;
-  reviewReason?: FulfilledLineSnapshot['reviewReason'];
-} {
-  if (value === null || value === undefined || value === '') {
-    return { quantity: 1, reviewReason: 'missing_quantity' };
+/** Strip control characters before anything provider-supplied is persisted. */
+const stripControl = (value: string): string => value.replace(/[\x00-\x1F\x7F]/g, '');
+
+const NUMERIC_TOKEN = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const MAX_EVIDENCE_TOKEN = 64;
+
+/**
+ * PS-497: describe an unusable quantity safely enough to persist forever.
+ *
+ * Numbers and numeric-looking strings are the diagnostically valuable cases and cannot carry
+ * PII, so they are kept verbatim. Everything else is reduced: arbitrary strings are hashed so
+ * repeat occurrences can be correlated without storing content, and objects and arrays keep
+ * only a type marker — a provider object could contain anything.
+ */
+function describeQuantity(value: unknown): QuantityEvidence {
+  if (value === null || value === undefined) {
+    return { inputType: 'missing', token: null, redacted: false };
   }
-  const parsed = typeof value === 'number' ? value : Number(String(value).trim());
-  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
-    return { quantity: 1, reviewReason: 'invalid_quantity' };
+  if (typeof value === 'boolean') {
+    return { inputType: 'boolean', token: value ? 'true' : 'false', redacted: false };
   }
+  if (typeof value === 'number') {
+    // Covers NaN and ±Infinity too: String() renders them exactly, and they are safe.
+    return { inputType: 'number', token: String(value).slice(0, MAX_EVIDENCE_TOKEN), redacted: false };
+  }
+  if (typeof value === 'string') {
+    const trimmed = stripControl(value).trim();
+    const numericLike = NUMERIC_TOKEN.test(trimmed)
+      || trimmed === 'NaN' || trimmed === 'Infinity' || trimmed === '-Infinity';
+    if (trimmed === '' || numericLike) {
+      return {
+        inputType: 'string',
+        token: trimmed.slice(0, MAX_EVIDENCE_TOKEN),
+        redacted: false,
+        originalLength: value.length,
+      };
+    }
+    return {
+      inputType: 'string',
+      token: '[redacted_non_numeric_string]',
+      redacted: true,
+      originalLength: value.length,
+      sha256: createHash('sha256').update(value).digest('hex'),
+    };
+  }
+  return {
+    inputType: Array.isArray(value) ? 'array' : 'object',
+    token: null,
+    redacted: true,
+  };
+}
+
+type FulfillmentQuantityResult =
+  | { quantity: number; reviewReason?: never; quantityEvidence?: never }
+  | {
+      quantity: null;
+      reviewReason: FulfilledLineQuantityReviewReason;
+      quantityEvidence: QuantityEvidence;
+    };
+
+/**
+ * PS-497: a claim may carry a deduction quantity ONLY when this owner proved a positive
+ * integer. Unknown, zero and invalid values are never converted into one.
+ *
+ * The previous rule returned `{ quantity: 1 }` for every unusable input. That fabricated a
+ * number nobody measured and persisted it on a claim row — inert only for as long as nothing
+ * drains review claims. It also collapsed three different provider conditions into one.
+ *
+ * Two rules worth stating because they are easy to "simplify" back into bugs:
+ *
+ *   ZERO IS NOT INVALID. A zero-quantity line plausibly means the provider shipped nothing on
+ *   it, which is a different fact from an unparseable value, and it gets its own reason. It is
+ *   deliberately NOT skipped: dropping the line would erase a provider fact and could hide a
+ *   provider defect. Promoting `zero_quantity` to "record, no claim" needs authoritative
+ *   ShipStation semantics, not an inference from one occurrence.
+ *
+ *   ONLY NUMBERS AND STRINGS ARE PARSED. `Number()` on other types has surprising results —
+ *   `Number(['1'])` is 1, `Number(true)` is 1, `Number([])` is 0 — so an array or object would
+ *   otherwise coerce into a real deduction quantity. Anything else is invalid by type.
+ */
+function fulfillmentQuantity(value: unknown): FulfillmentQuantityResult {
+  const unusable = (reviewReason: FulfilledLineQuantityReviewReason): FulfillmentQuantityResult => ({
+    quantity: null,
+    reviewReason,
+    quantityEvidence: describeQuantity(value),
+  });
+
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    return unusable('missing_quantity');
+  }
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return unusable('invalid_quantity');
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value.trim());
+  if (!Number.isFinite(parsed)) return unusable('invalid_quantity');
+  // `Object.is` because `-0 === 0` is true but they are distinguishable, and either way
+  // nothing shipped.
+  if (parsed === 0 || Object.is(parsed, -0)) return unusable('zero_quantity');
+  if (parsed < 0 || !Number.isInteger(parsed)) return unusable('invalid_quantity');
+
   return { quantity: parsed };
 }
 
@@ -111,21 +204,37 @@ export function normalizeFulfilledLines(items: unknown[] | null | undefined): Fu
     ) ?? `${sku ?? 'no-sku'}:${index + 1}`;
     const occurrence = (usedKeys.get(baseKey) ?? 0) + 1;
     usedKeys.set(baseKey, occurrence);
-    const normalizedQuantity = fulfillmentQuantity(item.quantity ?? item.qty);
-    lines.push({
-      lineKey: occurrence === 1 ? baseKey : `${baseKey}#${occurrence}`,
-      sku,
-      name: text(item.name ?? item.title),
-      quantity: normalizedQuantity.quantity,
-      ...(normalizedQuantity.reviewReason
-        ? { reviewReason: normalizedQuantity.reviewReason }
-        : {}),
-    });
+    // Presence-aware, NOT `item.quantity ?? item.qty`. That form cannot tell an ABSENT
+    // `quantity` from an explicit `quantity: null`, so an explicitly malformed quantity would
+    // silently fall through to a different field and be reported as a clean deduction.
+    const rawQuantity = Object.prototype.hasOwnProperty.call(item, 'quantity')
+      ? item.quantity
+      : Object.prototype.hasOwnProperty.call(item, 'qty')
+        ? item.qty
+        : undefined;
+    const normalizedQuantity = fulfillmentQuantity(rawQuantity);
+    const lineKey = occurrence === 1 ? baseKey : `${baseKey}#${occurrence}`;
+    const name = text(item.name ?? item.title);
+    // Every provider line stays in the snapshot. A line is never dropped for a bad quantity:
+    // dropping it would erase the provider fact and hide a provider defect.
+    lines.push(
+      normalizedQuantity.quantity === null
+        ? {
+            lineKey,
+            sku,
+            name,
+            quantity: null,
+            reviewReason: normalizedQuantity.reviewReason,
+            quantityEvidence: normalizedQuantity.quantityEvidence,
+          }
+        : { lineKey, sku, name, quantity: normalizedQuantity.quantity },
+    );
   }
   return lines;
 }
 
-function normalizeFulfillmentFacts(
+/** Exported for boundary tests: this is where the unavailable-line shape is decided. */
+export function normalizeFulfillmentFacts(
   facts: OrderLifecycleFulfillmentFacts | null | undefined,
   transition: OrderLifecycleTransition,
 ): FulfilledLineSnapshot[] {
@@ -153,7 +262,9 @@ function normalizeFulfillmentFacts(
     lineKey: 'review:fulfillment-lines-unavailable',
     sku: null,
     name: description ?? 'Exact shipment fulfillment-line quantities were unavailable',
-    quantity: 1,
+    // PS-497: null, not 1. Nothing was measured here either — the old fabricated 1 is what
+    // 2,950 production review claims carry today.
+    quantity: null,
     reviewReason: 'fulfillment_lines_unavailable',
   }];
 }
@@ -411,7 +522,11 @@ export async function applyOrderLifecycleCommandInTransaction(
         name: line.name,
         quantity: line.quantity,
         direction: 'deduct',
-        status: line.sku && !line.reviewReason ? 'pending' : 'review',
+        // PS-497: `quantity !== null` is part of the predicate, not an implication of it. A
+        // claim only becomes deductable work when this owner PROVED a positive integer, so a
+        // future snapshot variant cannot make a null-quantity line pending by omitting a
+        // reviewReason. The database constraint added in 0090 enforces the same rule.
+        status: line.sku && !line.reviewReason && line.quantity !== null ? 'pending' : 'review',
         lastError: line.reviewReason ?? (line.sku ? null : 'missing_sku'),
         idempotencyKey: `inventory:deduct:lifecycle:${event.id}:line:${line.lineKey}`,
         updatedAt: effectiveAt,
@@ -427,7 +542,10 @@ export async function applyOrderLifecycleCommandInTransaction(
     await consumeOutboundPackageInTransaction(input.packageConsumption, tx);
   }
 
-  if (createsDeduction && fulfilledLines.some((line) => line.sku && !line.reviewReason)) {
+  // PS-497: the same three-part test as the claim status above. Review-only lines must never
+  // enqueue inventory work.
+  if (createsDeduction
+    && fulfilledLines.some((line) => line.sku && !line.reviewReason && line.quantity !== null)) {
     await enqueueInventoryClaimDeduction({
       lifecycleEventId: event.id,
       orderId: input.orderId,
