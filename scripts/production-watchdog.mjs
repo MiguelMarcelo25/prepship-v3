@@ -284,6 +284,28 @@ async function runChecks() {
   return checks;
 }
 
+/**
+ * PS-497: is any failing check something a restart could actually fix?
+ *
+ * Exported and called by `main()` rather than inlined, because the guard used to run a COPY
+ * of this predicate. Review defeated that: adding `|| check.name === 'Inventory claim
+ * backlog'` to the real predicate left every assertion green, since the behavioural test
+ * exercised the copy and the source check only confirmed the original terms still appeared.
+ * A copied safety predicate proves nothing about the code that actually runs.
+ *
+ * A stranded-claim backlog is a DATA condition: bouncing the API leaves every claim exactly
+ * where it was, so a run failing only on that must alert without restarting. Checks with no
+ * `restartEligible` flag are eligible, so every pre-existing check behaves as before.
+ */
+export function hasRestartEligibleFailure(checks) {
+  return checks.some(
+    (check) =>
+      !check.ok &&
+      check.name !== 'Render /health/deep' &&
+      check.restartEligible !== false,
+  );
+}
+
 export function summarizeHealth(checks) {
   // /health/deep is diagnostic. Render /health/ready and canonical sync
   // freshness are independently required and cannot mask each other.
@@ -433,14 +455,9 @@ async function main() {
   }
 
   state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
-  // PS-497: a restart must be justified by a failure a restart could actually fix. The
-  // stranded-claim alarm is a DATA condition — bouncing the API leaves every claim exactly
-  // where it was, so a run failing ONLY on that must alert without restarting, or the
-  // watchdog cycles production indefinitely against a backlog it cannot touch.
-  // Checks with no flag are eligible, so every pre-existing check behaves as before.
-  const restartEligibleFailure = checks.some(
-    (check) => !check.ok && check.name !== 'Render /health/deep' && check.restartEligible !== false,
-  );
+  // PS-497: a restart must be justified by a failure a restart could actually fix. The rule
+  // lives in the exported predicate so the guard executes THIS function, not a copy of it.
+  const restartEligibleFailure = hasRestartEligibleFailure(checks);
   const restartDecision = restartEligibleFailure
     ? canRestart(state, now)
     : { ok: false, reason: 'no restart-eligible failure (data condition only)' };

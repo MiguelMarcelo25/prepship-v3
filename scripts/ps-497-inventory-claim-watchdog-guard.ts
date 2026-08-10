@@ -15,7 +15,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { summarizeHealth } from './production-watchdog.mjs';
+import { hasRestartEligibleFailure, summarizeHealth } from './production-watchdog.mjs';
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
@@ -55,28 +55,43 @@ check('the alarm is NOT treated as diagnostic-only like /health/deep', () => {
 });
 
 // ── but it must never restart ────────────────────────────────────────────────
-// Mirrors main()'s predicate exactly; the source assertion below pins that they match.
-const restartEligibleFailure = (checks: Array<Record<string, unknown>>) => checks.some(
-  (c) => !c.ok && c.name !== 'Render /health/deep' && c.restartEligible !== false,
-);
-
+// These run the REAL exported predicate. They used to run a copy, and review defeated that
+// by adding `|| check.name === 'Inventory claim backlog'` to the production function: every
+// assertion stayed green because the copy was untouched. A copied safety predicate proves
+// nothing about the code that runs.
 check('a run failing ONLY on the claim alarm is not restart-eligible', () => {
-  assert.equal(restartEligibleFailure([healthy, claimAlarm(false)]), false,
+  assert.equal(hasRestartEligibleFailure([healthy, claimAlarm(false)]), false,
     'restarting the API cannot move a stranded claim');
 });
 check('a real service failure IS still restart-eligible', () => {
-  assert.equal(restartEligibleFailure([{ name: 'Render /health/ready', ok: false }]), true,
+  assert.equal(hasRestartEligibleFailure([{ name: 'Render /health/ready', ok: false }]), true,
     'the existing restart behaviour must be unchanged');
 });
 check('a service failure alongside the alarm is still restart-eligible', () => {
   assert.equal(
-    restartEligibleFailure([{ name: 'Render /health/ready', ok: false }, claimAlarm(false)]),
+    hasRestartEligibleFailure([{ name: 'Render /health/ready', ok: false }, claimAlarm(false)]),
     true,
     'the alarm must not suppress a restart that something else earned',
   );
 });
 check('checks with no restartEligible flag stay eligible, so nothing pre-existing changed', () => {
-  assert.equal(restartEligibleFailure([{ name: 'Shipment sync freshness', ok: false }]), true);
+  assert.equal(hasRestartEligibleFailure([{ name: 'Shipment sync freshness', ok: false }]), true);
+});
+check('a /health/deep failure alone is not restart-eligible', () => {
+  assert.equal(hasRestartEligibleFailure([healthy, { name: 'Render /health/deep', ok: false }]), false);
+});
+check('the alarm failing on config-missing or transport error still never restarts', () => {
+  assert.equal(hasRestartEligibleFailure([
+    healthy,
+    { name: 'Inventory claim backlog', ok: false, status: 'config-missing', restartEligible: false },
+  ]), false);
+  assert.equal(hasRestartEligibleFailure([
+    healthy,
+    { name: 'Inventory claim backlog', ok: false, status: 'error', restartEligible: false },
+  ]), false);
+});
+check('everything healthy is not restart-eligible', () => {
+  assert.equal(hasRestartEligibleFailure([healthy, claimAlarm(true)]), false);
 });
 
 // ── the wiring, which execution cannot reach ─────────────────────────────────
@@ -100,20 +115,16 @@ check('checks with no restartEligible flag stay eligible, so nothing pre-existin
     assert.equal(flags, returns,
       `every return must be restart-ineligible: ${flags} flags for ${returns} returns`);
   });
-  check('main() gates restarts on restart-eligible failures', () => {
-    assert.match(src, /const restartEligibleFailure = checks\.some\(/);
+  // The predicate's TERMS are no longer pinned by regex — the imported behavioural tests
+  // above prove them by execution. These two assert only that main() still delegates, so an
+  // inline copy cannot quietly reappear beside the export.
+  check('main() gates restarts on the exported predicate', () => {
+    assert.match(src, /const restartEligibleFailure = hasRestartEligibleFailure\(checks\)/);
     assert.match(src, /restartEligibleFailure\s*\r?\n?\s*\?\s*canRestart\(state, now\)/);
   });
-  // The behavioural restart assertions above run a COPY of main()'s predicate, because it is
-  // a module-private const and cannot be imported. A copy can drift from the original and
-  // then prove nothing, so pin the original's exact terms here. Loosening main() without
-  // updating this fails, which is the only thing keeping the two honest.
-  check('the copied restart predicate still matches the real one, term for term', () => {
-    const start = src.indexOf('const restartEligibleFailure = checks.some(');
-    const body = src.slice(start, start + 260);
-    assert.match(body, /!check\.ok/, 'must require a failing check');
-    assert.match(body, /check\.name !== 'Render \/health\/deep'/, 'must still exempt the diagnostic probe');
-    assert.match(body, /check\.restartEligible !== false/, 'must honour the restart-ineligible flag');
+  check('main() no longer carries its own inline restart predicate', () => {
+    assert.doesNotMatch(src, /const restartEligibleFailure = checks\.some\(/,
+      'an inline copy beside the export is how the two drift apart again');
   });
 }
 

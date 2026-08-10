@@ -44,6 +44,18 @@ export type InventoryClaimAlarmReading = {
   verdict: InventoryClaimReviewAlarmVerdict;
 };
 
+/**
+ * The measurement contract, exported so a change is visible in review rather than buried in
+ * a default argument.
+ *
+ * Seven days is an operational decision, not an incidental number: it is long enough to
+ * average out a single bad sync run and short enough that a genuine shift in behaviour
+ * reaches the baseline. Changing it means changing this constant, the fixture boundaries and
+ * the explicit assertion together — which is the point.
+ */
+export const DEFAULT_CLAIM_ALARM_WINDOW_HOURS = 24;
+export const DEFAULT_CLAIM_ALARM_BASELINE_HOURS = 24 * 7;
+
 const num = (value: unknown): number => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -59,8 +71,8 @@ export async function readInventoryClaimAlarm(
   query: ClaimAlarmQuery,
   options: { windowHours?: number; baselineHours?: number } = {},
 ): Promise<InventoryClaimAlarmReading> {
-  const windowHours = options.windowHours ?? 24;
-  const baselineHours = options.baselineHours ?? 24 * 7;
+  const windowHours = options.windowHours ?? DEFAULT_CLAIM_ALARM_WINDOW_HOURS;
+  const baselineHours = options.baselineHours ?? DEFAULT_CLAIM_ALARM_BASELINE_HOURS;
 
   const currentRows = await query`
     select e.source as source,
