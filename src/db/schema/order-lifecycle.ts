@@ -80,9 +80,26 @@ type UnavailableFulfilledLineSnapshot = {
   quantityEvidence?: never;
 };
 
+/**
+ * PS-497: a line from a shipment that could not be identified.
+ *
+ * The quantity may be perfectly well known here — what is missing is WHICH product it was.
+ * A deduction needs both, so these never deduct. The line is retained rather than dropped so
+ * the provider fact, including the product name, survives for diagnosis.
+ */
+type IdentityReviewFulfilledLineSnapshot = {
+  lineKey: string;
+  sku: string | null;
+  name: string | null;
+  quantity: number | null;
+  reviewReason: 'fulfillment_line_missing_sku';
+  quantityEvidence?: never;
+};
+
 export type FulfilledLineSnapshot =
   | ExactFulfilledLineSnapshot
   | QuantityReviewFulfilledLineSnapshot
+  | IdentityReviewFulfilledLineSnapshot
   | UnavailableFulfilledLineSnapshot;
 
 /**

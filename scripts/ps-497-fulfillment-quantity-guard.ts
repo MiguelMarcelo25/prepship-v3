@@ -270,6 +270,72 @@ check('exact facts with a bad quantity still produce a real line, not the unavai
   assert.ok(lines[0].quantityEvidence);
 });
 
+// ── a shipment with an unidentifiable line is not exact ──────────────────────
+//
+// A deduction needs two facts: which product, and how many. A SKU-less line supplies only
+// the second. It used to be accepted inside an `exact` set, so its siblings deducted and it
+// alone went to review — a PARTIAL deduction, where the order reads as fulfilled while some
+// stock was never moved.
+const exact = (lines: unknown[]) => normalizeFulfillmentFacts({ kind: 'exact', lines }, 'shipped');
+
+check('a wholly SKU-less shipment deducts nothing', () => {
+  // The shape of all 9 production occurrences: one line, no SKU, a real quantity.
+  const lines = exact([{ sku: null, name: '2 Pack - Beard Dye', quantity: 2 }]);
+  assert.equal(lines.length, 1, 'the line is retained, never dropped');
+  assert.equal(lines[0].reviewReason, 'fulfillment_line_missing_sku');
+  assert.equal(lines[0].quantity, 2, 'the quantity IS known — it is the identity that is missing');
+  assert.equal(lines[0].name, '2 Pack - Beard Dye', 'the name is the only remaining clue to what shipped');
+});
+
+check('a MIXED shipment refuses wholesale rather than half-deducting', () => {
+  const lines = exact([
+    { sku: 'GOOD-1', name: 'Known', quantity: 2 },
+    { sku: null, name: 'Unknown', quantity: 1 },
+  ]);
+  assert.equal(lines.length, 2);
+  assert.deepEqual(
+    lines.map((l) => l.reviewReason),
+    ['fulfillment_line_missing_sku', 'fulfillment_line_missing_sku'],
+    'deducting the identified line and quietly reviewing the other is a partial deduction',
+  );
+  assert.ok(lines.every((l) => l.reviewReason), 'nothing from an unidentifiable shipment may deduct');
+});
+
+check('an empty-string SKU counts as missing, not as an identity', () => {
+  const lines = exact([{ sku: '   ', name: 'Blank', quantity: 1 }]);
+  assert.equal(lines[0].reviewReason, 'fulfillment_line_missing_sku');
+});
+
+check('a fully identified shipment is untouched and still deducts', () => {
+  const lines = exact([
+    { sku: 'A', name: 'One', quantity: 2 },
+    { sku: 'B', name: 'Two', quantity: 1 },
+  ]);
+  assert.deepEqual(lines.map((l) => [l.sku, l.quantity, l.reviewReason ?? null]),
+    [['A', 2, null], ['B', 1, null]],
+    'the normal path must be completely unaffected');
+});
+
+check('a quantity-quarantined line keeps its own reason and evidence', () => {
+  // Both defects on one shipment. The quantity reason is the more specific fact and its
+  // evidence must not be discarded by the identity rule.
+  const lines = exact([
+    { sku: null, name: 'No identity', quantity: 1 },
+    { sku: 'B', name: 'Bad quantity', quantity: 'xyz' },
+  ]);
+  assert.equal(lines[0].reviewReason, 'fulfillment_line_missing_sku');
+  assert.equal(lines[1].reviewReason, 'invalid_quantity');
+  assert.ok(lines[1].quantityEvidence, 'the quantity evidence must survive the identity rule');
+});
+
+check('no SKU is ever guessed from the product name', () => {
+  // Resolving identity by name would deduct the wrong product's stock on a wrong guess,
+  // which is worse than not deducting at all.
+  const lines = exact([{ sku: null, name: 'Booster Gel', quantity: 1 }]);
+  assert.equal(lines[0].sku, null, 'the sku must stay null — no name matching, no restored deduction');
+  assert.equal(lines[0].reviewReason, 'fulfillment_line_missing_sku');
+});
+
 if (failures > 0) {
   console.error(`\nPS-497 fulfillment quantity guard FAILED with ${failures} failure(s).`);
   process.exit(1);

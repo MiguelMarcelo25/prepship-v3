@@ -233,6 +233,46 @@ export function normalizeFulfilledLines(items: unknown[] | null | undefined): Fu
   return lines;
 }
 
+/**
+ * PS-497: a shipment carrying a line with no SKU is not EXACT fulfillment truth.
+ *
+ * A deduction needs two facts — which product, and how many. A line without a SKU supplies
+ * only the second. Previously such a line was still accepted as part of an `exact` fact set:
+ * its siblings deducted and it alone went to review, which is a PARTIAL deduction. The order
+ * then reads as fulfilled while some of its stock was never moved, and the shortfall is
+ * visible only to whoever reads the claim queue.
+ *
+ * So identity failure condemns the whole set, matching `loadWholeOrderShipmentLines`, which
+ * already refuses wholesale rather than "deducting some lines and quietly reviewing others".
+ *
+ * Every line is RETAINED, never dropped — including the product name, which is the only
+ * remaining clue to what shipped. Deliberately NOT done here, per review:
+ *   - no name matching. Resolving a SKU by product name guesses at inventory identity, and a
+ *     wrong guess deducts the wrong product's stock — worse than not deducting.
+ *   - no restored deduction. These stay in review until the identity gap is fixed upstream.
+ *
+ * All 9 production occurrences are single-line, wholly SKU-less shipments — 8 from the one
+ * store whose provider returns sku, upc and fulfillmentSku all null — so no order currently
+ * loses a working deduction to this. A MIXED shipment would, and that is the intended
+ * fail-closed direction: an unidentifiable shipment should stop, not half-deduct.
+ */
+function refuseUnidentifiedShipment(lines: FulfilledLineSnapshot[]): FulfilledLineSnapshot[] {
+  if (lines.every((line) => line.sku)) return lines;
+  return lines.map((line) => (
+    line.reviewReason
+      // A line already quarantined for its quantity keeps that reason and its evidence: it
+      // does not deduct either way, and the quantity evidence is the more specific fact.
+      ? line
+      : {
+          lineKey: line.lineKey,
+          sku: line.sku,
+          name: line.name,
+          quantity: line.quantity,
+          reviewReason: 'fulfillment_line_missing_sku' as const,
+        }
+  ));
+}
+
 /** Exported for boundary tests: this is where the unavailable-line shape is decided. */
 export function normalizeFulfillmentFacts(
   facts: OrderLifecycleFulfillmentFacts | null | undefined,
@@ -253,7 +293,7 @@ export function normalizeFulfillmentFacts(
   }
   if (facts.kind === 'exact') {
     const exactLines = normalizeFulfilledLines(facts.lines);
-    if (exactLines.length > 0) return exactLines;
+    if (exactLines.length > 0) return refuseUnidentifiedShipment(exactLines);
   }
   const description = facts.kind === 'unavailable'
     ? text(facts.description)
