@@ -1083,6 +1083,7 @@ const REQUIRED_GUARDS = [
   'test:ps-497-inventory-claim-alarm',
   'test:ps-497-inventory-claim-alarm-integration',
   'test:ps-497-inventory-claim-watchdog',
+  'test:ps-497-inventory-claim-alarm-detector',
   // PS-495: shipped orders that never reached billing at all. Pinned for the two
   // EXCLUSIONS, which are what make the number usable: orders after the client's billing
   // frontier are ordinary generation lag (6 of 454 when measured), and clients who have
