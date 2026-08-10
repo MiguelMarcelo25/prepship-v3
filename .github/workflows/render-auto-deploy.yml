@@ -95,13 +95,39 @@ jobs:
             http_code=$(printf '%s' "$resp" | tail -n1)
             body=$(printf '%s' "$resp" | sed '$d')
 
-            if [ "$http_code" != "201" ]; then
-              echo "::error::${service_name}: Render deploy trigger failed (HTTP ${http_code}): ${body}"
+            # Render answers 201 with the created deploy, and 202 Accepted when it queues the
+            # request instead. Both mean the deploy was accepted. Treating 202 as a failure
+            # reported a false red on 0f06b734 while the deploy actually went live — worse
+            # than noisy, because a spurious red and a real one then look identical.
+            case "$http_code" in
+              200|201|202) ;;
+              *)
+                echo "::error::${service_name}: Render deploy trigger failed (HTTP ${http_code}): ${body}"
+                echo "::endgroup::"
+                return 1 ;;
+            esac
+
+            deploy_id=$(printf '%s' "$body" | json_field id)
+            # A 202 body can be empty, leaving no deploy id. Polling ".../deploys/" without one
+            # hits the LIST endpoint, whose response has no top-level `status` — the poll would
+            # read empty forever and time out on a healthy deploy. Fall back to the service's
+            # most recent deploy, which is the one this POST just created.
+            if [ -z "$deploy_id" ]; then
+              echo "${service_name}: trigger returned HTTP ${http_code} with no deploy id; resolving the latest deploy"
+              deploy_id=$(curl -sS \
+                "https://api.render.com/v1/services/${service_id}/deploys?limit=1" \
+                -H "Authorization: Bearer ${RENDER_API_KEY}" \
+                -H "Accept: application/json" \
+                | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const first=Array.isArray(j)?j[0]:null;console.log((first&&(first.deploy?.id??first.id))??"")}catch{console.log("")}})')
+            fi
+
+            # Never proceed without an id: a blank one polls the wrong endpoint and would fail
+            # the deploy on a timeout rather than on the truth.
+            if [ -z "$deploy_id" ]; then
+              echo "::error::${service_name}: deploy accepted (HTTP ${http_code}) but no deploy id could be resolved; cannot verify it reached live"
               echo "::endgroup::"
               return 1
             fi
-
-            deploy_id=$(printf '%s' "$body" | json_field id)
             echo "${service_name}: deploy created -> ${deploy_id}"
 
             # Poll until terminal. Render statuses: live (ok); build_failed/update_failed/
