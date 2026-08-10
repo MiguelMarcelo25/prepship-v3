@@ -15,6 +15,7 @@ const config = {
   vercelShellUrl: env.VERCEL_SHELL_URL || '',
   renderBaseUrl: env.RENDER_BASE_URL || '',
   syncStatusUrl: env.WATCHDOG_SYNC_STATUS_URL || '',
+  inventoryClaimStatusUrl: env.WATCHDOG_INVENTORY_CLAIM_STATUS_URL || '',
   cronSecret: env.WATCHDOG_CRON_SECRET || '',
   alertWebhookUrl: env.WATCHDOG_ALERT_WEBHOOK_URL || '',
   timeoutMs: readPositiveInt('WATCHDOG_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
@@ -175,6 +176,63 @@ async function checkSyncFreshness(url) {
   }
 }
 
+/**
+ * PS-497: stranded inventory claims.
+ *
+ * Reads the backend verdict rather than deciding anything here — the alarm rule
+ * (activity-normalised, per source) is business truth and lives in
+ * `src/services/inventory-claim-review-alarm.ts`. This is a thin consumer, exactly like
+ * `checkSyncFreshness` above.
+ *
+ * `restartEligible: false` is the important part. A stranded-claim backlog is a DATA
+ * condition — restarting the API cannot fix it, and a watchdog that restarts on it would
+ * cycle production forever while the claims sat exactly where they were. It alerts and it
+ * makes the run red; it never restarts.
+ */
+async function checkInventoryClaimAlarm(url) {
+  const started = Date.now();
+  const name = 'Inventory claim backlog';
+  if (!config.cronSecret) {
+    return { name, ok: false, status: 'config-missing', ms: 0, target: 'WATCHDOG_CRON_SECRET', restartEligible: false };
+  }
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: 'GET',
+      headers: { 'x-cron-secret': config.cronSecret },
+    });
+    const body = await response.json().catch(() => null);
+    const verdict = body?.verdict;
+    const alert = verdict?.alert;
+    const ok = response.status >= 200 && response.status < 300 && alert === false;
+    return {
+      name,
+      ok,
+      status: response.status,
+      ms: Date.now() - started,
+      target: publicTarget(url),
+      restartEligible: false,
+      details: {
+        state: typeof verdict?.state === 'string' ? verdict.state : 'invalid',
+        // Sanitised: source names and counts only, never order or claim identifiers.
+        alerting: Array.isArray(verdict?.sources)
+          ? verdict.sources.filter((s) => s?.alert).map((s) => `${s.source}:${s.state}`).join(',')
+          : '',
+      },
+      ...(body && typeof alert === 'boolean' ? {} : { error: 'invalid inventory claim alarm response' }),
+    };
+  } catch (error) {
+    return {
+      name,
+      ok: false,
+      status: 'error',
+      ms: Date.now() - started,
+      target: publicTarget(url),
+      restartEligible: false,
+      error: error?.name === 'AbortError' ? 'timeout' : sanitizeAlertText(error?.message || 'request failed'),
+    };
+  }
+}
+
 async function runChecks() {
   const checks = [];
 
@@ -213,6 +271,15 @@ async function runChecks() {
     '/cron/shipment-sync-watchdog/status',
   );
   checks.push(await checkSyncFreshness(syncStatusUrl));
+  // PS-497: only meaningful when a base URL is configured; without one there is nothing to
+  // ask, and inventing a config-missing failure here would page for a watchdog that was
+  // never pointed at anything.
+  if (config.renderBaseUrl) {
+    checks.push(await checkInventoryClaimAlarm(
+      config.inventoryClaimStatusUrl
+      || joinUrl(config.renderBaseUrl, '/cron/inventory-claim-watchdog/status'),
+    ));
+  }
 
   return checks;
 }
@@ -366,7 +433,17 @@ async function main() {
   }
 
   state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
-  const restartDecision = canRestart(state, now);
+  // PS-497: a restart must be justified by a failure a restart could actually fix. The
+  // stranded-claim alarm is a DATA condition — bouncing the API leaves every claim exactly
+  // where it was, so a run failing ONLY on that must alert without restarting, or the
+  // watchdog cycles production indefinitely against a backlog it cannot touch.
+  // Checks with no flag are eligible, so every pre-existing check behaves as before.
+  const restartEligibleFailure = checks.some(
+    (check) => !check.ok && check.name !== 'Render /health/deep' && check.restartEligible !== false,
+  );
+  const restartDecision = restartEligibleFailure
+    ? canRestart(state, now)
+    : { ok: false, reason: 'no restart-eligible failure (data condition only)' };
   let action = 'alert';
   let reason = restartDecision.reason;
 
