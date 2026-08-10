@@ -13,6 +13,8 @@ import {
   readShipmentSyncWatchdogStatus,
   runShipmentSyncWatchdogTick,
 } from '../services/shipment-sync-watchdog';
+import { sql as pgSql } from '../db/client';
+import { readInventoryClaimAlarm } from '../services/inventory-claim-alarm-read-model';
 
 const app = new Hono();
 
@@ -134,6 +136,19 @@ app.get('/shipment-sync-watchdog/status', async (c) => {
   // PS-431 external monitoring consumes canonical sync freshness without
   // enqueue, restart, recovery, or snapshot-write side effects.
   return c.json(await readShipmentSyncWatchdogStatus());
+});
+
+// PS-497: the stranded-claim alarm. Read-only — it measures and rules, it never drains,
+// closes, or deducts. /health/deep publishes the raw backlog and deliberately never gates
+// readiness (a 503 there restarts the service over a data condition); this is the separate
+// out-of-band verdict a monitor can act on, exactly like the sync-freshness probe above.
+app.get('/inventory-claim-watchdog/status', async (c) => {
+  const windowHours = Number(c.req.query('windowHours') ?? 24);
+  const reading = await readInventoryClaimAlarm(
+    ((strings: TemplateStringsArray, ...values: never[]) => pgSql(strings, ...values)) as never,
+    { windowHours: Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24 },
+  );
+  return c.json(reading);
 });
 
 app.post('/fulfillment-outbox', async (c) => {

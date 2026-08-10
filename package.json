@@ -929,6 +929,7 @@
     "test:ps-497-inventory-claim-review-visibility": "tsx scripts/ps-497-inventory-claim-review-visibility-guard.ts",
     "test:ps-497-inventory-claim-review-integration": "tsx scripts/ps-497-inventory-claim-review-integration.ts",
     "test:ps-497-inventory-claim-alarm": "tsx scripts/ps-497-inventory-claim-alarm-guard.ts",
+    "test:ps-497-inventory-claim-alarm-integration": "tsx scripts/ps-497-inventory-claim-alarm-integration.ts",
     "test:ps-491-duplicate-order-billing": "tsx scripts/ps-491-duplicate-order-billing-guard.ts",
     "test:billing-destination-international": "tsx scripts/billing-destination-international-guard.ts",
     "test:billing-international-destination:browser": "playwright test web/e2e/billing-international-destination.spec.js --reporter=line",
