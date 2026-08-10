@@ -15,7 +15,17 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { hasRestartEligibleFailure, summarizeHealth } from './production-watchdog.mjs';
+
+// The watchdog reads its config from the environment at MODULE LOAD, so the secret must exist
+// before the module is evaluated. Static imports are hoisted above statements, so this uses a
+// dynamic import — otherwise every behavioural case below would take the `config-missing`
+// branch and pass without ever reaching the code under test.
+process.env.WATCHDOG_CRON_SECRET ||= 'guard-only-not-a-real-secret';
+const {
+  checkInventoryClaimAlarm,
+  hasRestartEligibleFailure,
+  summarizeHealth,
+} = await import('./production-watchdog.mjs');
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
@@ -94,26 +104,181 @@ check('everything healthy is not restart-eligible', () => {
   assert.equal(hasRestartEligibleFailure([healthy, claimAlarm(true)]), false);
 });
 
+// ── the check itself, EXECUTED against a stubbed endpoint ────────────────────
+//
+// This block replaces two source-text assertions that pinned the previous placement: that the
+// check read `body?.verdict` and never mentioned `reviewCount`. The placement rule they stood
+// for — the watchdog must not own the alarm rule — has NOT been relaxed. What changed is how
+// it is satisfied: the rule now lives in the pure detector, which the watchdog imports and
+// runs, because the detector is stateful across runs and this process owns the state file
+// while the route is stateless. Reading source text could never have proven that delegation,
+// so these cases run the real function instead.
+
+const NOW = 1_760_000_000_000;
+const POLICIES = {
+  shipment_sync: { class: 'fixed' },
+  order_sync_status: { class: 'open_incident', baselineRatio: 1, saturated: true },
+};
+const detectorInputs = (over: Record<string, unknown> = {}) => ({
+  completedWindows: [],
+  severity: { reviewCount: 100, oldestAgeDays: 1, acknowledgedNewEvents24h: 10 },
+  immediateReasons: [],
+  policies: POLICIES,
+  ...over,
+});
+
+/** Stub the network. No production endpoint is contacted by this guard. */
+function withStubbedFetch<T>(status: number, body: unknown, run: () => Promise<T>): Promise<T> {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status,
+    json: async () => body,
+  })) as unknown as typeof globalThis.fetch;
+  return run().finally(() => { globalThis.fetch = original; });
+}
+
+const URL_UNDER_TEST = 'https://example.invalid/cron/inventory-claim-watchdog/status';
+
+async function acheck(name: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+    console.log(`ok   ${name}`);
+  } catch (err) {
+    failures += 1;
+    console.log(`FAIL ${name}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+await acheck('a quiet backlog leaves the check green', async () => {
+  const result = await withStubbedFetch(200, { detector: detectorInputs() }, () =>
+    checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.equal(result.check.ok, true);
+  assert.equal(result.check.restartEligible, false);
+});
+
+await acheck('an immediate regression on a repaired path makes the check red', async () => {
+  const result = await withStubbedFetch(200, {
+    detector: detectorInputs({
+      immediateReasons: [{ code: 'inventory_claim.fixed_regression.shipment_sync', message: 'x' }],
+    }),
+  }, () => checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.equal(result.check.ok, false, 'one stranded event on a repaired path is the alarm');
+  assert.equal(result.check.restartEligible, false, 'and still must never restart');
+});
+
+await acheck('a saturated path crossing an absolute threshold makes the check red', async () => {
+  // The exact case the old 1.5x rule could not reach: baseline already 1.0, so only absolute
+  // severity can see this. If the watchdog were still trusting the legacy rollup verdict,
+  // this would come back green.
+  const result = await withStubbedFetch(200, {
+    detector: detectorInputs({
+      severity: { reviewCount: 5000, oldestAgeDays: 40, acknowledgedNewEvents24h: 500 },
+    }),
+  }, () => checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.equal(result.check.ok, false);
+  assert.match(result.check.details.reasons, /open_volume_24h/);
+});
+
+await acheck('the check returns advanced detector state for the caller to persist', async () => {
+  const result = await withStubbedFetch(200, {
+    detector: detectorInputs({
+      severity: { reviewCount: 3200, oldestAgeDays: 2, acknowledgedNewEvents24h: 10 },
+    }),
+  }, () => checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.equal(result.nextState.lastCountMilestone, 3000,
+    'without a returned state the same milestone pages on every run, forever');
+  assert.equal(result.nextState.lastReviewCount, 3200);
+});
+
+await acheck('a milestone already recorded in state does not page again', async () => {
+  const first = await withStubbedFetch(200, {
+    detector: detectorInputs({
+      severity: { reviewCount: 3200, oldestAgeDays: 2, acknowledgedNewEvents24h: 10 },
+    }),
+  }, () => checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.equal(first.check.ok, false, 'the first crossing pages');
+  const second = await withStubbedFetch(200, {
+    detector: detectorInputs({
+      severity: { reviewCount: 3200, oldestAgeDays: 2, acknowledgedNewEvents24h: 10 },
+    }),
+  }, () => checkInventoryClaimAlarm(URL_UNDER_TEST, first.nextState, NOW + 3_600_000));
+  assert.equal(second.check.ok, true, 'the state carried forward suppresses the repeat');
+});
+
+await acheck('a malformed payload fails the check instead of passing quietly', async () => {
+  for (const body of [null, {}, { detector: {} }, { detector: { completedWindows: [] } }]) {
+    const result = await withStubbedFetch(200, body, () =>
+      checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+    assert.equal(result.check.ok, false, `"could not measure" must never read as "nothing wrong": ${JSON.stringify(body)}`);
+    assert.equal(result.check.restartEligible, false);
+    assert.equal(result.nextState, null, 'and must not advance state from a payload it could not read');
+  }
+});
+
+await acheck('a non-2xx response fails the check', async () => {
+  const result = await withStubbedFetch(500, { detector: detectorInputs() }, () =>
+    checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.equal(result.check.ok, false);
+  assert.equal(result.check.restartEligible, false);
+});
+
+await acheck('a transport failure fails the check and never restarts', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error('connect ECONNREFUSED'); }) as unknown as typeof globalThis.fetch;
+  try {
+    const result = await checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW);
+    assert.equal(result.check.ok, false);
+    assert.equal(result.check.restartEligible, false);
+    assert.equal(result.nextState, null);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+await acheck('reported details carry stable reason codes and no free prose', async () => {
+  const result = await withStubbedFetch(200, {
+    detector: detectorInputs({
+      severity: { reviewCount: 5000, oldestAgeDays: 40, acknowledgedNewEvents24h: 500 },
+    }),
+  }, () => checkInventoryClaimAlarm(URL_UNDER_TEST, null, NOW));
+  assert.ok(!/\s/.test(result.check.details.reasons),
+    'prose in the details churns the alert dedupe key and defeats the cooldown');
+});
+
 // ── the wiring, which execution cannot reach ─────────────────────────────────
 {
   const src = readFileSync('scripts/production-watchdog.mjs', 'utf8');
   check('the watchdog actually calls the claim alarm check', () => {
-    assert.match(src, /checks\.push\(await checkInventoryClaimAlarm\(/);
+    assert.match(src, /const result = await checkInventoryClaimAlarm\(/);
+    assert.match(src, /checks\.push\(result\.check\)/);
   });
-  check('it reads the backend verdict rather than deciding the rule itself', () => {
-    const start = src.indexOf('async function checkInventoryClaimAlarm');
-    const body = src.slice(start, start + 2200);
-    assert.match(body, /body\?\.verdict/, 'must consume the backend verdict');
-    assert.ok(!/reviewCount|threshold|ratio\s*>/.test(body),
-      'the watchdog must not re-implement the alarm rule');
+  check('the alarm rule is imported, not re-implemented here', () => {
+    assert.match(src, /import \{[\s\S]*?evaluateClaimAlarm[\s\S]*?\} from '\.\.\/src\/services\/inventory-claim-alarm-detector\.mjs'/,
+      'the decision must come from the pure detector');
+    const start = src.indexOf('export async function checkInventoryClaimAlarm');
+    const body = src.slice(start, src.indexOf('async function runChecks'));
+    assert.match(body, /evaluateClaimAlarm\(\{/, 'and the check must actually call it');
+    // No threshold of its own. HTTP status bounds are the only numeric comparison allowed.
+    const comparisons = body.match(/[<>]=?\s*\d+(\.\d+)?/g) || [];
+    assert.deepEqual(
+      comparisons.filter((c) => !/(200|300)$/.test(c)), [],
+      `the watchdog must own no alarm threshold, found: ${comparisons.join(' ')}`,
+    );
+  });
+  check('main() persists the advanced detector state', () => {
+    assert.match(src, /state\.inventoryClaimAlarm = claimAlarm\.nextState/,
+      'an advance that is never written back replays the same days forever');
+    assert.match(src, /inventoryClaimAlarm:\s*\r?\n?\s*parsed\.inventoryClaimAlarm/,
+      'readState rebuilds a fixed shape, so an unlisted key is silently dropped on every run');
   });
   check('the check declares itself restart-ineligible on every return path', () => {
-    const start = src.indexOf('async function checkInventoryClaimAlarm');
+    const start = src.indexOf('export async function checkInventoryClaimAlarm');
     const body = src.slice(start, src.indexOf('async function runChecks'));
-    const returns = (body.match(/return \{/g) || []).length;
+    const returns = (body.match(/restartEligible/g) || []).length;
     const flags = (body.match(/restartEligible: false/g) || []).length;
     assert.equal(flags, returns,
-      `every return must be restart-ineligible: ${flags} flags for ${returns} returns`);
+      `every restartEligible must be false: ${flags} of ${returns}`);
+    assert.equal(flags, 4, 'four return paths: config-missing, invalid payload, verdict, error');
   });
   // The predicate's TERMS are no longer pinned by regex — the imported behavioural tests
   // above prove them by execution. These two assert only that main() still delegates, so an

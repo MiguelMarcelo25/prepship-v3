@@ -69,31 +69,89 @@ export type InventoryClaimReviewAlarmVerdict = {
 };
 
 /**
- * Paths repaired on 2026-08-07. They must deduct now, so any review claim is a regression.
- * Adding a source here is a claim that it is fixed — the zero threshold enforces it.
- */
-export const FIXED_CLAIM_SOURCES: readonly string[] = ['shipment_sync', 'prepship_v2'];
-
-/**
- * Paths knowingly still routing to review, pending DJ's policy ruling. Listed explicitly so
- * that when the ruling lands and they are repaired, moving them to FIXED_CLAIM_SOURCES flips
- * them to a zero threshold rather than leaving them permanently excused.
- */
-export const OPEN_INCIDENT_CLAIM_SOURCES: readonly string[] = [
-  'order_sync_status',
-  'external_shipped_classifier',
-];
-
-/**
  * How much worse than the baseline an acknowledged path must get before it alerts.
  * 1.5 = half again as many review claims per shipped event as expected.
+ *
+ * NOTE: this rule is retained only for the classes it can still decide. It CANNOT decide a
+ * saturated path: an event-level ratio cannot exceed 1.0, so 1.5x a 1.0 baseline is
+ * unreachable. Acknowledged sources are judged by the committed-baseline EWMA and absolute
+ * severity in `inventory-claim-alarm-detector.mjs` instead.
  */
 export const OPEN_INCIDENT_WORSENING_FACTOR = 1.5;
 
+export type ClaimSourcePolicy = {
+  class: ClaimSourceClass;
+  /**
+   * COMMITTED reference ratio for an acknowledged path. Deliberately a constant, not a
+   * trailing measurement: a moving baseline follows a slow leak upward and never trips, and
+   * learning it from live data on first run would bless an active outage as normal.
+   *
+   * A future non-saturated acknowledged source must have this calculated from cited
+   * completed-window evidence and committed WITH a `baselineVersion`, so the number changes
+   * only in review.
+   */
+  baselineRatio?: number;
+  /** True when the ratio is at the ceiling and only absolute severity can detect worsening. */
+  saturated?: boolean;
+  baselineVersion?: string;
+};
+
+/**
+ * The source policy table.
+ *
+ * `order_sync_status` and `external_shipped_classifier` are recorded at baselineRatio 1
+ * because that is what production measures: 82/82 and 43/43 stranded on 2026-08-10. An
+ * event-level ratio cannot exceed 1.0, so no upward ratio signal exists for them — they are
+ * flagged `saturated` and detected by absolute volume, backlog growth and age instead.
+ *
+ * Moving a source from `open_incident` to `fixed` is the act of claiming it repaired, and it
+ * flips the threshold to zero. That is intentional: the claim should be expensive.
+ */
+export const CLAIM_SOURCE_POLICIES: Readonly<Record<string, ClaimSourcePolicy>> = {
+  shipment_sync: { class: 'fixed' },
+  prepship_v2: { class: 'fixed' },
+  order_sync_status: {
+    class: 'open_incident',
+    baselineRatio: 1,
+    saturated: true,
+    baselineVersion: 'ps-497-2026-08-10',
+  },
+  external_shipped_classifier: {
+    class: 'open_incident',
+    baselineRatio: 1,
+    saturated: true,
+    baselineVersion: 'ps-497-2026-08-10',
+  },
+};
+
+/**
+ * The two exported lists are DERIVED from the table above rather than written out again.
+ * Two hand-maintained copies of the same classification is how a source ends up "fixed" in
+ * one place and "acknowledged" in the other — and the difference between those two is a zero
+ * threshold versus no threshold at all.
+ */
+function sourcesOfClass(target: ClaimSourceClass): readonly string[] {
+  return Object.entries(CLAIM_SOURCE_POLICIES)
+    .filter(([, policy]) => policy.class === target)
+    .map(([source]) => source);
+}
+
+/**
+ * Paths repaired on 2026-08-07. They must deduct now, so any review claim is a regression.
+ * Adding a source to the table as `fixed` is a claim that it is repaired — the zero threshold
+ * enforces it.
+ */
+export const FIXED_CLAIM_SOURCES: readonly string[] = sourcesOfClass('fixed');
+
+/**
+ * Paths knowingly still routing to review, pending DJ's policy ruling. Declared so that when
+ * the ruling lands and they are repaired, moving them to `fixed` in the table flips them to a
+ * zero threshold rather than leaving them permanently excused.
+ */
+export const OPEN_INCIDENT_CLAIM_SOURCES: readonly string[] = sourcesOfClass('open_incident');
+
 export function classifyClaimSource(source: string): ClaimSourceClass {
-  if (FIXED_CLAIM_SOURCES.includes(source)) return 'fixed';
-  if (OPEN_INCIDENT_CLAIM_SOURCES.includes(source)) return 'open_incident';
-  return 'unknown';
+  return CLAIM_SOURCE_POLICIES[source]?.class ?? 'unknown';
 }
 
 /**

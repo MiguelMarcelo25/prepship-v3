@@ -14,7 +14,11 @@
 
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
-import { readInventoryClaimAlarm } from '../src/services/inventory-claim-alarm-read-model.js';
+import {
+  readClaimAlarmDetectionInputs,
+  readCompletedClaimWindows,
+  readInventoryClaimAlarm,
+} from '../src/services/inventory-claim-alarm-read-model.js';
 
 async function main(): Promise<void> {
   const client = new PGlite();
@@ -215,6 +219,113 @@ async function main(): Promise<void> {
     assert.equal(quiet.verdict.state, 'ok', 'no sources reported at all is ok, not a crash');
     assert.deepEqual(quiet.windows, [], 'and reports no windows rather than inventing zeros');
     console.log('ok   a window with no lifecycle events at all is handled without paging');
+  }
+
+  // ── detector inputs: completed UTC days, severity, immediate findings ───────
+  //
+  // The detector's whole premise is COMPLETED days rather than rolling windows: an hourly
+  // watchdog re-reading an overlapping 24h window counts nearly the same events repeatedly
+  // and gives the estimator an unpredictable weight. That premise lives in SQL, so it is
+  // proven here by execution rather than by reading the query.
+  {
+    await client.exec(`delete from fulfillment_line_claims; delete from order_lifecycle_events;`);
+
+    // Anchored to the UTC day boundary, not "N hours ago", so the fixture means the same
+    // thing whatever time this guard runs.
+    const dayAt = async (source: string, transition: string, daysAgo: number, n: number, strand: number) => {
+      for (let i = 0; i < n; i += 1) {
+        const { rows } = await client.query(
+          `insert into order_lifecycle_events (source, transition, created_at)
+           values ($1, $2, (date_trunc('day', now() at time zone 'UTC') at time zone 'UTC')
+                            - make_interval(days => $3) + interval '12 hours')
+           returning id`,
+          [source, transition, daysAgo],
+        );
+        if (i < strand) {
+          await client.query(
+            `insert into fulfillment_line_claims (lifecycle_event_id, status) values ($1, 'review')`,
+            [(rows[0] as { id: number }).id],
+          );
+        }
+      }
+    };
+
+    // Two and three days back, not one: a completed day anchored to yesterday MIDDAY still
+    // falls inside the rolling 24h window when this runs in the morning, which would make the
+    // severity assertion below depend on the clock.
+    await dayAt('order_sync_status', 'shipped', 2, 30, 12);
+    await dayAt('order_sync_status', 'shipped', 3, 25, 5);
+    // TODAY, still filling. A partial day must never reach the estimator: a leak that starts
+    // at 09:00 would otherwise be averaged against an hour of work and read as catastrophic,
+    // and a quiet morning would read as a fix.
+    await mk('order_sync_status', 'shipped', 8, 0, 8);
+
+    const completed = await readCompletedClaimWindows(query, 14);
+    assert.equal(completed.length, 2, `today must be excluded, got ${JSON.stringify(completed)}`);
+    console.log('ok   the incomplete current day is excluded from the completed windows');
+
+    assert.ok(
+      completed[0].windowKey < completed[1].windowKey,
+      'windows must be ascending — the EWMA is order-dependent, so replaying days out of order changes the answer',
+    );
+    console.log('ok   completed windows are ordered oldest-first');
+
+    assert.deepEqual(
+      completed.map((w) => [w.shippedEvents, w.reviewClaims]),
+      [[25, 5], [30, 12]],
+      `per-day counts wrong: ${JSON.stringify(completed)}`,
+    );
+    console.log('ok   each completed day is measured separately, not merged into one window');
+    assert.match(completed[0].windowKey, /^\d{4}-\d{2}-\d{2}$/, 'windowKey must be a UTC date');
+    console.log('ok   windowKey is a UTC date, so the same day cannot advance the estimator twice');
+
+    // ── severity ─────────────────────────────────────────────────────────────
+    // A 40-day-old claim, which must drive the age milestone.
+    const { rows: oldEvent } = await client.query(
+      `insert into order_lifecycle_events (source, transition, created_at)
+       values ('order_sync_status', 'shipped', now() - interval '40 days') returning id`,
+    );
+    await client.query(
+      `insert into fulfillment_line_claims (lifecycle_event_id, status, created_at)
+       values ($1, 'review', now() - interval '40 days')`,
+      [(oldEvent[0] as { id: number }).id],
+    );
+    // An unclassified path stranding inside the current window.
+    await mk('brand_new_path', 'shipped', 3, 2, 3);
+
+    const inputs = await readClaimAlarmDetectionInputs(query, { completedDays: 14 });
+
+    // 12 + 5 + 8 (today) + 1 (40-day) + 3 (unknown) = 29 claims in review.
+    assert.equal(inputs.severity.reviewCount, 29, `reviewCount wrong: ${inputs.severity.reviewCount}`);
+    console.log('ok   reviewCount counts every stranded claim regardless of window or source');
+    assert.ok(
+      inputs.severity.oldestAgeDays >= 39.9 && inputs.severity.oldestAgeDays < 41,
+      `oldestAgeDays wrong: ${inputs.severity.oldestAgeDays}`,
+    );
+    console.log('ok   oldestAgeDays measures the oldest stranded claim, which drives age milestones');
+
+    // Only acknowledged sources count toward the volume threshold. The 3 unknown-source
+    // strandings must NOT inflate it — they page immediately on their own.
+    assert.equal(
+      inputs.severity.acknowledgedNewEvents24h, 8,
+      `only open-incident sources feed the volume threshold: ${inputs.severity.acknowledgedNewEvents24h}`,
+    );
+    console.log('ok   the 24h volume counts acknowledged sources only, per CLAIM_SOURCE_POLICIES');
+
+    // ── immediate findings ───────────────────────────────────────────────────
+    const codes = inputs.immediateReasons.map((r) => r.code);
+    assert.deepEqual(codes, ['inventory_claim.unclassified.brand_new_path'],
+      `unexpected immediate reasons: ${JSON.stringify(codes)}`);
+    console.log('ok   an unclassified source pages immediately, without waiting for a day to complete');
+    assert.ok(
+      !codes.some((c) => c.includes('order_sync_status')),
+      'an acknowledged source must NOT page through the legacy 1.5x rollup — that rule is unreachable against its 1.0 baseline, and re-importing it restores the defect the detector replaces',
+    );
+    console.log('ok   acknowledged sources are excluded from immediate findings, so the old rule cannot leak back in');
+
+    assert.equal(inputs.policies.order_sync_status.saturated, true);
+    assert.equal(inputs.policies.shipment_sync.class, 'fixed');
+    console.log('ok   the policy table ships with the measurements, so the watchdog needs no copy of it');
   }
 
   await client.close();

@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  evaluateClaimAlarm,
+  initialClaimAlarmState,
+} from '../src/services/inventory-claim-alarm-detector.mjs';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAILURE_THRESHOLD = 3;
@@ -82,6 +86,15 @@ export function readState(statePath) {
         parsed.lastAlertsByState && typeof parsed.lastAlertsByState === 'object'
           ? parsed.lastAlertsByState
           : {},
+      // PS-497: the claim detector is stateful across runs — its EWMA, growth anchor and
+      // already-paged milestones live here. This reader rebuilds a fixed shape rather than
+      // spreading the parsed file, so a key that is not named here is DROPPED on every run.
+      // Omitting it would not crash: the detector would silently re-initialise hourly, the
+      // estimator would never accumulate and every milestone would page forever.
+      inventoryClaimAlarm:
+        parsed.inventoryClaimAlarm && typeof parsed.inventoryClaimAlarm === 'object'
+          ? parsed.inventoryClaimAlarm
+          : null,
     };
   } catch {
     return {
@@ -89,6 +102,7 @@ export function readState(statePath) {
       restartAttempts: [],
       lastRestartAt: null,
       lastAlertsByState: {},
+      inventoryClaimAlarm: null,
     };
   }
 }
@@ -189,11 +203,29 @@ async function checkSyncFreshness(url) {
  * cycle production forever while the claims sat exactly where they were. It alerts and it
  * makes the run red; it never restarts.
  */
-async function checkInventoryClaimAlarm(url) {
+/**
+ * PS-497: fetch the measurements and RUN THE DETECTOR.
+ *
+ * The route is read-only and holds no memory between calls, but the detector is stateful —
+ * it carries a per-source EWMA, a growth anchor and the milestones it has already paged. This
+ * process already owns a durable state file, so the decision runs here.
+ *
+ * `ok` follows the detector's `page`, not the legacy rollup's `verdict.alert`. That rollup
+ * still applies the trailing-baseline 1.5x rule which review proved unreachable against a
+ * saturated 1.0 baseline; trusting it here would keep the defect the detector replaces.
+ *
+ * Returns `nextState` separately rather than on the check object, so detector state never
+ * leaks into the alert payload.
+ */
+export async function checkInventoryClaimAlarm(url, alarmState, nowMs) {
   const started = Date.now();
   const name = 'Inventory claim backlog';
   if (!config.cronSecret) {
-    return { name, ok: false, status: 'config-missing', ms: 0, target: 'WATCHDOG_CRON_SECRET', restartEligible: false };
+    return {
+      check: { name, ok: false, status: 'config-missing', ms: 0, target: 'WATCHDOG_CRON_SECRET', restartEligible: false },
+      nextState: null,
+      reminderDue: false,
+    };
   }
   try {
     const response = await fetchWithTimeout(url, {
@@ -201,40 +233,76 @@ async function checkInventoryClaimAlarm(url) {
       headers: { 'x-cron-secret': config.cronSecret },
     });
     const body = await response.json().catch(() => null);
-    const verdict = body?.verdict;
-    const alert = verdict?.alert;
-    const ok = response.status >= 200 && response.status < 300 && alert === false;
+    const inputs = body?.detector;
+    const transportOk = response.status >= 200 && response.status < 300;
+
+    // A malformed or missing payload is a FAILURE, never a quiet pass. An alarm that treats
+    // "I could not measure" as "nothing is wrong" is the shape of a guard that cannot fail.
+    if (!transportOk || !inputs || !Array.isArray(inputs.completedWindows) || !inputs.severity) {
+      return {
+        check: {
+          name,
+          ok: false,
+          status: response.status,
+          ms: Date.now() - started,
+          target: publicTarget(url),
+          restartEligible: false,
+          error: 'invalid inventory claim alarm response',
+        },
+        nextState: null,
+        reminderDue: false,
+      };
+    }
+
+    const verdict = evaluateClaimAlarm({
+      state: alarmState ?? initialClaimAlarmState(),
+      policies: inputs.policies ?? {},
+      completedWindows: inputs.completedWindows,
+      severity: inputs.severity,
+      immediateReasons: inputs.immediateReasons ?? [],
+      nowMs,
+    });
+
     return {
-      name,
-      ok,
-      status: response.status,
-      ms: Date.now() - started,
-      target: publicTarget(url),
-      restartEligible: false,
-      details: {
-        state: typeof verdict?.state === 'string' ? verdict.state : 'invalid',
-        // Sanitised: source names and counts only, never order or claim identifiers.
-        alerting: Array.isArray(verdict?.sources)
-          ? verdict.sources.filter((s) => s?.alert).map((s) => `${s.source}:${s.state}`).join(',')
-          : '',
+      check: {
+        name,
+        ok: !verdict.page,
+        status: response.status,
+        ms: Date.now() - started,
+        target: publicTarget(url),
+        restartEligible: false,
+        details: {
+          state: verdict.state,
+          // Sanitised: reason CODES only — stable identifiers that carry no order, claim or
+          // customer data, and no free prose that would churn the alert dedupe key.
+          reasons: verdict.reasons.map((r) => r.code).join(','),
+          reviewCount: Number(inputs.severity.reviewCount) || 0,
+          oldestAgeDays: Math.round(Number(inputs.severity.oldestAgeDays) || 0),
+        },
       },
-      ...(body && typeof alert === 'boolean' ? {} : { error: 'invalid inventory claim alarm response' }),
+      nextState: verdict.nextState,
+      reminderDue: verdict.reminderDue,
     };
   } catch (error) {
     return {
-      name,
-      ok: false,
-      status: 'error',
-      ms: Date.now() - started,
-      target: publicTarget(url),
-      restartEligible: false,
-      error: error?.name === 'AbortError' ? 'timeout' : sanitizeAlertText(error?.message || 'request failed'),
+      check: {
+        name,
+        ok: false,
+        status: 'error',
+        ms: Date.now() - started,
+        target: publicTarget(url),
+        restartEligible: false,
+        error: error?.name === 'AbortError' ? 'timeout' : sanitizeAlertText(error?.message || 'request failed'),
+      },
+      nextState: null,
+      reminderDue: false,
     };
   }
 }
 
-async function runChecks() {
+async function runChecks(alarmState, nowMs) {
   const checks = [];
+  let claimAlarm = { nextState: null, reminderDue: false };
 
   if (config.vercelShellUrl) {
     checks.push(await checkHttp('Vercel shell', config.vercelShellUrl));
@@ -275,13 +343,17 @@ async function runChecks() {
   // ask, and inventing a config-missing failure here would page for a watchdog that was
   // never pointed at anything.
   if (config.renderBaseUrl) {
-    checks.push(await checkInventoryClaimAlarm(
+    const result = await checkInventoryClaimAlarm(
       config.inventoryClaimStatusUrl
       || joinUrl(config.renderBaseUrl, '/cron/inventory-claim-watchdog/status'),
-    ));
+      alarmState,
+      nowMs,
+    );
+    checks.push(result.check);
+    claimAlarm = { nextState: result.nextState, reminderDue: result.reminderDue };
   }
 
-  return checks;
+  return { checks, claimAlarm };
 }
 
 /**
@@ -443,9 +515,32 @@ export function buildAlertPayload({ checks, health, state, mode, action, reason 
 async function main() {
   const now = Date.now();
   const state = readState(config.stateFile);
-  const checks = await runChecks();
+  const { checks, claimAlarm } = await runChecks(state.inventoryClaimAlarm, now);
   const health = summarizeHealth(checks);
   const mode = restartMode();
+
+  // PS-497: persist the detector's advanced state on EVERY path, healthy or not. Persisting
+  // only on the unhealthy path would replay the same completed days forever and re-page every
+  // milestone; persisting only on the healthy path would lose the advance whenever it fired.
+  if (claimAlarm.nextState) {
+    state.inventoryClaimAlarm = claimAlarm.nextState;
+  }
+
+  // The open-incident reminder is delivered as its own alert rather than by failing the
+  // health check. Failing it would keep `consecutiveFailures` permanently above the restart
+  // threshold for a known data condition, so the NEXT genuine outage would restart on its
+  // first occurrence instead of its third. The detector already limits this to once a day.
+  if (claimAlarm.reminderDue) {
+    await sendAlert({
+      text: 'PrepShip production watchdog: open inventory-claim incident (daily reminder)',
+      content: 'PrepShip production watchdog: open inventory-claim incident (daily reminder)',
+      service: 'prepship-v4',
+      status: 'open-incident',
+      mode,
+      action: 'incident-reminder',
+      checks: checks.filter((check) => check.name === 'Inventory claim backlog'),
+    });
+  }
 
   if (health.ok) {
     state.consecutiveFailures = 0;

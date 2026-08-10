@@ -240,6 +240,42 @@ check('reason codes are stable and carry no message text', () => {
   assert.ok(codes.every((c) => !/\s/.test(c)), 'dedupe keys must never be built from prose');
 });
 
+// ── the growth anchor is held for a day, so hourly runs cannot shrink the window ──
+// The watchdog runs hourly. If each run re-anchored `lastReviewCount`, "growth of 400 in
+// 24h" would silently become "growth of 400 in ONE HOUR" — about four times the known daily
+// rate, so the check would never fire while looking fully implemented.
+check('an hourly run does not move the growth anchor', () => {
+  const state = { ...initialClaimAlarmState(), lastReviewCount: 1000, lastSeveritySnapshotAt: NOW - HOUR };
+  const r = evaluateSeverity(state, severity({ reviewCount: 1100 }), NOW);
+  assert.equal(r.state.lastReviewCount, 1000, 'the anchor must survive an hourly run');
+  assert.equal(r.state.lastSeveritySnapshotAt, NOW - HOUR, 'and keep its original timestamp');
+});
+check('growth is not evaluated against an anchor younger than a day', () => {
+  const state = { ...initialClaimAlarmState(), lastReviewCount: 1000, lastSeveritySnapshotAt: NOW - HOUR };
+  const r = evaluateSeverity(state, severity({ reviewCount: 1500 }), NOW);
+  assert.equal(r.page, false, '500 in one hour is not the 24h growth this threshold describes');
+});
+check('24 hourly runs still page on a full day of growth', () => {
+  // The realistic sequence: the anchor is set, 23 hourly runs pass through, and the 24th
+  // measures the whole day. A re-anchoring bug makes each step tiny and this never pages.
+  let state = { ...initialClaimAlarmState(), lastReviewCount: 1000, lastSeveritySnapshotAt: NOW };
+  let paged = false;
+  for (let hour = 1; hour <= 24; hour += 1) {
+    const r = evaluateSeverity(state, severity({ reviewCount: 1000 + hour * 25 }), NOW + hour * HOUR);
+    state = r.state;
+    if (r.page) paged = true;
+  }
+  assert.equal(paged, true, '600 claims across a day must page even when read hourly');
+  assert.equal(state.lastReviewCount, 1600, 'and the anchor re-arms at the measured value');
+});
+check('a matured anchor below the threshold re-arms without paging', () => {
+  const state = { ...initialClaimAlarmState(), lastReviewCount: 1000, lastSeveritySnapshotAt: NOW - 24 * HOUR };
+  const r = evaluateSeverity(state, severity({ reviewCount: 1100 }), NOW);
+  assert.equal(r.page, false);
+  assert.equal(r.state.lastReviewCount, 1100, 'a quiet day still moves the anchor forward');
+  assert.equal(r.state.lastSeveritySnapshotAt, NOW);
+});
+
 if (failures > 0) {
   console.error(`\nPS-497 inventory claim alarm detector guard FAILED with ${failures} failure(s).`);
   process.exit(1);

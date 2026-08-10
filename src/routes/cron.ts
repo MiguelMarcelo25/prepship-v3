@@ -14,7 +14,7 @@ import {
   runShipmentSyncWatchdogTick,
 } from '../services/shipment-sync-watchdog';
 import { sql as pgSql } from '../db/client';
-import { readInventoryClaimAlarm } from '../services/inventory-claim-alarm-read-model';
+import { readClaimAlarmDetectionInputs } from '../services/inventory-claim-alarm-read-model';
 
 const app = new Hono();
 
@@ -142,13 +142,19 @@ app.get('/shipment-sync-watchdog/status', async (c) => {
 // closes, or deducts. /health/deep publishes the raw backlog and deliberately never gates
 // readiness (a 503 there restarts the service over a data condition); this is the separate
 // out-of-band verdict a monitor can act on, exactly like the sync-freshness probe above.
+//
+// The response also carries the DETECTOR INPUTS — completed-day windows, the absolute
+// severity snapshot, immediate findings and the source policy table. The detector itself is
+// stateful across runs, so it runs in the watchdog, which already owns a durable state file;
+// this route stays read-only and holds no memory between calls.
 app.get('/inventory-claim-watchdog/status', async (c) => {
   const windowHours = Number(c.req.query('windowHours') ?? 24);
-  const reading = await readInventoryClaimAlarm(
+  const inputs = await readClaimAlarmDetectionInputs(
     ((strings: TemplateStringsArray, ...values: never[]) => pgSql(strings, ...values)) as never,
     { windowHours: Number.isFinite(windowHours) && windowHours > 0 ? windowHours : 24 },
   );
-  return c.json(reading);
+  const { reading, ...detector } = inputs;
+  return c.json({ ...reading, detector });
 });
 
 app.post('/fulfillment-outbox', async (c) => {

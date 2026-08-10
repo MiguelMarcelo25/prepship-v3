@@ -37,6 +37,15 @@ export const CLAIM_ALARM_SATURATED_BASELINE = 0.90;
 export const OPEN_INCIDENT_VOLUME_PAGE_24H = 400;
 /** Backlog growth in 24h that means the same. */
 export const OPEN_INCIDENT_BACKLOG_GROWTH_PAGE_24H = 400;
+/**
+ * How long a growth anchor must stand before growth is measured against it.
+ *
+ * The watchdog runs hourly. If every run re-anchored `lastReviewCount`, the "24h growth"
+ * threshold would silently become an HOURLY delta — 400 an hour is roughly four times the
+ * known daily rate, so the check would never fire and would look implemented. The anchor is
+ * therefore held for a full day and growth is only evaluated once it has aged.
+ */
+export const CLAIM_ALARM_GROWTH_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Backlog milestones page once each, on first crossing, from 3,000 upward in 500s. */
 export const CLAIM_ALARM_COUNT_MILESTONE_STEP = 500;
 export const CLAIM_ALARM_COUNT_MILESTONE_FLOOR = 3000;
@@ -186,12 +195,20 @@ export function evaluateSeverity(state, severity, nowMs) {
     });
   }
 
-  const growth = state.lastReviewCount == null ? null : severity.reviewCount - state.lastReviewCount;
+  // Growth is measured against an anchor that has stood for a full day, never against the
+  // previous hourly run. Until the anchor ages, it is carried forward untouched.
+  const anchorAgeMs = state.lastSeveritySnapshotAt == null
+    ? Infinity
+    : nowMs - state.lastSeveritySnapshotAt;
+  const anchorMatured = anchorAgeMs >= CLAIM_ALARM_GROWTH_WINDOW_MS;
+  const growth = anchorMatured && state.lastReviewCount != null
+    ? severity.reviewCount - state.lastReviewCount
+    : null;
   if (growth != null && growth >= OPEN_INCIDENT_BACKLOG_GROWTH_PAGE_24H) {
     page = true;
     reasons.push({
       code: 'inventory_claim.backlog_growth_24h',
-      message: `backlog grew by ${growth} since the previous severity snapshot`,
+      message: `backlog grew by ${growth} in the ${Math.round(anchorAgeMs / 3_600_000)}h since the last growth anchor`,
     });
   }
 
@@ -224,8 +241,9 @@ export function evaluateSeverity(state, severity, nowMs) {
 
   const next = {
     ...state,
-    lastReviewCount: severity.reviewCount,
-    lastSeveritySnapshotAt: nowMs,
+    // Milestones, volume and reminders are absolute measurements and update every run. Only
+    // the growth anchor is held, so growth always spans at least a day.
+    ...(anchorMatured ? { lastReviewCount: severity.reviewCount, lastSeveritySnapshotAt: nowMs } : {}),
     ...(countMilestone != null && (state.lastCountMilestone == null || countMilestone > state.lastCountMilestone)
       ? { lastCountMilestone: countMilestone } : {}),
     ...(ageMilestone != null && (state.lastAgeMilestone == null || ageMilestone > state.lastAgeMilestone)
