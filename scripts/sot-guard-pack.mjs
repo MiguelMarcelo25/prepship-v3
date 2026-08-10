@@ -1079,6 +1079,7 @@ const REQUIRED_GUARDS = [
   'test:ps-494-customs-origin',
   'test:ps-494-shipp-origin-request-body',
   'test:ps-497-inventory-claim-review-visibility',
+  'test:ps-497-inventory-claim-review-integration',
   // PS-495: shipped orders that never reached billing at all. Pinned for the two
   // EXCLUSIONS, which are what make the number usable: orders after the client's billing
   // frontier are ordinary generation lag (6 of 454 when measured), and clients who have

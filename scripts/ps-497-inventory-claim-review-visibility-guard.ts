@@ -39,18 +39,36 @@ const deductions = read('src/services/fulfillment-deductions.ts');
 const deductionsCode = stripComments(deductions);
 
 // ── the backlog is reported ───────────────────────────────────────────────────
+//
+// What the QUERY RETURNS is proven behaviourally, not here. The first version of this guard
+// asserted the SQL's source shape — `status = 'review'`, the table name, the three field
+// names — and Hermes defeated all of it by appending `and false` to the predicate: permanent
+// zero backlog, ten green assertions. Reading SQL cannot tell you what SQL returns.
+//
+// scripts/ps-497-inventory-claim-review-integration.ts now executes the real query against a
+// seeded PGlite database and asserts the numbers. These assertions cover only what execution
+// cannot: that the probe is wired in, and that it can never gate readiness.
 check('the deep probe reports the inventory claim review backlog',
   /checkComponent\('inventoryClaimReview'/.test(healthCode));
-check('the probe counts rows in the review state specifically',
-  /status = 'review'/.test(healthCode) && /fulfillment_line_claims/.test(healthCode));
-check('the probe publishes the backlog size, not just a pass/fail',
-  /reviewCount:/.test(healthCode));
-check('the probe publishes recent inflow, so a RESUMED leak is distinguishable from a static backlog',
-  /reviewLast24h:/.test(healthCode));
-check('the probe publishes the age of the oldest claim',
-  /oldestAgeDays:/.test(healthCode));
+check('the probe delegates to the extracted, executable reader',
+  /readInventoryClaimReviewHealth\(/.test(healthCode));
 check('the component is wired into the deep readiness component list',
   /inventoryClaimReview,/.test(healthCode));
+
+// The behavioural test is load-bearing now, so it must not be quietly dropped or unregistered.
+{
+  const integration = read('scripts/ps-497-inventory-claim-review-integration.ts');
+  check('a behavioural integration test exists and executes the real reader',
+    /readInventoryClaimReviewHealth/.test(integration) && /PGlite/.test(integration));
+  check('it asserts returned COUNTS, which is what `and false` would break',
+    /reviewCount, 7/.test(integration));
+  const pkg = read('package.json');
+  check('the behavioural test is registered as an npm script',
+    /test:ps-497-inventory-claim-review-integration/.test(pkg));
+  const pack = read('scripts/sot-guard-pack.mjs');
+  check('and runs inside the guard pack, so it gates every deploy',
+    /test:ps-497-inventory-claim-review-integration/.test(pack));
+}
 
 // ── and it must never gate readiness ─────────────────────────────────────────
 // /deep answers 503 when any component fails, and Render restarts the service on that

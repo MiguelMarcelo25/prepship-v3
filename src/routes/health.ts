@@ -6,6 +6,7 @@ import { readPrintQueueWorkerHealth } from '../services/print-queue-worker-healt
 import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
 import { getPersistedWorkerStatus } from '../services/worker-status';
 import { evaluateWorkerJobSkipHealth } from '../services/worker-job-skip-health';
+import { readInventoryClaimReviewHealth } from '../services/inventory-claim-review-health';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
@@ -299,26 +300,16 @@ async function checkDeepReadiness() {
   //
   // Reported, NEVER gated: the component always returns ok. Same shape as the printQueue
   // probe above — publish the numbers, let the watchdog and operators decide what they mean.
+  // The query itself lives in inventory-claim-review-health.ts so a guard can EXECUTE it
+  // against a seeded database rather than read it as text. The first guard for this probe
+  // asserted the SQL's source shape and was defeated by appending `and false` to the
+  // predicate: permanent zero backlog, all ten assertions still green.
   const inventoryClaimReview = await checkComponent('inventoryClaimReview', async () => {
-    const [summary] = await withTimeout(
-      healthSql`
-        select
-          count(*)::int as review_count,
-          count(*) filter (where created_at > now() - interval '24 hours')::int as review_last_24h,
-          coalesce(max(extract(epoch from (now() - created_at)) / 86400), 0)::int as oldest_age_days
-        from fulfillment_line_claims
-        where status = 'review'
-      `,
+    const details = await withTimeout(
+      readInventoryClaimReviewHealth(((strings: TemplateStringsArray) => healthSql(strings)) as never),
       DB_HEALTH_TIMEOUT_MS
     );
-
-    return {
-      details: {
-        reviewCount: Number(summary?.review_count ?? 0),
-        reviewLast24h: Number(summary?.review_last_24h ?? 0),
-        oldestAgeDays: Number(summary?.oldest_age_days ?? 0),
-      },
-    };
+    return { details };
   });
   const syncFreshness = await checkSyncFreshness();
   const fulfillmentOutbox = await checkFulfillmentOutboxWorker();
