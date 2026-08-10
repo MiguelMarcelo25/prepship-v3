@@ -926,6 +926,7 @@
     "test:ps-495-billing-coverage-gap": "tsx scripts/ps-495-billing-coverage-gap-guard.ts",
     "test:ps-494-customs-origin": "tsx scripts/ps-494-customs-origin-guard.ts",
     "test:ps-494-shipp-origin-request-body": "tsx scripts/ps-494-shipp-origin-request-body-guard.ts",
+    "test:ps-497-inventory-claim-review-visibility": "tsx scripts/ps-497-inventory-claim-review-visibility-guard.ts",
     "test:ps-491-duplicate-order-billing": "tsx scripts/ps-491-duplicate-order-billing-guard.ts",
     "test:billing-destination-international": "tsx scripts/billing-destination-international-guard.ts",
     "test:billing-international-destination:browser": "playwright test web/e2e/billing-international-destination.spec.js --reporter=line",

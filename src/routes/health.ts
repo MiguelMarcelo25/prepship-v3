@@ -34,6 +34,7 @@ type ReadinessComponentName =
   | 'fulfillmentOutbox'
   | 'printQueue'
   | 'printQueueWorker'
+  | 'inventoryClaimReview'
   | 'eventLoop';
 
 type ReadinessComponent = {
@@ -259,7 +260,7 @@ async function checkDeepReadiness() {
     checkDbWrite(),
     checkEventLoopDelay(),
   ]);
-  const [orders, printQueue, printQueueWorker] = await Promise.all([
+  const [orders, printQueue, printQueueWorker, inventoryClaimReview] = await Promise.all([
     checkComponent('orders', async () => {
       await withTimeout(healthSql`select 1 from orders limit 1`, DB_HEALTH_TIMEOUT_MS);
     }),
@@ -282,6 +283,38 @@ async function checkDeepReadiness() {
       };
     }),
     checkPrintQueueWorker(),
+    // PS-497: inventory deduction stopped on 2026-07-16 and ran 22 days before anyone
+    // noticed, because a claim that lands in `status='review'` is written and never read —
+    // `fulfillment-deductions.ts` selects `status='pending'` only. A backlog nothing
+    // consumes and nothing reports is invisible by construction, which is the actual reason
+    // this went unnoticed for three weeks rather than three hours.
+    //
+    // Reported, NEVER gated. This component always returns ok. /deep answers 503 when any
+    // component fails and Render restarts the service on that signal, so failing here on a
+    // non-zero backlog would put production into a restart loop over a data condition that
+    // is currently 2,731 rows deep. Same shape as the printQueue probe above: publish the
+    // numbers, let the watchdog and operators decide what they mean.
+    checkComponent('inventoryClaimReview', async () => {
+      const [summary] = await withTimeout(
+        healthSql`
+          select
+            count(*)::int as review_count,
+            count(*) filter (where created_at > now() - interval '24 hours')::int as review_last_24h,
+            coalesce(max(extract(epoch from (now() - created_at)) / 86400), 0)::int as oldest_age_days
+          from fulfillment_line_claims
+          where status = 'review'
+        `,
+        DB_HEALTH_TIMEOUT_MS
+      );
+
+      return {
+        details: {
+          reviewCount: Number(summary?.review_count ?? 0),
+          reviewLast24h: Number(summary?.review_last_24h ?? 0),
+          oldestAgeDays: Number(summary?.oldest_age_days ?? 0),
+        },
+      };
+    }),
   ]);
   const syncFreshness = await checkSyncFreshness();
   const fulfillmentOutbox = await checkFulfillmentOutboxWorker();
@@ -291,6 +324,7 @@ async function checkDeepReadiness() {
     orders,
     printQueue,
     printQueueWorker,
+    inventoryClaimReview,
     syncFreshness,
     fulfillmentOutbox,
     eventLoop,
