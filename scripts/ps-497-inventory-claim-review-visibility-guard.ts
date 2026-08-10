@@ -61,7 +61,15 @@ check('the component is wired into the deep readiness component list',
   check('a behavioural integration test exists and executes the real reader',
     /readInventoryClaimReviewHealth/.test(integration) && /PGlite/.test(integration));
   check('it asserts returned COUNTS, which is what `and false` would break',
-    /reviewCount, 7/.test(integration));
+    /assert\.equal\(health\.reviewCount, \d+/.test(integration));
+  // Hermes defeated the first version of the behavioural test by widening the production
+  // window from `24 hours` to `48 hours`. The fixture jumped 10h -> 3 days, so nothing lived
+  // in the gap and the wrong window was invisible. A boundary is only tested by rows on BOTH
+  // sides of it, so pin that those rows exist rather than trusting they were kept.
+  check('the fixture straddles the 24-hour boundary, so widening the window turns it red',
+    /interval '23 hours'/.test(integration) && /interval '25 hours'/.test(integration));
+  check('the adapter forbids interpolation at runtime, not only by type',
+    /strings\.length, 1/.test(integration));
   const pkg = read('package.json');
   check('the behavioural test is registered as an npm script',
     /test:ps-497-inventory-claim-review-integration/.test(pkg));
