@@ -178,6 +178,108 @@ const [fencedRow] = (await pg.query<{ status: string; lease_token: string | null
 `)).rows;
 assert.deepEqual(fencedRow, { status: 'completed', lease_token: null });
 
+// ── a stale owner cannot finish a run whose ownership has moved ──────────────
+//
+// This is the whole point of the fence, and until now nothing proved it: deleting
+// `eq(automationRuns.leaseToken, claimToken)` from finish() left the suite fully green.
+// That is a guard that cannot fail — the exact defect class this card exists to fix.
+//
+// The scenario is the one that actually happens: a worker claims a run, stalls past its
+// lease, recovery terminalizes it, and then the stalled worker wakes up and tries to write
+// its result. Without the fence it would resurrect a recovered run and silently overwrite
+// the recovery audit trail.
+{
+  const stalled = createPostgresAutomationExecutionStore(testDb as never);
+  const staleRunId = await stalled.begin({
+    executionKey: 'stale-owner-run',
+    orderId: 300,
+    trigger: 'order_facts_updated',
+    sourceEventId: 'stale-owner-event',
+    factsRevision: 'stale-owner-facts',
+    rulesetDigest: 'b'.repeat(64),
+    mode: 'apply',
+  });
+
+  // The worker stalls: its lease expires while it is still holding an in-memory claim.
+  await pg.query(
+    `update automation_runs set started_at = $1, lease_expires_at = $1 where id = $2`,
+    ['2026-08-11T11:00:00Z', staleRunId],
+  );
+  const reclaimed = await reapExpiredAutomationRuns({ database: testDb as never, now, batchSize: 25 });
+  assert.equal(reclaimed, 1, 'the stalled run is reclaimed by recovery');
+
+  const afterReclaim = (await pg.query<{ status: string; error_code: string | null; recovery_count: number; completed_at: string | null }>(
+    `select status, error_code, recovery_count, completed_at from automation_runs where id = ${staleRunId}`,
+  )).rows[0];
+  assert.equal(afterReclaim?.status, 'failed');
+  assert.equal(afterReclaim?.error_code, 'AUTOMATION_RUN_LEASE_EXPIRED');
+  assert.equal(afterReclaim?.recovery_count, 1);
+
+  // Ownership legitimately moves on BEFORE the stalled worker wakes: a fresh admission
+  // re-leases the reclaimed run, so it is `running` again under a new token.
+  //
+  // This ordering is the whole test. If the stale worker is refused while the row is still
+  // `failed`, the `status = 'running'` guard alone rejects it and the token check is never
+  // exercised — which is exactly why deleting the token check left the suite green. Only a
+  // run that is running again under a DIFFERENT owner can prove the fence.
+  const successor = createPostgresAutomationExecutionStore(testDb as never);
+  const successorRunId = await successor.begin({
+    executionKey: 'stale-owner-run',
+    orderId: 300,
+    trigger: 'order_facts_updated',
+    sourceEventId: 'stale-owner-event',
+    factsRevision: 'stale-owner-facts',
+    rulesetDigest: 'b'.repeat(64),
+    mode: 'apply',
+  });
+  assert.equal(successorRunId, staleRunId, 'recovery leaves the row retryable rather than orphaned');
+  const reLeased = (await pg.query<{ status: string; lease_token: string | null }>(
+    `select status, lease_token from automation_runs where id = ${staleRunId}`,
+  )).rows[0];
+  assert.equal(reLeased?.status, 'running', 'the successor holds a live lease');
+  assert.ok(reLeased?.lease_token, 'and a token of its own');
+
+  // NOW the stalled worker wakes up and tries to complete the run it no longer owns. The row
+  // is `running`, so only the fenced token can refuse it.
+  await assert.rejects(
+    stalled.finish({
+      runId: staleRunId,
+      executionKey: 'stale-owner-run',
+      rulesetDigest: 'b'.repeat(64),
+      mode: 'apply',
+      status: 'completed',
+      evaluation: { matches: [] },
+      reduction: {},
+    } as never),
+    /lease lost before completion/,
+    'a stale owner must be refused: its claim token no longer matches the persisted lease',
+  );
+  const afterStaleAttempt = (await pg.query<{ status: string; lease_token: string | null }>(
+    `select status, lease_token from automation_runs where id = ${staleRunId}`,
+  )).rows[0];
+  assert.equal(afterStaleAttempt?.status, 'running',
+    'a refused stale completion must not terminalize a run someone else is running');
+  assert.equal(afterStaleAttempt?.lease_token, reLeased?.lease_token,
+    'and must not clear the successor\'s lease');
+
+  // The successor, which legitimately holds the lease, IS allowed to finish.
+  await successor.finish({
+    runId: successorRunId,
+    executionKey: 'stale-owner-run',
+    rulesetDigest: 'b'.repeat(64),
+    mode: 'apply',
+    status: 'completed',
+    evaluation: { matches: [] },
+    reduction: {},
+  } as never);
+  const settled = (await pg.query<{ status: string; recovery_count: number; last_recovery_code: string | null }>(
+    `select status, recovery_count, last_recovery_code from automation_runs where id = ${staleRunId}`,
+  )).rows[0];
+  assert.equal(settled?.status, 'completed', 'the new owner completes the run it legitimately holds');
+  assert.equal(settled?.recovery_count, 1, 'and the recovery history survives the later success');
+  assert.equal(settled?.last_recovery_code, 'AUTOMATION_RUN_LEASE_EXPIRED');
+}
+
 const indexes = await pg.query<{ indexname: string }>(`
   select indexname from pg_indexes where indexname = 'automation_runs_recovery_idx'
 `);
