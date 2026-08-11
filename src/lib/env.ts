@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { parseAutomationExecutionPaused } from '../services/automations/execution-pause-config.js';
 import { z } from 'zod';
 
 const booleanFlag = (defaultValue: boolean) =>
@@ -181,17 +182,20 @@ const schema = z.object({
   AUTOMATION_EXECUTION_PAUSED: z
     .string()
     .optional()
-    .superRefine((value, ctx) => {
-      if (value === undefined) return;
-      const normalized = value.trim().toLowerCase();
-      if (normalized !== 'true' && normalized !== 'false' && normalized !== '') {
+    .transform((value, ctx) => {
+      // Delegates to the ONE canonical grammar. Do not re-implement the rule here: a second
+      // copy is how production and the tests came to disagree about what a malformed value
+      // means, with production failing open and the suite still green.
+      try {
+        return parseAutomationExecutionPaused(value);
+      } catch (error) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `AUTOMATION_EXECUTION_PAUSED must be exactly 'true' or 'false', got ${JSON.stringify(value)}`,
+          message: error instanceof Error ? error.message : 'invalid AUTOMATION_EXECUTION_PAUSED',
         });
+        return z.NEVER;
       }
-    })
-    .transform((value) => (value ?? '').trim().toLowerCase() === 'true'),
+    }),
   ENABLE_RATE_BACKFILL_SCHEDULER: z
     .string()
     .optional()

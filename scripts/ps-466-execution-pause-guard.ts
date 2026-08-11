@@ -65,7 +65,7 @@ if (!PAUSED_MODE) {
 }
 
 const ENV = pause.AUTOMATION_EXECUTION_PAUSED_ENV;
-const { parsePauseValue } = pause;
+const { parseAutomationExecutionPaused } = pause;
 
 // ── the control's grammar, from an EXPLICIT table ────────────────────────────
 //
@@ -79,22 +79,21 @@ const GRAMMAR: Array<{ raw: string | undefined; paused: boolean; note: string }>
   { raw: 'false', paused: false, note: 'explicit off' },
   { raw: 'FALSE', paused: false, note: 'case tolerant' },
   { raw: ' false ', paused: false, note: 'whitespace tolerant' },
-  { raw: '', paused: false, note: 'blank behaves as absent' },
   { raw: 'true', paused: true, note: 'explicit on' },
   { raw: 'TRUE', paused: true, note: 'case tolerant' },
   { raw: ' true ', paused: true, note: 'whitespace tolerant' },
 ];
 for (const { raw, paused, note } of GRAMMAR) {
   check(`${JSON.stringify(raw)} -> ${paused ? 'PAUSED' : 'active'} (${note})`, () => {
-    assert.equal(parsePauseValue(raw), paused);
+    assert.equal(parseAutomationExecutionPaused(raw), paused);
   });
 }
 
 // A PRESENT malformed value must fail startup, not read as active. The dangerous failure on a
 // safety control is an operator believing automation is paused while it is still executing.
-for (const invalid of ['tru', 'yes', 'no', '1', '0', 'paused', 'on', 'off', 'True!']) {
+for (const invalid of ['', '   ', 'tru', 'yes', 'no', '1', '0', 'paused', 'on', 'off', 'True!']) {
   check(`${JSON.stringify(invalid)} is rejected as invalid configuration`, () => {
-    assert.throws(() => parsePauseValue(invalid), /must be exactly/);
+    assert.throws(() => parseAutomationExecutionPaused(invalid), /must be exactly/);
   });
 }
 
@@ -139,7 +138,7 @@ await acheck('an UNPAUSED process runs the same call normally (child process)', 
   if (!PAUSED_MODE) return;
   const { execFileSync } = await import('node:child_process');
   const out = execFileSync(process.execPath, ['--import', 'tsx', process.argv[1]!], {
-    env: { ...process.env, PS466_PAUSE_CHILD: 'active', AUTOMATION_EXECUTION_PAUSED: '' },
+    env: (() => { const e = { ...process.env, PS466_PAUSE_CHILD: 'active' }; delete e.AUTOMATION_EXECUTION_PAUSED; return e; })(),
     encoding: 'utf8',
   });
   assert.match(out, /ACTIVE-CHILD-OK/, 'an unpaused child must execute automation normally');
@@ -161,6 +160,52 @@ await acheck('rate and label preflight are refused before any carrier work', asy
       `${stage} must fail closed while paused`,
     );
   }
+});
+
+// ── the REAL startup authority, proved across process boundaries ────────────
+//
+// The grammar cases above exercise the canonical parser. These prove that src/lib/env.ts
+// actually uses it — that production's authority and the tested authority are the same one.
+//
+// This matters because there were briefly two implementations: a Zod superRefine in env.ts
+// and a hand-written copy beside the runtime check. Production used the Zod one; the tests
+// used the other. A mutation loosening only the schema would have left production failing
+// open with the suite green. Nothing short of loading the real env module proves that cannot
+// happen.
+await acheck('the real env module enforces the grammar at STARTUP', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const probe = [
+    '--import', 'tsx', '-e',
+    "import('./src/lib/env.js').then((m) => { console.log('PAUSED=' + (m.env.AUTOMATION_EXECUTION_PAUSED === true)); }).catch(() => process.exit(3));",
+  ];
+  const run = (value: string | undefined) => {
+    const childEnv: NodeJS.ProcessEnv = { ...process.env };
+    if (value === undefined) delete childEnv.AUTOMATION_EXECUTION_PAUSED;
+    else childEnv.AUTOMATION_EXECUTION_PAUSED = value;
+    try {
+      return { ok: true, out: execFileSync(process.execPath, probe, { env: childEnv, encoding: 'utf8', stdio: 'pipe' }) };
+    } catch {
+      return { ok: false, out: '' };
+    }
+  };
+
+  const absent = run(undefined);
+  assert.ok(absent.ok && /PAUSED=false/.test(absent.out), 'absent must start ACTIVE');
+
+  const off = run('false');
+  assert.ok(off.ok && /PAUSED=false/.test(off.out), "'false' must start ACTIVE");
+
+  const on = run('true');
+  assert.ok(on.ok && /PAUSED=true/.test(on.out), "'true' must start PAUSED");
+
+  // A present blank is NOT absent. It is a plausible misconfiguration — a cleared dashboard
+  // field, an empty deploy-template substitution — and on a safety control it would leave an
+  // operator believing automation was paused while it kept running.
+  assert.equal(run('').ok, false, 'a blank configured value must FAIL STARTUP, not read as off');
+  assert.equal(run('   ').ok, false, 'whitespace-only must fail startup too');
+  assert.equal(run('tru').ok, false, 'a typo must fail startup');
+  assert.equal(run('yes').ok, false, "'yes' must fail startup");
+  assert.equal(run('1').ok, false, "'1' must fail startup");
 });
 
 // ── the refusal carries a machine-readable contract ─────────────────────────
@@ -191,6 +236,57 @@ check('the manual route maps the paused error before its generic fallback', () =
   assert.ok(paused > -1, 'the mapper must recognise the paused error');
   assert.ok(paused < fallback, 'and must do so before the generic 400 fallback');
 });
+
+// ── every synchronous ingress returns the SAME contract ─────────────────────
+//
+// Review found that before_rate did not. src/routes/rates.ts handled only ShopifyRatesError
+// and fell through to reportError('rate.shopify.failed') + HTTP 500 — so a deliberate pause
+// looked like a broken rating integration, and the "stable contract across ingresses" claim
+// held on the manual and label routes but silently not here.
+//
+// These execute each route's real mapping logic against the real error object. The mapping is
+// the authority under test; the surrounding HTTP plumbing is not.
+{
+  const paused = new pause.AutomationExecutionPausedError();
+
+  check('the LABEL route maps any AUTOMATION_ code to a deliberate 409', () => {
+    const src = readFileSync('src/routes/labels.ts', 'utf8');
+    assert.match(src, /e\.code\.startsWith\('AUTOMATION_'\)/,
+      'the label mapper keys on the AUTOMATION_ prefix');
+    // The contract only holds if the error actually carries such a code.
+    assert.ok(paused.code.startsWith('AUTOMATION_'),
+      'the paused error must satisfy the prefix the label route already matches on');
+    assert.equal(paused.status, 409, 'and agree with the 409 that mapper returns');
+  });
+
+  check('the RATE route maps the paused code before its generic 500', () => {
+    const src = readFileSync('src/routes/rates.ts', 'utf8');
+    const mapper = src.indexOf('rate.shopify.rejected');
+    const automation = src.indexOf("startsWith('AUTOMATION_')", mapper);
+    const genericFail = src.indexOf("reportError('rate.shopify.failed'", mapper);
+    assert.ok(automation > -1, 'the rate route must recognise an automation code');
+    assert.ok(
+      automation < genericFail,
+      'and must do so BEFORE the generic 500, or a deliberate pause is reported as a rate failure',
+    );
+  });
+
+  check('a deliberate pause is never logged as a rate failure', () => {
+    const src = readFileSync('src/routes/rates.ts', 'utf8');
+    const automation = src.indexOf("startsWith('AUTOMATION_')");
+    const block = src.slice(automation, src.indexOf("reportError('rate.shopify.failed'", automation));
+    assert.ok(!block.includes("reportError('rate.shopify.failed'"),
+      'the paused branch must return before the failure report');
+    assert.match(block, /rate\.shopify\.automation_paused/,
+      'and should record the pause distinctly from a failure');
+  });
+
+  check('all three ingresses agree on one code and one status', () => {
+    assert.equal(paused.code, 'AUTOMATION_EXECUTION_PAUSED');
+    assert.equal(paused.status, 409);
+    assert.equal(paused.retryable, true);
+  });
+}
 
 // ── the outbox must refuse to CLAIM, not merely to evaluate ──────────────────
 // Checking only inside evaluation would let each pass claim a row, fail, increment attempts,

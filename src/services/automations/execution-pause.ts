@@ -42,7 +42,7 @@ import { env } from '../../lib/env.js';
  * status endpoint reports the same boolean execution uses.
  */
 
-export const AUTOMATION_EXECUTION_PAUSED_ENV = 'AUTOMATION_EXECUTION_PAUSED';
+export { AUTOMATION_EXECUTION_PAUSED_ENV, parseAutomationExecutionPaused } from './execution-pause-config.js';
 
 /** Stable, machine-readable. Route mappers key off `AUTOMATION_*` codes. */
 export const AUTOMATION_EXECUTION_PAUSED_CODE = 'AUTOMATION_EXECUTION_PAUSED';
@@ -70,17 +70,6 @@ export class AutomationExecutionPausedError extends Error {
  * real rule instead of a copy. Absent and 'false' are active; 'true' pauses; anything else
  * present is a configuration error and throws.
  */
-export function parsePauseValue(raw: string | undefined): boolean {
-  if (raw === undefined) return false;
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === '') return false;
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
-  throw new Error(
-    `AUTOMATION_EXECUTION_PAUSED must be exactly 'true' or 'false', got ${JSON.stringify(raw)}`,
-  );
-}
-
 /** The validated startup value. `override` exists so tests need not mutate process.env. */
 export function isAutomationExecutionPaused(override?: boolean): boolean {
   return override ?? env.AUTOMATION_EXECUTION_PAUSED === true;

@@ -671,6 +671,25 @@ app.post('/shopify', requireBusinessRoutePolicy('rates.shopify.quote'), zValidat
       });
       return c.json({ error: err.message, code: err.code, ...(err.details ?? {}) }, err.status as 400);
     }
+    // PS-466 cutover: a deliberate pause is not a rate failure. Without this it became a
+    // generic HTTP 500 with no code, reported as `rate.shopify.failed` — so an operator
+    // pausing for cutover would see what looks like a broken rating integration, and the
+    // stable AUTOMATION_EXECUTION_PAUSED contract would hold on the manual and label routes
+    // but silently not here. Matched on the code prefix, exactly as the label route does, so
+    // the two cannot drift apart.
+    const automationCode = (err as { code?: unknown } | null)?.code;
+    if (typeof automationCode === 'string' && automationCode.startsWith('AUTOMATION_')) {
+      logStructured('warn', 'rate.shopify.automation_paused', {
+        operation: 'shopify_rate_quote',
+        orderId: body.orderId,
+        errorCode: automationCode,
+      });
+      return c.json({
+        error: err instanceof Error ? err.message : 'Automation preflight rejected the quote',
+        code: automationCode,
+        retryable: (err as { retryable?: unknown }).retryable === true,
+      }, ((err as { status?: unknown }).status as 409) ?? 409);
+    }
     reportError('rate.shopify.failed', err, {
       operation: 'shopify_rate_quote',
       orderId: body.orderId,
