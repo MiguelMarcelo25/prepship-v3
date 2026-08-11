@@ -47,7 +47,19 @@ function resultFromTrace(value: unknown): AutomationExecutionResult | null {
  */
 export const AUTOMATION_LEGACY_RECOVERY_ENV = 'AUTOMATION_LEGACY_RUN_RECOVERY_BEFORE';
 
-export function resolveLegacyRecoveryCutoff(raw: string | undefined): {
+/**
+ * Explicit ISO-8601 with a MANDATORY timezone. `2026-08-01T00:00:00` is rejected: without an
+ * offset it is interpreted in the machine's local zone, so the same configuration text would
+ * authorise a different cohort on a developer laptop than in production.
+ */
+const ISO_WITH_TZ = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+
+const disabled = (why: string) => ({
+  cutoff: null,
+  diagnostic: `legacy run recovery DISABLED: ${why}`,
+});
+
+export function resolveLegacyRecoveryCutoff(raw: string | undefined, now: Date = new Date()): {
   cutoff: Date | null;
   diagnostic: string;
 } {
@@ -55,15 +67,43 @@ export function resolveLegacyRecoveryCutoff(raw: string | undefined): {
   if (!value) {
     return { cutoff: null, diagnostic: 'legacy run recovery DISABLED (no cutoff configured)' };
   }
+
+  const match = ISO_WITH_TZ.exec(value);
+  if (!match) {
+    return disabled(
+      `${AUTOMATION_LEGACY_RECOVERY_ENV} must be an ISO-8601 timestamp with an explicit timezone (Z or +HH:MM)`,
+    );
+  }
+
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    // Fail closed. A typo must not become a licence to sweep history.
-    return {
-      cutoff: null,
-      diagnostic: `legacy run recovery DISABLED: ${AUTOMATION_LEGACY_RECOVERY_ENV} is not a valid ISO-8601 timestamp`,
-    };
+    return disabled(`${AUTOMATION_LEGACY_RECOVERY_ENV} is not a parseable timestamp`);
   }
-  return { cutoff: parsed, diagnostic: `legacy run recovery ENABLED for runs started at or before ${parsed.toISOString()}` };
+
+  // Reject impossible calendar dates. `new Date('2026-02-30T00:00:00Z')` silently rolls over
+  // to 2 March, which would authorise two days more history than the operator wrote down.
+  const [, y, mo, d, h, mi, s] = match;
+  const utc = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`);
+  if (
+    utc.getUTCFullYear() !== Number(y)
+    || utc.getUTCMonth() + 1 !== Number(mo)
+    || utc.getUTCDate() !== Number(d)
+  ) {
+    return disabled(`${AUTOMATION_LEGACY_RECOVERY_ENV} is not a real calendar date`);
+  }
+
+  // A future cutoff authorises the ENTIRE legacy cohort, which is precisely the unbounded
+  // sweep this control exists to prevent. An operator must name a boundary they can point at.
+  if (parsed.getTime() > now.getTime()) {
+    return disabled(
+      `${AUTOMATION_LEGACY_RECOVERY_ENV} is in the future (${parsed.toISOString()}); a cutoff must bound an identified historical cohort`,
+    );
+  }
+
+  return {
+    cutoff: parsed,
+    diagnostic: `legacy run recovery ENABLED for runs started at or before ${parsed.toISOString()}`,
+  };
 }
 
 let announcedLegacyCutoff: string | null = null;
@@ -77,8 +117,11 @@ export async function reapExpiredAutomationRuns(input: {
   const database = input.database ?? db;
   const now = input.now ?? new Date();
   const maxRuntimeCutoff = new Date(now.getTime() - AUTOMATION_RUN_LEASE_MS);
+  // The reaper's effective `now` is passed in, so a future cutoff is judged against the same
+  // clock the sweep uses rather than wall-clock.
   const legacy = resolveLegacyRecoveryCutoff(
     input.legacyCutoffRaw ?? process.env[AUTOMATION_LEGACY_RECOVERY_ENV],
+    now,
   );
   // Announce once, not once per batch: a sweep decision this consequential should be visible
   // in the logs, but repeating it every pass trains people to skip it.
@@ -365,6 +408,40 @@ export function createPostgresAutomationExecutionStore(database: typeof db = db)
           ? { status: 'claimed' as const, claimToken }
           : { status: 'busy' as const, retryAt: leaseExpiresAt };
       });
+    },
+    /**
+     * PS-466: fence an UNFENCED convergence step.
+     *
+     * Hazmat retraction deliberately never calls `claimEffect()` — it has no persisted rule
+     * version, so it is an explicit convergence step rather than a synthetic action-result
+     * intent. That means the parent-run fence guarding every other handler does not cover it,
+     * and a stale worker could mutate the canonical hazmat declaration on a run it no longer
+     * owns. Its later `finish()` would be refused, but the retraction already happened.
+     *
+     * `expectedRevision` stops two retractions both succeeding; it does NOT prove the winner
+     * still owns the run. A stale worker can win that race using stale rules and facts.
+     *
+     * A read-only ownership assertion is insufficient: the lease could expire between the
+     * assertion and the retraction. RENEWING the lease is what creates a bounded ownership
+     * window that covers the convergence command.
+     */
+    async renewRunLease(runId: number) {
+      const now = new Date();
+      const claimToken = runClaims.get(runId);
+      if (!claimToken) {
+        throw new Error('Automation run lease lost before convergence');
+      }
+      const [renewed] = await database.update(automationRuns).set({
+        leaseExpiresAt: new Date(now.getTime() + AUTOMATION_RUN_LEASE_MS),
+      }).where(and(
+        eq(automationRuns.id, runId),
+        eq(automationRuns.status, 'running'),
+        eq(automationRuns.leaseToken, claimToken),
+        gt(automationRuns.leaseExpiresAt, now),
+      )).returning({ id: automationRuns.id });
+      if (!renewed) {
+        throw new Error('Automation run lease lost before convergence');
+      }
     },
     async recordEffect(effect: AutomationEffectRecord, claimToken: string) {
       const [recorded] = await database.update(automationActionResults).set({

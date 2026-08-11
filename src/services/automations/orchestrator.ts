@@ -76,6 +76,8 @@ export interface AutomationExecutionStore {
   }): Promise<string | number>;
   claimEffect(effect: AutomationEffectRecord): Promise<AutomationEffectClaim>;
   recordEffect(effect: AutomationEffectRecord, claimToken: string): Promise<void>;
+  /** PS-466: fence an unfenced convergence step by renewing the run lease first. */
+  renewRunLease(runId: number): Promise<void>;
   finish(result: AutomationExecutionResult): Promise<void>;
   setState(state: AutomationWatermark): Promise<void>;
 }
@@ -416,6 +418,10 @@ export async function executeAutomationEvaluation(input: {
     // guarded by expectedRevision, which stands in for the effect lease.
     if (status === 'completed' && retractHazmat) {
       try {
+        // PS-466: prove and EXTEND run ownership immediately before the only canonical
+        // mutation that does not pass through claimEffect(). If the lease is gone this throws,
+        // so a stale worker cannot retract a declaration on a run it no longer owns.
+        await input.store.renewRunLease(Number(runId));
         await (input.retractHazmat ?? automationHazmatRetraction)({
           facts: input.facts,
           scope: input.scope,
@@ -520,6 +526,10 @@ export function createInMemoryAutomationExecutionStore(): AutomationExecutionSto
     effects,
     states,
     async findCompleted(key) { return completed.get(key) ?? null; },
+    // PS-466: the in-memory store has no lease to renew and no rival owner, so this is a
+    // no-op. The fenced behaviour is proved against the real PostgreSQL store, where the
+    // predicate can actually fail.
+    async renewRunLease() {},
     // PS-469: this in-memory store is for callers that keep no run history, so it
     // reports zero and the backstop never trips. A store that cannot count runs must
     // not be able to suppress evaluations on a guess.

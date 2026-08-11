@@ -252,6 +252,85 @@ assert.throws(
 );
 process.env.AUTOMATION_PREFERENCE_RANKING = 'true';
 
+// ── the shared handler boundary refuses a stale run owner ────────────────────
+//
+// All ten configured actions reach their handler through claimEffect(), so ONE test at that
+// boundary covers all of them - ten copies would prove nothing extra. What matters is that a
+// failed parent-run admission stops the handler BEFORE it runs, not after.
+{
+  let handlerCalls = 0;
+  const countingHandlers = Object.fromEntries(
+    Object.entries(handlers).map(([type, fn]) => [type, async (...args: unknown[]) => {
+      handlerCalls += 1;
+      return (fn as (...a: unknown[]) => unknown)(...args);
+    }]),
+  );
+  const fencedStore = orchestrator.createInMemoryAutomationExecutionStore();
+  const realClaim = fencedStore.claimEffect.bind(fencedStore);
+  let admitted = 0;
+  fencedStore.claimEffect = (async (effect: unknown) => {
+    admitted += 1;
+    // Simulate the parent-run fence refusing admission: ownership moved while this worker
+    // was mid-run.
+    throw new Error('Automation run lease lost before effect admission');
+  }) as typeof fencedStore.claimEffect;
+  void realClaim;
+
+  await assert.rejects(
+    orchestrator.executeAutomationEvaluation({
+      facts, trigger: 'order_items_changed', sourceEventId: 'stale-admission-event',
+      rules: [rule], store: fencedStore, handlers: countingHandlers as never, scope,
+    }),
+    /lease lost before effect admission/,
+    'a refused parent-run admission must abort the run',
+  );
+  assert.equal(handlerCalls, 0, 'NO handler may run once parent-run admission is refused');
+  assert.equal(fencedStore.effects.length, 0, 'and no action-result row may be produced');
+  assert.equal(admitted, 1, 'the run stops at the first refused admission rather than looping');
+}
+
+// ── the UNFENCED convergence step is fenced by a lease renewal ───────────────
+//
+// Hazmat retraction never calls claimEffect(), so the parent-run fence that guards all ten
+// handlers does not cover it. It mutates the canonical hazmat declaration directly. The
+// orchestrator must therefore RENEW the run lease first, and a failed renewal must stop the
+// retraction before it happens - not merely refuse the finish() afterwards.
+{
+  // Retraction fires when workflow hazmat is active and no rule asks for a declaration.
+  const retractFacts = {
+    ...facts,
+    workflow: { ...(facts as { workflow?: Record<string, unknown> }).workflow, hazmatState: 'active' },
+  } as typeof facts;
+
+  let retractions = 0;
+  const retractSpy = async () => { retractions += 1; };
+
+  // A store whose lease renewal fails: ownership moved while this worker was mid-run.
+  const lostLeaseStore = orchestrator.createInMemoryAutomationExecutionStore();
+  lostLeaseStore.renewRunLease = (async () => {
+    throw new Error('Automation run lease lost before convergence');
+  }) as typeof lostLeaseStore.renewRunLease;
+
+  const lost = await orchestrator.executeAutomationEvaluation({
+    facts: retractFacts, trigger: 'before_rate', sourceEventId: 'retract-lost-lease',
+    rules: [], store: lostLeaseStore, handlers, scope,
+  });
+  assert.equal(retractions, 0, 'a stale owner must NOT retract a hazmat declaration');
+  assert.notEqual(lost.status, 'completed', 'and the run must not report success');
+
+  // The legitimate owner renews and retracts exactly once.
+  const heldStore = orchestrator.createInMemoryAutomationExecutionStore();
+  let renewals = 0;
+  heldStore.renewRunLease = (async () => { renewals += 1; }) as typeof heldStore.renewRunLease;
+  const held = await orchestrator.executeAutomationEvaluation({
+    facts: retractFacts, trigger: 'before_rate', sourceEventId: 'retract-held-lease',
+    rules: [], store: heldStore, handlers, scope, retractHazmat: retractSpy as never,
+  });
+  assert.equal(held.status, 'completed');
+  assert.equal(renewals, 1, 'the lease is renewed before the convergence command');
+  assert.equal(retractions, 1, 'the rightful owner retracts exactly once');
+}
+
 console.log(JSON.stringify({
   fixture: 'PS-466 ten-action behavioral fixture / order 46601',
   command: 'npm run test:ps-466-ten-action-behavior',

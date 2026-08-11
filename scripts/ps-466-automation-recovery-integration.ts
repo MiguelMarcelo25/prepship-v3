@@ -491,9 +491,36 @@ assert.deepEqual(fencedRow, { status: 'completed', lease_token: null });
     0, 'an unparseable cutoff must never be read as "sweep everything"');
   assert.deepEqual(await legacyStatuses(),
     [{ id: 9001, status: 'running' }, { id: 9002, status: 'running' }]);
-  assert.equal(resolveLegacyRecoveryCutoff('not-a-date').cutoff, null);
-  assert.match(resolveLegacyRecoveryCutoff('not-a-date').diagnostic, /DISABLED/);
-  assert.equal(resolveLegacyRecoveryCutoff('   ').cutoff, null, 'blank is off');
+  // Every way an operator can write a cutoff that does not bound an identified cohort must
+  // fail closed. A cutoff is an AUTHORISATION, so an ambiguous one is not a smaller
+  // authorisation — it is an unbounded one.
+  const REJECTED: Array<[string, string]> = [
+    ['   ', 'blank'],
+    ['not-a-date', 'unparseable'],
+    ['2099-01-01T00:00:00Z', 'in the future — would authorise the ENTIRE legacy cohort'],
+    ['2026-08-01T00:00:00', 'no timezone — resolves differently on a laptop than in production'],
+    ['08/01/2026', 'ambiguous regional format'],
+    ['August 1, 2026', 'prose, not ISO-8601'],
+    ['2026-02-30T00:00:00Z', 'impossible calendar date — Date() rolls it to 2 March'],
+    ['2026-13-01T00:00:00Z', 'impossible month'],
+  ];
+  for (const [value, why] of REJECTED) {
+    const resolved = resolveLegacyRecoveryCutoff(value, now);
+    assert.equal(resolved.cutoff, null, `cutoff must be refused (${why}): ${value}`);
+    assert.match(resolved.diagnostic, /DISABLED/);
+    assert.equal(
+      await reapExpiredAutomationRuns({
+        database: testDb as never, now, batchSize: 25, legacyCutoffRaw: value,
+      }),
+      0,
+      `a refused cutoff must sweep nothing (${why})`,
+    );
+  }
+
+  // Accepted: explicit timezone, real date, at or before now. Both Z and a numeric offset.
+  assert.ok(resolveLegacyRecoveryCutoff('2026-08-01T00:00:00Z', now).cutoff);
+  assert.ok(resolveLegacyRecoveryCutoff('2026-08-01T00:00:00-07:00', now).cutoff);
+  assert.ok(resolveLegacyRecoveryCutoff('2026-08-01T00:00:00.500Z', now).cutoff, 'fractional seconds are fine');
 
   // 3. valid cutoff — bounded to exactly the authorised cohort
   assert.equal(
@@ -531,6 +558,125 @@ assert.deepEqual(fencedRow, { status: 'completed', lease_token: null });
     [9102, 9103],
     'the remaining legacy rows wait for the next bounded pass rather than being swept at once',
   );
+}
+
+// ── the UNFENCED convergence step: hazmat retraction ─────────────────────────
+//
+// Every configured action reaches its handler through claimEffect(), so the parent-run fence
+// covers all ten at one boundary. Hazmat retraction does NOT: it has no persisted rule
+// version, so it is an explicit convergence step and never claims an effect. Without a fence
+// of its own, a stale worker can mutate the canonical hazmat declaration on a run it no
+// longer owns — and expectedRevision does not help, because it proves only that one retraction
+// won the race, not that the winner still owned the run.
+{
+  const mkRun = async (store: ReturnType<typeof createPostgresAutomationExecutionStore>, key: string, orderId: number) =>
+    store.begin({
+      executionKey: key, orderId, trigger: 'before_rate', sourceEventId: `${key}-event`,
+      factsRevision: `${key}-facts`, rulesetDigest: 'e'.repeat(64), mode: 'apply',
+    });
+
+  // 1. expired but unreaped: token still matches, status still running, lease dead.
+  {
+    const owner = createPostgresAutomationExecutionStore(testDb as never);
+    const id = await mkRun(owner, 'retract-expired', 600);
+    await pg.query(`update automation_runs set lease_expires_at = $1 where id = $2`,
+      ['2020-01-01T00:00:00Z', id]);
+    await assert.rejects(
+      owner.renewRunLease(id),
+      /lease lost before convergence/,
+      'an expired-but-unreaped owner cannot renew, so it never reaches the retraction',
+    );
+    await pg.query(`update automation_runs set status = 'failed' where id = $1`, [id]);
+  }
+
+  // 2. ownership moved: a successor holds a different token.
+  {
+    const stalled = createPostgresAutomationExecutionStore(testDb as never);
+    const id = await mkRun(stalled, 'retract-moved', 601);
+    await pg.query(`update automation_runs set started_at = $1, lease_expires_at = $1 where id = $2`,
+      ['2026-08-11T11:00:00Z', id]);
+    assert.equal(await reapExpiredAutomationRuns({ database: testDb as never, now, batchSize: 25 }), 1);
+    const successor = createPostgresAutomationExecutionStore(testDb as never);
+    assert.equal(await mkRun(successor, 'retract-moved', 601), id);
+    const successorToken = (await pg.query<{ lease_token: string | null }>(
+      `select lease_token from automation_runs where id = $1`, [id])).rows[0]?.lease_token;
+
+    await assert.rejects(
+      stalled.renewRunLease(id),
+      /lease lost before convergence/,
+      'a stale owner cannot renew a run someone else now holds',
+    );
+    assert.equal(
+      (await pg.query<{ lease_token: string | null }>(
+        `select lease_token from automation_runs where id = $1`, [id])).rows[0]?.lease_token,
+      successorToken,
+      'and the refused renewal must not disturb the successor lease',
+    );
+
+    // 3. the legitimate owner renews, and the persisted expiry actually advances.
+    const beforeRenew = (await pg.query<{ lease_expires_at: string }>(
+      `select lease_expires_at from automation_runs where id = $1`, [id])).rows[0]?.lease_expires_at;
+    await successor.renewRunLease(id);
+    const afterRenew = (await pg.query<{ lease_expires_at: string }>(
+      `select lease_expires_at from automation_runs where id = $1`, [id])).rows[0]?.lease_expires_at;
+    assert.ok(
+      new Date(afterRenew).getTime() > new Date(beforeRenew).getTime(),
+      'a successful renewal extends the ownership window that covers the convergence command',
+    );
+    await successor.finish({
+      runId: id, executionKey: 'retract-moved', rulesetDigest: 'e'.repeat(64), mode: 'apply',
+      status: 'completed', evaluation: { matches: [] }, reduction: {},
+    } as never);
+  }
+
+  // 4. a store instance that never admitted the run cannot renew it, even when the run is
+  //    otherwise renewable AND its persisted token is NULL. Without the capability guard an
+  //    absent in-memory token would compare against a NULL column and could match.
+  {
+    const outsider = createPostgresAutomationExecutionStore(testDb as never);
+    await pg.query(
+      `insert into automation_runs(id, execution_key, order_id, trigger, source_event_id,
+         facts_revision, ruleset_digest, engine_version, mode, status, trace_hash, started_at,
+         lease_token, lease_expires_at)
+       values (9500,'outsider-target',602,'before_rate','outsider-event','outsider-facts',
+               repeat('7',64),'ps-466-v1','apply','running',repeat('7',64), now(), null, $1)`,
+      ['2099-01-01T00:00:00Z'],
+    );
+    const before = (await pg.query<{ lease_expires_at: string }>(
+      `select lease_expires_at from automation_runs where id = 9500`)).rows[0]?.lease_expires_at;
+    await assert.rejects(
+      outsider.renewRunLease(9500),
+      /lease lost before convergence/,
+      'renewal requires the process-local capability, not merely a run id',
+    );
+    assert.equal(
+      new Date((await pg.query<{ lease_expires_at: string }>(
+        `select lease_expires_at from automation_runs where id = 9500`)).rows[0]?.lease_expires_at ?? 0).getTime(),
+      new Date(before ?? 0).getTime(),
+      'and a refused renewal must not extend anyone\'s lease',
+    );
+    await pg.query(`update automation_runs set status = 'failed' where id = 9500`);
+  }
+
+  // 5. a run that is NOT running cannot be renewed even when the token matches and the lease
+  //    is still live. Only the status predicate can refuse this, so without it a worker could
+  //    renew — and then converge on — a run that recovery has already terminalized.
+  {
+    const owner = createPostgresAutomationExecutionStore(testDb as never);
+    const id = await mkRun(owner, 'retract-terminalized', 603);
+    const token = (await pg.query<{ lease_token: string | null }>(
+      `select lease_token from automation_runs where id = $1`, [id])).rows[0]?.lease_token;
+    // Terminalized, but the token and a live lease are deliberately left in place.
+    await pg.query(
+      `update automation_runs set status = 'failed', lease_token = $1, lease_expires_at = $2 where id = $3`,
+      [token, '2099-01-01T00:00:00Z', id],
+    );
+    await assert.rejects(
+      owner.renewRunLease(id),
+      /lease lost before convergence/,
+      'a terminalized run cannot be renewed, even by the worker whose token still matches',
+    );
+  }
 }
 
 const indexes = await pg.query<{ indexname: string }>(`
