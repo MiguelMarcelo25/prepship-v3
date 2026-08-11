@@ -10,12 +10,21 @@
 // safe: new binaries refuse to start any automation while old ones roll away.
 
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:test@127.0.0.1:5432/prepship_test';
 process.env.SUPABASE_URL ??= 'https://example.supabase.co';
 process.env.SUPABASE_ANON_KEY ??= 'test-anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
 process.env.SUPABASE_JWT_SECRET ??= 'test-jwt-secret-test-jwt-secret-test';
+
+// The pause is parsed ONCE at startup, so it must be set before the module graph loads.
+// Mutating process.env mid-run would silently do nothing — proving only that the test was
+// written against a stale mental model. This process runs PAUSED; the active case is proved
+// in a child process below, which is the only honest way to test a startup-parsed value.
+const PAUSED_MODE = process.env.PS466_PAUSE_CHILD !== 'active';
+if (PAUSED_MODE) process.env.AUTOMATION_EXECUTION_PAUSED = 'true';
+else delete process.env.AUTOMATION_EXECUTION_PAUSED;
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
@@ -40,24 +49,54 @@ async function acheck(name: string, fn: () => Promise<void>): Promise<void> {
 const pause = await import('../src/services/automations/execution-pause.js');
 const orchestrator = await import('../src/services/automations/orchestrator.js');
 
-const ENV = pause.AUTOMATION_EXECUTION_PAUSED_ENV;
+// The child half: prove the ACTIVE path in a process that started without the variable, then
+// exit. Everything below this block runs only in the paused parent.
+if (!PAUSED_MODE) {
+  const store = orchestrator.createInMemoryAutomationExecutionStore();
+  const result = await orchestrator.executeAutomationEvaluation({
+    facts: { revision: 'active-facts', order: { id: 901, status: 'awaiting_shipment' } } as never,
+    trigger: 'before_rate', sourceEventId: 'active-child', rules: [],
+    store, handlers: {} as never, scope: { clientId: 1, storeId: 1 } as never,
+  });
+  if (result.status !== 'completed') throw new Error(`active child did not complete: ${result.status}`);
+  if (pause.isAutomationExecutionPaused()) throw new Error('active child reported paused');
+  console.log('ACTIVE-CHILD-OK');
+  process.exit(0);
+}
 
-// ── the control only engages on an explicit affirmative ──────────────────────
-// Default OFF matters as much as the pause itself: a typo must not silently halt production
-// automation. Only the exact string turns it on.
-check('absent means ACTIVE', () => {
-  assert.equal(pause.isAutomationExecutionPaused(undefined), false);
-});
-for (const notPaused of ['', '   ', 'false', 'FALSE', '0', 'no', 'yes', 'paused', '1', 'True ']) {
-  check(`"${notPaused}" does not pause`, () => {
-    assert.equal(pause.isAutomationExecutionPaused(notPaused), notPaused.trim().toLowerCase() === 'true');
+const ENV = pause.AUTOMATION_EXECUTION_PAUSED_ENV;
+const { parsePauseValue } = pause;
+
+// ── the control's grammar, from an EXPLICIT table ────────────────────────────
+//
+// The expected value is written out by hand, never computed with the same normalisation the
+// case is meant to be checking. The previous version derived it from
+// `raw.trim().toLowerCase() === 'true'`, so a case LABELLED "'True ' does not pause" actually
+// asserted that it DOES pause — the printed label contradicted its own assertion and the
+// suite still went green. That is the fifth instance of this trap on this card.
+const GRAMMAR: Array<{ raw: string | undefined; paused: boolean; note: string }> = [
+  { raw: undefined, paused: false, note: 'absent is the normal production state' },
+  { raw: 'false', paused: false, note: 'explicit off' },
+  { raw: 'FALSE', paused: false, note: 'case tolerant' },
+  { raw: ' false ', paused: false, note: 'whitespace tolerant' },
+  { raw: '', paused: false, note: 'blank behaves as absent' },
+  { raw: 'true', paused: true, note: 'explicit on' },
+  { raw: 'TRUE', paused: true, note: 'case tolerant' },
+  { raw: ' true ', paused: true, note: 'whitespace tolerant' },
+];
+for (const { raw, paused, note } of GRAMMAR) {
+  check(`${JSON.stringify(raw)} -> ${paused ? 'PAUSED' : 'active'} (${note})`, () => {
+    assert.equal(parsePauseValue(raw), paused);
   });
 }
-check('"true" pauses', () => assert.equal(pause.isAutomationExecutionPaused('true'), true));
-check('"TRUE" and " true " pause (case and whitespace tolerant)', () => {
-  assert.equal(pause.isAutomationExecutionPaused('TRUE'), true);
-  assert.equal(pause.isAutomationExecutionPaused(' true '), true);
-});
+
+// A PRESENT malformed value must fail startup, not read as active. The dangerous failure on a
+// safety control is an operator believing automation is paused while it is still executing.
+for (const invalid of ['tru', 'yes', 'no', '1', '0', 'paused', 'on', 'off', 'True!']) {
+  check(`${JSON.stringify(invalid)} is rejected as invalid configuration`, () => {
+    assert.throws(() => parsePauseValue(invalid), /must be exactly/);
+  });
+}
 
 // ── the shared boundary refuses before ANY side effect ───────────────────────
 const facts = {
@@ -66,7 +105,6 @@ const facts = {
 } as never;
 
 await acheck('a paused process starts NO automation run, and touches no store', async () => {
-  process.env[ENV] = 'true';
   const store = orchestrator.createInMemoryAutomationExecutionStore();
   let storeTouched = 0;
   const spy = new Proxy(store, {
@@ -92,22 +130,23 @@ await acheck('a paused process starts NO automation run, and touches no store', 
   assert.equal(storeTouched, 0, 'no store call at all — not even findCompleted');
   assert.equal(handlerCalls, 0, 'and no handler may run');
   assert.equal(store.effects.length, 0);
-  delete process.env[ENV];
 });
 
-await acheck('the same call succeeds once the pause is lifted', async () => {
-  delete process.env[ENV];
-  const store = orchestrator.createInMemoryAutomationExecutionStore();
-  const result = await orchestrator.executeAutomationEvaluation({
-    facts, trigger: 'before_rate', sourceEventId: 'pause-event-2', rules: [],
-    store, handlers: {} as never, scope: { clientId: 1, storeId: 1 } as never,
+await acheck('an UNPAUSED process runs the same call normally (child process)', async () => {
+  // Startup-parsed means the only honest way to prove the active path is a second process
+  // with the variable absent. Asserting it in-process would be asserting against a value
+  // this process can no longer change.
+  if (!PAUSED_MODE) return;
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync(process.execPath, ['--import', 'tsx', process.argv[1]!], {
+    env: { ...process.env, PS466_PAUSE_CHILD: 'active', AUTOMATION_EXECUTION_PAUSED: '' },
+    encoding: 'utf8',
   });
-  assert.equal(result.status, 'completed', 'lifting the pause restores normal execution');
+  assert.match(out, /ACTIVE-CHILD-OK/, 'an unpaused child must execute automation normally');
 });
 
 // ── it fails BEFORE provider work, which is the point ────────────────────────
 await acheck('rate and label preflight are refused before any carrier work', async () => {
-  process.env[ENV] = 'true';
   // reconcileOrderAutomationsForShipping routes both before_rate and before_label_purchase
   // through executeAutomationEvaluation, so a refusal here happens before carrier selection,
   // label purchase or postage spend.
@@ -122,7 +161,35 @@ await acheck('rate and label preflight are refused before any carrier work', asy
       `${stage} must fail closed while paused`,
     );
   }
-  delete process.env[ENV];
+});
+
+// ── the refusal carries a machine-readable contract ─────────────────────────
+//
+// Without an explicit code the manual route's errorResponse() falls through to a generic 400
+// and the label-route mapper, which keys on AUTOMATION_* codes, cannot recognise it. An
+// operator pausing for cutover would then see an indistinguishable "Automation request
+// failed" on every ingress.
+await acheck('a paused refusal carries a stable code and a deliberate status', async () => {
+  const thrown = await orchestrator.executeAutomationEvaluation({
+    facts, trigger: 'before_rate', sourceEventId: 'pause-contract', rules: [],
+    store: orchestrator.createInMemoryAutomationExecutionStore(),
+    handlers: {} as never, scope: { clientId: 1, storeId: 1 } as never,
+  }).then(() => null, (error: unknown) => error);
+  assert.ok(thrown instanceof pause.AutomationExecutionPausedError);
+  assert.equal(thrown.code, 'AUTOMATION_EXECUTION_PAUSED', 'route mappers key on this exact code');
+  assert.equal(thrown.code, pause.AUTOMATION_EXECUTION_PAUSED_CODE);
+  assert.equal(thrown.status, 409, 'deliberate, retryable refusal — not a generic 400');
+  assert.equal(thrown.retryable, true);
+  assert.match(thrown.code, /^AUTOMATION_/, 'the label-route mapper matches on the AUTOMATION_ prefix');
+});
+
+check('the manual route maps the paused error before its generic fallback', () => {
+  const src = readFileSync('src/routes/automations.ts', 'utf8');
+  const mapper = src.indexOf('function errorResponse');
+  const paused = src.indexOf('AutomationExecutionPausedError', mapper);
+  const fallback = src.indexOf("'Automation request failed'", mapper);
+  assert.ok(paused > -1, 'the mapper must recognise the paused error');
+  assert.ok(paused < fallback, 'and must do so before the generic 400 fallback');
 });
 
 // ── the outbox must refuse to CLAIM, not merely to evaluate ──────────────────

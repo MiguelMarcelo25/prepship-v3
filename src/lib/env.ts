@@ -172,6 +172,26 @@ const schema = z.object({
   SHIP_FROM_POSTAL_CODE: z.string().optional(),
   SHIP_FROM_COUNTRY: z.string().default('US'),
   SHIP_FROM_PHONE: z.string().optional(),
+  /**
+   * PS-466 cutover control. Absent or 'false' means automation runs normally; 'true' pauses
+   * it. Anything else FAILS STARTUP rather than defaulting to active — a malformed value on a
+   * safety control must not let an operator believe automation is paused while it is running.
+   * Deliberately strict only when the variable is present: it is normally absent entirely.
+   */
+  AUTOMATION_EXECUTION_PAUSED: z
+    .string()
+    .optional()
+    .superRefine((value, ctx) => {
+      if (value === undefined) return;
+      const normalized = value.trim().toLowerCase();
+      if (normalized !== 'true' && normalized !== 'false' && normalized !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `AUTOMATION_EXECUTION_PAUSED must be exactly 'true' or 'false', got ${JSON.stringify(value)}`,
+        });
+      }
+    })
+    .transform((value) => (value ?? '').trim().toLowerCase() === 'true'),
   ENABLE_RATE_BACKFILL_SCHEDULER: z
     .string()
     .optional()

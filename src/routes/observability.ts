@@ -100,6 +100,10 @@ app.get('/status', async (c) => {
       },
     },
     runtime: {
+      // PS-466 cutover control. Reported here and NOT on /health, /health/ready or
+      // /health/deep: a deliberate pause is an operational mode, not an unhealthy process,
+      // and failing readiness for it would create the restart loop PS-497 already had to fix.
+      automationExecutionPaused: env.AUTOMATION_EXECUTION_PAUSED === true,
       runSyncScheduler: env.RUN_SYNC_SCHEDULER,
       usePgBossScheduler: true,
       runOrdersPerformanceMaintenance:
