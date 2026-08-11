@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { classifyAutomationResponse } from '../services/automations/response-classifier.js';
 import type { Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -183,8 +184,15 @@ function handleCreateError(c: Context, err: unknown): Response {
   // backend automation preflight/rate-proof rejection as an operator-actionable
   // conflict. This response mapping occurs before provider dispatch and does
   // not weaken any shipped/cancelled or existing-label guard.
-  if (typeof e.code === 'string' && e.code.startsWith('AUTOMATION_')) {
-    return c.json({ error: message, code: e.code, ...details }, 409);
+  // PS-466: same shared owner as the manual and rate routes.
+  const automationResponse = classifyAutomationResponse(e);
+  if (automationResponse) {
+    // Classifier fields LAST: route-supplied details may add context but must never replace
+    // the canonical error/code/retryable. Spreading details second would let an error carrying
+    // its own `code` overwrite the classifier's — which defeats the point of having one
+    // response authority, and could downgrade a paused refusal into something a caller treats
+    // differently.
+    return c.json({ ...details, ...automationResponse.body }, automationResponse.status);
   }
   // Per user override unlock shipped data on 2026-07-25: expose only the
   // backend fail-closed verdict; this route does not bypass terminal guards.

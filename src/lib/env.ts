@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { parseAutomationExecutionPaused } from '../services/automations/execution-pause-config.js';
 import { z } from 'zod';
 
 const booleanFlag = (defaultValue: boolean) =>
@@ -172,6 +173,29 @@ const schema = z.object({
   SHIP_FROM_POSTAL_CODE: z.string().optional(),
   SHIP_FROM_COUNTRY: z.string().default('US'),
   SHIP_FROM_PHONE: z.string().optional(),
+  /**
+   * PS-466 cutover control. Absent or 'false' means automation runs normally; 'true' pauses
+   * it. Anything else FAILS STARTUP rather than defaulting to active — a malformed value on a
+   * safety control must not let an operator believe automation is paused while it is running.
+   * Deliberately strict only when the variable is present: it is normally absent entirely.
+   */
+  AUTOMATION_EXECUTION_PAUSED: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      // Delegates to the ONE canonical grammar. Do not re-implement the rule here: a second
+      // copy is how production and the tests came to disagree about what a malformed value
+      // means, with production failing open and the suite still green.
+      try {
+        return parseAutomationExecutionPaused(value);
+      } catch (error) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: error instanceof Error ? error.message : 'invalid AUTOMATION_EXECUTION_PAUSED',
+        });
+        return z.NEVER;
+      }
+    }),
   ENABLE_RATE_BACKFILL_SCHEDULER: z
     .string()
     .optional()

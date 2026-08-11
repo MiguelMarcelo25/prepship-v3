@@ -8,6 +8,7 @@ import { evaluateAutomationBundle } from './evaluator.js';
 import { isTerminalAutomationStatus } from './facts.js';
 import { automationHazmatRetraction } from './hazmat-action.js';
 import { shouldRetractAutomationHazmat } from './hazmat-retraction-intent.js';
+import { assertAutomationExecutionAllowed } from './execution-pause.js';
 
 export type AutomationStateStatus = 'pending' | 'current' | 'blocked' | 'conflict' | 'failed' | 'audit_only';
 
@@ -76,6 +77,8 @@ export interface AutomationExecutionStore {
   }): Promise<string | number>;
   claimEffect(effect: AutomationEffectRecord): Promise<AutomationEffectClaim>;
   recordEffect(effect: AutomationEffectRecord, claimToken: string): Promise<void>;
+  /** PS-466: fence an unfenced convergence step by renewing the run lease first. */
+  renewRunLease(runId: number): Promise<void>;
   finish(result: AutomationExecutionResult): Promise<void>;
   setState(state: AutomationWatermark): Promise<void>;
 }
@@ -107,6 +110,16 @@ export class AutomationEffectLeaseBusyError extends Error {
   constructor(public readonly retryAt: Date | null) {
     super('Automation action evaluation is already in progress; retry after the active lease expires');
     this.name = 'AutomationEffectLeaseBusyError';
+  }
+}
+
+export class AutomationRunLeaseBusyError extends Error {
+  readonly code = 'AUTOMATION_RUN_BUSY';
+  readonly status = 409;
+
+  constructor(public readonly retryAt: Date | null) {
+    super('Automation evaluation is already owned by an active run lease');
+    this.name = 'AutomationRunLeaseBusyError';
   }
 }
 
@@ -222,6 +235,9 @@ export async function executeAutomationEvaluation(input: {
   /** PS-475 convergence. Injectable so tests can assert it without a database. */
   retractHazmat?: typeof automationHazmatRetraction;
 }): Promise<AutomationExecutionResult> {
+  // PS-466 cutover: refuse BEFORE any run row, handler, provider call or postage decision.
+  // Every ingress converges here, so this is the one boundary that covers them all.
+  assertAutomationExecutionAllowed();
   const rulesetDigest = automationRulesetDigest(input.rules);
   const key = executionKey({
     orderId: input.facts.order.id,
@@ -406,6 +422,10 @@ export async function executeAutomationEvaluation(input: {
     // guarded by expectedRevision, which stands in for the effect lease.
     if (status === 'completed' && retractHazmat) {
       try {
+        // PS-466: prove and EXTEND run ownership immediately before the only canonical
+        // mutation that does not pass through claimEffect(). If the lease is gone this throws,
+        // so a stale worker cannot retract a declaration on a run it no longer owns.
+        await input.store.renewRunLease(Number(runId));
         await (input.retractHazmat ?? automationHazmatRetraction)({
           facts: input.facts,
           scope: input.scope,
@@ -510,6 +530,10 @@ export function createInMemoryAutomationExecutionStore(): AutomationExecutionSto
     effects,
     states,
     async findCompleted(key) { return completed.get(key) ?? null; },
+    // PS-466: the in-memory store has no lease to renew and no rival owner, so this is a
+    // no-op. The fenced behaviour is proved against the real PostgreSQL store, where the
+    // predicate can actually fail.
+    async renewRunLease() {},
     // PS-469: this in-memory store is for callers that keep no run history, so it
     // reports zero and the backstop never trips. A store that cannot count runs must
     // not be able to suppress evaluations on a guess.
