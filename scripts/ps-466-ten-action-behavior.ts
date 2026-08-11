@@ -311,9 +311,14 @@ process.env.AUTOMATION_PREFERENCE_RANKING = 'true';
     throw new Error('Automation run lease lost before convergence');
   }) as typeof lostLeaseStore.renewRunLease;
 
+  // The spy MUST be injected here. Without it this case falls through to the production
+  // `automationHazmatRetraction()`, which fails for an unrelated reason (no database role in
+  // this suite) and leaves every assertion green — proving the run failed, but proving
+  // nothing about whether the retraction was stopped BEFORE it ran. That is the same
+  // right-outcome-wrong-mechanism trap this card keeps producing.
   const lost = await orchestrator.executeAutomationEvaluation({
     facts: retractFacts, trigger: 'before_rate', sourceEventId: 'retract-lost-lease',
-    rules: [], store: lostLeaseStore, handlers, scope,
+    rules: [], store: lostLeaseStore, handlers, scope, retractHazmat: retractSpy as never,
   });
   assert.equal(retractions, 0, 'a stale owner must NOT retract a hazmat declaration');
   assert.notEqual(lost.status, 'completed', 'and the run must not report success');
