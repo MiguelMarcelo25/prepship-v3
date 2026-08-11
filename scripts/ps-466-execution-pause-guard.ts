@@ -228,14 +228,86 @@ await acheck('a paused refusal carries a stable code and a deliberate status', a
   assert.match(thrown.code, /^AUTOMATION_/, 'the label-route mapper matches on the AUTOMATION_ prefix');
 });
 
-check('the manual route maps the paused error before its generic fallback', () => {
+check('the manual route classifies before its generic fallback', () => {
   const src = readFileSync('src/routes/automations.ts', 'utf8');
   const mapper = src.indexOf('function errorResponse');
-  const paused = src.indexOf('AutomationExecutionPausedError', mapper);
+  const classified = src.indexOf('classifyAutomationResponse(', mapper);
   const fallback = src.indexOf("'Automation request failed'", mapper);
-  assert.ok(paused > -1, 'the mapper must recognise the paused error');
-  assert.ok(paused < fallback, 'and must do so before the generic 400 fallback');
+  assert.ok(classified > -1, 'the mapper must delegate to the shared classifier');
+  assert.ok(classified < fallback, 'and must do so before the generic 400 fallback');
 });
+
+// ── the shared response classifier ──────────────────────────────────────────
+//
+// The first fix matched the AUTOMATION_ prefix and logged every hit as a cutover pause. But
+// that prefix also covers ordinary preflight rejections — AUTOMATION_CONFLICT,
+// AUTOMATION_EVALUATION_FAILED, AUTOMATION_ACTION_FAILED are all real codes on this path — so
+// an automation hold during normal trading would have been recorded as a pause, inventing
+// cutover evidence on a day nobody was cutting over. The RESPONSE is identical for both; the
+// EVENT is not, which is what `kind` carries.
+{
+  const { classifyAutomationResponse } = await import('../src/services/automations/response-classifier.js');
+
+  check('a cutover pause classifies as kind=paused', () => {
+    const r = classifyAutomationResponse(new pause.AutomationExecutionPausedError());
+    assert.ok(r);
+    assert.equal(r.status, 409);
+    assert.equal(r.kind, 'paused');
+    assert.equal(r.body.code, 'AUTOMATION_EXECUTION_PAUSED');
+    assert.equal(r.body.retryable, true);
+  });
+
+  check('an ordinary automation rejection is NOT reported as a pause', () => {
+    // This is the exact defect: AUTOMATION_HOLD_REQUIRED shares the prefix but is a normal
+    // preflight outcome, not evidence that the cutover control is engaged.
+    const held = Object.assign(new Error('Order is held for review'), { code: 'AUTOMATION_HOLD_REQUIRED' });
+    const r = classifyAutomationResponse(held);
+    assert.ok(r);
+    assert.equal(r.status, 409, 'the response contract is the same');
+    assert.equal(r.kind, 'preflight', 'but the EVENT must not claim a cutover pause');
+    assert.equal(r.body.code, 'AUTOMATION_HOLD_REQUIRED', 'and the original code is preserved');
+  });
+
+  for (const code of ['AUTOMATION_CONFLICT', 'AUTOMATION_EVALUATION_FAILED', 'AUTOMATION_ACTION_FAILED']) {
+    check(`${code} classifies as preflight, not paused`, () => {
+      const r = classifyAutomationResponse(Object.assign(new Error('x'), { code }));
+      assert.equal(r?.kind, 'preflight');
+      assert.equal(r?.body.code, code);
+    });
+  }
+
+  check('an unrelated error is not classified at all', () => {
+    assert.equal(classifyAutomationResponse(new Error('database exploded')), null);
+    assert.equal(classifyAutomationResponse(Object.assign(new Error('x'), { code: 'HAZMAT_DECLARATION_INVALID' })), null);
+    assert.equal(classifyAutomationResponse(null), null);
+    assert.equal(classifyAutomationResponse(undefined), null);
+  });
+
+  check('an error-supplied status cannot override the 409 contract', () => {
+    // Otherwise a bug or a crafted error could downgrade a preflight refusal into a 200-family
+    // response the caller treats as success.
+    const spoof = Object.assign(new Error('x'), { code: 'AUTOMATION_CONFLICT', status: 204 });
+    assert.equal(classifyAutomationResponse(spoof)?.status, 409);
+  });
+
+  check('all three routes classify through the shared owner', () => {
+    for (const file of ['src/routes/automations.ts', 'src/routes/rates.ts', 'src/routes/labels.ts']) {
+      assert.match(
+        readFileSync(file, 'utf8'),
+        /classifyAutomationResponse\(/,
+        `${file} must not map automation rejections independently`,
+      );
+    }
+  });
+
+  check('the rate route logs paused and preflight as DIFFERENT events', () => {
+    const src = readFileSync('src/routes/rates.ts', 'utf8');
+    assert.match(src, /rate\.shopify\.automation_paused/);
+    assert.match(src, /rate\.shopify\.automation_rejected/);
+    assert.match(src, /automation\.kind === 'paused'/,
+      'the event must be chosen by kind, not by the code prefix');
+  });
+}
 
 // ── every synchronous ingress returns the SAME contract ─────────────────────
 //
@@ -249,36 +321,32 @@ check('the manual route maps the paused error before its generic fallback', () =
 {
   const paused = new pause.AutomationExecutionPausedError();
 
-  check('the LABEL route maps any AUTOMATION_ code to a deliberate 409', () => {
+  check('the LABEL route classifies through the shared owner', () => {
     const src = readFileSync('src/routes/labels.ts', 'utf8');
-    assert.match(src, /e\.code\.startsWith\('AUTOMATION_'\)/,
-      'the label mapper keys on the AUTOMATION_ prefix');
-    // The contract only holds if the error actually carries such a code.
-    assert.ok(paused.code.startsWith('AUTOMATION_'),
-      'the paused error must satisfy the prefix the label route already matches on');
-    assert.equal(paused.status, 409, 'and agree with the 409 that mapper returns');
+    assert.match(src, /classifyAutomationResponse\(/,
+      'the label route must not keep its own prefix rule');
+    assert.ok(!/e\.code\.startsWith\('AUTOMATION_'\)/.test(src),
+      'the independent prefix match must be gone, or the two rules can drift again');
   });
 
-  check('the RATE route maps the paused code before its generic 500', () => {
+  check('the RATE route classifies before its generic 500', () => {
     const src = readFileSync('src/routes/rates.ts', 'utf8');
     const mapper = src.indexOf('rate.shopify.rejected');
-    const automation = src.indexOf("startsWith('AUTOMATION_')", mapper);
+    const classified = src.indexOf('classifyAutomationResponse(', mapper);
     const genericFail = src.indexOf("reportError('rate.shopify.failed'", mapper);
-    assert.ok(automation > -1, 'the rate route must recognise an automation code');
+    assert.ok(classified > -1, 'the rate route must classify automation rejections');
     assert.ok(
-      automation < genericFail,
-      'and must do so BEFORE the generic 500, or a deliberate pause is reported as a rate failure',
+      classified < genericFail,
+      'and must do so BEFORE the generic 500, or an automation rejection is a rate failure',
     );
   });
 
-  check('a deliberate pause is never logged as a rate failure', () => {
+  check('an automation rejection is never logged as a rate failure', () => {
     const src = readFileSync('src/routes/rates.ts', 'utf8');
-    const automation = src.indexOf("startsWith('AUTOMATION_')");
-    const block = src.slice(automation, src.indexOf("reportError('rate.shopify.failed'", automation));
+    const classified = src.indexOf('classifyAutomationResponse(');
+    const block = src.slice(classified, src.indexOf("reportError('rate.shopify.failed'", classified));
     assert.ok(!block.includes("reportError('rate.shopify.failed'"),
-      'the paused branch must return before the failure report');
-    assert.match(block, /rate\.shopify\.automation_paused/,
-      'and should record the pause distinctly from a failure');
+      'the classified branch must return before the failure report');
   });
 
   check('all three ingresses agree on one code and one status', () => {

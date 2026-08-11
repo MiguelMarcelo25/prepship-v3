@@ -25,7 +25,7 @@ import {
   updateAutomationDraft,
 } from '../services/automations/repository.js';
 import { evaluateOrderAutomations } from '../services/automations/runtime.js';
-import { AutomationExecutionPausedError } from '../services/automations/execution-pause.js';
+import { classifyAutomationResponse } from '../services/automations/response-classifier.js';
 import { ShippingControlLockedError } from '../services/automations/shipping-controls.js';
 import {
   listShippingControlAvailability,
@@ -129,9 +129,10 @@ function errorResponse(c: { json(value: Record<string, unknown>, status: 400 | 4
   // PS-466 cutover: a paused refusal is deliberate and retryable, so it must not fall through
   // to a generic 400. Without this an operator pausing for cutover would see the manual
   // endpoint fail with an indistinguishable "Automation request failed".
-  if (error instanceof AutomationExecutionPausedError) {
-    return c.json({ error: error.message, code: error.code, retryable: true }, error.status);
-  }
+  // PS-466: classified through the shared owner so the manual, rate and label ingresses
+  // cannot drift apart on status or code.
+  const automation = classifyAutomationResponse(error);
+  if (automation) return c.json(automation.body, automation.status);
   if (error instanceof ShippingControlPolicyError) {
     return c.json({ error: error.message, locked: error.locked, reason: error.reason }, 409);
   }
