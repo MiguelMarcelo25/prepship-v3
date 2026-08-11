@@ -13,6 +13,7 @@ const REQUIRED_GUARDS = [
   'test:ps-305-authority-drift',
   'test:rate-source-of-truth',
   'test:ps-466-automation-controls',
+  'test:ps-466-execution-pause',
   // PS-465 hazmat. These existed and passed but nothing ran them -- not this
   // pack, not test:master:shipping -- so the whole dangerous-goods compliance
   // surface could rot undetected during an unrelated refactor, which is exactly

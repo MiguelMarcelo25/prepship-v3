@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { announceAutomationExecutionPause, isAutomationExecutionPaused } from './execution-pause.js';
 import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import {
@@ -225,6 +226,12 @@ async function pump(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    // PS-466 cutover: do not CLAIM work while paused. Checking only inside evaluation would
+    // let every pass increment attempts and eventually dead-letter genuine events.
+    if (isAutomationExecutionPaused()) {
+      announceAutomationExecutionPause(true);
+      return;
+    }
     await reapExpiredAutomationRuns();
     for (let index = 0; index < 5; index += 1) {
       if (await processAutomationOutboxOnce() === 'idle') break;

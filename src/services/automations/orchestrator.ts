@@ -8,6 +8,7 @@ import { evaluateAutomationBundle } from './evaluator.js';
 import { isTerminalAutomationStatus } from './facts.js';
 import { automationHazmatRetraction } from './hazmat-action.js';
 import { shouldRetractAutomationHazmat } from './hazmat-retraction-intent.js';
+import { assertAutomationExecutionAllowed } from './execution-pause.js';
 
 export type AutomationStateStatus = 'pending' | 'current' | 'blocked' | 'conflict' | 'failed' | 'audit_only';
 
@@ -234,6 +235,9 @@ export async function executeAutomationEvaluation(input: {
   /** PS-475 convergence. Injectable so tests can assert it without a database. */
   retractHazmat?: typeof automationHazmatRetraction;
 }): Promise<AutomationExecutionResult> {
+  // PS-466 cutover: refuse BEFORE any run row, handler, provider call or postage decision.
+  // Every ingress converges here, so this is the one boundary that covers them all.
+  assertAutomationExecutionAllowed();
   const rulesetDigest = automationRulesetDigest(input.rules);
   const key = executionKey({
     orderId: input.facts.order.id,
