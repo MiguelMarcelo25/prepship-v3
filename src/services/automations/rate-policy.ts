@@ -34,7 +34,9 @@ export function applyAutomationPlanToRateIntent<T extends RateIntent>(
   const currentInsurance = Number(intent.insuredValue ?? 0);
   return {
     ...intent,
-    confirmation: plan.confirmation?.value ?? intent.confirmation,
+    confirmation: intent.confirmation == null || intent.confirmation === 'none'
+      ? plan.confirmation?.value ?? intent.confirmation
+      : intent.confirmation,
     insuranceProvider: requiredInsurance != null && requiredInsurance > 0
       ? plan.insurance!.provider
       : intent.insuranceProvider,

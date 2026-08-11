@@ -17,6 +17,7 @@ import { addAutomationWorkflowTag } from './order-workflow-command.js';
 import {
   automationRulesetDigest,
   AutomationEffectLeaseBusyError,
+  AutomationRunLeaseBusyError,
   AutomationPreflightError,
   ensureAutomationStateCurrent,
   executeAutomationEvaluation,
@@ -178,7 +179,7 @@ export async function reconcileOrderAutomationsForShipping(input: {
         labelPurchaseLock: input.labelPurchaseLock,
       });
     } catch (evaluationError) {
-      if (evaluationError instanceof AutomationEffectLeaseBusyError) {
+      if (evaluationError instanceof AutomationEffectLeaseBusyError || evaluationError instanceof AutomationRunLeaseBusyError) {
         throw new AutomationPreflightError(
           'AUTOMATION_EVALUATION_REQUIRED',
           'Automation evaluation is already in progress; retry before rating or label purchase',

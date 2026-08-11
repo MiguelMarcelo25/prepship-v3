@@ -10,8 +10,8 @@ import {
 import { GLOBAL_SCOPE } from '../../lib/client-store-scope.js';
 import { compileAutomationRuleVersion, type AutomationRuleDocument } from './contracts.js';
 import { loadAutomationFacts } from './facts.js';
-import { AutomationEffectLeaseBusyError, executeAutomationEvaluation } from './orchestrator.js';
-import { createPostgresAutomationExecutionStore } from './postgres-store.js';
+import { AutomationEffectLeaseBusyError, AutomationRunLeaseBusyError, executeAutomationEvaluation } from './orchestrator.js';
+import { createPostgresAutomationExecutionStore, reapExpiredAutomationRuns } from './postgres-store.js';
 import { automationHandlerRegistry, evaluateOrderAutomationFactEvent } from './runtime.js';
 import { AUTOMATION_TRIGGERS, type AutomationTrigger } from './catalog.js';
 
@@ -87,7 +87,7 @@ async function markFailure(row: ClaimedOutbox, error: unknown): Promise<void> {
   const summary = error instanceof Error ? error.message.slice(0, 500) : 'Automation reprocess failed';
   const delaySeconds = Math.min(60, 2 ** Math.max(0, row.attemptCount - 1));
   const backoffAt = Date.now() + delaySeconds * 1_000;
-  const leaseRetryAt = error instanceof AutomationEffectLeaseBusyError && error.retryAt
+  const leaseRetryAt = (error instanceof AutomationEffectLeaseBusyError || error instanceof AutomationRunLeaseBusyError) && error.retryAt
     ? error.retryAt.getTime() + 1_000
     : 0;
   const jobId = positiveId(row.payload.jobId);
@@ -225,6 +225,7 @@ async function pump(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    await reapExpiredAutomationRuns();
     for (let index = 0; index < 5; index += 1) {
       if (await processAutomationOutboxOnce() === 'idle') break;
     }

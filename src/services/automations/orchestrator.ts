@@ -110,6 +110,16 @@ export class AutomationEffectLeaseBusyError extends Error {
   }
 }
 
+export class AutomationRunLeaseBusyError extends Error {
+  readonly code = 'AUTOMATION_RUN_BUSY';
+  readonly status = 409;
+
+  constructor(public readonly retryAt: Date | null) {
+    super('Automation evaluation is already owned by an active run lease');
+    this.name = 'AutomationRunLeaseBusyError';
+  }
+}
+
 export function automationRulesetDigest(rules: CompiledAutomationRule[]): string {
   return automationDocumentHash({
     engineVersion: AUTOMATION_ENGINE_VERSION,

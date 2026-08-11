@@ -151,6 +151,12 @@ export const automationRuns = pgTable('automation_runs', {
   createdBy: text(),
   startedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp({ withTimezone: true }),
+  attemptCount: integer().notNull().default(1),
+  leaseToken: text(),
+  leaseExpiresAt: timestamp({ withTimezone: true }),
+  recoveryCount: integer().notNull().default(0),
+  lastRecoveryCode: text(),
+  lastRecoveredAt: timestamp({ withTimezone: true }),
 }, (table) => [
   index('automation_runs_order_trigger_idx').on(table.orderId, table.trigger, table.startedAt),
   index('automation_runs_rule_status_idx').on(table.ruleId, table.status, table.startedAt),
@@ -164,6 +170,7 @@ export const automationRuns = pgTable('automation_runs', {
     table.mode,
   ),
   uniqueIndex('automation_runs_execution_key_idx').on(table.executionKey),
+  index('automation_runs_recovery_idx').on(table.status, table.leaseExpiresAt, table.startedAt, table.id),
 ]);
 
 export const automationActionResults = pgTable('automation_action_results', {

@@ -188,6 +188,11 @@ const ACTION_DEFINITIONS: readonly ActionDefinition[] = [
 
 const actionByType = new Map(ACTION_DEFINITIONS.map((definition) => [definition.type, definition]));
 
+function actionAvailable(definition: Pick<ActionDefinition, 'type' | 'available'>): boolean {
+  const preferenceGated = definition.type === 'carrier.prefer' || definition.type === 'service.prefer';
+  return preferenceGated ? isAutomationPreferenceRankingEnabled() : definition.available;
+}
+
 export function getAutomationActionDefinition(type: string): ActionDefinition | null {
   return actionByType.get(type as AutomationActionType) ?? null;
 }
@@ -196,7 +201,7 @@ export function validateAutomationAction(action: AutomationAction, trigger: Auto
   const definition = getAutomationActionDefinition(action.type);
   if (!definition) throw new Error(`Unsupported automation action: ${String(action.type)}`);
   if (action.schemaVersion !== 1) throw new Error(`Unsupported ${action.type} schema version`);
-  if (!definition.available) throw new Error(definition.unavailableReason ?? `${action.type} is unavailable`);
+  if (!actionAvailable(definition)) throw new Error(definition.unavailableReason ?? `${action.type} is unavailable`);
   if (!definition.allowedTriggers.includes(trigger)) {
     throw new Error(`${action.type} is not allowed for trigger ${trigger}`);
   }
@@ -254,9 +259,7 @@ export function getAutomationCatalog() {
     // works" failure this whole pass exists to remove.
     actions: ACTION_DEFINITIONS.map(({ schema: _schema, ...definition }) => {
       const preferenceGated = definition.type === 'carrier.prefer' || definition.type === 'service.prefer';
-      const available = preferenceGated
-        ? isAutomationPreferenceRankingEnabled()
-        : definition.available;
+      const available = actionAvailable(definition);
       return {
         ...definition,
         available,

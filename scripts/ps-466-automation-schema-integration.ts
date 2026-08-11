@@ -37,6 +37,13 @@ const recoveryMigration = await readFile('drizzle/0080_ps466_automation_recovery
 await pg.exec(recoveryMigration);
 const controlsMigration = await readFile('drizzle/0081_ps466_automation_shipping_controls.sql', 'utf8');
 await pg.exec(controlsMigration);
+const runRecoveryMigration = await readFile('drizzle/0091_ps466_automation_run_recovery.sql', 'utf8');
+await pg.exec(runRecoveryMigration);
+await pg.exec(`
+  create index if not exists automation_runs_recovery_idx
+    on automation_runs (status, lease_expires_at, started_at, id)
+    where status = 'running'
+`);
 
 const required = [
   'automation_rules',
@@ -192,18 +199,20 @@ const indexes = await pg.query<{ indexname: string }>(`
     'automation_action_results_idempotency_unq',
     'automation_action_results_reclaim_idx',
     'automation_outbox_ready_idx',
-    'automation_outbox_reclaim_idx'
+    'automation_outbox_reclaim_idx',
+    'automation_runs_recovery_idx'
   )
 `);
-assert.equal(indexes.rows.length, 8, 'runtime-critical scope, activation, idempotency, and recovery indexes exist');
+assert.equal(indexes.rows.length, 9, 'runtime-critical scope, activation, idempotency, and recovery indexes exist');
 
 const leaseColumns = await pg.query<{ table_name: string; column_name: string }>(`
   select table_name, column_name
   from information_schema.columns
   where (table_name = 'automation_action_results' and column_name in ('attempt_count', 'lease_token', 'lease_expires_at', 'updated_at'))
      or (table_name = 'automation_outbox' and column_name in ('lock_token', 'lease_expires_at'))
+     or (table_name = 'automation_runs' and column_name in ('attempt_count', 'lease_token', 'lease_expires_at', 'recovery_count', 'last_recovery_code', 'last_recovered_at'))
 `);
-assert.equal(leaseColumns.rows.length, 6, 'effect and outbox recovery lease columns are migrated');
+assert.equal(leaseColumns.rows.length, 12, 'run, effect, and outbox recovery lease columns are migrated');
 
 const importedControls = await pg.query<{
   control_type: string;
