@@ -47,6 +47,7 @@ async function acheck(name: string, fn: () => Promise<void>): Promise<void> {
 }
 
 const pause = await import('../src/services/automations/execution-pause.js');
+const { classifyAutomationResponse } = await import('../src/services/automations/response-classifier.js');
 const orchestrator = await import('../src/services/automations/orchestrator.js');
 
 // The child half: prove the ACTIVE path in a process that started without the variable, then
@@ -228,13 +229,60 @@ await acheck('a paused refusal carries a stable code and a deliberate status', a
   assert.match(thrown.code, /^AUTOMATION_/, 'the label-route mapper matches on the AUTOMATION_ prefix');
 });
 
-check('the manual route classifies before its generic fallback', () => {
+// ── classification is scoped to ONE endpoint, not the shared mapper ─────────
+//
+// errorResponse() serves 16 endpoints. Classifying at the top of it intercepted every
+// AUTOMATION_ code and silently stripped established fields: ShippingControlLockedError lost
+// `locked` and `reason`, AutomationDeleteBlockedError lost `reason`, AutomationConflictError
+// lost its specialised branch. The evaluation route got its contract; fifteen others quietly
+// lost theirs.
+{
   const src = readFileSync('src/routes/automations.ts', 'utf8');
-  const mapper = src.indexOf('function errorResponse');
-  const classified = src.indexOf('classifyAutomationResponse(', mapper);
-  const fallback = src.indexOf("'Automation request failed'", mapper);
-  assert.ok(classified > -1, 'the mapper must delegate to the shared classifier');
-  assert.ok(classified < fallback, 'and must do so before the generic 400 fallback');
+  const mapperStart = src.indexOf('function errorResponse');
+  const mapperEnd = src.indexOf('\napp.get', mapperStart);
+  const mapperBody = src.slice(mapperStart, mapperEnd);
+
+  check('the SHARED mapper does not classify', () => {
+    assert.ok(
+      !/^\s*const automation = classifyAutomationResponse\(/m.test(mapperBody),
+      'classifying in the shared mapper intercepts 15 unrelated endpoint contracts',
+    );
+  });
+
+  check('the specialised contracts still reach their own branches', () => {
+    // Each of these carries an AUTOMATION_ code and WOULD have been swallowed by a
+    // classifier at the top of this mapper.
+    assert.match(mapperBody, /ShippingControlLockedError/);
+    assert.match(mapperBody, /locked: error\.locked, reason: error\.reason/);
+    assert.match(mapperBody, /AutomationConflictError/);
+    assert.match(mapperBody, /AutomationDeleteBlockedError/);
+    assert.match(mapperBody, /reason: error\.reason/);
+  });
+
+  check('classification is scoped to the manual evaluation endpoint', () => {
+    const endpoint = src.indexOf("app.post('/orders/:orderId/evaluate'");
+    assert.ok(endpoint > -1);
+    const endpointBody = src.slice(endpoint, src.indexOf('\napp.', endpoint + 10));
+    assert.match(endpointBody, /classifyAutomationResponse\(/,
+      'the one ingress that can raise a paused rejection must classify');
+    assert.match(endpointBody, /return errorResponse\(c, error\)/,
+      'and must still fall back to the shared mapper for everything else');
+  });
+}
+
+check('a shipping-control lock keeps locked and reason', () => {
+  // The classifier must DECLINE to own this: it is a specialised contract, not a paused or
+  // preflight rejection of an evaluation.
+  const locked = Object.assign(new Error('Control is locked'), {
+    code: 'AUTOMATION_SHIPPING_CONTROL_LOCKED', locked: true, reason: 'carrier disabled',
+  });
+  const classified = classifyAutomationResponse(locked);
+  // It still classifies as an automation code — that is expected — which is exactly why it
+  // must never reach the classifier from the shared mapper.
+  assert.ok(classified, 'the prefix does match, which is why scoping matters');
+  assert.equal(classified.body.code, 'AUTOMATION_SHIPPING_CONTROL_LOCKED');
+  assert.ok(!('locked' in classified.body), 'the classifier body has no place for locked');
+  assert.ok(!('reason' in classified.body), 'nor for reason — hence endpoint scoping');
 });
 
 // ── the shared response classifier ──────────────────────────────────────────
@@ -246,7 +294,6 @@ check('the manual route classifies before its generic fallback', () => {
 // cutover evidence on a day nobody was cutting over. The RESPONSE is identical for both; the
 // EVENT is not, which is what `kind` carries.
 {
-  const { classifyAutomationResponse } = await import('../src/services/automations/response-classifier.js');
 
   check('a cutover pause classifies as kind=paused', () => {
     const r = classifyAutomationResponse(new pause.AutomationExecutionPausedError());
@@ -327,6 +374,23 @@ check('the manual route classifies before its generic fallback', () => {
       'the label route must not keep its own prefix rule');
     assert.ok(!/e\.code\.startsWith\('AUTOMATION_'\)/.test(src),
       'the independent prefix match must be gone, or the two rules can drift again');
+  });
+
+  check('route details cannot overwrite classifier-owned fields', () => {
+    const src = readFileSync('src/routes/labels.ts', 'utf8');
+    assert.match(
+      src,
+      /\{ \.\.\.details, \.\.\.automationResponse\.body \}/,
+      'classifier fields must spread LAST — details may add context, never replace the contract',
+    );
+    // Prove the semantics, not just the spelling: a details object carrying its own code and
+    // retryable must lose to the classifier.
+    const details = { code: 'NOT_AUTOMATION', retryable: false, orderId: 7 };
+    const body = classifyAutomationResponse(new pause.AutomationExecutionPausedError())!.body;
+    const merged = { ...details, ...body };
+    assert.equal(merged.code, 'AUTOMATION_EXECUTION_PAUSED', 'the classifier code wins');
+    assert.equal(merged.retryable, true, 'and its retryable flag wins');
+    assert.equal(merged.orderId, 7, 'while unrelated context is preserved');
   });
 
   check('the RATE route classifies before its generic 500', () => {

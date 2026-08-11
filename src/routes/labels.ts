@@ -187,7 +187,12 @@ function handleCreateError(c: Context, err: unknown): Response {
   // PS-466: same shared owner as the manual and rate routes.
   const automationResponse = classifyAutomationResponse(e);
   if (automationResponse) {
-    return c.json({ ...automationResponse.body, ...details }, automationResponse.status);
+    // Classifier fields LAST: route-supplied details may add context but must never replace
+    // the canonical error/code/retryable. Spreading details second would let an error carrying
+    // its own `code` overwrite the classifier's — which defeats the point of having one
+    // response authority, and could downgrade a paused refusal into something a caller treats
+    // differently.
+    return c.json({ ...details, ...automationResponse.body }, automationResponse.status);
   }
   // Per user override unlock shipped data on 2026-07-25: expose only the
   // backend fail-closed verdict; this route does not bypass terminal guards.

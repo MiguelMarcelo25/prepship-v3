@@ -129,10 +129,17 @@ function errorResponse(c: { json(value: Record<string, unknown>, status: 400 | 4
   // PS-466 cutover: a paused refusal is deliberate and retryable, so it must not fall through
   // to a generic 400. Without this an operator pausing for cutover would see the manual
   // endpoint fail with an indistinguishable "Automation request failed".
-  // PS-466: classified through the shared owner so the manual, rate and label ingresses
-  // cannot drift apart on status or code.
-  const automation = classifyAutomationResponse(error);
-  if (automation) return c.json(automation.body, automation.status);
+  // PS-466: the automation-response classifier is deliberately NOT applied here.
+  //
+  // This mapper serves 16 endpoints, and the classifier recognises every AUTOMATION_ code —
+  // so putting it first intercepted established contracts and silently stripped their fields:
+  // ShippingControlLockedError lost `locked` and `reason`, AutomationDeleteBlockedError lost
+  // `reason`, AutomationConflictError lost its specialised branch.
+  //
+  // Classification is scoped to the manual evaluation endpoint instead, which is the only
+  // ingress in this file that can raise a paused/preflight rejection. Scoping by ENDPOINT
+  // rather than by branch ordering means a future AUTOMATION_ code cannot regress these
+  // contracts by being added in the wrong place.
   if (error instanceof ShippingControlPolicyError) {
     return c.json({ error: error.message, locked: error.locked, reason: error.reason }, 409);
   }
@@ -340,6 +347,12 @@ app.post('/orders/:orderId/evaluate', requireInternalPermission('automations:rep
       scope: scope(c as never),
     }) });
   } catch (error) {
+    // PS-466: this is the only endpoint in this file that can raise a paused or preflight
+    // automation rejection, so classification is scoped here rather than to the shared
+    // mapper — which serves 16 endpoints whose established contracts it would otherwise
+    // intercept.
+    const automation = classifyAutomationResponse(error);
+    if (automation) return c.json(automation.body, automation.status);
     return errorResponse(c, error);
   }
 });
