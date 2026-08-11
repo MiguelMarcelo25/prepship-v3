@@ -275,6 +275,31 @@ export const billingBoxResolutions = pgTable(
 
 export type BillingBoxResolution = typeof billingBoxResolutions.$inferSelect;
 
+// PS-498 — the canonical owner of an order's operator-authored billing DESCRIPTION.
+//
+// One row per order holding the sentence the operator wrote to explain why that
+// order's invoice line was corrected, plus who wrote it and when. Captured per
+// row by the Import Box Size & Shipping grid; rendered READ-ONLY in the Edit
+// Billing Detail modal.
+//
+// It is NOT a box decision and NOT a money input: generateLineItems never reads
+// this table, and regeneration (which deletes/recreates billing_line_items) must
+// never touch it. Unlike the `note` column on billingBoxResolutions,
+// billingFeeWaivers and billing_manual_overrides — all of which are synthesized
+// from the edit `reason` on every save — this value is written ONLY when the
+// caller explicitly supplies one, so a later manual edit cannot clobber it.
+export const billingOrderDescriptions = pgTable('billing_order_descriptions', {
+  orderId: integer()
+    .primaryKey()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  description: text().notNull(),
+  savedBy: text(),
+  savedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+});
+
+export type BillingOrderDescription = typeof billingOrderDescriptions.$inferSelect;
+
 // PS-373 (slice 2) — frozen per-period storage-billing PROOF sidecar.
 //
 // The one `storage` billing_line_items row carries only a display total and a

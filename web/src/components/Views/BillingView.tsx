@@ -1474,6 +1474,10 @@ export default function BillingView() {
         ? row.packageId
         : (current?.packageId ? Number(current.packageId) : null),
       reason,
+      // PS-498: only sent when the row actually carries one. Omitting the key is
+      // what tells the backend to leave any stored description alone — an empty
+      // string would be rejected, not treated as a clear.
+      ...(row.description ? { orderDescription: row.description } : {}),
     }, { deferReads: true })
   }
 

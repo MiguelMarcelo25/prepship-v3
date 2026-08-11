@@ -11,6 +11,7 @@ export type BulkImportParsedRow = {
   orderNumberRaw: string
   boxRaw: string
   shippingRaw: string
+  descriptionRaw: string
 }
 
 export type BulkImportStatus =
@@ -19,6 +20,7 @@ export type BulkImportStatus =
   | 'unknown_box'
   | 'ambiguous_box'
   | 'bad_shipping'
+  | 'bad_description'
   | 'duplicate'
   | 'nothing_to_change'
 
@@ -29,9 +31,24 @@ export type BulkImportResolvedRow = {
   packageId: number | null
   packageName: string | null
   shipping: number | null
+  /**
+   * PS-498 — the operator's per-order description, trimmed. Empty string when the
+   * row carries none. Distinct from `detail`, which is this file's explanation of
+   * a status; this is the human's own sentence and it travels to the API, the
+   * database and the Edit modal under this one name.
+   */
+  description: string
   status: BulkImportStatus
   detail: string
 }
+
+/**
+ * PS-498 — the shortest description we will send. The description REPLACES the
+ * shared reason for its row, and the API's `reason` is `min(3)`. Checking it here
+ * means a 2-character description is refused in the grid, instead of sailing
+ * through and returning a server 400 about a "reason" the operator never typed.
+ */
+const MIN_DESCRIPTION_LENGTH = 3
 
 type LooseRow = Record<string, unknown>
 
@@ -65,38 +82,58 @@ export function parseImportMoney(raw: string): number | null {
 
 /**
  * Accepts a paste from Google Sheets (tab-separated) or CSV.
- * Column order is fixed: Order #, Box, Shipping. Box and Shipping may be blank —
- * a blank column means "leave that field alone".
+ * Column order is fixed: Order #, Box, Shipping, Description. Any column may be
+ * blank — a blank Box or Shipping means "leave that field alone", and a blank
+ * Description means the shared fallback reason applies to that row.
  */
 /**
- * Split one line into [order, box, shipping].
+ * Split one line into [order, box, shipping, description].
+ *
+ * A SPACE-SEPARATED LINE NEVER YIELDS A DESCRIPTION, and that is a refusal rather
+ * than an oversight. Once both the box and the description may contain spaces,
+ * "2555 12x10x3 20.72 Canada re-ship" is genuinely undecidable — "Canada re-ship"
+ * is indistinguishable from a box named "Custom 12x10x3". Any heuristic here is a
+ * guess, and a wrong guess writes the wrong box onto a real invoice. Instead the
+ * tail is swallowed into the box, no package matches, and the row refuses with
+ * "Box not found" — loud, and nothing is written. Paste with tabs or commas
+ * (which is what Sheets and CSV produce anyway), or type into the Description cell.
  *
  * Tabs and commas are unambiguous separators. Plain spaces are not — a box can
  * legitimately be "Custom 12x10x3" — so for a space-separated line we anchor on
  * the ends instead: first token is the order, a trailing money-looking token is
  * the shipping, and whatever remains in the middle is the box.
  */
-function splitImportLine(line: string): [string, string, string] {
+function splitImportLine(line: string): [string, string, string, string] {
   if (line.includes('\t')) {
-    const [a = '', b = '', c = ''] = line.split('\t').map((cell) => cell.trim())
-    return [a, b, c]
+    const cells = line.split('\t')
+    const [a = '', b = '', c = ''] = cells.map((cell) => cell.trim())
+    // Join the tail rather than taking cells[3], so a stray extra tab typed
+    // inside the description truncates nothing.
+    return [a, b, c, cells.slice(3).join(' ').trim()]
   }
   if (line.includes(',')) {
-    const [a = '', b = '', c = ''] = line.split(',').map((cell) => cell.trim())
-    return [a, b, c]
+    const parts = line.split(',')
+    const [a = '', b = '', c = ''] = parts.map((cell) => cell.trim())
+    // Only the FIRST THREE commas are separators — a description legitimately
+    // contains commas ("Canada re-ship, external Unishippers cost"). Slice the
+    // ORIGINAL string past the third comma instead of re-joining trimmed parts,
+    // so interior spacing survives exactly as typed. A line with <=3 fields
+    // yields '' here and behaves byte-identically to before.
+    const head = parts.slice(0, 3).join(',')
+    return [a, b, c, parts.length > 3 ? line.slice(head.length + 1).trim() : '']
   }
 
   const tokens = line.trim().split(/\s+/).filter(Boolean)
-  if (tokens.length === 0) return ['', '', '']
+  if (tokens.length === 0) return ['', '', '', '']
   const order = tokens[0]!
   const rest = tokens.slice(1)
-  if (rest.length === 0) return [order, '', '']
+  if (rest.length === 0) return [order, '', '', '']
 
   const last = rest[rest.length - 1]!
   if (parseImportMoney(last) != null) {
-    return [order, rest.slice(0, -1).join(' '), last]
+    return [order, rest.slice(0, -1).join(' '), last, '']
   }
-  return [order, rest.join(' '), '']
+  return [order, rest.join(' '), '', '']
 }
 
 export function parseBulkImportText(text: string): BulkImportParsedRow[] {
@@ -104,11 +141,12 @@ export function parseBulkImportText(text: string): BulkImportParsedRow[] {
   const lines = String(text ?? '').split(/\r?\n/)
   lines.forEach((line, index) => {
     if (!line.trim()) return
-    const [orderNumberRaw, boxRaw, shippingRaw] = splitImportLine(line)
-    // Skip a pasted header row.
+    const [orderNumberRaw, boxRaw, shippingRaw, descriptionRaw] = splitImportLine(line)
+    // Skip a pasted header row. Tests the FIRST cell only, so a header carrying a
+    // fourth "Description" column still skips.
     if (index === 0 && /order/i.test(orderNumberRaw) && !/^\d+$/.test(orderNumberRaw)) return
     if (!orderNumberRaw) return
-    out.push({ lineNumber: index + 1, orderNumberRaw, boxRaw, shippingRaw })
+    out.push({ lineNumber: index + 1, orderNumberRaw, boxRaw, shippingRaw, descriptionRaw })
   })
   return out
 }
@@ -118,16 +156,25 @@ export function parseBulkImportText(text: string): BulkImportParsedRow[] {
  * here — the operator already put each value in its own input.
  */
 export function bulkImportRowsFromFields(
-  fields: Array<{ orderNumberRaw: string; boxRaw: string; shippingRaw: string }>,
+  fields: Array<{
+    orderNumberRaw: string
+    boxRaw: string
+    shippingRaw: string
+    descriptionRaw?: string
+  }>,
 ): BulkImportParsedRow[] {
   const out: BulkImportParsedRow[] = []
   fields.forEach((field, index) => {
     const orderNumberRaw = String(field.orderNumberRaw ?? '').trim()
     const boxRaw = String(field.boxRaw ?? '').trim()
     const shippingRaw = String(field.shippingRaw ?? '').trim()
-    // A wholly empty row is the operator's blank line, not an error.
-    if (!orderNumberRaw && !boxRaw && !shippingRaw) return
-    out.push({ lineNumber: index + 1, orderNumberRaw, boxRaw, shippingRaw })
+    const descriptionRaw = String(field.descriptionRaw ?? '').trim()
+    // A wholly empty row is the operator's blank line, not an error. The
+    // description MUST be part of this test: without it, typing only a
+    // description makes the row vanish from the resolved list and the operator
+    // sees no status at all for text they just typed.
+    if (!orderNumberRaw && !boxRaw && !shippingRaw && !descriptionRaw) return
+    out.push({ lineNumber: index + 1, orderNumberRaw, boxRaw, shippingRaw, descriptionRaw })
   })
   return out
 }
@@ -181,6 +228,7 @@ export function resolveBulkImportRows(
   const seen = new Set<string>()
 
   return parsed.map((row) => {
+    const description = String(row.descriptionRaw ?? '').trim()
     const base = {
       lineNumber: row.lineNumber,
       orderNumberRaw: row.orderNumberRaw,
@@ -188,6 +236,10 @@ export function resolveBulkImportRows(
       packageId: null as number | null,
       packageName: null as string | null,
       shipping: null as number | null,
+      // Set in `base` so EVERY branch below — including the refusals — carries the
+      // operator's text back to the grid, and so it reaches BulkImportReadyRow for
+      // free via the Omit<> below.
+      description,
     }
 
     const orderKey = normalizeKey(row.orderNumberRaw)
@@ -227,8 +279,33 @@ export function resolveBulkImportRows(
       }
     }
 
+    // Placed AFTER box/shipping so the common problems surface first — an operator
+    // fixing one thing per round trip is the failure this ordering avoids.
+    if (description && description.length < MIN_DESCRIPTION_LENGTH) {
+      return {
+        ...base,
+        orderId,
+        packageId,
+        packageName,
+        shipping,
+        status: 'bad_description' as const,
+        detail: `Description must be at least ${MIN_DESCRIPTION_LENGTH} characters`,
+      }
+    }
+
     if (packageId == null && shipping == null) {
-      return { ...base, orderId, status: 'nothing_to_change' as const, detail: 'No box and no shipping given' }
+      // A description alone is deliberately NOT an edit. Applying a row re-sends
+      // the whole invoice line at its current values, which would mint durable
+      // manual overrides for three line types that did not previously exist —
+      // turning "add a note" into "pin three amounts that survive regeneration".
+      return {
+        ...base,
+        orderId,
+        status: 'nothing_to_change' as const,
+        detail: description
+          ? 'A description alone is not an invoice edit — add a Box or Shipping'
+          : 'No box and no shipping given',
+      }
     }
 
     return {
@@ -265,6 +342,27 @@ export const BULK_IMPORT_STATUS_LABEL: Record<BulkImportStatus, string> = {
   unknown_box: 'Box not found',
   ambiguous_box: 'Box ambiguous',
   bad_shipping: 'Bad amount',
+  bad_description: 'Description too short',
   duplicate: 'Duplicate',
   nothing_to_change: 'Nothing to change',
+}
+
+/**
+ * PS-498 — which reason a ready row is applied with. The ONE home for the
+ * precedence rule: the row's own description wins, the shared box is the fallback
+ * for rows without one, and `null` means the row cannot be applied yet.
+ *
+ * Consumed by BOTH the Apply button's enable-gate and the apply loop. That is the
+ * point of it being a function rather than two expressions: a gate that disagrees
+ * with the send path either blocks work that would have succeeded, or sends a
+ * request the server rejects for a reason the operator cannot see.
+ */
+export function bulkImportReasonFor(
+  row: Pick<BulkImportResolvedRow, 'description'>,
+  sharedReason: string,
+): string | null {
+  const own = String(row.description ?? '').trim()
+  if (own.length >= MIN_DESCRIPTION_LENGTH) return own
+  const shared = String(sharedReason ?? '').trim()
+  return shared.length >= MIN_DESCRIPTION_LENGTH ? shared : null
 }

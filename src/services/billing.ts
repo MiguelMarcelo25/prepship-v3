@@ -76,6 +76,7 @@ import {
   manualBillingOverrideLabel,
   readBillingManualOverrides,
 } from './billing-manual-overrides';
+import { readBillingOrderDescriptions } from './billing-order-descriptions';
 import { getBundlesForOrders } from './shipment-bundles/bundle-read-model';
 import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-policy';
 import { env } from '../lib/env';
@@ -2769,6 +2770,13 @@ export async function billingDetails(input: GenerateInput) {
   );
   const feeWaiverByOrderId = await readBillingFeeWaivers(detailOrderIds);
   const manualBillingOverrideByOrderId = await readBillingManualOverrides(detailOrderIds);
+  // PS-498: the operator's per-order description, rendered read-only in the Edit
+  // Billing Detail modal. Plain await, NOT requireBillingRegenerationRead — that
+  // wrapper exists because a missing MONEY sidecar would silently re-bill, and
+  // this is not a money input. Equally it is not try/catch-swallowed: a swallowed
+  // read would show "no description" for an order that has one, which is a silent
+  // lie about who annotated an invoice. Either the true value, or an error.
+  const orderDescriptionByOrderId = await readBillingOrderDescriptions(detailOrderIds);
   const manuallyResolvedBoxOrderIds = new Set<number>();
   if (detailOrderIds.length) {
     await ensureBillingBoxResolutionsSchema();
@@ -2960,6 +2968,11 @@ export async function billingDetails(input: GenerateInput) {
       });
       const feeWaiver = row.orderId != null ? feeWaiverByOrderId.get(row.orderId) ?? null : null;
       const feeWaived = feeWaiver?.decision === 'waived';
+      // PS-498: keyed per ORDER, so every line row of the order carries the same
+      // value — which is what makes it safe under toBillingDetailOrderRows'
+      // collapse regardless of which line lands first.
+      const orderDescription =
+        row.orderId != null ? orderDescriptionByOrderId.get(row.orderId) ?? null : null;
       const billingStatus = resolveBillingRowStatus({
         lineType,
         orderStatus: detailOrderStatus,
@@ -3064,6 +3077,13 @@ export async function billingDetails(input: GenerateInput) {
         // null = undecided; the FE badges "Prep fee waived" when true.
         feeWaived,
         feeWaiverDecision: feeWaiver?.decision ?? null,
+        // PS-498: the operator's durable per-order description + attribution.
+        // Display only — it never feeds manualBillingOverrideLabels, billingBadges
+        // or resolveBillingRowStatus, so annotating an order cannot change how the
+        // row is classified. savedAt is already an ISO string from the owner.
+        orderDescription: orderDescription?.description ?? null,
+        orderDescriptionSavedBy: orderDescription?.savedBy ?? null,
+        orderDescriptionSavedAt: orderDescription?.savedAt ?? null,
       };
     })
   );

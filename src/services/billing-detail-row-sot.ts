@@ -83,6 +83,22 @@ export interface BillingDetailRowDto {
   returnReference?: string | null;
   manualBillingOverrideLineTypes?: string[];
   manualBillingOverrideLabels?: string[];
+  /**
+   * PS-498 — the operator's own sentence explaining why this order's invoice line
+   * was corrected, plus who saved it and when. Free text authored by a human, so
+   * unlike every other text field here it is NOT a backend classification: the FE
+   * renders it read-only and never sends it back from the Edit modal.
+   *
+   * Named `orderDescription`, not `description`: the DTO already receives a
+   * generator-owned `description` key from billing_line_items via the first-line
+   * spread, and that one is parsed by regex elsewhere.
+   *
+   * `orderDescriptionSavedAt` is an ISO STRING, not a Date — carryText below is
+   * `typeof value === 'string'` gated and would silently drop a Date.
+   */
+  orderDescription?: string | null;
+  orderDescriptionSavedBy?: string | null;
+  orderDescriptionSavedAt?: string | null;
 }
 
 function numberValue(value: unknown): number {
@@ -297,6 +313,14 @@ const TEXT_CARRY_FIELDS = [
   'billingAdjustmentId',
   'adjustmentKind',
   'adjustmentSource',
+  // PS-498: the operator's per-order description + attribution. Every line row of
+  // an order carries the same value (the lookup is keyed by orderId), so the
+  // first-line spread already carries it — but the spread is an accident of which
+  // line sorts first, and this table is the DECLARED owner of what survives the
+  // collapse. Listed here so the guarantee does not depend on row order.
+  'orderDescription',
+  'orderDescriptionSavedBy',
+  'orderDescriptionSavedAt',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [

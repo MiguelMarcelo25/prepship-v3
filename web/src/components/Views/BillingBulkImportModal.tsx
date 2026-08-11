@@ -5,6 +5,7 @@ import type { BillingDetailDto } from './billing-parity'
 import {
   BULK_IMPORT_STATUS_LABEL,
   bulkImportReadyRows,
+  bulkImportReasonFor,
   bulkImportRowsFromFields,
   parseBulkImportText,
   resolveBulkImportRows,
@@ -23,6 +24,7 @@ type ImportField = {
   orderNumberRaw: string
   boxRaw: string
   shippingRaw: string
+  descriptionRaw: string
 }
 
 type BillingBulkImportModalProps = {
@@ -37,7 +39,7 @@ type BillingBulkImportModalProps = {
 
 let nextFieldId = 1
 function emptyField(): ImportField {
-  return { id: nextFieldId++, orderNumberRaw: '', boxRaw: '', shippingRaw: '' }
+  return { id: nextFieldId++, orderNumberRaw: '', boxRaw: '', shippingRaw: '', descriptionRaw: '' }
 }
 
 export function BillingBulkImportModal({
@@ -71,7 +73,18 @@ export function BillingBulkImportModal({
 
   const ready = useMemo(() => bulkImportReadyRows(resolved), [resolved])
   const problems = useMemo(() => resolved.filter((row) => row.status !== 'ready'), [resolved])
-  const canApply = ready.length > 0 && reason.trim().length >= 3 && !applying
+  // PS-498: a ready row is blocked only when it has neither its own description
+  // nor a usable shared fallback. Derived from bulkImportReasonFor — the same
+  // function apply() sends with — so the enable-gate and the send path cannot
+  // disagree about which rows are applicable.
+  const blockedLineNumbers = useMemo(
+    () =>
+      new Set(
+        ready.filter((row) => bulkImportReasonFor(row, reason) == null).map((row) => row.lineNumber),
+      ),
+    [ready, reason],
+  )
+  const canApply = ready.length > 0 && blockedLineNumbers.size === 0 && !applying
 
   function updateField(id: number, key: keyof Omit<ImportField, 'id'>, value: string) {
     setFields((current) => current.map((field) => (field.id === id ? { ...field, [key]: value } : field)))
@@ -114,6 +127,7 @@ export function BillingBulkImportModal({
           orderNumberRaw: row.orderNumberRaw,
           boxRaw: row.boxRaw,
           shippingRaw: row.shippingRaw,
+          descriptionRaw: row.descriptionRaw,
         }
         if (next[target]) next[target] = { ...next[target]!, ...incoming }
         else next.push({ ...emptyField(), ...incoming })
@@ -140,7 +154,9 @@ export function BillingBulkImportModal({
       if (fieldId != null) setRowState((current) => ({ ...current, [fieldId]: { state: 'applying' } }))
       let ok = true
       try {
-        await onApplyRow(row, reason.trim())
+        // PS-498: the row's own description is its reason; the shared box is only
+        // the fallback. canApply has already guaranteed this is non-null.
+        await onApplyRow(row, bulkImportReasonFor(row, reason) ?? reason.trim())
         results.push({ lineNumber: row.lineNumber, orderNumberRaw: row.orderNumberRaw, ok: true, message: 'Applied' })
         if (fieldId != null) {
           setRowState((current) => ({ ...current, [fieldId]: { state: 'done' } }))
@@ -148,7 +164,9 @@ export function BillingBulkImportModal({
           // needs attention.
           setFields((current) =>
             current.map((field) =>
-              field.id === fieldId ? { ...field, orderNumberRaw: '', boxRaw: '', shippingRaw: '' } : field,
+              field.id === fieldId
+                ? { ...field, orderNumberRaw: '', boxRaw: '', shippingRaw: '', descriptionRaw: '' }
+                : field,
             ),
           )
         }
@@ -196,17 +214,19 @@ export function BillingBulkImportModal({
 
         <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '4px 0 8px' }}>
           Fill a row per order, or paste several rows straight into an Order # cell. Leave Box or
-          Shipping empty to leave that field alone. Each row is saved as a normal invoice-line edit
-          with the reason below.
+          Shipping empty to leave that field alone. A row&rsquo;s Description is saved on that order
+          and shown again when you open it — rows without one use the shared reason below. Pasted
+          columns must be separated by tabs or commas for the Description to come through.
         </p>
 
         <div style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 8 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--muted)', fontSize: 10.5, textTransform: 'uppercase' }}>
-                <th style={{ padding: '2px 4px', width: '22%' }}>Order #</th>
-                <th style={{ padding: '2px 4px', width: '30%' }}>Box Size</th>
-                <th style={{ padding: '2px 4px', width: '20%' }}>Shipping</th>
+                <th style={{ padding: '2px 4px', width: '14%' }}>Order #</th>
+                <th style={{ padding: '2px 4px', width: '18%' }}>Box Size</th>
+                <th style={{ padding: '2px 4px', width: '13%' }}>Shipping</th>
+                <th style={{ padding: '2px 4px', width: '30%' }}>Description</th>
                 <th style={{ padding: '2px 4px' }}>Status</th>
                 <th style={{ width: 28 }} aria-label="Remove row" />
               </tr>
@@ -252,6 +272,17 @@ export function BillingBulkImportModal({
                         onChange={(event) => updateField(field.id, 'shippingRaw', event.target.value)}
                       />
                     </td>
+                    <td style={{ padding: '2px 4px' }}>
+                      <input
+                        className="ship-input"
+                        style={cell}
+                        value={field.descriptionRaw}
+                        disabled={applying}
+                        placeholder="DHL eCommerce Parcel Direct to Gatineau, Quebec"
+                        aria-label={`Description, row ${index + 1}`}
+                        onChange={(event) => updateField(field.id, 'descriptionRaw', event.target.value)}
+                      />
+                    </td>
                     <td style={{ padding: '2px 4px', fontSize: 11 }}>
                       {rowState[field.id]?.state === 'applying' ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--muted)' }}>
@@ -264,6 +295,10 @@ export function BillingBulkImportModal({
                       ) : rowState[field.id]?.state === 'failed' ? (
                         <span style={{ color: '#b91c1c' }}>
                           Failed — {rowState[field.id]?.message}
+                        </span>
+                      ) : status && blockedLineNumbers.has(status.lineNumber) ? (
+                        <span style={{ color: '#b45309' }}>
+                          Needs a reason — add a Description or fill the shared reason
                         </span>
                       ) : status ? (
                         <span style={{ color: isProblem ? '#b45309' : '#15803d' }}>
@@ -308,7 +343,11 @@ export function BillingBulkImportModal({
 
         <label style={{ display: 'block', fontSize: 11.5, marginBottom: 8 }}>
           <span style={{ display: 'block', marginBottom: 2 }}>
-            Reason for edit <span style={{ color: 'var(--muted)' }}>(applied to every row, required)</span>
+            Reason for edit{' '}
+            <span style={{ color: 'var(--muted)' }}>
+              (used only for rows with no Description
+              {blockedLineNumbers.size ? ' — required' : ''})
+            </span>
           </span>
           <input
             className="ship-input"

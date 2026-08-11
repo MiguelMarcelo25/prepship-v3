@@ -9,6 +9,7 @@ const REQUIRED_RELATIONS = [
   'billing_finalization_group_locks',
   'billing_credit_notes',
   'billing_manual_overrides',
+  'billing_order_descriptions',
   'billing_storage_proof',
   'client_packing_rules',
   'client_sku_classes',
@@ -265,6 +266,11 @@ const REQUIRED_CONSTRAINTS = [
   'billing_line_items_adjustment_reference_chk',
   'billing_line_items_source_finalization_client_fk',
   'billing_line_items_adjustment_client_fk',
+  // PS-498: the non-blank CHECK IS the anti-blanking control for an operator's
+  // billing description — a later manual edit must never be able to empty it.
+  // A table that exists without its CHECK is a silently weaker guarantee, so
+  // boot must verify the constraint itself, not just the relation.
+  'billing_order_descriptions_description_chk',
   'print_queue_send_jobs_generation_nonnegative',
   'print_queue_send_jobs_chunk_sequence_positive',
   'print_queue_batch_job_items_attempt_count_nonnegative',
@@ -438,7 +444,8 @@ async function verifyRuntimeSchema(): Promise<void> {
       `Runtime schema is not migration-ready. Apply Drizzle migrations through ` +
         `the current release frontier (0074_billing_current_period_adjustments.sql, ` +
         `0075_inventory_quantity_sot.sql, 0077_ps462_billing_storage_month.sql, ` +
-        `0078_order_hazmat_declarations.sql, and 0081_ps466_automation_shipping_controls.sql). ` +
+        `0078_order_hazmat_declarations.sql, 0081_ps466_automation_shipping_controls.sql, ` +
+        `and 0091_billing_order_descriptions.sql). ` +
         `Missing: ${missing.slice(0, 20).join(', ')}`,
     );
   }

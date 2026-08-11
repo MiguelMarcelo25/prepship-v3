@@ -93,6 +93,7 @@
     "test:ps-462-inventory-sot": "npm run test:ps-439-inventory-sot && npm run test:ps-462-inventory-preparation-rollout && npm run test:ps-462-inventory-forward-rollback && npm run test:ps-462-inventory-correction-cutover && tsx scripts/ps-462-inventory-correction-packet-guard.ts && tsx scripts/ps-462-inventory-correction-packet.ts --self-test",
     "test:ps-462-billing-sot": "tsx scripts/ps-462-billing-boundary-guard.ts",
     "test:billing-bulk-import": "tsx scripts/billing-bulk-import-guard.ts",
+    "test:billing-order-description": "tsx scripts/billing-order-description-guard.ts",
     "best-rate:dims:dry-run": "tsx scripts/clear-invalid-best-rates.ts",
     "best-rate:dims:apply": "tsx scripts/clear-invalid-best-rates.ts --apply",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",

@@ -80,6 +80,10 @@ import {
   upsertBillingManualOverride,
   type ManualBillingOverrideLineType,
 } from '../services/billing-manual-overrides';
+import {
+  ensureBillingOrderDescriptionsSchema,
+  applyBillingOrderDescriptionPatch,
+} from '../services/billing-order-descriptions';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import {
@@ -594,6 +598,14 @@ const detailPatchSchema = z.object({
   // PS-462: every direct invoice-line edit requires an explicit reason. This
   // reason is frozen with actor + before/after values in the atomic audit row.
   reason: z.string().trim().min(3).max(500),
+  // PS-498: the operator's durable per-order description, owned by
+  // billing-order-descriptions.ts. A DIFFERENT field from `note` above, with a
+  // different owner and a different lifecycle: `note` is synthesized from
+  // `reason` on every save, this one is NEVER synthesized from anything. ABSENT
+  // means "leave the stored description alone", which is what makes a later
+  // manual edit unable to clobber an imported one. An explicit empty string is
+  // rejected rather than treated as a clear — there is no clear.
+  orderDescription: z.string().trim().min(1).max(500).optional(),
 });
 
 const hugrabShippingFloorRawSchema = z.object({
@@ -1059,6 +1071,7 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
   await ensureAuditLogSchema();
   if (prepFeePatchTouched) await ensureBillingFeeWaiverSchema();
   if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
+  if (body.orderDescription !== undefined) await ensureBillingOrderDescriptionsSchema();
 
   await db.transaction(async (tx) => {
     await assertBillingOrdersEditable(
@@ -1430,6 +1443,21 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
       }
     }
 
+    // PS-498: persist the operator's per-order description, if this request
+    // carries one. The owner decides whether a write happens at all — absent
+    // means leave it alone, and it builds no SQL in that case. Inside the
+    // transaction deliberately: assertBillingOrdersEditable has already run, so
+    // a finalized order refuses the description exactly as it refuses the money,
+    // and the audit insert below rolls it back with everything else.
+    const descriptionWritten = await applyBillingOrderDescriptionPatch(
+      {
+        orderId,
+        orderDescription: body.orderDescription,
+        savedBy: (c.get('email' as never) as string | undefined) ?? null,
+      },
+      tx,
+    );
+
     const after = await tx
       .select({
         id: billingLineItems.id,
@@ -1460,6 +1488,7 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
         clientId: body.clientId,
         orderId,
         reason: body.reason,
+        orderDescription: descriptionWritten ? body.orderDescription : null,
         before,
         after,
       },

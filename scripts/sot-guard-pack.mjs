@@ -70,6 +70,11 @@ const REQUIRED_GUARDS = [
   // invoice-line edit, so the refusals (unmatched order, ambiguous box, bad
   // amount, comma-as-decimal) are what stop a bad paste reaching an invoice.
   'test:billing-bulk-import',
+  // PS-498 per-order billing description. In the pack because the rule it owns is
+  // invisible to review: an absent field must LEAVE THE STORED VALUE ALONE, while
+  // every sibling note column in billing is deliberately re-synthesized from the
+  // edit reason on each save. Real Postgres (PGlite), executing the migration.
+  'test:billing-order-description',
   'test:recalculate-best-rate-strict',
   // ── Batch 2: label / postage integrity, plus two guards the sweep found RED ──
   //

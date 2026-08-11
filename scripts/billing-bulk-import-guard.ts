@@ -17,6 +17,7 @@ import {
   resolveBulkImportRows,
   resolveImportPackage,
   bulkImportReadyRows,
+  bulkImportReasonFor,
   bulkImportRowsFromFields,
 } from '../web/src/components/Views/billing-bulk-import';
 
@@ -312,6 +313,223 @@ check('a pasted box takes that box\'s saved client price', () => {
   assert.match(
     view,
     /packageCost: row\.packageId != null && billingEditPackagePrices\[row\.packageId\] != null/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PS-498 — per-row Description.
+// ---------------------------------------------------------------------------
+
+check('a tab paste carries a fourth Description column', () => {
+  const rows = parseBulkImportText('2515\t9x6x3\t20.83\tDHL eCommerce to Gatineau');
+  assert.equal(rows[0]!.descriptionRaw, 'DHL eCommerce to Gatineau');
+  assert.equal(rows[0]!.boxRaw, '9x6x3', 'the box must not absorb the description');
+  assert.equal(rows[0]!.shippingRaw, '20.83');
+});
+
+check('an extra tab inside the description does not truncate it', () => {
+  // cells.slice(3).join(' ') rather than cells[3]: a stray tab typed mid-sentence
+  // would otherwise silently drop everything after it.
+  const rows = parseBulkImportText('2515\t9x6x3\t20.83\tDHL eCommerce\tto Gatineau');
+  assert.equal(rows[0]!.descriptionRaw, 'DHL eCommerce to Gatineau');
+});
+
+check('a comma paste keeps commas INSIDE the description', () => {
+  // Only the first three commas separate. Slicing the original string also keeps
+  // the interior spacing exactly as typed.
+  const rows = parseBulkImportText('2515, 9x6x3, 20.83, Canada re-ship, external Unishippers cost');
+  assert.equal(rows[0]!.descriptionRaw, 'Canada re-ship, external Unishippers cost');
+  assert.equal(rows[0]!.boxRaw, '9x6x3');
+  assert.equal(rows[0]!.shippingRaw, '20.83');
+});
+
+check('a three-field line still parses byte-identically', () => {
+  for (const line of ['2515,9x6x3,20.83', '2515\t9x6x3\t20.83']) {
+    const rows = parseBulkImportText(line);
+    assert.equal(rows[0]!.descriptionRaw, '', `${line} must yield no description`);
+    assert.equal(rows[0]!.boxRaw, '9x6x3');
+    assert.equal(rows[0]!.shippingRaw, '20.83');
+  }
+});
+
+check('a space-separated line REFUSES rather than guessing a description', () => {
+  // "Canada re-ship" is indistinguishable from the box "Custom 12x10x3", so any
+  // heuristic here could write the wrong box onto a real invoice. Both token
+  // orderings must refuse, and neither may produce a description.
+  for (const line of ['2515 12x10x3 20.72 Canada re-ship', '2515 12x10x3 Canada re-ship 20.72']) {
+    const parsed = parseBulkImportText(line);
+    assert.equal(parsed[0]!.descriptionRaw, '', `${line} must not invent a description`);
+    const rows = resolveBulkImportRows(parsed, DETAILS, PACKAGES);
+    assert.equal(rows[0]!.status, 'unknown_box', `${line} must refuse`);
+    assert.equal(bulkImportReadyRows(rows).length, 0);
+  }
+});
+
+check('a description is trimmed and carried onto the ready row', () => {
+  const rows = resolveBulkImportRows(
+    bulkImportRowsFromFields([
+      { orderNumberRaw: '2515', boxRaw: '', shippingRaw: '20.83', descriptionRaw: '  Canada re-ship  ' },
+    ]),
+    DETAILS,
+    PACKAGES,
+  );
+  assert.equal(rows[0]!.status, 'ready');
+  assert.equal(rows[0]!.description, 'Canada re-ship');
+});
+
+check('a description under 3 characters blocks the row instead of 400ing later', () => {
+  // The description BECOMES the row's reason, and the API's reason is min(3). Left
+  // unchecked this returns a server error about a "reason" the operator never typed.
+  const rows = resolveBulkImportRows(
+    bulkImportRowsFromFields([
+      { orderNumberRaw: '2515', boxRaw: '', shippingRaw: '20.83', descriptionRaw: 'ab' },
+    ]),
+    DETAILS,
+    PACKAGES,
+  );
+  assert.equal(rows[0]!.status, 'bad_description');
+  assert.equal(bulkImportReadyRows(rows).length, 0);
+});
+
+check('a description alone is NOT an invoice edit', () => {
+  // Applying it would re-send the whole line and mint durable manual overrides for
+  // three line types that did not previously exist — an annotation becoming three
+  // pinned amounts that survive regeneration.
+  const rows = resolveBulkImportRows(
+    bulkImportRowsFromFields([
+      { orderNumberRaw: '2515', boxRaw: '', shippingRaw: '', descriptionRaw: 'Canada re-ship' },
+    ]),
+    DETAILS,
+    PACKAGES,
+  );
+  assert.equal(rows[0]!.status, 'nothing_to_change');
+  assert.match(rows[0]!.detail, /description alone/i, 'the detail must say why, not just "no box"');
+  assert.equal(bulkImportReadyRows(rows).length, 0);
+});
+
+check('a wholly blank row is still ignored, but a description-only row is not', () => {
+  assert.equal(
+    bulkImportRowsFromFields([
+      { orderNumberRaw: '', boxRaw: '', shippingRaw: '', descriptionRaw: '' },
+    ]).length,
+    0,
+    'a blank line is the operator\'s spacing, not an error',
+  );
+  // Without descriptionRaw in the emptiness test, text the operator just typed
+  // vanishes from the grid with no status shown at all.
+  const typed = bulkImportRowsFromFields([
+    { orderNumberRaw: '', boxRaw: '', shippingRaw: '', descriptionRaw: 'Canada re-ship' },
+  ]);
+  assert.equal(typed.length, 1);
+  assert.equal(typed[0]!.lineNumber, 1);
+});
+
+check('the row description wins over the shared reason, and gates Apply', () => {
+  const described = { description: 'Canada re-ship' };
+  const bare = { description: '' };
+  assert.equal(bulkImportReasonFor(described, ''), 'Canada re-ship', 'own description needs no fallback');
+  assert.equal(
+    bulkImportReasonFor(described, 'Bulk shipping correction'),
+    'Canada re-ship',
+    'the shared reason must never override a row that has its own',
+  );
+  assert.equal(bulkImportReasonFor(bare, 'ab'), null, 'a too-short shared reason blocks the row');
+  assert.equal(bulkImportReasonFor(bare, '  Bulk shipping correction  '), 'Bulk shipping correction');
+});
+
+check('the Apply gate and the send path use the SAME reason function', () => {
+  // Two expressions drift: a gate that disagrees with the send path either blocks
+  // work that would succeed, or sends a request rejected for an invisible reason.
+  const modal = readFileSync('web/src/components/Views/BillingBulkImportModal.tsx', 'utf8');
+  assert.match(modal, /const canApply = [\s\S]{0,120}blockedLineNumbers\.size === 0/);
+  assert.doesNotMatch(
+    modal,
+    /const canApply = [\s\S]{0,160}reason\.trim\(\)\.length >= 3/,
+    'the inline length rule must be gone, not duplicated beside the function',
+  );
+  assert.match(modal, /onApplyRow\(row, bulkImportReasonFor\(row, reason\)/);
+  assert.match(modal, /blockedLineNumbers[\s\S]{0,200}bulkImportReasonFor\(row, reason\) == null/);
+});
+
+check('the import sends the description only when the row carries one', () => {
+  // Omitting the key is what tells the backend to leave a stored description
+  // alone. Sending '' would be rejected, and sending the reason would clobber.
+  const view = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
+  const block = view.slice(
+    view.indexOf('async function handleBulkImportRow'),
+    view.indexOf('async function handleBulkImportFinished'),
+  );
+  assert.ok(block.length > 400, 'handleBulkImportRow slice is empty or truncated — negatives below would pass vacuously');
+  assert.match(block, /\.\.\.\(row\.description \? \{ orderDescription: row\.description \} : \{\}\)/);
+  assert.doesNotMatch(block, /orderDescription: reason/, 'the description must never be the reason');
+  assert.doesNotMatch(block, /orderDescription: ''/, 'never send an explicit blank');
+});
+
+check('the Edit Billing Detail modal shows the description READ-ONLY', () => {
+  const modal = readFileSync('web/src/components/Views/BillingEditDetailModal.tsx', 'utf8');
+  assert.match(modal, /row\.orderDescriptionSavedBy/, 'attribution must render');
+  assert.match(modal, /row\.orderDescriptionSavedAt/, 'timestamp must render');
+  // Read-only means read-only: no input binding, no draft field, no onChange.
+  assert.doesNotMatch(modal, /value=\{[^}]*orderDescription/, 'must not be bound to an input');
+  assert.doesNotMatch(modal, /onDraftChange\('orderDescription'/, 'must not be editable');
+
+  const cache = readFileSync('web/src/components/Views/billing-edit-draft-cache.ts', 'utf8');
+  assert.doesNotMatch(
+    cache,
+    /orderDescription/i,
+    'prefilling Reason from a saved description makes an old reason the reason for a NEW edit',
+  );
+  assert.match(cache, /reason: ''/, 'the reason field must still start empty');
+});
+
+check('the description does NOT leak into the billing table or the exports', () => {
+  // Scope was explicitly "Edit Billing Detail only".
+  const parity = readFileSync('web/src/components/Views/billing-parity.ts', 'utf8');
+  assert.doesNotMatch(parity, /orderDescription/i, 'no billing detail column');
+  const table = readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8');
+  assert.doesNotMatch(table, /orderDescription/i, 'no table cell');
+  const csv = readFileSync('src/routes/billing-invoice-csv.ts', 'utf8');
+  assert.doesNotMatch(csv, /orderDescription/i, 'operator notes must not reach a customer invoice');
+});
+
+check('the route delegates the write decision to the owner', () => {
+  // The only source-text assertion left, because standing the full PATCH up under
+  // PGlite (auth, clients, line items, finalization, audit) is out of scope. The
+  // POLICY it could hide has been moved into billing-order-descriptions.ts, which
+  // the behavioural guard executes — so the residual risk is "silently stops
+  // persisting", not "silently overwrites".
+  const route = readFileSync('src/routes/billing.ts', 'utf8');
+  const start = route.indexOf("app.patch('/details/:orderId");
+  // Line-ending agnostic on purpose: a literal '\r\n' anchor is how this repo has
+  // already produced silent false passes more than once.
+  const tail = start >= 0 ? route.slice(start) : '';
+  const endOffset = tail.search(/app\.post\(\s*'\/box-cost\/bulk\/preview'/);
+  const block = start >= 0 && endOffset > 0 ? tail.slice(0, endOffset) : '';
+  assert.ok(block.length > 2000, 'PATCH slice is empty or truncated — the negatives below would pass vacuously');
+  assert.match(block, /applyBillingOrderDescriptionPatch\(/, 'the route must call the owner');
+  assert.match(block, /orderDescription: body\.orderDescription,[\s\S]{0,200}\},\s*tx,/, 'the write must run on the transaction');
+  assert.doesNotMatch(
+    block,
+    /orderDescription: body\.orderDescription \?\?/,
+    'no fallback may be applied before the owner sees it',
+  );
+  // The sibling note columns must keep their own lifecycle, untouched.
+  assert.match(block, /body\.note \?\? `\$\{body\.reason\}/, 'billing_manual_overrides.note keeps its reason synthesis');
+  // Scope to the box upsert's own set{} block. A slice running to the end of the
+  // PATCH would swallow the description write that legitimately follows it and
+  // report a false failure — the mirror of the vacuous-pass problem above.
+  const boxUpsertStart = block.indexOf('.insert(billingBoxResolutions)');
+  const boxUpsert = boxUpsertStart >= 0 ? block.slice(boxUpsertStart, boxUpsertStart + 900) : '';
+  assert.ok(boxUpsert.includes('onConflictDoUpdate'), 'box-resolution upsert slice missed its set block');
+  assert.doesNotMatch(boxUpsert, /orderDescription/, 'the box-resolution upsert must never touch the description');
+});
+
+check('the description schema rejects a blank rather than treating it as a clear', () => {
+  const route = readFileSync('src/routes/billing.ts', 'utf8');
+  assert.match(
+    route,
+    /orderDescription: z\.string\(\)\.trim\(\)\.min\(1\)\.max\(500\)\.optional\(\)/,
+    'optional (absent = leave alone) but min(1) (blank = 400, never a silent clear)',
   );
 });
 

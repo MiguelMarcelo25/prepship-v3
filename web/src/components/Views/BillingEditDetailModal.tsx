@@ -377,6 +377,34 @@ export function BillingEditDetailModal({
           </div>
         ) : null}
 
+        {/* PS-498 — the operator's saved description for this order, rendered
+            READ-ONLY. Deliberately not an input and deliberately not prefilled
+            into the Reason for edit box below: an old reason silently becoming
+            the reason for a new edit would corrupt the audit trail. The only way
+            to change it is to re-import the order with new text. */}
+        {row.orderDescription ? (
+          <div
+            style={{
+              margin: '8px 0',
+              padding: '6px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'var(--bg2)',
+              fontSize: 11.5,
+              color: 'var(--text)',
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>Description</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{String(row.orderDescription)}</div>
+            <div style={{ color: 'var(--muted)', marginTop: 2 }}>
+              Saved by {String(row.orderDescriptionSavedBy || 'unknown')}
+              {row.orderDescriptionSavedAt
+                ? ` · ${formatBillingShipDate(row.orderDescriptionSavedAt)}`
+                : ''}
+            </div>
+          </div>
+        ) : null}
+
         {hasBillingNoBoxCostAlert(row) ? (
           <BillingNoBoxCostPreview
             rows={noBoxCostRows}
