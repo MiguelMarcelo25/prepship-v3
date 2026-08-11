@@ -86,6 +86,7 @@ await pg.exec(`
 
 const testDb = drizzle(pg, { casing: 'snake_case' });
 const {
+  resolveLegacyRecoveryCutoff,
   createPostgresAutomationExecutionStore,
   reapExpiredAutomationRuns,
 } = await import('../src/services/automations/postgres-store');
@@ -95,7 +96,10 @@ const recovered = await reapExpiredAutomationRuns({
   now,
   batchSize: 25,
 });
-assert.equal(recovered, 3, 'stale empty, mixed, and legacy rows terminalize; live leases remain fenced');
+// Two, not three. The legacy null-lease row (id 5) is NOT swept by default — sweeping it is
+// historical data mutation and now requires an explicit operator cutoff. Expired FENCED
+// leases still recover automatically, which is the whole point of deploying the worker.
+assert.equal(recovered, 2, 'expired fenced leases terminalize; legacy and live rows are left alone');
 
 const runs = await pg.query<{
   id: number;
@@ -110,9 +114,23 @@ assert.deepEqual(runs.rows.map(({ id, status, error_code, recovery_count, last_r
   { id: 2, status: 'failed', error_code: 'AUTOMATION_RUN_LEASE_EXPIRED', recovery_count: 1, last_recovery_code: 'AUTOMATION_RUN_LEASE_EXPIRED' },
   { id: 3, status: 'running', error_code: null, recovery_count: 0, last_recovery_code: null },
   { id: 4, status: 'running', error_code: null, recovery_count: 0, last_recovery_code: null },
-  { id: 5, status: 'failed', error_code: 'AUTOMATION_RUN_LEASE_EXPIRED', recovery_count: 1, last_recovery_code: 'AUTOMATION_RUN_LEASE_EXPIRED' },
+  // id 5 is a legacy null-lease row old enough to sweep, and it STAYS running: a deploy
+  // must not perform historical disposition as a side effect of shipping code.
+  { id: 5, status: 'running', error_code: null, recovery_count: 0, last_recovery_code: null },
   { id: 6, status: 'running', error_code: null, recovery_count: 0, last_recovery_code: null },
 ]);
+// The legacy cohort IS reachable, but only under an explicit bounded cutoff.
+assert.equal(
+  await reapExpiredAutomationRuns({
+    database: testDb as never, now, batchSize: 25, legacyCutoffRaw: '2026-08-11T11:30:00Z',
+  }),
+  1,
+  'an authorised cutoff recovers the legacy row that a default deploy left untouched',
+);
+assert.equal(
+  (await pg.query<{ status: string }>(`select status from automation_runs where id = 5`)).rows[0]?.status,
+  'failed',
+);
 assert.ok(runs.rows[0]?.completed_at, 'recovered runs receive one terminal timestamp');
 
 const effects = await pg.query<{
@@ -278,6 +296,241 @@ assert.deepEqual(fencedRow, { status: 'completed', lease_token: null });
   assert.equal(settled?.status, 'completed', 'the new owner completes the run it legitimately holds');
   assert.equal(settled?.recovery_count, 1, 'and the recovery history survives the later success');
   assert.equal(settled?.last_recovery_code, 'AUTOMATION_RUN_LEASE_EXPIRED');
+}
+
+// ── a stale run owner cannot ADMIT AN EFFECT after losing the run ────────────
+//
+// This fence matters more than the one on finish(). finish() protects run history; this
+// protects the HANDLER boundary, where tags, hazmat declarations, rate invalidations and any
+// future provider call actually happen. Without it a stale worker's finish() is refused, but
+// only after its side effect has already landed.
+{
+  const stalled = createPostgresAutomationExecutionStore(testDb as never);
+  const runId = await stalled.begin({
+    executionKey: 'effect-fence-run',
+    orderId: 400,
+    trigger: 'before_rate',
+    sourceEventId: 'effect-fence-event',
+    factsRevision: 'effect-fence-facts',
+    rulesetDigest: 'c'.repeat(64),
+    mode: 'apply',
+  });
+  const originalToken = (await pg.query<{ lease_token: string | null }>(
+    `select lease_token from automation_runs where id = $1`, [runId],
+  )).rows[0]?.lease_token;
+  assert.ok(originalToken, 'the first owner holds a token');
+
+  await pg.query(
+    `update automation_runs set started_at = $1, lease_expires_at = $1 where id = $2`,
+    ['2026-08-11T11:00:00Z', runId],
+  );
+  assert.equal(await reapExpiredAutomationRuns({ database: testDb as never, now, batchSize: 25 }), 1);
+
+  const successor = createPostgresAutomationExecutionStore(testDb as never);
+  assert.equal(await successor.begin({
+    executionKey: 'effect-fence-run',
+    orderId: 400,
+    trigger: 'before_rate',
+    sourceEventId: 'effect-fence-event',
+    factsRevision: 'effect-fence-facts',
+    rulesetDigest: 'c'.repeat(64),
+    mode: 'apply',
+  }), runId);
+  const successorToken = (await pg.query<{ lease_token: string | null }>(
+    `select lease_token from automation_runs where id = $1`, [runId],
+  )).rows[0]?.lease_token;
+  assert.ok(successorToken && successorToken !== originalToken, 'ownership moved to a NEW token');
+
+  const effectsBefore = (await pg.query(`select id from automation_action_results`)).rows.length;
+  await assert.rejects(
+    stalled.claimEffect({
+      runId, ruleId: 1, versionId: 10, actionIndex: 0,
+      actionType: 'tag.add', idempotencyKey: 'stale-owner-effect', status: 'planned',
+    } as never),
+    /lease lost before effect admission/,
+    'a stale run owner must be refused BEFORE any handler can run',
+  );
+  assert.equal(
+    (await pg.query(`select id from automation_action_results`)).rows.length, effectsBefore,
+    'the refused stale claim must not create an action-result row',
+  );
+  assert.equal(
+    (await pg.query<{ lease_token: string | null }>(
+      `select lease_token from automation_runs where id = $1`, [runId],
+    )).rows[0]?.lease_token,
+    successorToken,
+    'and must not disturb the successor lease',
+  );
+
+  // The legitimate owner can still claim and record normally.
+  const claim = await successor.claimEffect({
+    runId, ruleId: 1, versionId: 10, actionIndex: 0,
+    actionType: 'tag.add', idempotencyKey: 'stale-owner-effect', status: 'planned',
+  } as never);
+  assert.equal(claim.status, 'claimed', 'the rightful owner is admitted');
+
+  // ── recordEffect's own fence, proved directly ──────────────────────────────
+  // It has a token predicate, but like finish() it had no test. A second worker reclaiming
+  // the effect lease must make the first worker's record attempt fail.
+  // claimEffect compares against real wall-clock, not the injected `now`, so this must be a
+  // timestamp that is unambiguously in the past whenever the suite runs.
+  await pg.query(
+    `update automation_action_results set lease_expires_at = $1 where idempotency_key = 'stale-owner-effect'`,
+    ['2020-01-01T00:00:00Z'],
+  );
+  const reclaimer = await successor.claimEffect({
+    runId, ruleId: 1, versionId: 10, actionIndex: 0,
+    actionType: 'tag.add', idempotencyKey: 'stale-owner-effect', status: 'planned',
+  } as never);
+  assert.equal(reclaimer.status, 'claimed', 'an expired effect lease is reclaimable');
+  assert.notEqual((reclaimer as { claimToken: string }).claimToken, (claim as { claimToken: string }).claimToken);
+
+  await assert.rejects(
+    successor.recordEffect({
+      runId, ruleId: 1, versionId: 10, actionIndex: 0,
+      actionType: 'tag.add', idempotencyKey: 'stale-owner-effect', status: 'applied',
+    } as never, (claim as { claimToken: string }).claimToken),
+    /lease/i,
+    'a stale effect token must not be able to record a result',
+  );
+  const stillPlanned = (await pg.query<{ status: string; lease_token: string | null }>(
+    `select status, lease_token from automation_action_results where idempotency_key = 'stale-owner-effect'`,
+  )).rows[0];
+  assert.equal(stillPlanned?.status, 'planned', 'the reclaimer\'s row is untouched by the stale record');
+  assert.equal(stillPlanned?.lease_token, (reclaimer as { claimToken: string }).claimToken);
+
+  await successor.recordEffect({
+    runId, ruleId: 1, versionId: 10, actionIndex: 0,
+    actionType: 'tag.add', idempotencyKey: 'stale-owner-effect', status: 'applied',
+  } as never, (reclaimer as { claimToken: string }).claimToken);
+  assert.equal(
+    (await pg.query<{ status: string }>(
+      `select status from automation_action_results where idempotency_key = 'stale-owner-effect'`,
+    )).rows[0]?.status,
+    'applied',
+    'the rightful effect owner records normally',
+  );
+
+  // An owner whose lease has EXPIRED but has not yet been reaped must also be refused.
+  // This is the race window between expiry and the next sweep: the token still matches and
+  // the row is still `running`, so only the expiry comparison can catch it. Without this the
+  // owner could start a handler at the very moment recovery is about to take the run away.
+  {
+    const racer = createPostgresAutomationExecutionStore(testDb as never);
+    const raceRunId = await racer.begin({
+      executionKey: 'expiry-race-run',
+      orderId: 401,
+      trigger: 'before_rate',
+      sourceEventId: 'expiry-race-event',
+      factsRevision: 'expiry-race-facts',
+      rulesetDigest: 'd'.repeat(64),
+      mode: 'apply',
+    });
+    // Expire the lease in place; do NOT reap. Status stays 'running', token stays the racer's.
+    await pg.query(
+      `update automation_runs set lease_expires_at = $1 where id = $2`,
+      ['2020-01-01T00:00:00Z', raceRunId],
+    );
+    const before = (await pg.query(`select id from automation_action_results`)).rows.length;
+    await assert.rejects(
+      racer.claimEffect({
+        runId: raceRunId, ruleId: 1, versionId: 10, actionIndex: 0,
+        actionType: 'tag.add', idempotencyKey: 'expiry-race-effect', status: 'planned',
+      } as never),
+      /lease lost before effect admission/,
+      'an expired-but-unreaped owner must not start a handler',
+    );
+    assert.equal(
+      (await pg.query(`select id from automation_action_results`)).rows.length, before,
+      'and must create no action-result row',
+    );
+    await pg.query(`update automation_runs set status = 'failed' where id = $1`, [raceRunId]);
+  }
+
+  // Close this run out. The suite's injected `now` is later than a real wall-clock lease, so
+  // a run left `running` here would look expired to the next reaper call and pollute the
+  // legacy assertions below.
+  await successor.finish({
+    runId, executionKey: 'effect-fence-run', rulesetDigest: 'c'.repeat(64), mode: 'apply',
+    status: 'completed', evaluation: { matches: [] }, reduction: {},
+  } as never);
+}
+
+// ── legacy recovery is OFF unless an operator names a bounded cutoff ─────────
+//
+// Deploying the worker must not sweep the historical cohort. That is data repair, and DJ has
+// authorised none — so it cannot happen as a side effect of shipping code.
+{
+  const seedLegacy = async (id: number, key: string, startedAt: string) => {
+    await pg.query(
+      `insert into automation_runs(id, execution_key, order_id, trigger, source_event_id,
+         facts_revision, ruleset_digest, engine_version, mode, status, trace_hash, started_at,
+         lease_token, lease_expires_at)
+       values ($1,$2,500,'before_rate',$2,'legacy-facts',repeat('9',64),'ps-466-v1','apply',
+               'running',repeat('9',64),$3,null,null)`,
+      [id, key, startedAt],
+    );
+  };
+  await seedLegacy(9001, 'legacy-old', '2026-07-30T06:00:00Z');
+  await seedLegacy(9002, 'legacy-newer', '2026-08-05T06:00:00Z');
+  const legacyStatuses = async () => (await pg.query<{ id: number; status: string }>(
+    `select id, status from automation_runs where id in (9001, 9002) order by id`,
+  )).rows;
+
+  // 1. absent cutoff — legacy rows survive a complete pass
+  assert.equal(
+    await reapExpiredAutomationRuns({ database: testDb as never, now, batchSize: 25, legacyCutoffRaw: undefined }),
+    0, 'with no cutoff configured, nothing legacy is swept');
+  assert.deepEqual(await legacyStatuses(),
+    [{ id: 9001, status: 'running' }, { id: 9002, status: 'running' }],
+    'a deploy without an explicit cutoff performs NO historical mutation');
+
+  // 2. invalid cutoff — fail closed, not fail open
+  assert.equal(
+    await reapExpiredAutomationRuns({ database: testDb as never, now, batchSize: 25, legacyCutoffRaw: 'not-a-date' }),
+    0, 'an unparseable cutoff must never be read as "sweep everything"');
+  assert.deepEqual(await legacyStatuses(),
+    [{ id: 9001, status: 'running' }, { id: 9002, status: 'running' }]);
+  assert.equal(resolveLegacyRecoveryCutoff('not-a-date').cutoff, null);
+  assert.match(resolveLegacyRecoveryCutoff('not-a-date').diagnostic, /DISABLED/);
+  assert.equal(resolveLegacyRecoveryCutoff('   ').cutoff, null, 'blank is off');
+
+  // 3. valid cutoff — bounded to exactly the authorised cohort
+  assert.equal(
+    await reapExpiredAutomationRuns({
+      database: testDb as never, now, batchSize: 25, legacyCutoffRaw: '2026-08-01T00:00:00Z',
+    }),
+    1, 'only the legacy row at or before the cutoff is recovered');
+  assert.deepEqual(await legacyStatuses(),
+    [{ id: 9001, status: 'failed' }, { id: 9002, status: 'running' }],
+    'a row started AFTER the cutoff is outside the authorisation and survives');
+
+  // 4. repeated passes are idempotent
+  assert.equal(
+    await reapExpiredAutomationRuns({
+      database: testDb as never, now, batchSize: 25, legacyCutoffRaw: '2026-08-01T00:00:00Z',
+    }),
+    0, 'legacy recovery cannot transition the same row twice');
+
+  // 5. batch bounds still apply while legacy mode is active
+  for (let i = 0; i < 4; i += 1) {
+    await seedLegacy(9100 + i, `legacy-batch-${i}`, '2026-07-30T06:00:00Z');
+  }
+  // batchSize bounds CANDIDATES, not recoveries. Run 3 is always a candidate (its lease is
+  // expired) but is always skipped because it holds a live effect lease, so it consumes one
+  // slot every pass without ever recovering. Three candidates therefore yield two recoveries.
+  assert.equal(
+    await reapExpiredAutomationRuns({
+      database: testDb as never, now, batchSize: 3, legacyCutoffRaw: '2026-08-01T00:00:00Z',
+    }),
+    2, 'the batch bound is enforced in legacy mode too');
+  assert.deepEqual(
+    (await pg.query<{ id: number; status: string }>(
+      `select id, status from automation_runs where id between 9100 and 9103 order by id`,
+    )).rows.filter((r) => r.status === 'running').map((r) => r.id),
+    [9102, 9103],
+    'the remaining legacy rows wait for the next bounded pass rather than being swept at once',
+  );
 }
 
 const indexes = await pg.query<{ indexname: string }>(`

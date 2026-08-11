@@ -32,14 +32,60 @@ function resultFromTrace(value: unknown): AutomationExecutionResult | null {
   return result && typeof result === 'object' ? result as AutomationExecutionResult : null;
 }
 
+/**
+ * PS-466: legacy runs predate fenced leases and carry `lease_expires_at IS NULL`.
+ *
+ * Sweeping them is HISTORICAL DATA MUTATION, so it is off unless an operator names an
+ * explicit cutoff. Without this, deploying the worker would silently terminalize the 98
+ * stranded production runs — a data repair nobody authorised, performed as a side effect of
+ * a code deploy.
+ *
+ * A bounded timestamp rather than a boolean: a boolean authorises an unbounded cohort,
+ * whereas a cutoff authorises exactly the rows an operator can point at. Absent, blank or
+ * unparseable all mean OFF — an unreadable cutoff must never be treated as "sweep
+ * everything", and it deliberately never defaults to `now()`.
+ */
+export const AUTOMATION_LEGACY_RECOVERY_ENV = 'AUTOMATION_LEGACY_RUN_RECOVERY_BEFORE';
+
+export function resolveLegacyRecoveryCutoff(raw: string | undefined): {
+  cutoff: Date | null;
+  diagnostic: string;
+} {
+  const value = (raw ?? '').trim();
+  if (!value) {
+    return { cutoff: null, diagnostic: 'legacy run recovery DISABLED (no cutoff configured)' };
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    // Fail closed. A typo must not become a licence to sweep history.
+    return {
+      cutoff: null,
+      diagnostic: `legacy run recovery DISABLED: ${AUTOMATION_LEGACY_RECOVERY_ENV} is not a valid ISO-8601 timestamp`,
+    };
+  }
+  return { cutoff: parsed, diagnostic: `legacy run recovery ENABLED for runs started at or before ${parsed.toISOString()}` };
+}
+
+let announcedLegacyCutoff: string | null = null;
+
 export async function reapExpiredAutomationRuns(input: {
   now?: Date;
   batchSize?: number;
   database?: typeof db;
+  legacyCutoffRaw?: string;
 } = {}): Promise<number> {
   const database = input.database ?? db;
   const now = input.now ?? new Date();
-  const legacyCutoff = new Date(now.getTime() - AUTOMATION_RUN_LEASE_MS);
+  const maxRuntimeCutoff = new Date(now.getTime() - AUTOMATION_RUN_LEASE_MS);
+  const legacy = resolveLegacyRecoveryCutoff(
+    input.legacyCutoffRaw ?? process.env[AUTOMATION_LEGACY_RECOVERY_ENV],
+  );
+  // Announce once, not once per batch: a sweep decision this consequential should be visible
+  // in the logs, but repeating it every pass trains people to skip it.
+  if (announcedLegacyCutoff !== legacy.diagnostic) {
+    announcedLegacyCutoff = legacy.diagnostic;
+    console.log(`[automation-recovery] ${legacy.diagnostic}`);
+  }
   const batchSize = Math.max(1, Math.min(input.batchSize ?? AUTOMATION_RECOVERY_BATCH_SIZE, 100));
 
   return database.transaction(async (tx) => {
@@ -53,8 +99,19 @@ export async function reapExpiredAutomationRuns(input: {
       .where(and(
         eq(automationRuns.status, 'running'),
         or(
+          // A fenced lease that has expired is always recoverable — that is the whole point
+          // of the lease, and it is unrelated to the historical cohort.
           lte(automationRuns.leaseExpiresAt, now),
-          and(isNull(automationRuns.leaseExpiresAt), lte(automationRuns.startedAt, legacyCutoff)),
+          // A legacy null-lease row is recoverable ONLY under an explicit operator cutoff,
+          // and even then only once it is older than a normal maximum runtime, so a run that
+          // is legitimately in flight during the deploy is never swept.
+          legacy.cutoff
+            ? and(
+                isNull(automationRuns.leaseExpiresAt),
+                lte(automationRuns.startedAt, legacy.cutoff),
+                lte(automationRuns.startedAt, maxRuntimeCutoff),
+              )
+            : sql`false`,
         ),
       ))
       .orderBy(automationRuns.id)
@@ -213,6 +270,42 @@ export function createPostgresAutomationExecutionStore(database: typeof db = db)
         const now = new Date();
         const claimToken = randomUUID();
         const leaseExpiresAt = new Date(now.getTime() + EFFECT_LEASE_MS);
+
+        // PS-466: the caller must still own the PARENT RUN before any effect is admitted.
+        //
+        // This fence matters more than the one on finish(). finish() protects run HISTORY;
+        // this protects the HANDLER BOUNDARY, which is where tags, hazmat declarations, rate
+        // invalidations and any future provider call actually happen.
+        //
+        // Without it: worker A claims a run, stalls past its lease, recovery terminalizes the
+        // run, worker B re-leases it — and stale worker A can still claim an effect and
+        // invoke its handler, because nothing here ever looked at automation_runs. Its later
+        // finish() would be correctly refused, but by then the side effect has occurred.
+        //
+        // Locked FOR UPDATE inside the same transaction as the effect claim, so ownership
+        // cannot move between the check and the insert.
+        const parentRunId = numericId(effect.runId, 'Run ID');
+        const runToken = runClaims.get(parentRunId);
+        const [parentRun] = await tx.select({
+          status: automationRuns.status,
+          leaseToken: automationRuns.leaseToken,
+          leaseExpiresAt: automationRuns.leaseExpiresAt,
+        }).from(automationRuns)
+          .where(eq(automationRuns.id, parentRunId))
+          .limit(1)
+          .for('update');
+        const ownsParentRun = Boolean(
+          parentRun
+          && runToken
+          && parentRun.status === 'running'
+          && parentRun.leaseToken === runToken
+          && parentRun.leaseExpiresAt
+          && parentRun.leaseExpiresAt > now,
+        );
+        if (!ownsParentRun) {
+          throw new Error('Automation run lease lost before effect admission');
+        }
+
         const [existing] = await tx.select({
           id: automationActionResults.id,
           status: automationActionResults.status,
