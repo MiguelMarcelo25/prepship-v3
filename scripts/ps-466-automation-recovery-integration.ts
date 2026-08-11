@@ -86,6 +86,7 @@ await pg.exec(`
 
 const testDb = drizzle(pg, { casing: 'snake_case' });
 const {
+  AUTOMATION_LEGACY_RECOVERY_ENV,
   resolveLegacyRecoveryCutoff,
   createPostgresAutomationExecutionStore,
   reapExpiredAutomationRuns,
@@ -677,6 +678,78 @@ assert.deepEqual(fencedRow, { status: 'completed', lease_token: null });
       'a terminalized run cannot be renewed, even by the worker whose token still matches',
     );
   }
+}
+
+// ── legacy rows are protected from DEMAND-DRIVEN reclamation too ─────────────
+//
+// The default-off cutoff originally guarded only the proactive reaper. begin() infers an
+// expiry from started_at when lease_expires_at IS NULL, so a repeat event on the same
+// execution key could reclaim a historical run through ordinary admission — assigning a
+// lease, bumping attempt_count and recovery_count, stamping last_recovery_code, and
+// re-executing it.
+//
+// The reaper would have left it alone; admission would not have. That breaks the "legacy
+// untouched" deployment promise silently, on normal traffic rather than an operator action.
+{
+  const LEGACY_KEY = 'legacy-demand-admission';
+  await pg.query(
+    `insert into automation_runs(id, execution_key, order_id, trigger, source_event_id,
+       facts_revision, ruleset_digest, engine_version, mode, status, trace_hash, started_at,
+       lease_token, lease_expires_at, attempt_count, recovery_count)
+     values (9600,$1,700,'before_rate','legacy-demand-event','legacy-demand-facts',
+             repeat('8',64),'ps-466-v1','apply','running',repeat('8',64),
+             '2026-07-30T06:00:00Z', null, null, 1, 0)`,
+    [LEGACY_KEY],
+  );
+  const snapshot = async () => (await pg.query<{
+    status: string; lease_token: string | null; lease_expires_at: string | null;
+    attempt_count: number; recovery_count: number; last_recovery_code: string | null;
+    last_recovered_at: string | null;
+  }>(`select status, lease_token, lease_expires_at, attempt_count, recovery_count,
+             last_recovery_code, last_recovered_at
+      from automation_runs where id = 9600`)).rows[0];
+  const before = await snapshot();
+
+  const admitter = createPostgresAutomationExecutionStore(testDb as never);
+  const admit = () => admitter.begin({
+    executionKey: LEGACY_KEY, orderId: 700, trigger: 'before_rate',
+    sourceEventId: 'legacy-demand-event', factsRevision: 'legacy-demand-facts',
+    rulesetDigest: 'f'.repeat(64), mode: 'apply',
+  });
+
+  delete process.env[AUTOMATION_LEGACY_RECOVERY_ENV];
+  await assert.rejects(
+    admit(),
+    (error: unknown) => error instanceof AutomationRunLeaseBusyError,
+    'with no cutoff configured, admission must NOT reclaim a legacy run',
+  );
+  assert.deepEqual(await snapshot(), before,
+    'a refused legacy admission must leave every recovery field untouched');
+
+  // An invalid or future cutoff is equally no authorisation.
+  for (const bad of ['not-a-date', '2099-01-01T00:00:00Z']) {
+    process.env[AUTOMATION_LEGACY_RECOVERY_ENV] = bad;
+    await assert.rejects(admit(), (error: unknown) => error instanceof AutomationRunLeaseBusyError,
+      `an unusable cutoff must not authorise demand-driven reclamation: ${bad}`);
+    assert.deepEqual(await snapshot(), before);
+  }
+
+  // A valid cutoff that does not cover the row is still no authorisation for THAT row.
+  process.env[AUTOMATION_LEGACY_RECOVERY_ENV] = '2026-07-01T00:00:00Z';
+  await assert.rejects(admit(), (error: unknown) => error instanceof AutomationRunLeaseBusyError,
+    'a row started after the cutoff stays outside the authorised cohort');
+  assert.deepEqual(await snapshot(), before);
+
+  // Authorised and covered: admission may now reclaim it.
+  process.env[AUTOMATION_LEGACY_RECOVERY_ENV] = '2026-08-01T00:00:00Z';
+  const reclaimedId = await admit();
+  assert.equal(reclaimedId, 9600);
+  const after = await snapshot();
+  assert.equal(after?.status, 'running');
+  assert.ok(after?.lease_token, 'the authorised reclaim assigns a fenced lease');
+  assert.equal(after?.recovery_count, 1, 'and records that a recovery happened');
+  assert.equal(after?.last_recovery_code, 'AUTOMATION_RUN_LEASE_RECLAIMED');
+  delete process.env[AUTOMATION_LEGACY_RECOVERY_ENV];
 }
 
 const indexes = await pg.query<{ indexname: string }>(`

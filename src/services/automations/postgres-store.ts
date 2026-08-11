@@ -276,6 +276,27 @@ export function createPostgresAutomationExecutionStore(database: typeof db = db)
           throw new AutomationRunLeaseBusyError(null);
         }
         if (existing.status === 'running') {
+          // PS-466: the default-off legacy policy governs EVERY recovery entry point, not
+          // just the sweeper.
+          //
+          // A legacy row has `lease_expires_at IS NULL`, so the inferred expiry below is
+          // always in the past for anything older than a run's maximum lifetime. Without this
+          // guard a repeat event on the same execution key would reclaim one of the 98
+          // historical runs through demand-driven admission: assign it a lease, bump
+          // attempt_count and recovery_count, stamp last_recovery_code, and re-execute it.
+          //
+          // The reaper would have left those rows alone. Admission would not have. That
+          // breaks the deployment promise that legacy disposition stays disabled, and it
+          // breaks it silently, on ordinary traffic rather than on an operator action.
+          if (existing.leaseExpiresAt == null) {
+            const legacyAdmission = resolveLegacyRecoveryCutoff(
+              process.env[AUTOMATION_LEGACY_RECOVERY_ENV],
+              now,
+            );
+            if (!legacyAdmission.cutoff || existing.startedAt > legacyAdmission.cutoff) {
+              throw new AutomationRunLeaseBusyError(null);
+            }
+          }
           const effectiveExpiry = existing.leaseExpiresAt
             ?? new Date(existing.startedAt.getTime() + AUTOMATION_RUN_LEASE_MS);
           if (effectiveExpiry > now) throw new AutomationRunLeaseBusyError(effectiveExpiry);
