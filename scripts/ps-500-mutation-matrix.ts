@@ -35,6 +35,7 @@ const TSX_CLI = 'node_modules/tsx/dist/cli.mjs';
 const CLASSIFIER = 'src/services/shipping-workflow/shipping-rate-money-classifier.ts';
 const BROWSE = 'src/services/rate-browser-display-fields.ts';
 const MODAL = 'web/src/components/RateBrowserModal.tsx';
+const REDACTION = 'src/services/rate-browser-money-redaction.ts';
 
 type Mutation = {
   id: string;
@@ -118,7 +119,59 @@ const MUTATIONS: Mutation[] = [
     file: CLASSIFIER,
     find: "return fail(shipmentCost, otherCost, 'total_contradicts_components');",
     replace: '/* contradiction ignored */',
-    expect: 'an explicit total contradicting its components fails closed',
+    expect: 'a DOCUMENTED total contradicting its components fails closed',
+  },
+  {
+    id: 'M9',
+    defect: 'the classifier cannot read provider payloads again (the browse outage)',
+    file: CLASSIFIER,
+    find: 'const structured = readMoneyObject(rate, raw, STRUCTURED_SHIPMENT_KEY);',
+    replace: 'const structured = null;',
+    expect: 'shipping_amount.amount is the shipment component',
+  },
+  {
+    id: 'M10',
+    defect: 'a structured add-on stops being summed into otherCost',
+    file: CLASSIFIER,
+    find: "const STRUCTURED_OTHER_KEYS = ['other_amount', 'confirmation_amount', 'insurance_amount'] as const;",
+    replace: "const STRUCTURED_OTHER_KEYS = ['other_amount', 'confirmation_amount'] as const;",
+    expect: 'the structured add-ons are summed',
+  },
+  {
+    id: 'M11',
+    defect: 'a bare `amount` is treated as a documented total again',
+    file: CLASSIFIER,
+    find: "const TOTAL_KEYS = ['totalCost', 'total_cost', 'selectedRateCost', 'selected_rate_cost'] as const;",
+    replace: "const TOTAL_KEYS = ['totalCost', 'total_cost', 'selectedRateCost', 'selected_rate_cost', 'amount'] as const;",
+    expect: 'a bare `amount` is NOT read as a total',
+  },
+  {
+    id: 'M12',
+    defect: 'the no-add-ons concession leaks out of the provider convention into flat rows',
+    file: CLASSIFIER,
+    find: 'if (!shipmentIsStructured) return ABSENT;',
+    replace: 'void shipmentIsStructured;',
+    // Owned by the ORIGINAL absent-is-not-zero check, not by the newer
+    // flat-row check that restates it. The matrix rejected the newer one as the
+    // expected owner, which is the correct answer: the older check is the one
+    // that has always held this line.
+    expect: 'absent otherCost is ABSENT, never zero',
+  },
+  {
+    id: 'M14',
+    defect: 'the verdict is redacted away, blocking restricted viewers only',
+    file: REDACTION,
+    find: "  'houseMargin',",
+    replace: "  'houseMargin',\n  'rateMoneyComplete',",
+    expect: 'the verdict survives money redaction',
+  },
+  {
+    id: 'M13',
+    defect: 'a negative add-on line is netted away by a positive sibling',
+    file: CLASSIFIER,
+    find: 'if (field.value! < 0) return field;',
+    replace: 'void field.value;',
+    expect: 'an unparseable or negative provider component is refused',
   },
   {
     id: 'M8',

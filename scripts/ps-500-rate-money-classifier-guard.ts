@@ -16,7 +16,8 @@
  * `classifyRateMoney` runs first and never substitutes, so "the backend sent
  * nothing" stays distinguishable from "the backend sent zero".
  *
- * Exercises the REAL exported classifier. Hermetic: the module has no imports.
+ * Exercises the REAL exported classifier and the real browse producer — no
+ * hand-built stand-ins for the code under test.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -25,6 +26,7 @@ import {
   RATE_MONEY_UNAVAILABLE_MESSAGE,
 } from '../src/services/shipping-workflow/shipping-rate-money-classifier';
 import { stampRateBrowserDisplayAliases } from '../src/services/rate-browser-display-fields';
+import { redactRateBrowserMoney } from '../src/services/rate-browser-money-redaction';
 
 let checks = 0;
 const check = (label: string, fn: () => void) => {
@@ -107,16 +109,126 @@ check('a negative otherCost is reported, not clamped to zero', () => {
   assert.equal(v.otherCost.value, -2, 'the contradictory value is preserved for diagnosis');
 });
 
-check('an explicit total contradicting its components fails closed', () => {
-  const v = classifyRateMoney({ shipmentCost: 8, otherCost: 5, amount: 4 });
+check('a DOCUMENTED total contradicting its components fails closed', () => {
+  const v = classifyRateMoney({ shipmentCost: 8, otherCost: 5, totalCost: 4 });
   assert.equal(v.rateMoneyComplete, false, '8 + 5 cannot total 4');
   assert.equal(v.rateMoneyUnavailableReason, 'total_contradicts_components');
+  assert.equal(classifyRateMoney({ shipmentCost: 8, otherCost: 5, selectedRateCost: 4 }).rateMoneyUnavailableReason,
+    'total_contradicts_components');
 });
 
 check('a total agreeing with its components stays complete', () => {
-  assert.equal(classifyRateMoney({ shipmentCost: 8.25, otherCost: 1.5, amount: 9.75 }).rateMoneyComplete, true);
+  assert.equal(classifyRateMoney({ shipmentCost: 8.25, otherCost: 1.5, totalCost: 9.75 }).rateMoneyComplete, true);
   // float noise must not read as contradiction
   assert.equal(classifyRateMoney({ shipmentCost: 8.25, otherCost: 1.5, totalCost: 9.7499999 }).rateMoneyComplete, true);
+});
+
+check('a bare `amount` is NOT read as a total', () => {
+  // Regression. `amount` was in TOTAL_KEYS, so a correct row whose `amount`
+  // carried the shipment component (which is how
+  // shipping-rate-money-normalizer.ts:123 reads it) contradicted itself and was
+  // blocked. Providers use `amount` inconsistently; only documented totals count.
+  const v = classifyRateMoney({ shipmentCost: 8.25, otherCost: 1.5, amount: 8.25 });
+  assert.equal(v.rateMoneyComplete, true, 'an ambiguous `amount` must not manufacture a contradiction');
+});
+
+// ── The provider shape — what the first version could not read at all ────────
+// src/lib/shipstation/types.ts: shipping_amount is REQUIRED, the three add-ons
+// are OPTIONAL. Knowing only the flat keys classified every live rate
+// `shipment_cost_absent` and took the whole browse path unavailable.
+check('shipping_amount.amount is the shipment component', () => {
+  const v = classifyRateMoney({
+    shipping_amount: { currency: 'usd', amount: 8.25 },
+    other_amount: { currency: 'usd', amount: 0 },
+    confirmation_amount: { currency: 'usd', amount: 0 },
+    insurance_amount: { currency: 'usd', amount: 0 },
+  });
+  assert.equal(v.rateMoneyComplete, true, 'a live rate with explicit zero add-ons is selectable');
+  assert.equal(v.shipmentCost.value, 8.25);
+  assert.equal(v.otherCost.value, 0);
+});
+
+check('the structured add-ons are summed', () => {
+  const v = classifyRateMoney({
+    shipping_amount: { currency: 'usd', amount: 8.25 },
+    insurance_amount: { currency: 'usd', amount: 1.5 },
+  });
+  assert.equal(v.rateMoneyComplete, true);
+  assert.equal(v.shipmentCost.value, 8.25);
+  assert.equal(v.otherCost.value, 1.5, 'insurance is an add-on, not the shipment cost');
+  assert.equal(v.shipmentCost.value! + v.otherCost.value!, 9.75);
+});
+
+check('all three add-ons sum, and cents do not drift', () => {
+  const v = classifyRateMoney({
+    shipping_amount: { amount: 8.25 },
+    other_amount: { amount: 0.1 },
+    confirmation_amount: { amount: 0.2 },
+    insurance_amount: { amount: 1.5 },
+  });
+  assert.equal(v.rateMoneyComplete, true);
+  assert.equal(v.otherCost.value, 1.8, '0.1 + 0.2 + 1.5 must not land on 1.8000000000000003');
+});
+
+check('a structured row carrying no add-on fields is complete', () => {
+  // The add-ons are optional in the contract, so an omitted one means the
+  // carrier did not charge it. Reading the contract, not defaulting.
+  const v = classifyRateMoney({ shipping_amount: { currency: 'usd', amount: 8.25 } });
+  assert.equal(v.rateMoneyComplete, true);
+  assert.equal(v.otherCost.value, 0);
+  assert.match(String(v.otherCost.source), /no add-on fields carried/,
+    'the reason this is zero must stay auditable, not look like a supplied value');
+});
+
+check('a FLAT row silent about add-ons is still incomplete', () => {
+  // The concession above is scoped to the provider convention. In the flat
+  // shape, silence is genuinely unknown — this is the original `?? 0` defect.
+  assert.equal(classifyRateMoney({ shipmentCost: 8.25 }).rateMoneyUnavailableReason, 'other_cost_absent');
+});
+
+check('a missing shipping_amount is still absent', () => {
+  const v = classifyRateMoney({ insurance_amount: { amount: 1.5 }, amount: 9.75 });
+  assert.equal(v.rateMoneyComplete, false);
+  assert.equal(v.rateMoneyUnavailableReason, 'shipment_cost_absent');
+});
+
+check('an unparseable or negative provider component is refused', () => {
+  assert.equal(
+    classifyRateMoney({ shipping_amount: { amount: 'n/a' } }).rateMoneyUnavailableReason,
+    'shipment_cost_invalid');
+  assert.equal(
+    classifyRateMoney({ shipping_amount: { amount: 8.25 }, insurance_amount: { amount: 'n/a' } })
+      .rateMoneyUnavailableReason,
+    'other_cost_invalid');
+  assert.equal(
+    classifyRateMoney({ shipping_amount: { amount: 8.25 }, insurance_amount: { amount: -2 } })
+      .rateMoneyUnavailableReason,
+    'other_cost_negative');
+  assert.equal(
+    classifyRateMoney({ shipping_amount: { amount: 8.25 }, other_amount: { amount: 5 }, insurance_amount: { amount: -2 } })
+      .rateMoneyUnavailableReason,
+    'other_cost_negative',
+    'a negative line must not be netted away by a larger positive sibling');
+});
+
+check('a flattened scalar provider field carries the same authority', () => {
+  // Some payloads drop the { currency, amount } wrapper. The wrapper is
+  // presentation; the field name is the provenance.
+  const v = classifyRateMoney({ shipping_amount: 8.25, insurance_amount: 1.5 });
+  assert.equal(v.rateMoneyComplete, true);
+  assert.equal(v.shipmentCost.value, 8.25);
+  assert.equal(v.otherCost.value, 1.5);
+});
+
+check('the add-on sum rounds through the money owner', () => {
+  // roundMoney is the repo's single cent-rounding owner (audit-money-rounding).
+  const v = classifyRateMoney({ shipping_amount: 8.25, other_amount: 0.07, confirmation_amount: 0.08 });
+  assert.equal(v.otherCost.value, 0.15, '0.07 + 0.08 must not land on 0.15000000000000002');
+});
+
+check('flat keys still win over the structured shape', () => {
+  const v = classifyRateMoney({ shipmentCost: 8.25, otherCost: 0, shipping_amount: { amount: 99 } });
+  assert.equal(v.shipmentCost.value, 8.25, 'a normalized row is already authoritative');
 });
 
 // ── Unusable is different from silent ───────────────────────────────────────
@@ -179,6 +291,53 @@ check('a complete live row is stamped complete', () => {
   ]) as Array<Record<string, unknown>>;
   assert.equal(row.rateMoneyComplete, true);
   assert.equal(row.rateMoneyUnavailableReason, null);
+});
+
+check('a refreshed live rate set is selectable across carriers', () => {
+  // The regression this replaces: every one of these classified
+  // `shipment_cost_absent`, so Browse Rates showed Unavailable on every row and
+  // no carrier could be selected at all.
+  const live = [
+    { carrier_code: 'ups', service_code: 'ups_ground',
+      shipping_amount: { currency: 'usd', amount: 12.4 },
+      other_amount: { currency: 'usd', amount: 0 },
+      confirmation_amount: { currency: 'usd', amount: 0 },
+      insurance_amount: { currency: 'usd', amount: 0 } },
+    { carrier_code: 'usps', service_code: 'usps_priority_mail',
+      shipping_amount: { currency: 'usd', amount: 8.25 },
+      insurance_amount: { currency: 'usd', amount: 1.5 } },
+    { carrier_code: 'fedex', service_code: 'fedex_2day',
+      shipping_amount: { currency: 'usd', amount: 21.07 } },
+  ];
+  const rows = stampRateBrowserDisplayAliases(live) as Array<Record<string, unknown>>;
+  for (const [index, row] of rows.entries()) {
+    assert.equal(row.rateMoneyComplete, true,
+      `${live[index].carrier_code} must be selectable — reason: ${row.rateMoneyUnavailableReason}`);
+    assert.equal(row.rateMoneyUnavailableReason, null);
+  }
+});
+
+check('an incomplete row in a live set is the ONLY one blocked', () => {
+  const rows = stampRateBrowserDisplayAliases([
+    { carrier_code: 'ups', shipping_amount: { amount: 12.4 } },
+    { carrier_code: 'usps', amount: 9.75, otherCost: 1.5 },
+  ]) as Array<Record<string, unknown>>;
+  assert.equal(rows[0].rateMoneyComplete, true, 'a valid neighbour must not be dragged down');
+  assert.equal(rows[1].rateMoneyComplete, false);
+  assert.equal(rows[1].rateMoneyUnavailableReason, 'shipment_cost_absent');
+});
+
+check('the verdict survives money redaction', () => {
+  // Redaction runs AFTER stamping and nulls internal money for restricted
+  // viewers. The verdict is a boolean about provenance, not a money value — if
+  // it were ever added to that key set it would null out, the frontend would
+  // read it as a legacy untrusted row, and those viewers would get the same
+  // browse outage that only they could see.
+  const [row] = redactRateBrowserMoney(stampRateBrowserDisplayAliases([
+    { carrier_code: 'ups', shipping_amount: { currency: 'usd', amount: 8.25 }, other_amount: { currency: 'usd', amount: 0 } },
+  ])) as Array<Record<string, unknown>>;
+  assert.equal(row.rateMoneyComplete, true,
+    'redacting internal money must not make a valid rate unavailable');
 });
 
 check('the verdict survives the alias stamper it wraps', () => {
