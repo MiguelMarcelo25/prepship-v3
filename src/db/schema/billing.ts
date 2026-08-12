@@ -64,9 +64,13 @@ export const billingLineItems = pgTable(
     // identity, and order_id + line_type mis-attributes the moment an order has a
     // second return.
     //
-    // ON DELETE SET NULL: a billing line is financial history and must outlive the
-    // return record it came from.
-    returnId: integer('return_id').references(() => returns.id, { onDelete: 'set null' }),
+    // PS-488 recovery (migration 0092): ON DELETE RESTRICT, not SET NULL. 0089
+    // shipped SET NULL, which would silently detach a billing line from the return
+    // that produced it when that return was deleted — losing the linkage on a money
+    // row rather than refusing the delete. RESTRICT makes the database refuse
+    // instead. A billing line is still financial history; the way to protect it is
+    // to prevent the delete, not to quietly null the evidence.
+    returnId: integer('return_id').references(() => returns.id, { onDelete: 'restrict' }),
     shipDate: timestamp({ withTimezone: true }),
     // PS-434: shipDate remains the actual activity calendar day. This nullable
     // field is the invoice/range bucket; NULL preserves all legacy rows through
@@ -132,6 +136,24 @@ export const billingLineItems = pgTable(
     index('billing_li_return_id_idx')
       .on(t.returnId)
       .where(sql`${t.returnId} is not null`),
+    // PS-488 recovery (migration 0092): at most one postage row and one processing
+    // row per return. Without this, one return could accumulate duplicate charges of
+    // the same kind and each would look individually legitimate.
+    uniqueIndex('billing_li_return_identity_unq')
+      .on(t.returnId, t.lineType)
+      .where(sql`${t.returnId} is not null`),
+    // PS-488 recovery (migration 0092): a non-null return_id may carry ONLY
+    // 'return_postage' or 'return_processing_fee'.
+    //
+    // This constraint is MIGRATION-OWNED, not declared here. Drizzle's table-level
+    // check() would emit its own constraint definition, and 0092 adds the CHECK as
+    // NOT VALID and then VALIDATEs it separately so the scan takes a weaker lock.
+    // Declaring an approximation here would produce a second, subtly different
+    // definition and make drizzle-kit propose a spurious drop/recreate against a
+    // validated production constraint. The authoritative text lives in
+    // drizzle/0092_ps488_return_identity_reconciliation.sql as
+    // billing_li_return_id_canonical_type_check, and the runner pins it by exact
+    // catalog definition.
   ]
 );
 

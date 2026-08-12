@@ -92,6 +92,8 @@
     "test:ps-462-inventory-correction-cutover": "tsx scripts/ps-462-inventory-correction-cutover-guard.ts && tsx scripts/ps-462-inventory-correction-cutover-integration.ts",
     "test:ps-462-inventory-sot": "npm run test:ps-439-inventory-sot && npm run test:ps-462-inventory-preparation-rollout && npm run test:ps-462-inventory-forward-rollback && npm run test:ps-462-inventory-correction-cutover && tsx scripts/ps-462-inventory-correction-packet-guard.ts && tsx scripts/ps-462-inventory-correction-packet.ts --self-test",
     "test:ps-462-billing-sot": "tsx scripts/ps-462-billing-boundary-guard.ts",
+    "test:ps-488-recovery-contract": "tsx scripts/ps-488-return-identity-reconciliation-contract-test.ts",
+    "test:ps-488-recovery-pg17": "tsx scripts/ps-488-return-identity-reconciliation-pg17.ts",
     "test:billing-bulk-import": "tsx scripts/billing-bulk-import-guard.ts",
     "test:ps-499-billing-bulk-import-patch": "tsx scripts/ps-499-billing-bulk-import-patch-guard.ts",
     "test:ps-499-bulk-import-package-cost": "tsx scripts/ps-499-bulk-import-package-cost-integration.ts",

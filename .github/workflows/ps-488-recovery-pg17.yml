@@ -1,0 +1,91 @@
+# PS-488 recovery — real PostgreSQL 17 proof for migration 0092.
+#
+# REVIEW REF ONLY. This never runs on prepshipv4-stable and never deploys. It has
+# contents: read, no production or deploy secrets, and an ephemeral PostgreSQL 17
+# service container that exists only for the life of the job.
+#
+# It must FAIL, never skip, when its admin URL is absent — a migration proof that
+# skips reports green while proving nothing.
+name: PS-488 recovery PG17 proof
+
+on:
+  push:
+    branches:
+      - 'review/ps-488-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-488-recovery-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg17-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps488
+          POSTGRES_PASSWORD: ps488
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps488"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable from
+      # this job, and no deploy secret is exposed to it.
+      PS488_PG17_ADMIN_URL: postgres://ps488:ps488@127.0.0.1:5432/postgres
+
+    steps:
+      - name: Refuse to run against a protected branch
+        if: github.ref == 'refs/heads/prepshipv4-stable'
+        run: |
+          echo "This proof is review-ref only and must not run on prepshipv4-stable."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          set -euo pipefail
+          version="$(npx tsx -e "
+            import postgres from 'postgres';
+            const sql = postgres(process.env.PS488_PG17_ADMIN_URL, { max: 1, prepare: false });
+            const [row] = await sql\`show server_version\`;
+            console.log(row.server_version);
+            await sql.end({ timeout: 5 });
+          ")"
+          echo "server_version=${version}"
+          case "${version}" in
+            17*) ;;
+            *) echo "Expected PostgreSQL 17, got ${version}"; exit 1 ;;
+          esac
+
+      - name: Fast contract proof
+        run: npm run test:ps-488-recovery-contract
+
+      - name: Real PostgreSQL 17 proof (executes the actual runner)
+        run: npm run test:ps-488-recovery-pg17
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Whitespace check
+        run: git diff --check
