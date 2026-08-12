@@ -216,6 +216,41 @@ check('return money appears exactly once in the RENDERED invoice', () => {
   assert.equal(totalPostage, 7.73, 'return postage must total 7.73 across the document, not a multiple');
 });
 
+check('an OUTBOUND row reports no return fee, rather than a return fee of zero', () => {
+  // Outbound rows carry returnPostage: 0 so no return money can hide on them. But "this
+  // shipment has no return fee" and "this shipment's return fee is $0.00" are different
+  // claims, and the second one printed 0.00 in a return column on every shipment line of
+  // every invoice. Presence is what lets the serializers leave those cells blank.
+  const [row] = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: CANONICAL }) as Record<string, unknown>[];
+  assert.equal(row!.returnPostage, 0, 'no return money may sit on an outbound row');
+  assert.equal(row!.has_return_postage_line, false, 'and it must not claim the fee exists');
+  assert.equal(row!.return_postage_amt, null);
+});
+
+check('an absent return fee stays absent through the projection', () => {
+  // Built straight from the SOT so this tracks the real DTO, not a hand-made shape.
+  const processingOnly = toBillingDetailOrderRows([
+    { lineType: 'return_processing_fee', orderId: 4242, orderNumber: '1234', clientId: 1, qty: 1, totalCost: '3.00', returnId: 7, returnReference: '1234-RETURN' },
+  ]);
+  const ret = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: processingOnly })
+    .find((r) => r.rowType === 'Return')! as Record<string, unknown>;
+  assert.equal(ret.return_postage_amt, null, 'a fee never charged must not become "0"');
+  assert.equal(ret.has_return_postage_line, false);
+  assert.equal(ret.return_processing_amt, '3');
+  assert.equal(ret.has_return_processing_line, true);
+
+  // The same number, with the charge genuinely present.
+  const waived = toBillingDetailOrderRows([
+    { lineType: 'return_postage', orderId: 4242, orderNumber: '1234', clientId: 1, qty: 1, totalCost: '0.00', returnId: 8, returnReference: '1234-RETURN-2' },
+  ]);
+  const zeroRet = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: waived })
+    .find((r) => r.rowType === 'Return')! as Record<string, unknown>;
+  assert.equal(zeroRet.return_postage_amt, '0', 'a real zero keeps its zero');
+  assert.equal(zeroRet.has_return_postage_line, true);
+  assert.notEqual(ret.return_postage_amt, zeroRet.return_postage_amt,
+    'absent and zero must not survive the projection as the same value');
+});
+
 if (failures > 0) {
   console.error(`\nFAIL PS-488 invoice reconcile guard (${failures} failing)`);
   process.exit(1);

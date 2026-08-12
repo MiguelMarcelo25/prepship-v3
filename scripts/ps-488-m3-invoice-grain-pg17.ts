@@ -113,7 +113,14 @@ const SCHEMA = `
 const GRAIN_SQL = `
   select b.order_id, b.shipment_id, b.return_id,
          sum(b.total_cost)::text as row_total,
-         count(*)::int as line_count
+         count(*)::int as line_count,
+         -- PS-488 M3: the production presence aggregates, verbatim. coalesce(sum(...),0)
+         -- cannot distinguish "never charged" from "charged 0.00"; these can, and the
+         -- claim that bool_or answers it correctly for a group with no matching line is a
+         -- claim about PostgreSQL, so it is exercised rather than assumed.
+         coalesce(sum(case when b.line_type in ('return_postage', 'return_label') then b.total_cost else 0 end), 0)::text as return_postage_amt,
+         bool_or(b.line_type in ('return_postage', 'return_label')) as has_return_postage_line,
+         bool_or(b.line_type in ('return_processing_fee', 'return_processing')) as has_return_processing_line
   from billing_line_items b
   left join shipments s on s.id = b.shipment_id
   left join orders o on o.id = b.order_id
@@ -260,6 +267,31 @@ await check('an outbound shipment and a return on one order stay separate', asyn
   assert.equal(rows.length, 2);
   const outbound = rows.find((r) => r.shipment_id === 501)!;
   assert.equal(Number(outbound.row_total), 2.5, 'no return fee may hide behind the outbound row');
+});
+
+// ── absent versus zero, at the aggregate ─────────────────────────────────────
+await check('an absent return fee and a zero return fee are distinguishable in SQL', async (db) => {
+  await db`insert into orders (id) values (4242)`;
+  await db`insert into returns (id, order_id) values (7, 4242), (8, 4242)`;
+  await seed(db, [
+    // Return 7: processing only. It was NEVER charged postage.
+    { orderId: 4242, returnId: 7, lineType: 'return_processing_fee', total: '3.00' },
+    // Return 8: postage charged, at zero. A real decision, not an absence.
+    { orderId: 4242, returnId: 8, lineType: 'return_postage', total: '0.00' },
+  ]);
+  const rows = await db.unsafe(GRAIN_SQL);
+  const byReturn = new Map(rows.map((r) => [r.return_id, r]));
+
+  const neverCharged = byReturn.get(7)!;
+  const chargedZero = byReturn.get(8)!;
+  // The money column CANNOT tell them apart — that is the defect, reproduced.
+  assert.equal(Number(neverCharged.return_postage_amt), 0);
+  assert.equal(Number(chargedZero.return_postage_amt), 0);
+  // Presence can, and this is the only thing that can.
+  assert.equal(neverCharged.has_return_postage_line, false, 'bool_or must be false with no matching line');
+  assert.equal(chargedZero.has_return_postage_line, true, 'a 0.00 charge still EXISTS');
+  assert.equal(neverCharged.has_return_processing_line, true);
+  assert.equal(chargedZero.has_return_processing_line, false);
 });
 
 // ── ordering is deterministic, which the new tie made necessary ──────────────

@@ -107,7 +107,8 @@ import {
   setBillingOrdersDirty,
 } from '../services/billing-finalization-policy';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
-import { resolveBillingRowStatus } from '../services/billing-row-status';
+import { resolveBillingRowStatus, resolveBillingReturnRowStatus } from '../services/billing-row-status';
+import { billingRowIdentity } from '../services/billing-row-reference';
 import {
   cancelledNoChargeBillingAmountSql,
   isCancelledBillingStatus,
@@ -2180,9 +2181,19 @@ type InvoiceDetailRow = {
   additional_amt: string;
   shipping_amt: string;
   storage_amt: string;
-  /** PS-488 AC-6 stopgap — return money on the invoice export. */
+  /** PS-488 AC-6 — return money on the invoice export. */
   return_postage_amt: string;
   return_processing_amt: string;
+  /**
+   * PS-488 M3 — PRESENCE, distinct from amount. `return_postage_amt === '0'` cannot say
+   * whether the return was charged nothing or was never charged at all; these can. Every
+   * serializer branches on these rather than on the number, so an absent fee renders
+   * blank and a genuine zero renders 0.00.
+   */
+  has_return_postage_line?: boolean;
+  has_return_processing_line?: boolean;
+  /** PS-488 AC-1 — returns.return_reference as persisted. Never minted here. */
+  return_reference?: string | null;
   row_total: string;
   billing_status_label: string;
   item_names: string | null;
@@ -2332,6 +2343,15 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type = 'storage' then ${detailAmount} else 0 end), 0)::text as storage_amt,
       coalesce(sum(case when b.line_type in ('return_postage', 'return_label') then ${detailAmount} else 0 end), 0)::text as return_postage_amt,
       coalesce(sum(case when b.line_type in ('return_processing_fee', 'return_processing') then ${detailAmount} else 0 end), 0)::text as return_processing_amt,
+      -- PS-488 M3: PRESENCE, separate from amount. The coalesce(...,0) above cannot
+      -- distinguish "never charged postage" from "charged 0.00 postage", so a
+      -- processing-only return exported postage as 0.00 on a client-facing document.
+      -- bool_or over the line types answers the presence question directly.
+      bool_or(b.line_type in ('return_postage', 'return_label')) as has_return_postage_line,
+      bool_or(b.line_type in ('return_processing_fee', 'return_processing')) as has_return_processing_line,
+      -- PS-488 M3: the STORED reference. PrepShip never mints a -RETURN suffix; max() over
+      -- a group that is keyed by return_id reads the single value that group can have.
+      max(r.return_reference) as return_reference,
       max(coalesce(nullif(s.label_carrier, ''), nullif(s.carrier_code, ''), nullif(s.carrier_provider, ''))) as carrier_code,
       -- PS-217: the BILLED box cost is the generated package_cost line value for
       -- this order in the period — never the current package price table, and
@@ -2376,6 +2396,11 @@ async function billingInvoiceData(
     from billing_line_items b
     left join shipments s on s.id = b.shipment_id
     left join orders o on o.id = b.order_id
+    -- PS-488 M3: the persisted return reference, joined on the PRIMARY KEY so the join
+    -- cannot fan out and multiply this client's money. This is what removes the need for
+    -- a SECOND read of billing_line_items: the invoice's one read now carries every
+    -- return fact the canonical owners need to classify the row.
+    left join returns r on r.id = b.return_id
     where b.client_id = ${clientId}
       -- PS-208: identical date-only bounds as every billing endpoint — UTC
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
@@ -2484,6 +2509,12 @@ async function billingInvoiceData(
       storage_amt: suppressed ? zero : r.storage_amt,
       return_postage_amt: suppressed ? zero : r.return_postage_amt,
       return_processing_amt: suppressed ? zero : r.return_processing_amt,
+      // PS-488 M3: presence is NOT suppressed with the money. PS-491 zeroes a duplicate
+      // copy's dollars; the line still existed, and saying otherwise would turn a
+      // suppressed charge into an absent one — a different claim about the same row.
+      has_return_postage_line: r.has_return_postage_line === true,
+      has_return_processing_line: r.has_return_processing_line === true,
+      return_reference: r.return_reference ?? null,
       row_total: suppressed ? zero : r.row_total,
       billing_status_label: duplicateLabel ?? billingStatus.billingStatusLabel,
       item_names: r.adjustment_description ?? itemSummary.itemNames,
@@ -2505,12 +2536,15 @@ async function billingInvoiceData(
     };
   });
 
-  // ── PS-488 AC-6: the canonical DTO becomes the owner of return rows ──────────
+  // ── PS-488 AC-6: canonical ownership of return rows, from ONE read ───────────
   //
-  // Until now the invoice ran its own aggregate and the Billing table ran
-  // toBillingDetailOrderRows, so the two were independent derivations of the same money
-  // that merely agreed. Return rows now come from the canonical owner; outbound rows keep
-  // the frozen SHIPMENT grain this query owns and are only STAMPED from it.
+  // ONE read of billing_line_items, above. An earlier revision called billingDetails()
+  // here, which issued a SECOND read of the same fact table inside one request and
+  // outside any shared snapshot: the two could observe different data, and the invoice
+  // could disagree with itself between its outbound rows and its return rows. The join to
+  // `returns` above is what removed the need for it — the single read now carries the
+  // persisted reference and the presence flags, and the canonical OWNERS are applied to
+  // those rows in TS. Ownership is about which function decides, not which query fetched.
   //
   // Exactly one producer per return, by complementary predicates:
   //   * a canonical Return row exists iff return_id is non-null (billingRowIdentity
@@ -2524,18 +2558,43 @@ async function billingInvoiceData(
   // return_id NULL (CP-059). Those are not canonical Return rows and are not dropped here
   // — they continue to flow through the SQL path exactly as before, which is why this
   // change moves no money for them. Closing that gap is CP-059's job, not this one's.
-  const canonicalRows = await billingDetails({
-    clientId,
-    dateFrom,
-    dateTo,
-    scopeClientIds: invoiceScope.clientIds,
-    scopeStoreIds: invoiceScope.storeIds,
-    scopeIsGlobal: invoiceScope.isGlobal,
-    scopeRestricted: invoiceScope.isRestricted,
-  });
+  const canonicalRows = details
+    .filter((row) => row.return_id != null)
+    .map((row) => {
+      // The canonical OWNERS, applied to the invoice's own read. Ownership is about which
+      // FUNCTION decides, not which query fetched the bytes: billingRowIdentity is still
+      // the only thing that says what a row is called, and resolveBillingReturnRowStatus
+      // is still the only thing that says what an aggregated Return row's status is.
+      const identity = billingRowIdentity({
+        orderNumber: row.order_number,
+        orderId: row.order_id,
+        returnId: row.return_id,
+        returnReference: row.return_reference,
+      });
+      const status = resolveBillingReturnRowStatus({
+        returnId: row.return_id,
+        relatedOrderId: row.order_id,
+      });
+      return {
+        orderId: row.order_id,
+        orderNumber: row.order_number,
+        returnId: row.return_id,
+        rowType: identity.rowType,
+        displayReference: identity.displayReference,
+        billingStatusLabel: status.billingStatusLabel,
+        returnPostageTotal: Number(row.return_postage_amt),
+        returnProcessingTotal: Number(row.return_processing_amt),
+        hasReturnPostageLine: row.has_return_postage_line === true,
+        hasReturnProcessingLine: row.has_return_processing_line === true,
+        grandTotal: Number(row.row_total),
+        destination: row.destination,
+        billingEffectiveDate: row.billing_effective_date,
+        shipDate: row.ship_date,
+      };
+    });
   const reconciled = reconcileInvoiceRows({
     outbound: details.filter((row) => row.return_id == null),
-    canonical: canonicalRows,
+    canonical: canonicalRows as never,
   }) as unknown as InvoiceDetailRow[];
 
   return {

@@ -32,9 +32,9 @@ type LineItem = {
   billingEffectiveDate?: string | null;
   rolledFromWeekend?: boolean;
   lineType: string;
-  description: string;
-  qty: string;
-  unitCost: string;
+  description: string | null;
+  qty: string | null;
+  unitCost: string | null;
   totalCost: string;
   // PS-488 M3 — the canonical fields /billing/details already emits. This page was
   // typed against the RAW line-item shape it was written for years ago, so it read
@@ -46,6 +46,9 @@ type LineItem = {
   grandTotal?: number;
   returnId?: number | null;
   displayQty?: string;
+  /** PS-488 M3 — whether the fee EXISTS, distinct from its amount being 0. */
+  hasReturnPostageLine?: boolean;
+  hasReturnProcessingLine?: boolean;
 };
 
 type Client = {
@@ -437,12 +440,20 @@ export default function Invoice() {
                             "billing order" on every line of every invoice. */}
                         {l.rowType ?? l.lineType.replace(/_/g, ' ')}
                       </td>
+                      {/* PS-488 M3 — a Return aggregate clears description/qty/unitCost,
+                          because each belonged to ONE component line and none of them
+                          describes the row: "Return postage" is the wrong description for
+                          a row that is postage AND processing, and a 7.73 unit cost
+                          against a 10.73 total reads as a quantity error. The backend
+                          declines to invent a synthetic answer, so these render as an
+                          em-dash. The money is unaffected — it is in Amount, and the
+                          breakdown is in the Return Postage / Return Processing columns. */}
                       <td className="py-1 text-ink truncate max-w-[300px]">
-                        {l.description}
+                        {l.description ?? '—'}
                       </td>
-                      <td className="py-1 text-right font-mono">{l.qty}</td>
+                      <td className="py-1 text-right font-mono">{l.qty ?? '—'}</td>
                       <td className="py-1 text-right font-mono">
-                        {fmtMoney(l.unitCost)}
+                        {l.unitCost == null ? '—' : fmtMoney(l.unitCost)}
                       </td>
                       <td className="py-1 text-right font-mono font-semibold">
                         {fmtMoney(invoiceRowTotal(l))}

@@ -210,19 +210,45 @@ function billingStatusChipStyle(tone: BillingStatusTone): CSSProperties {
   }
 }
 
+/**
+ * PS-488 M3 — every return lifecycle value the backend can emit.
+ *
+ * Two call sites below each spelled out `'return' || 'return_label' ||
+ * 'return_processing'` and both omitted the CANONICAL names the generator actually
+ * writes — 'return_postage' and 'return_processing_fee'. A row carrying either of those
+ * therefore lost its Return styling and its Return backup label entirely, while a row
+ * carrying the legacy spelling kept them. Listed once so the two sites cannot drift apart
+ * again, and so adding a lifecycle value has exactly one place to touch.
+ *
+ * The aggregated Billing rows now resolve to the single stable 'return', but this must
+ * still cover the component values: they remain reachable on unaggregated reads and on
+ * Client Portal rows, and styling that silently drops a case is worse than no styling.
+ */
+const RETURN_LIFECYCLE_STATUSES = new Set([
+  'return',
+  'return_label',
+  'return_processing',
+  'return_postage',
+  'return_processing_fee',
+])
+
+function isReturnLifecycle(row: BillingDetailDto): boolean {
+  return RETURN_LIFECYCLE_STATUSES.has(String(billingStatusLifecycle(row) ?? ''))
+}
+
 function billingOrderBackupStatus(row: BillingDetailDto): 'Cancelled' | 'Return' | null {
   const lifecycle = billingStatusLifecycle(row)
   if (lifecycle === 'cancelled_no_charge' || lifecycle === 'cancelled_billable' || row.billingStatusBadge === 'CANCELLED') {
     return 'Cancelled'
   }
-  if (lifecycle === 'return' || lifecycle === 'return_label' || lifecycle === 'return_processing') return 'Return'
+  if (isReturnLifecycle(row)) return 'Return'
   return null
 }
 
 function billingStatusRowClass(row: BillingDetailDto): string | null {
   const lifecycle = billingStatusLifecycle(row)
   if (lifecycle === 'cancelled_no_charge' || lifecycle === 'cancelled_billable') return 'billing-detail-status-cancelled'
-  if (lifecycle === 'return' || lifecycle === 'return_label' || lifecycle === 'return_processing') return 'billing-detail-status-return'
+  if (isReturnLifecycle(row)) return 'billing-detail-status-return'
   return null
 }
 
@@ -521,9 +547,17 @@ export function BillingDetailTable({
                 )
               case 'returnPostage':
               case 'returnProcessing': {
-                const value = column.id === 'returnPostage'
-                  ? row.returnPostageTotal
-                  : row.returnProcessingTotal
+                const isPostage = column.id === 'returnPostage'
+                const value = isPostage ? row.returnPostageTotal : row.returnProcessingTotal
+                // PS-488 M3: PRESENCE, not the number. The aggregate reports 0 for a fee
+                // the return was never charged, so reading the number alone rendered
+                // "$0.00 postage" on a processing-only return — indistinguishable from a
+                // postage charge that was genuinely waived. The backend now says which
+                // it is, and a fee that does not exist gets no cell value.
+                const present = isPostage ? row.hasReturnPostageLine : row.hasReturnProcessingLine
+                if (present === false) {
+                  return <span style={{ color: 'var(--text4)' }}>—</span>
+                }
                 // AC-5: not-yet-billable return money is blank, never a fabricated
                 // $0.00 — an invented zero reads as a decision that was never made.
                 if (value === null || value === undefined) {

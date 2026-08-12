@@ -45,6 +45,9 @@ export type InvoiceCsvDetailRow = {
    */
   return_postage_amt?: string | null;
   return_processing_amt?: string | null;
+  /** PS-488 M3 — whether the fee EXISTS. The cell is blank when false, 0 when a real zero. */
+  has_return_postage_line?: boolean;
+  has_return_processing_line?: boolean;
   billing_status_label?: string | null;
   skus: string | null;
   package_cost_amt: string;
@@ -117,8 +120,16 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   // shape is pinned by PS-468/Audit B-9. row_total already includes return money (it is
   // a sum over every line type), so adding these here would double-count on every row
   // that has a real row_total. They are display buckets only.
-  const returnPostageAmt = Number(row.return_postage_amt ?? 0) || 0;
-  const returnProcessingAmt = Number(row.return_processing_amt ?? 0) || 0;
+  //
+  // PS-488 M3 — presence decides whether the cell renders at all. `0` and `absent` are
+  // different facts: a return that was never charged processing and one that was charged
+  // $0.00 must not export the same cell. Branching on the flag, never on the number.
+  const returnPostageAmt = row.has_return_postage_line === true
+    ? num(Number(row.return_postage_amt ?? 0) || 0)
+    : '';
+  const returnProcessingAmt = row.has_return_processing_line === true
+    ? num(Number(row.return_processing_amt ?? 0) || 0)
+    : '';
   // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
   // CSV delegates the read-only total fallback to the backend owner.
   const total = resolveBillingInvoiceRowTotal({
@@ -162,8 +173,8 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     // PS-488 M3: the backend's own return buckets, never borrowed from shipping_amt.
     // Rendered through the same num() as every other money cell so an absent value
     // becomes 0, matching how the XLSX sheet carries these two columns.
-    num(returnPostageAmt),
-    num(returnProcessingAmt),
+    returnPostageAmt,
+    returnProcessingAmt,
   ];
   return cells.map(csvField).join(',');
 }

@@ -143,11 +143,13 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  // PS-488 M3: two trailing 0 cells. This fixture carries NO return money — it is an
-  // outbound shipment row that merely wears a " - Return" label, which is exactly the
-  // merged shape the M3 grouping key separates. It stays as-is to prove the new columns
-  // are 0 on a row with no return charges; returnMoneyRow below covers the real case.
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,0,0',
+  // PS-488 M3: two trailing BLANK cells, not two zeros. This fixture is an outbound
+  // shipment row that merely wears a " - Return" label — it has no return fee at all,
+  // which is a different fact from having a return fee of $0.00. Printing 0.00 in a
+  // return column on every shipment line of every invoice asserted a charge that was
+  // never made. returnMoneyRow below covers a real return; the waived case is covered in
+  // ps-488-billing-row-reference-guard, where the same number renders WITH presence.
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -170,7 +172,9 @@ const returnMoneyRow: InvoiceCsvDetailRow = {
   shipping_amt: '0',
   storage_amt: '0',
   return_postage_amt: '7.73',
+  has_return_postage_line: true,
   return_processing_amt: '3.00',
+  has_return_processing_line: true,
   row_total: '10.73',
   billing_status_label: 'Return postage',
   skus: null,
@@ -204,6 +208,45 @@ assert.equal(sumOf('Pick & Pack Fee'), 0, 'return processing must not appear as 
 // PS-488 AC-1: the label is the backend's STORED reference, passed through untouched.
 assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Order #')], '#1234-RETURN');
 
+// PS-488 M3 — ABSENT versus genuinely ZERO, on the exported cell.
+//
+// These two rows carry the SAME number for postage. Only presence separates them, and
+// the CSV is where the difference becomes a client-facing claim: a blank says "no such
+// charge", a 0 says "charged, at no cost". Collapsing them exported a waived postage
+// charge onto a return that was never charged postage at all.
+{
+  const cellOf = (row: InvoiceCsvDetailRow, header: string) =>
+    renderInvoiceCsvRow(row).split(',')[INVOICE_CSV_HEADERS.indexOf(header as never)];
+
+  const processingOnly = {
+    ...returnMoneyRow,
+    return_postage_amt: null,
+    has_return_postage_line: false,
+    row_total: '3.00',
+  };
+  assert.equal(cellOf(processingOnly, 'Return Postage'), '',
+    'a fee that was never charged must export BLANK');
+  assert.equal(cellOf(processingOnly, 'Return Processing'), '3');
+
+  const waivedPostage = {
+    ...returnMoneyRow,
+    return_postage_amt: '0',
+    has_return_postage_line: true,
+    return_processing_amt: null,
+    has_return_processing_line: false,
+    row_total: '0',
+  };
+  assert.equal(cellOf(waivedPostage, 'Return Postage'), '0',
+    'a fee charged at zero must export 0, not blank');
+  assert.equal(cellOf(waivedPostage, 'Return Processing'), '');
+
+  assert.notEqual(
+    cellOf(processingOnly, 'Return Postage'),
+    cellOf(waivedPostage, 'Return Postage'),
+    'absent and zero must not serialize identically — that is the whole defect',
+  );
+}
+
 // PS-490: a row from a caller that has not been updated must still emit a correct order
 // number and an empty Destination — never a blank Order # cell.
 assert.ok(
@@ -226,8 +269,8 @@ assert.equal(
   'a row without a destination emits an empty Destination cell, not a missing column',
 );
 // The same rule for the two return columns: absent means 0, never NaN or blank.
-assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Postage')], '0');
-assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Processing')], '0');
+assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Postage')], '');
+assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Processing')], '');
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
 // pickPackFee(3) + package cost(2) + shipping(2) + storage(1) = 8. Empty SKUs serialize blank.
@@ -239,7 +282,7 @@ assert.equal(
   // and the fallback deliberately does NOT include the return buckets — row_total is a
   // sum over every line type, so folding returns into the fallback would double-count on
   // every row that has a real total.
-  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021,,0,0',
+  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021,,,',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

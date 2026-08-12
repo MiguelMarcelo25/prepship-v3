@@ -255,6 +255,110 @@ check('the invoice page reads aggregate money, not the stamped component field',
 });
 
 
+// ── M3 (Hermes afd440a2): a Return aggregate describes ITSELF ────────────────
+const RETURN_BOTH = [
+  { ...base, id: 10, lineType: 'return_postage', totalCost: '7.73', unitCost: '7.73', description: 'Return postage', returnId: 7, returnReference: '1234-RETURN' },
+  { ...base, id: 11, lineType: 'return_processing_fee', totalCost: '3.00', unitCost: '3.00', description: 'Return processing', returnId: 7, returnReference: '1234-RETURN' },
+];
+
+check('a combined Return row has ONE stable status, whatever the arrival order', () => {
+  // resolveBillingRowStatus answers for a LINE: postage resolves to 'return_postage',
+  // processing to 'return_processing_fee'. The collapse kept whichever initialised the
+  // row, so the status of a two-line return depended on the order the rows arrived in.
+  const forward = toBillingDetailOrderRows(RETURN_BOTH)[0]!;
+  const reverse = toBillingDetailOrderRows([...RETURN_BOTH].reverse())[0]!;
+  assert.equal(forward.billingLifecycleStatus, 'return');
+  assert.equal(forward.billingStatusLabel, 'Return');
+  assert.equal(forward.billingStatusTone, 'purple');
+  assert.equal(reverse.billingStatusLabel, forward.billingStatusLabel,
+    'reversing arrival order must not change the status');
+  // A one-component return gets the SAME status as a two-component one. The aggregate is
+  // a return either way; which fees it carries lives in the buckets, not in the status.
+  const postageOnly = toBillingDetailOrderRows([RETURN_BOTH[0]!])[0]!;
+  assert.equal(postageOnly.billingStatusLabel, 'Return');
+});
+
+check('a Return row never presents a COMPONENT as the aggregate', () => {
+  // description/qty/unitCost belong to one line. Pinning them to the highest component id
+  // made the choice deterministic, but deterministic is not truthful: "Return postage" is
+  // the wrong description for a row that is postage AND processing, and a unit cost of
+  // 7.73 against a total of 10.73 invites the reader to think the quantity is wrong.
+  const row = toBillingDetailOrderRows(RETURN_BOTH)[0]!;
+  assert.equal(row.description, null, 'no component description may stand in for the row');
+  assert.equal(row.qty, null);
+  assert.equal(row.unitCost, null);
+  assert.equal(row.grandTotal, 10.73, 'clearing display fields must not touch the money');
+});
+
+check('an OUTBOUND aggregate keeps its display fields (ps-394 depends on qty)', () => {
+  const row = toBillingDetailOrderRows([
+    { ...base, id: 20, lineType: 'pick_pack', totalCost: '2.50', unitCost: '2.50', qty: 3, description: 'Pick & pack' },
+    { ...base, id: 21, lineType: 'shipping', totalCost: '4.25', unitCost: '4.25', qty: 1, description: 'Shipping' },
+  ])[0]!;
+  assert.ok(row.description != null, 'the Return-only clearing must not reach outbound rows');
+  assert.ok(row.qty != null);
+  assert.ok(typeof row.displayQty === 'string' && row.displayQty.length > 0, 'displayQty still has a quantity to format');
+});
+
+check('an ABSENT return fee is distinguishable from a fee that is genuinely zero', () => {
+  // The whole point: both carry the number 0. Only presence separates them, and without
+  // it a processing-only return exported postage as $0.00 — indistinguishable from a
+  // waived postage charge, on a document a client is billed from.
+  const processingOnly = toBillingDetailOrderRows([RETURN_BOTH[1]!])[0]!;
+  assert.equal(processingOnly.returnPostageTotal, 0);
+  assert.equal(processingOnly.hasReturnPostageLine, false, 'never charged postage');
+  assert.equal(processingOnly.hasReturnProcessingLine, true);
+
+  const waivedPostage = toBillingDetailOrderRows([
+    { ...base, id: 12, lineType: 'return_postage', totalCost: '0.00', returnId: 9, returnReference: '1234-RETURN-2' },
+  ])[0]!;
+  assert.equal(waivedPostage.returnPostageTotal, 0, 'same number as the absent case');
+  assert.equal(waivedPostage.hasReturnPostageLine, true, 'but the charge EXISTS');
+
+  // Presence unions across components and never depends on arrival order.
+  const both = toBillingDetailOrderRows(RETURN_BOTH)[0]!;
+  assert.equal(both.hasReturnPostageLine, true);
+  assert.equal(both.hasReturnProcessingLine, true);
+  assert.deepEqual(
+    toBillingDetailOrderRows([...RETURN_BOTH].reverse())[0]!.lineTypes,
+    both.lineTypes,
+    'the line-type set is a property of the row, not of arrival order',
+  );
+});
+
+
+check('the UI recognises EVERY return lifecycle the backend can emit', () => {
+  // Two call sites in the table each spelled out their own list and both omitted the
+  // CANONICAL names the generator writes — 'return_postage' and 'return_processing_fee'.
+  // A row carrying either lost its Return styling and its Return backup label, while a
+  // row carrying the legacy spelling kept them: the same return, styled differently
+  // depending on which vocabulary wrote it.
+  //
+  // The expected set is DERIVED from the backend's BillingLifecycleStatus union rather
+  // than hardcoded here, so adding a return status to the owner makes this fail until the
+  // UI is taught about it. A hardcoded copy would be a fourth list to forget to update.
+  const statusSource = readFileSync('src/services/billing-row-status.ts', 'utf8');
+  const union = /export type BillingLifecycleStatus =([\s\S]*?);/.exec(statusSource)?.[1] ?? '';
+  const backendReturnStatuses = [...union.matchAll(/'([a-z_]+)'/g)]
+    .map((m) => m[1]!)
+    .filter((value) => value.startsWith('return'));
+  assert.ok(backendReturnStatuses.length >= 5,
+    `expected the union to declare the return statuses, found ${backendReturnStatuses.join(', ')}`);
+
+  const table = stripGuardComments(readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8'));
+  const declared = /RETURN_LIFECYCLE_STATUSES = new Set\(\[([\s\S]*?)\]\)/.exec(table)?.[1] ?? '';
+  for (const status of backendReturnStatuses) {
+    assert.ok(new RegExp(`'${status}'`).test(declared),
+      `the table must style '${status}' as a Return — the backend can emit it`);
+  }
+  // And both call sites must go through the shared set rather than re-listing it.
+  assert.equal(
+    (table.match(/lifecycle === 'return_label'/g) ?? []).length, 0,
+    'return lifecycle checks must delegate to the shared set, not re-spell the list',
+  );
+});
+
+
 // ── AC-6: the four Billing columns render, and derive nothing ────────────────
 check('the four AC-6 columns exist in the registry and are visible by default', () => {
   const parity = readFileSync('web/src/components/Views/billing-parity.ts', 'utf8');
@@ -315,8 +419,21 @@ check('AC-6 CLOSED: the invoice reconciles from the canonical DTO', () => {
   const end = after.search(/^(?:export )?(?:async )?function /m);
   const invoiceData = end >= 0 ? after.slice(0, end) : after;
 
-  assert.ok(/await billingDetails\(/.test(invoiceData),
-    'the invoice builder must read the canonical DTO, not only its own aggregate');
+  // PS-488 M3 (Hermes, afd440a2 review): this previously REQUIRED `await billingDetails(`
+  // here — it mandated the very defect it was meant to prevent. Reading the canonical DTO
+  // through a second query meant two reads of billing_line_items inside one request and
+  // outside any shared snapshot, so the invoice could disagree with itself between its
+  // outbound rows and its return rows. Canonical OWNERSHIP is about which function
+  // decides, not which query fetched the bytes, so the owners are now applied to the
+  // single read's rows and the second read is forbidden.
+  assert.ok(!/billingDetails\(/.test(invoiceData),
+    'the invoice builder must NOT issue a second read of billing_line_items');
+  assert.ok(/left join returns r on r\.id = b\.return_id/.test(billing),
+    'the ONE read must join returns, or the persisted reference is unavailable without a second read');
+  assert.ok(/billingRowIdentity\(/.test(invoiceData),
+    'return identity must come from the canonical owner, not be assembled here');
+  assert.ok(/resolveBillingReturnRowStatus\(/.test(invoiceData),
+    'return status must come from the shared owner, not from a component line');
   assert.ok(/reconcileInvoiceRows\(/.test(invoiceData),
     'the invoice builder must reconcile through the shared projection');
   // The complementary predicates are what make "exactly one producer per return" true.

@@ -102,6 +102,14 @@ export function reconcileInvoiceRows(input: {
       // undefined, so a future reader cannot mistake "absent" for "not yet computed".
       returnPostage: 0,
       returnProcessing: 0,
+      // PS-488 M3 — but an outbound row has no return FEE at all, which is a different
+      // statement from "its return fee is zero". Marking presence false is what makes the
+      // serializers leave those two cells blank on outbound rows instead of printing 0.00
+      // in a return column on every shipment line of every invoice.
+      has_return_postage_line: false,
+      has_return_processing_line: false,
+      return_postage_amt: null,
+      return_processing_amt: null,
     };
   });
 
@@ -150,8 +158,14 @@ export function reconcileInvoiceRows(input: {
       shipping_amt: '0',
       storage_amt: '0',
       package_cost_amt: '0',
-      return_postage_amt: String(num(row.returnPostageTotal)),
-      return_processing_amt: String(num(row.returnProcessingTotal)),
+      // PS-488 M3 — absent stays absent. A fee the return was never charged is null, not
+      // '0': a processing-only return must not export postage as 0.00, which reads as a
+      // waived charge on a document the client is billed from. A genuine zero keeps its
+      // '0' because its presence flag is true.
+      return_postage_amt: row.hasReturnPostageLine === true ? String(num(row.returnPostageTotal)) : null,
+      return_processing_amt: row.hasReturnProcessingLine === true ? String(num(row.returnProcessingTotal)) : null,
+      has_return_postage_line: row.hasReturnPostageLine === true,
+      has_return_processing_line: row.hasReturnProcessingLine === true,
       row_total: String(num(row.grandTotal)),
       billing_status_label: (row.billingStatusLabel as string | undefined) ?? 'Return',
       item_names: null,

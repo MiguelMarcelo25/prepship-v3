@@ -1,6 +1,11 @@
 import { NO_BOX_COST_BILLING_BADGE, resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { isCancelledNoChargeBillingRow } from './billing-cancelled-no-charge';
-import { isBillingReturnLineType } from './billing-row-status';
+import {
+  isBillingReturnLineType,
+  isBillingReturnPostageLineType,
+  isBillingReturnProcessingLineType,
+  resolveBillingReturnRowStatus,
+} from './billing-row-status';
 import {
   INTERNATIONAL_BILLING_BADGE,
   classifyDestinationCountry,
@@ -73,6 +78,21 @@ export interface BillingDetailRowDto {
   /** PS-488 AC-6 — return money in its own columns, never inferred by the FE. */
   returnPostageTotal?: number;
   returnProcessingTotal?: number;
+  /**
+   * PS-488 M3 — PRESENCE, distinct from amount.
+   *
+   * `returnPostageTotal === 0` cannot tell a reader whether the return was charged
+   * nothing for postage or was never charged postage at all. These flags carry that
+   * difference all the way to the rendered cell, so an absent fee shows blank and a real
+   * zero shows $0.00. Every serializer must branch on these, not on the number.
+   */
+  hasReturnPostageLine?: boolean;
+  hasReturnProcessingLine?: boolean;
+  /**
+   * PS-488 M3 — the deduplicated, sorted set of line types that formed this aggregate.
+   * Sorted because the set is a property of the row, not of its components' arrival order.
+   */
+  lineTypes?: string[];
   /** PS-488 AC-1 — Outbound or Return, from the relational returnId. */
   rowType?: BillingRowType;
   /** PS-488 AC-1 — `#1234` or `#1234-RETURN`. Display/search identity, never a key. */
@@ -456,11 +476,53 @@ function applyRowIdentity(row: BillingDetailRowDto): void {
   row.displayReference = displayReference;
 }
 
+/**
+ * PS-488 M3 — make a Return aggregate describe ITSELF, not one of its components.
+ *
+ * Two separate defects, both of which made a component masquerade as the whole row:
+ *
+ * 1. STATUS. resolveBillingRowStatus runs per LINE upstream, so the postage line resolves
+ *    to 'return_postage' and the processing line to 'return_processing_fee'. The collapse
+ *    kept whichever initialised the row, so the status of a two-line return depended on
+ *    arrival order. Re-resolved here through the shared owner, from the row's own type.
+ *
+ * 2. DESCRIPTION / QTY / UNIT COST. These belong to one component line. Pinning them to
+ *    the highest component id (the previous fix) made the choice deterministic, but
+ *    deterministic is not truthful: "Return postage" as the description of a row that is
+ *    postage AND processing is simply wrong, and a unit cost of 7.73 against a total of
+ *    10.73 invites the reader to conclude the quantity is wrong. There is no honest
+ *    single-component answer, and PrepShip must not invent a synthetic one, so they are
+ *    cleared and the renderers show blank.
+ *
+ * Scoped to Return rows on purpose. An outbound aggregate's qty is a real quantity that
+ * ps-394's displayQty depends on; nothing about outbound rows changes here.
+ */
+function applyReturnAggregate(row: BillingDetailRowDto): void {
+  if (row.rowType !== 'Return') return;
+
+  const status = resolveBillingReturnRowStatus({
+    lineTypes: Array.isArray(row.lineTypes) ? row.lineTypes : [],
+    returnId: (row.returnId ?? null) as number | string | null,
+    relatedOrderId: (row.relatedOrderId ?? null) as number | string | null,
+  });
+  row.billingLifecycleStatus = status.billingLifecycleStatus;
+  row.billingStatusLabel = status.billingStatusLabel;
+  row.billingStatusTone = status.billingStatusTone;
+  row.billingZeroReason = status.billingZeroReason;
+  row.billingStatusBadge = status.billingStatusBadge;
+
+  row.description = null;
+  row.qty = null;
+  row.unitCost = null;
+  row.totalQty = null;
+}
+
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
   // PS-488 M3 — identity FIRST. applyCancelledNoCharge must know whether this is a
   // Return row before it decides whether to zero it, and rowType is what tells it.
   // Running the zeroing first meant the decision was made with the answer missing.
   applyRowIdentity(row);
+  applyReturnAggregate(row);
   applyCancelledNoCharge(row);
   applyDestinationInternational(row);
   row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
@@ -507,6 +569,18 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         totalCost: 0,
         hasPackageCostLine,
         boxCostNoCharge,
+        // PS-488 M3 — PRESENCE, tracked separately from amount.
+        //
+        // A return that was never charged processing and one that was charged $0.00
+        // processing are different facts, and both collapsed to the number 0 here. A
+        // processing-only return therefore showed postage as $0.00 — indistinguishable
+        // from a waived postage charge, on a document a client is billed from. Presence
+        // is what makes "no such fee" renderable as blank while a real zero stays $0.00.
+        hasReturnPostageLine: isBillingReturnPostageLineType(lineType),
+        hasReturnProcessingLine: isBillingReturnProcessingLineType(lineType),
+        // The line types that formed this aggregate. Needed to resolve ONE stable status
+        // for the row rather than inheriting whichever component happened to arrive first.
+        lineTypes: nonEmpty(lineType) ? [String(lineType)] : [],
       } as BillingDetailRowDto;
       applyBoxCostAlert(next);
       byKey.set(key, next);
@@ -553,6 +627,20 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
       existing.description = row.description;
       existing.qty = row.qty;
       existing.unitCost = row.unitCost;
+    }
+
+    // PS-488 M3 — presence is a UNION across components, never a sum. OR-ing rather than
+    // overwriting is what lets a two-line return report both fees present while a
+    // one-line return reports exactly one.
+    existing.hasReturnPostageLine =
+      existing.hasReturnPostageLine === true || isBillingReturnPostageLineType(lineType);
+    existing.hasReturnProcessingLine =
+      existing.hasReturnProcessingLine === true || isBillingReturnProcessingLineType(lineType);
+    if (nonEmpty(lineType)) {
+      const seen = Array.isArray(existing.lineTypes) ? existing.lineTypes : [];
+      // Deduplicated and SORTED: the set of line types is a property of the aggregate, so
+      // it must not depend on the order its components arrived in.
+      existing.lineTypes = [...new Set([...seen, String(lineType)])].sort();
     }
 
     existing.hasPackageCostLine = existing.hasPackageCostLine === true || hasPackageCostLine;

@@ -86,6 +86,25 @@ export function isBillingReturnLineType(lineType: unknown): boolean {
     || value === 'return_processing_fee';
 }
 
+/**
+ * PS-488 M3 — which BUCKET a return line belongs to, by canonical and legacy spelling.
+ *
+ * Exported from the shared owner because three places need the same answer and had been
+ * spelling the list out separately: the DTO's metrics, the invoice aggregate's SQL CASE
+ * arms, and the presence tracking added for absent-versus-zero. A fourth private copy of
+ * this list is exactly how return_processing_fee came to be missing from one in the first
+ * place.
+ */
+export function isBillingReturnPostageLineType(lineType: unknown): boolean {
+  const value = normalizedText(lineType)?.toLowerCase();
+  return value === 'return_postage' || value === 'return_label';
+}
+
+export function isBillingReturnProcessingLineType(lineType: unknown): boolean {
+  const value = normalizedText(lineType)?.toLowerCase();
+  return value === 'return_processing_fee' || value === 'return_processing';
+}
+
 function result(
   status: BillingLifecycleStatus,
   label: string,
@@ -103,6 +122,25 @@ function result(
     ...(input.relatedOrderId != null ? { relatedOrderId: input.relatedOrderId } : {}),
     ...(input.returnId != null ? { returnId: input.returnId } : {}),
   };
+}
+
+/**
+ * PS-488 M3 — the ONE status an aggregated Return row carries.
+ *
+ * resolveBillingRowStatus below answers for a LINE. A return event's postage line resolves
+ * to 'return_postage' and its processing line to 'return_processing_fee', so an aggregate
+ * built by collapsing them inherited whichever component happened to initialise the row.
+ * Two returns with identical charges could then show different statuses depending on the
+ * order their lines arrived in, and one return could change status between fetches.
+ *
+ * An aggregate is not a line, so it does not get a line's answer. A Return row IS a
+ * return: one stable status, independent of which components exist and of their order.
+ * The per-component detail is not lost — it lives in returnPostageTotal /
+ * returnProcessingTotal and their presence flags, which is where a caller that needs to
+ * know what a return was actually charged for should look.
+ */
+export function resolveBillingReturnRowStatus(input: BillingRowStatusInput): BillingRowStatusResult {
+  return result('return', 'Return', 'purple', null, null, input);
 }
 
 export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRowStatusResult {
