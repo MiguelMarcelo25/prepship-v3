@@ -21,6 +21,19 @@
  * commandKey is per-shipment — so it legitimately fires for partial shipments and for
  * orders that already have others. The order's lines would over-deduct. ShipStation's
  * shipmentItems are scoped to the individual shipment, which is exactly right.
+ *
+ * AMENDED BY PS-505 (2026-08-12). The paragraph above is unchanged in INTENT and now wrong
+ * as an absolute. PS-505 lets sync fall back to the order's lines when it has PROVED the
+ * shipment is the order's sole live outbound shipment (`isSoleOutboundShipment`), which
+ * establishes directly the same scope equality the label path gets from its two
+ * preconditions — so the fallback is safe exactly where the ban assumed it could not be.
+ *
+ * The invariant this file enforces therefore became "never UNGATED" rather than "never
+ * present". A token ban cannot tell the gated call from an ungated one; it failed the moment
+ * the fix landed, and holding it would have blocked the repair of the 15 residual stranded
+ * orders it was itself written to catch. The gate's own semantics — voided/return exclusion,
+ * fail-closed on a second live shipment — are owned by ps-505-sync-line-fallback-guard.ts
+ * and are deliberately not duplicated here.
  */
 import { readFileSync } from 'node:fs';
 
@@ -121,10 +134,62 @@ check('a zero quantity is classified as zero_quantity, not generic invalid_quant
 check('an empty item array normalizes to nothing (caller falls back to unavailable)',
   normalizeFulfilledLines([] as never).length === 0);
 
-// ── scope: these are SHIPMENT lines, so the order-scoped loader must NOT be used here ──
-check('shipment-sync does NOT reuse the whole-order line loader',
-  !/loadWholeOrderShipmentLines/.test(syncCode),
-  'this path fires for partial and repeat shipments — order lines would over-deduct');
+// ── scope: order-scoped lines are legal here ONLY behind the sole-outbound gate ──
+//
+// Reachability is the invariant, not absence (see the PS-505 amendment in the header). Each
+// call site is located and required to have the gate in the expression immediately preceding
+// it, so the one legitimate gated call passes while a SECOND, ungated call added later still
+// fails — which a whole-file token ban could not express, and a bare "the gated call exists"
+// assertion would not catch either.
+function countUngatedWholeOrderCalls(source: string): number {
+  return [...source.matchAll(/loadWholeOrderShipmentLines\s*\(/g)].filter((match) => {
+    const callAt = match.index ?? 0;
+    // Look back to the start of the CURRENT statement, not a fixed character count. A
+    // character window is a magic number: the fixtures below proved a 200-char lookback let
+    // one gated call launder a separate ungated call that happened to sit near it. A
+    // statement boundary is structural, so the gate has to be in the same expression as the
+    // call it is supposed to be guarding.
+    const statement = source.slice(source.lastIndexOf(';', callAt) + 1, callAt);
+    return !/isSoleOutboundShipment\s*\(/.test(statement);
+  }).length;
+}
+
+check('every whole-order line call in shipment-sync is gated on sole-outbound-shipment',
+  countUngatedWholeOrderCalls(syncCode) === 0,
+  'an ungated call fires for partial and repeat shipments — the order\'s full line list would '
+  + 'be claimed by every shipment and stock would deduct once per shipment');
+
+// The predicate above must be able to FAIL, or it is decoration that reports green forever.
+// `shipment-sync.ts` cannot be mutated to prove that (it is inside the shipped-data lockdown),
+// so the discrimination is demonstrated against fixtures instead. This is the specific defect
+// this repo has already been bitten by twice: a guard whose assertions all pass while the
+// property it names does not hold.
+const GATED_FIXTURE = `
+  const wholeOrderLines = providerLines
+    ? null
+    : (await isSoleOutboundShipment(tx, row.orderId, row.id))
+      ? await loadWholeOrderShipmentLines(row.orderId, tx)
+      : null;
+`;
+const UNGATED_FIXTURE = `
+  const wholeOrderLines = providerLines
+    ? null
+    : await loadWholeOrderShipmentLines(row.orderId, tx);
+`;
+const IMPORT_ONLY_FIXTURE = `
+  import { loadWholeOrderShipmentLines } from './shipment-fulfillment-lines';
+`;
+
+check('gate check: accepts the gated call shape',
+  countUngatedWholeOrderCalls(GATED_FIXTURE) === 0);
+check('gate check: REJECTS an ungated call',
+  countUngatedWholeOrderCalls(UNGATED_FIXTURE) === 1,
+  'the assertion above would pass on unsafe code — it cannot fail, so it guards nothing');
+check('gate check: catches a second ungated call added beside a legitimate gated one',
+  countUngatedWholeOrderCalls(`${GATED_FIXTURE}\n${UNGATED_FIXTURE}`) === 1,
+  'one gated call must not launder every later call in the file');
+check('gate check: the bare import is not mistaken for a call',
+  countUngatedWholeOrderCalls(IMPORT_ONLY_FIXTURE) === 0);
 check('the per-shipment commandKey is unchanged',
   /commandKey: `lifecycle:shipment:\$\{row\.id\}:shipped`/.test(syncCode));
 check('provenance records which line source was used',
