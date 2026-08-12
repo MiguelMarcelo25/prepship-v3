@@ -56,6 +56,8 @@ export const RATE_MONEY_UNAVAILABLE_MESSAGE = 'Saved rate unavailable — browse
  */
 const SHIPMENT_COST_KEYS = ['shipmentCost', 'shipment_cost'] as const;
 const OTHER_COST_KEYS = ['otherCost', 'other_cost'] as const;
+/** Explicit totals. Never a component source — only a cross-check against one. */
+const TOTAL_KEYS = ['totalCost', 'total_cost', 'amount'] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
@@ -143,6 +145,17 @@ export function classifyRateMoney(value: unknown): RateMoneyVerdict {
   }
   if (!(shipmentCost.value! > 0)) {
     return fail(shipmentCost, otherCost, 'shipment_cost_not_positive');
+  }
+  // An explicit total that contradicts its own components. Reported, never
+  // reconciled: silently preferring either side would pick a number nobody sent.
+  // Tolerance covers float noise (8.25 + 1.50 vs 9.7499999) without masking a
+  // real discrepancy.
+  const explicitTotal = readMoneyField(rate, raw, TOTAL_KEYS);
+  if (explicitTotal.provenance === 'present') {
+    const componentTotal = shipmentCost.value! + otherCost.value!;
+    if (Math.abs(componentTotal - explicitTotal.value!) > 0.005) {
+      return fail(shipmentCost, otherCost, 'total_contradicts_components');
+    }
   }
   if (otherCost.value! < 0) {
     // Previously hidden by Math.max(0, ...), which turned a contradiction into

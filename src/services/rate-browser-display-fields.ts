@@ -1,4 +1,6 @@
 import { stampPurchaseCustomerRateAliases } from './shipping-workflow/purchase-customer-rate-aliases.js';
+// PS-500: the common live/cache browse boundary must carry the money verdict too.
+import { classifyRateMoney } from './shipping-workflow/shipping-rate-money-classifier';
 import {
   resolveHugrabLabelPurchasePreflight,
   resolveShippCustomsValueProofSource,
@@ -32,6 +34,13 @@ function toRateProviderAccountId(value: unknown): number | null {
 }
 
 function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<string, unknown> {
+  // PS-500: classify from the ORIGINAL row, before this function and
+  // stampPurchaseCustomerRateAliases default anything. Otherwise a live row with
+  // `amount: 9.75, otherCost: 1.50` and no shipmentCost is laundered into
+  // `shipmentCost: 9.75` — the exact total-as-component substitution this ticket
+  // removes — and still reaches handleRateClick(), because the availability
+  // check inspects proof and eligibility but never money completeness.
+  const moneyVerdict = classifyRateMoney(rate);
   const carrierCode = readText(rate.carrierCode ?? rate.carrier_code ?? rate.provider ?? null);
   const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? rate.service ?? null);
   const serviceName = readText(rate.serviceName ?? rate.service_type ?? rate.serviceCode ?? rate.service_code ?? null);
@@ -48,7 +57,7 @@ function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<str
     rate.shippingProviderId ?? rate.providerAccountId ?? rate.carrier_id ?? null
   );
 
-  return stampPurchaseCustomerRateAliases({
+  const stamped = stampPurchaseCustomerRateAliases({
     ...rate,
     ...(carrierCode ? { carrierCode } : {}),
     ...(serviceCode ? { serviceCode } : {}),
@@ -59,6 +68,18 @@ function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<str
       ? stampRateBrowserDisplayAlias(rate.secondBestRate)
       : rate.secondBestRate,
   });
+
+  // PS-500: applied to the RESULT, not folded into the literal above, so the
+  // verdict cannot be overwritten by the alias stamper it wraps — that stamper
+  // is the thing that derives `purchaseShipmentCost = purchaseTotal - otherCost`
+  // and defaults missing money, so its output must not be able to claim the
+  // money was complete. The verdict describes `rate` as received.
+  return {
+    ...stamped,
+    rateMoneyComplete: moneyVerdict.rateMoneyComplete,
+    rateMoneyUnavailableReason: moneyVerdict.rateMoneyUnavailableReason,
+    rateMoneyUnavailableMessage: moneyVerdict.rateMoneyUnavailableMessage,
+  };
 }
 
 export function stampRateBrowserDisplayAliases<T>(value: T): T {

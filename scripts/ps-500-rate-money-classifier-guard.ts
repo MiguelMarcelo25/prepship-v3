@@ -24,6 +24,7 @@ import {
   classifyRateMoney,
   RATE_MONEY_UNAVAILABLE_MESSAGE,
 } from '../src/services/shipping-workflow/shipping-rate-money-classifier';
+import { stampRateBrowserDisplayAliases } from '../src/services/rate-browser-display-fields';
 
 let checks = 0;
 const check = (label: string, fn: () => void) => {
@@ -106,6 +107,18 @@ check('a negative otherCost is reported, not clamped to zero', () => {
   assert.equal(v.otherCost.value, -2, 'the contradictory value is preserved for diagnosis');
 });
 
+check('an explicit total contradicting its components fails closed', () => {
+  const v = classifyRateMoney({ shipmentCost: 8, otherCost: 5, amount: 4 });
+  assert.equal(v.rateMoneyComplete, false, '8 + 5 cannot total 4');
+  assert.equal(v.rateMoneyUnavailableReason, 'total_contradicts_components');
+});
+
+check('a total agreeing with its components stays complete', () => {
+  assert.equal(classifyRateMoney({ shipmentCost: 8.25, otherCost: 1.5, amount: 9.75 }).rateMoneyComplete, true);
+  // float noise must not read as contradiction
+  assert.equal(classifyRateMoney({ shipmentCost: 8.25, otherCost: 1.5, totalCost: 9.7499999 }).rateMoneyComplete, true);
+});
+
 // ── Unusable is different from silent ───────────────────────────────────────
 check('an unparseable value is INVALID, not absent', () => {
   const v = classifyRateMoney({ shipmentCost: 'n/a', otherCost: 0 });
@@ -140,6 +153,57 @@ check('garbage input does not throw', () => {
   for (const payload of [null, undefined, 'x', 7, []]) {
     assert.equal(classifyRateMoney(payload).rateMoneyComplete, false);
   }
+});
+
+// ── BEHAVIOURAL: the common live/cache browse boundary ──────────────────────
+// Not source assertions. This runs a provider-shaped row through the real
+// producer, because the first attempt at PS-500 wired only the persisted seed
+// and Hermes reproduced a live candidate laundering a TOTAL into a COMPONENT
+// while carrying no verdict at all.
+check('the browse producer stamps the verdict on a live row', () => {
+  const [row] = stampRateBrowserDisplayAliases([
+    { amount: 9.75, otherCost: 1.5, carrierCode: 'ups', serviceCode: 'ups_ground' },
+  ]) as Array<Record<string, unknown>>;
+  // The alias stamper still derives a displayable shipmentCost — that is legacy
+  // display normalization and is deliberately preserved. What must NOT happen is
+  // that derived number being presented as complete money.
+  assert.equal(row.rateMoneyComplete, false,
+    'a live row with only `amount` must not claim complete money');
+  assert.equal(row.rateMoneyUnavailableReason, 'shipment_cost_absent');
+  assert.equal(row.rateMoneyUnavailableMessage, RATE_MONEY_UNAVAILABLE_MESSAGE);
+});
+
+check('a complete live row is stamped complete', () => {
+  const [row] = stampRateBrowserDisplayAliases([
+    { shipmentCost: 8.25, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_ground' },
+  ]) as Array<Record<string, unknown>>;
+  assert.equal(row.rateMoneyComplete, true);
+  assert.equal(row.rateMoneyUnavailableReason, null);
+});
+
+check('the verdict survives the alias stamper it wraps', () => {
+  // Applied to the RESULT, so stampPurchaseCustomerRateAliases — the code that
+  // derives purchaseShipmentCost = purchaseTotal - otherCost — cannot overwrite
+  // it back to a complete-looking row.
+  const [row] = stampRateBrowserDisplayAliases([
+    { amount: 12, otherCost: 2, purchaseTotal: 12 },
+  ]) as Array<Record<string, unknown>>;
+  assert.equal(row.rateMoneyComplete, false, 'derived purchase money must not imply completeness');
+});
+
+check('a single (non-array) bestRate is stamped too', () => {
+  const row = stampRateBrowserDisplayAliases({ amount: 9.75, otherCost: 1.5 }) as Record<string, unknown>;
+  assert.equal(row.rateMoneyComplete, false, 'bestRate goes through the same boundary');
+});
+
+check('nested secondBestRate carries its own verdict', () => {
+  const row = stampRateBrowserDisplayAliases({
+    shipmentCost: 8.25, otherCost: 0,
+    secondBestRate: { amount: 9.75, otherCost: 1.5 },
+  }) as Record<string, unknown>;
+  assert.equal(row.rateMoneyComplete, true);
+  const second = row.secondBestRate as Record<string, unknown>;
+  assert.equal(second.rateMoneyComplete, false, 'the nested row is classified on its own merits');
 });
 
 // ── Wiring: the verdict reaches the DTO, and the seed obeys it ──────────────

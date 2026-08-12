@@ -244,7 +244,14 @@ check(
     /import \{ stampPurchaseCustomerRateAliases \} from ['"]\.\/shipping-workflow\/purchase-customer-rate-aliases\.js['"]/.test(browseDisplay) &&
     /export function stampRateBrowserDisplayAliases<T>\(value: T\): T/.test(browseDisplay) &&
     /export function stampHugrabCoverageDisplayFields<T extends Record<string, unknown>>/.test(browseDisplay) &&
-    /return stampPurchaseCustomerRateAliases\(\{/.test(browseDisplay),
+    // PS-500 (guard rot): this pinned `return stampPurchaseCustomerRateAliases({`.
+    // The stamper is now assigned first so the money verdict can be applied to
+    // its RESULT — folding the verdict into the literal would let the alias
+    // stamper, which derives purchaseShipmentCost from a total, overwrite it back
+    // to a complete-looking row. The delegation this guard exists to protect is
+    // unchanged, so it is asserted as delegation rather than as a return
+    // expression.
+    /stampPurchaseCustomerRateAliases\(\{/.test(browseDisplay),
 );
 
 check(

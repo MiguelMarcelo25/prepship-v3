@@ -927,6 +927,17 @@ function rateBlockedReason(
   _shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
   displayOptions: { proofFinalizing?: boolean } = {},
 ): string | null {
+  // PS-500: money completeness is part of availability. The existing reason
+  // owner covers proof, freshness, eligibility and carrier completeness — it
+  // never inspected whether the money was actually supplied, so a live candidate
+  // that laundered a TOTAL into a shipment COMPONENT stayed selectable and could
+  // reach Apply, auto-best persistence and Create Label.
+  //
+  // Checked FIRST: an unpriceable row should not be described by a downstream
+  // reason when the reason is that its money was never there. The verdict is
+  // backend-owned; this only reads it.
+  const moneyReason = savedRateUnavailableMessage(rate);
+  if (moneyReason) return moneyReason;
   return rateBrowserUnavailableReason(rate, displayOptions);
 }
 
