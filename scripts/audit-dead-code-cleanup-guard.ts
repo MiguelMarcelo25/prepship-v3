@@ -28,14 +28,30 @@ const clientCheaper = {
 } as any;
 
 const rows = buildRateRows([backendBest, clientCheaper], backendBest);
+// PS-498 renamed these to intent-named, nullable fields. The old names
+// (baseCost / yourPrice / profit) were themselves part of the defect: `yourPrice`
+// fell back to `baseCost`, so an unknown CUSTOMER price rendered as the internal
+// label cost. This assertion keeps its original meaning — the backend tuple is
+// consumed verbatim — under the names that now carry it.
 assert.deepEqual(
   {
-    baseCost: rows[0]?.baseCost,
-    yourPrice: rows[0]?.yourPrice,
-    profit: rows[0]?.profit,
+    selectedRateCost: rows[0]?.selectedRateCost,
+    customerShippingRate: rows[0]?.customerShippingRate,
+    shippingMarginAmount: rows[0]?.shippingMarginAmount,
   },
-  { baseCost: 8, yourPrice: 12, profit: 4 },
+  { selectedRateCost: 8, customerShippingRate: 12, shippingMarginAmount: 4 },
   'Rates display must consume the backend money tuple verbatim',
+);
+// PS-498: and an absent field must stay absent rather than borrowing a
+// neighbouring amount. Kept here as well as in the dedicated PS-498 guard so
+// this file cannot go green against a restored fallback.
+const missingCustomerRate = buildRateRows([
+  { selectedRateKey: 'x', selectedRateCost: 5, carrierCode: 'ups', serviceName: 'Ground' } as any,
+])[0];
+assert.equal(
+  missingCustomerRate?.customerShippingRate,
+  null,
+  'an unknown customer rate must not fall back to the selected cost',
 );
 assert.equal(rows[0]?.isBest, true, 'backend-selected identity must own the CHEAPEST badge');
 assert.equal(

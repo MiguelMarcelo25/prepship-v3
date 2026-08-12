@@ -1307,6 +1307,19 @@ const REQUIRED_GUARDS = [
   // shipment. Mutation-verified: removing the gate, ignoring the provider payload, or
   // dropping the caller-liveness check each fail the guard.
   'test:ps-505-sync-line-fallback',
+  // PS-498 (2026-08-12). buildRateRows made three false financial claims:
+  // `?? 0` turned an unknown cost or margin into a real-looking zero, and
+  // `?? baseCost` showed the INTERNAL label cost as the customer's price — under
+  // a column literally titled "Label Cost" while rendering the customer rate,
+  // and used as the sort key. Writing the guard also exposed a fourth: the
+  // shared finiteNumber() coerced first, and `Number(null)` is 0, so a backend
+  // null became $0.00 one layer down.
+  //
+  // Mutation-verified, all four caught: restoring the customer-rate fallback,
+  // the margin-zero fallback, a truthiness display test (which misreads an
+  // owned $0.00 as missing), and the unsafe Number() coercion. Hermetic —
+  // rates-parity.ts imports nothing.
+  'test:ps-498-rates-missing-money',
 ];
 
 const npmCli = process.env.npm_execpath;

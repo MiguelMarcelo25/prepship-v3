@@ -25,6 +25,7 @@ import {
   buildLiveRatesPayload,
   buildRateRows,
   buildRateSelectionToast,
+  formatRateMoney,
   buildRatesMetaLabel,
   buildRatesSummary,
   getRatesValidationState,
@@ -55,37 +56,34 @@ type RatesResultState =
   | { kind: 'error'; message: string }
   | { kind: 'table'; rates: RateDto[]; bestRate: RateDto | null; directCarrierErrors?: DirectCarrierRateError[] }
 
-function formatMoney(amount: number) {
-  return `$${amount.toFixed(2)}`
-}
-
-function LabelCostCell({ row }: { row: RateRowView }) {
-  // 2026-05-13 (v2): the "Cost $X.XX" subline is now only shown
-  // when there's an actual markup. If yourPrice equals baseCost
-  // (no carrier markup configured / applied for this rate), then
-  // "Cost $9.84" sitting below "$9.84" was just duplicated info
-  // — the cell read like a stuttering ticket stub. Now:
-  //   • Markup present  → top: $11.32 (orange), sub: Cost $9.84
-  //   • No markup       → top: $9.84 (orange), no sub
-  // Threshold 0.005 catches floating-point near-zero (e.g.
-  // 9.84 - 9.8399999999 = ~1e-10) without false-positive on a
-  // legitimate $0.01 markup.
+function CustomerShippingRateCell({ row }: { row: RateRowView }) {
+  // 2026-05-13 (v2): the "Cost $X.XX" subline is only shown when there is an
+  // actual markup. With no markup the sub-line just repeated the figure above
+  // it and the cell read like a stuttering ticket stub. Threshold 0.005 catches
+  // floating-point near-zero (9.84 - 9.8399999999 ≈ 1e-10) without suppressing
+  // a legitimate $0.01 markup. The "+ Markup $X.XX" suffix stays suppressed
+  // when markup IS present — operators see the cost breakdown, not the
+  // per-line margin disclosure.
   //
-  // Earlier change (kept): "+ Markup $X.XX" suffix is still
-  // suppressed when markup IS present — operators see just the
-  // cost breakdown, not the per-line margin disclosure.
-  const hasMarkup = row.profit >= 0.005
+  // PS-498: the top figure is the CUSTOMER SHIPPING RATE and is now titled as
+  // such. It was titled "Label Cost" while showing the customer price — and
+  // when that price was missing it fell back to the internal cost, so the
+  // internal number appeared under a customer-facing label.
+  //
+  // The markup subline needs a KNOWN margin. A null margin is not "no markup";
+  // it is "unknown", so the cost line stays hidden rather than implying parity.
+  const hasMarkup = row.shippingMarginAmount != null && row.shippingMarginAmount >= 0.005
   return (
     <div
       className="leading-tight"
-      title={`Label Cost ${formatMoney(row.yourPrice)}`}
+      title={`Customer Shipping Rate ${formatRateMoney(row.customerShippingRate)}`}
     >
       <div className="font-mono tabular-nums text-[12.5px] font-extrabold text-orange-600">
-        {formatMoney(row.yourPrice)}
+        {formatRateMoney(row.customerShippingRate)}
       </div>
       {hasMarkup ? (
         <div className="mt-0.5 whitespace-nowrap text-[10.5px] font-semibold text-ink-3">
-          Cost {formatMoney(row.baseCost)}
+          Cost {formatRateMoney(row.selectedRateCost)}
         </div>
       ) : null}
     </div>
@@ -215,7 +213,9 @@ export default function RatesView() {
     },
     {
       key: 'labelCost',
-      label: 'Label Cost',
+      // PS-498: this column shows the CUSTOMER rate, so it says so. It was
+      // labelled "Label Cost" while rendering the customer price.
+      label: 'Customer Shipping Rate',
       width: 150,
       minWidth: 130,
       maxWidth: 180,
@@ -223,8 +223,14 @@ export default function RatesView() {
       sortable: true,
       // 2026-05-13: every column toggleable + draggable per operator
       // request (Awaiting-Shipment parity).
-      sortValue: (row) => row.yourPrice,
-      render: (row) => <LabelCostCell row={row} />,
+      //
+      // PS-498: a missing customer rate sorts to one deterministic end rather
+      // than borrowing the selected cost or collapsing to 0 — sorting an
+      // unknown price as $0.00 would park it among the genuinely cheapest.
+      // The CHEAPEST badge is unaffected: `isBest` comes from the backend's
+      // selectedRateKey identity, never from this ordering.
+      sortValue: (row) => row.customerShippingRate ?? Number.POSITIVE_INFINITY,
+      render: (row) => <CustomerShippingRateCell row={row} />,
     },
     {
       key: 'action',

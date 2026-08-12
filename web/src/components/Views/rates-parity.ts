@@ -33,9 +33,20 @@ export interface RateRowView {
   rateSourceTone: string
   carrierCode: string
   serviceLabel: string
-  baseCost: number
-  yourPrice: number
-  profit: number
+  // PS-498: intent-named and NULLABLE. `null` means the backend did not supply
+  // the value; it is never a substituted or fabricated amount. An explicit
+  // backend `0` stays numeric zero and must render as $0.00, so every consumer
+  // has to test `== null` rather than truthiness.
+  //
+  // The old names encouraged exactly the bug this replaces: `yourPrice` fell
+  // back to `baseCost`, so an unknown customer price rendered as the internal
+  // label cost under a customer-facing label.
+  /** Internal/selected label cost — `selectedRateCost` on the backend DTO. */
+  selectedRateCost: number | null
+  /** Customer Shipping Rate — `cShippingRateAmount` on the backend DTO. */
+  customerShippingRate: number | null
+  /** Customer rate minus selected cost — `shippingMarginAmount`, backend-owned. */
+  shippingMarginAmount: number | null
   isBest: boolean
   rate: RateDto
 }
@@ -195,8 +206,17 @@ export function getServiceLabel(rate: RateDto): string {
 }
 
 function finiteNumber(value: unknown): number | null {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
+  // PS-498: coercing first is unsafe here. `Number(null)`, `Number('')`,
+  // `Number(false)` and `Number([])` are all 0, so a backend null — the exact
+  // shape that means "this money is unknown" — would come back as a real-looking
+  // $0.00. That is the same fabricated zero this ticket removes, just moved one
+  // layer down. Accept only an actual number or a non-blank numeric string.
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
 }
 
 function backendRateIdentity(rate: RateDto | null | undefined): string | null {
@@ -210,9 +230,15 @@ export function buildRateRows(
 ): RateRowView[] {
   const backendBestIdentity = backendRateIdentity(backendBestRate)
   return rates.map((rate) => {
-    const baseCost = finiteNumber((rate as any)?.selectedRateCost) ?? 0
-    const yourPrice = finiteNumber((rate as any)?.cShippingRateAmount) ?? baseCost
-    const profit = finiteNumber((rate as any)?.shippingMarginAmount) ?? 0
+    // PS-498: read the canonical tuple verbatim. No `??` chain — each of the
+    // three fallbacks this replaces made a false financial claim:
+    //   `?? 0`        turned an unknown cost or margin into a real-looking zero
+    //   `?? baseCost` showed the internal label cost as the customer's price
+    // The backend already owns cShippingRateAmount / selectedRateCost /
+    // shippingMarginAmount; the margin is never recomputed here.
+    const selectedRateCost = finiteNumber((rate as any)?.selectedRateCost)
+    const customerShippingRate = finiteNumber((rate as any)?.cShippingRateAmount)
+    const shippingMarginAmount = finiteNumber((rate as any)?.shippingMarginAmount)
     const rateSource = getRateSourceLabel(rate)
     return {
       carrierLabel: getCarrierLabel(rate),
@@ -223,13 +249,29 @@ export function buildRateRows(
       rateSourceTone: rateSource.tone,
       carrierCode: rate.carrierCode,
       serviceLabel: getServiceLabel(rate),
-      baseCost,
-      yourPrice,
-      profit,
+      selectedRateCost,
+      customerShippingRate,
+      shippingMarginAmount,
       isBest: backendBestIdentity != null && backendRateIdentity(rate) === backendBestIdentity,
       rate,
     }
   })
+}
+
+/**
+ * PS-498: the display rule for a nullable canonical money field.
+ *
+ * It lives here, beside `buildRateRows`, rather than inside RatesView so the
+ * guard can exercise the REAL function instead of a re-implementation — a test
+ * that asserts against its own copy of the formula proves only that the copy is
+ * self-consistent.
+ *
+ * `== null` on purpose: a truthiness check would report an explicit backend
+ * `0` — a real, owned amount — as missing, which is the same class of false
+ * claim in the opposite direction.
+ */
+export function formatRateMoney(amount: number | null): string {
+  return amount == null ? 'Unavailable' : `$${amount.toFixed(2)}`
 }
 
 export function buildRatesSummary(form: RatesFormState, count: number): string {
@@ -258,5 +300,13 @@ export function buildRatesMetaLabel(form: RatesFormState): string {
 }
 
 export function buildRateSelectionToast(row: RateRowView): string {
-  return `${row.carrierLabel} ${row.serviceLabel.replace(/'/g, '')} @ $${row.yourPrice.toFixed(2)} — Phase 3`
+  // PS-498: this used to be `row.yourPrice.toFixed(2)`, which both crashed on a
+  // missing customer rate and — before that — quoted the internal label cost as
+  // if it were the customer's price. Selection itself is unchanged: the caller
+  // still acts on the same `row.rate`; only the message becomes honest.
+  const service = row.serviceLabel.replace(/'/g, '')
+  const money = row.customerShippingRate == null
+    ? 'Customer Shipping Rate unavailable'
+    : `$${row.customerShippingRate.toFixed(2)}`
+  return `${row.carrierLabel} ${service} @ ${money} — Phase 3`
 }
