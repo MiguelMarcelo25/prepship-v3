@@ -17,18 +17,83 @@
  * Offline/pure: no DB, no network, no provider calls, no billing regeneration.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { resolveBillingInvoiceReturnFee } from '../src/services/billing-invoice-return-cell';
 
 // src/routes/billing.ts validates env at import time. Obviously-fake values, matching the
 // ps-499 route harness convention, so importing the REAL renderers needs no live config.
 // Both renderers are pure functions of their arguments — no DB, no network, no provider
 // call is reachable from either — so this only satisfies the module-load check.
-process.env.NODE_ENV = 'test';
-process.env.SUPABASE_URL ??= 'https://ps488-test.supabase.invalid';
-process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'ps488-test-service-role-key';
-process.env.SUPABASE_ANON_KEY ??= 'ps488-test-anon-key';
-process.env.SESSION_SECRET ??= 'ps488-test-session-secret-value-not-real';
-process.env.DATABASE_URL ??= 'postgres://ps488:ps488@127.0.0.1:1/ps488_unused';
+//
+// This list was one name short (SUPABASE_JWT_SECRET) and still passed locally, because a
+// developer .env supplies it: the guard was reading ambient config it never declared, so
+// "green on my machine" meant nothing about a clean checkout. It failed on first contact
+// with CI, and took the typecheck, build and whitespace steps down with it.
+//
+// The assertion below is the actual fix. Hardcoding one more name would leave exactly the
+// same trap for the next required variable — instead the guard reads the REQUIRED keys out
+// of the env schema and fails with a plain sentence if this map does not cover them.
+const INERT_ENV: Record<string, string> = {
+  NODE_ENV: 'test',
+  DATABASE_URL: 'postgres://ps488:ps488@127.0.0.1:1/ps488_unused',
+  SUPABASE_URL: 'https://ps488-test.supabase.invalid',
+  SUPABASE_ANON_KEY: 'ps488-test-anon-key',
+  SUPABASE_SERVICE_ROLE_KEY: 'ps488-test-service-role-key',
+  SUPABASE_JWT_SECRET: 'ps488-test-jwt-secret-not-real',
+};
+
+{
+  // Required = declared in the schema with neither .optional() nor .default(). The
+  // renderOnlySecret helper is required off-serverless, which is how CI runs, so its
+  // three keys count. Parsed from source rather than imported, because importing env.ts
+  // is the very thing that fails when a key is missing.
+  const envSource = readFileSync('src/lib/env.ts', 'utf8');
+  const schemaBody = /const schema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(envSource)?.[1] ?? '';
+  assert.ok(schemaBody.length > 0, 'could not read the env schema — re-anchor this check');
+  //
+  // Declarations come in two forms: inline zod, and a shared helper. Inline is decided by
+  // `.optional()` / `.default(`. Helpers are decided by name, listed explicitly — and an
+  // UNRECOGNISED helper fails rather than being guessed, because guessing "probably
+  // optional" is how a required variable would slip past this check the same way
+  // SUPABASE_JWT_SECRET slipped past the map it is protecting.
+  const DEFAULTED_HELPERS = /^(booleanFlag\(|optional)/;   // carries its own default/optional
+  const REQUIRED_HELPERS = /^renderOnlySecret\b/;          // required off-serverless, i.e. in CI
+  const unknownHelpers: string[] = [];
+  const required: string[] = [];
+
+  // Chunked per KEY, not per line: several declarations wrap across lines, so a
+  // line-based read saw a bare `z` and could not find the `.default(` two lines below it.
+  const keyStarts = [...schemaBody.matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)];
+  for (const [index, match] of keyStarts.entries()) {
+    const key = match[1]!;
+    const from = match.index! + match[0].length;
+    const to = keyStarts[index + 1]?.index ?? schemaBody.length;
+    const declaration = schemaBody
+      .slice(from, to)
+      .replace(/\/\/.*$/gm, '')   // a comment must not supply a `.default(` the code lacks
+      .trim()
+      .replace(/,\s*$/, '');
+    if (declaration.startsWith('z')) {
+      if (!/\.optional\(\)|\.default\(/.test(declaration)) required.push(key!);
+      continue;
+    }
+    if (DEFAULTED_HELPERS.test(declaration)) continue;
+    if (REQUIRED_HELPERS.test(declaration)) { required.push(key!); continue; }
+    unknownHelpers.push(`${key}: ${declaration.split(String.fromCharCode(10))[0]}`);
+  }
+  assert.deepEqual(unknownHelpers, [],
+    `env.ts uses a schema helper this check does not recognise, so it cannot tell whether `
+    + `the variable is required. Classify it above rather than assuming: ${unknownHelpers.join('; ')}`);
+
+  const missing = required.filter((key) => !(key in INERT_ENV));
+  assert.deepEqual(missing, [],
+    `INERT_ENV must cover every required env var or this guard cannot run on a clean `
+    + `checkout. Add an obviously fake value for: ${missing.join(', ')}`);
+}
+
+// Assigned unconditionally, not with ??=. A developer .env must not be able to satisfy a
+// variable this harness forgot to declare — that is precisely how the omission hid.
+for (const [key, value] of Object.entries(INERT_ENV)) process.env[key] = value;
 
 const { renderInvoiceHtml, renderInvoiceXlsx } = await import('../src/routes/billing');
 
