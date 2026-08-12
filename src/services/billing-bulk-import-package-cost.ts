@@ -33,8 +33,18 @@ export type BulkImportPackageCostExecutor = {
   execute: (query: SQL) => Promise<unknown>;
 };
 
+/**
+ * Drizzle's drivers disagree on what `execute` returns: postgres-js (production)
+ * yields an array-like of rows, while the pglite driver used by the integration
+ * test yields `{ rows: [...] }`. Normalising here keeps the adapter portable —
+ * without it the pglite path silently sees zero rows and every box resolves as
+ * `unknown_package`, which is exactly how this was caught.
+ */
 async function rows<T>(executor: BulkImportPackageCostExecutor, query: SQL): Promise<T[]> {
-  return (await executor.execute(query)) as unknown as T[];
+  const result = (await executor.execute(query)) as unknown;
+  if (Array.isArray(result)) return result as T[];
+  const nested = (result as { rows?: unknown } | null)?.rows;
+  return Array.isArray(nested) ? (nested as T[]) : [];
 }
 
 export type BulkImportPackageCostDecision =
