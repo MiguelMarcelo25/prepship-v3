@@ -160,3 +160,65 @@ export async function resolveBulkImportPackageCost(
     reason: clientHasBoxPricing ? 'no_configured_price' : 'client_has_no_box_pricing',
   };
 }
+
+export type ResolvedBulkImportPackageCostWrite = {
+  clientId: number;
+  orderId: number;
+  orderNumber: string | null;
+  shipmentId: number | null;
+  shipDate: unknown;
+  billingEffectiveDate: unknown;
+  billingPolicyVersion: string | null;
+  packageName: string;
+  /** Already money-formatted by the caller, so there is only ever one formatter. */
+  amount: string;
+};
+
+/**
+ * Persist the package-cost line a bulk box import resolved to.
+ *
+ * Owned here rather than inline in the route so the PATCH handler does not grow
+ * more route-local money persistence (ps-464 architecture boundary). The route
+ * keeps the transaction boundary, the 422 translation and the PS-207 box
+ * resolution; this owns only the update-or-insert of the single line and the
+ * NOT NULL description that goes with it.
+ *
+ * The description written here is the INITIAL one — the row cannot be inserted
+ * without it. The PS-207 block canonicalises it afterwards from the same owner
+ * (resolvedPackageDisplayName), so there is one naming policy, not two.
+ */
+export async function writeResolvedBulkImportPackageCost(
+  executor: BulkImportPackageCostExecutor,
+  input: ResolvedBulkImportPackageCostWrite,
+): Promise<{ inserted: number; updated: number }> {
+  const description = `Box (${input.packageName})`;
+
+  const updated = await rows<{ id: number }>(
+    executor,
+    sql`
+      update billing_line_items
+      set qty = '1.00',
+          unit_cost = ${input.amount},
+          total_cost = ${input.amount},
+          description = ${description}
+      where client_id = ${input.clientId}
+        and order_id = ${input.orderId}
+        and line_type = 'package_cost'
+      returning id
+    `,
+  );
+  if (updated.length > 0) return { inserted: 0, updated: updated.length };
+
+  // No box line yet — the order was previously unpriced or sitting in review.
+  await executor.execute(sql`
+    insert into billing_line_items
+      (client_id, order_id, order_number, shipment_id, ship_date, billing_effective_date,
+       billing_policy_version, line_type, description, qty, unit_cost, total_cost)
+    values
+      (${input.clientId}, ${input.orderId}, ${input.orderNumber}, ${input.shipmentId},
+       ${input.shipDate as never}, ${input.billingEffectiveDate as never},
+       ${input.billingPolicyVersion}, 'package_cost', ${description}, '1.00',
+       ${input.amount}, ${input.amount})
+  `);
+  return { inserted: 1, updated: 0 };
+}

@@ -46,7 +46,14 @@ check('PATCH persists the operator resolution (overridePrice) for a $0 price cha
   // A $0 over an absent/null current box line IS a price change → the resolution
   // stores overridePrice = the submitted $0, so regeneration keeps it resolved.
   assert.ok(/body\.packageCost !== undefined && money\(body\.packageCost\) !== currentBoxAmount/.test(route));
-  assert.ok(/overridePrice = priceChanged && !isAutofillOfConfigured/.test(route) && /submittedAmount/.test(route));
+  // PS-499 put a bulk-import branch in front of this expression: a pasted box is
+  // never a price decision, so it always clears the pin. The MANUAL path this
+  // guard protects is unchanged — for a manual edit `bulkBoxIntent` is false and
+  // the expression reduces to exactly the original one, pinned below.
+  assert.ok(/overridePrice = bulkBoxIntent\s*\n?\s*\? null/.test(route),
+    'a bulk import must never pin a price');
+  assert.ok(/priceChanged && !isAutofillOfConfigured\s*\n?\s*\? submittedAmount/.test(route),
+    'a manual $0 price change must still persist submittedAmount as the override');
 });
 
 // ── Layer 2: the grouped DTO reads resolved (the FE + Invoice consume it) ─────

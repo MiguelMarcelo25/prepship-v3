@@ -50,7 +50,10 @@ import {
   isNonBillableDuplicate,
 } from '../services/billing-duplicate-order-policy';
 import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
-import { resolveBulkImportPackageCost } from '../services/billing-bulk-import-package-cost';
+import {
+  resolveBulkImportPackageCost,
+  writeResolvedBulkImportPackageCost,
+} from '../services/billing-bulk-import-package-cost';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
@@ -1296,44 +1299,23 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
       }
 
       const amount = money(decision.amount);
-      // Initial description only — the column is NOT NULL so the line needs one at
-      // insert time. The PS-207 block below owns the FINAL canonical value. Both
-      // names come from the same owner (resolvedPackageDisplayName, via
-      // decidePackageCostLine here), so this is one formula written twice, never
-      // two formulas that can drift apart.
-      const description = `Box (${decision.pkgName})`;
-      const rows = await tx
-        .update(billingLineItems)
-        .set({ qty: '1.00', unitCost: amount, totalCost: amount, description })
-        .where(
-          and(
-            eq(billingLineItems.clientId, body.clientId),
-            eq(billingLineItems.orderId, orderId),
-            eq(billingLineItems.lineType, 'package_cost'),
-          ),
-        )
-        .returning({ id: billingLineItems.id });
-
-      if (rows.length === 0) {
-        // No box line yet (the order was previously unpriced or in review).
-        await tx.insert(billingLineItems).values({
-          clientId: body.clientId,
-          orderId,
-          orderNumber: base.orderNumber,
-          shipmentId: base.shipmentId,
-          shipDate: base.shipDate,
-          billingEffectiveDate: base.billingEffectiveDate,
-          billingPolicyVersion: base.billingPolicyVersion,
-          lineType: 'package_cost',
-          description,
-          qty: '1.00',
-          unitCost: amount,
-          totalCost: amount,
-        });
-        inserted += 1;
-      } else {
-        updated += rows.length;
-      }
+      // The line write itself is owned by the billing service, not the route: the
+      // PATCH handler must not accumulate more route-local money persistence
+      // (ps-464 architecture boundary). The route keeps the transaction boundary,
+      // the 422 translation and the PS-207 box resolution below.
+      const written = await writeResolvedBulkImportPackageCost(tx, {
+        clientId: body.clientId,
+        orderId,
+        orderNumber: base.orderNumber,
+        shipmentId: base.shipmentId,
+        shipDate: base.shipDate,
+        billingEffectiveDate: base.billingEffectiveDate,
+        billingPolicyVersion: base.billingPolicyVersion,
+        packageName: decision.pkgName,
+        amount,
+      });
+      inserted += written.inserted;
+      updated += written.updated;
 
       bulkImportResolvedPackageCostRef.current = {
         amount,

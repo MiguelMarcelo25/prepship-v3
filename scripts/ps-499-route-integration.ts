@@ -455,7 +455,9 @@ async function main(): Promise<void> {
     const afterO = await snapshot(h);
     await h.query(`alter table audit_log drop constraint ps499_block_line_edit`);
     check('O — no line or sidecar can commit without its required audit row', () => {
-      if (resO.status === 200) throw new Error('the request must not succeed when the required audit insert fails');
+      // Exact status, not merely "not 200": an unrelated 4xx raised before the
+      // audit insert would otherwise pass this case while proving nothing.
+      eq(resO.status, 500, `body ${JSON.stringify(resO.body)}`);
       assertUnchanged(beforeO, afterO, 'O');
     });
 
@@ -475,8 +477,20 @@ async function main(): Promise<void> {
 
     for (const [label, body] of modesP) {
       const res = await patch(h, body as PatchBody);
-      check(`${label} against a finalized order is refused`, () => {
-        if (res.status === 200) throw new Error('a finalized order must not be editable by a bulk import');
+      check(`${label} against a finalized order is refused with the established lock`, () => {
+        // The frozen condition is that the EXISTING finalized lockdown still fires,
+        // not merely that the request failed. A 400/404/422/500 would satisfy
+        // "not 200" while silently proving the lockdown had stopped working.
+        //
+        // 409 is BillingFinalizedLockError.status. The established response
+        // contract (src/main.ts:222) puts the human message in `error`, not the
+        // code, so the message is what identifies the lock here — the production
+        // handler is mirrored rather than changed to suit the test.
+        eq(res.status, 409, `body ${JSON.stringify(res.body)}`);
+        const message = String(res.body.error ?? '');
+        if (!/finalized/i.test(message)) {
+          throw new Error(`expected the finalized-lock message, got ${JSON.stringify(message)}`);
+        }
       });
     }
 

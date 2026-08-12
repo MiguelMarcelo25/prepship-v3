@@ -215,11 +215,13 @@ export async function startHarness(): Promise<Harness> {
   process.env.DATABASE_URL = databaseUrl;
   process.env.DB_POOL_MAX = '1';
   process.env.VERCEL = '1';
-  // Obviously fake. Never load real secrets into this suite.
-  process.env.SUPABASE_URL ??= 'https://ps499-test.supabase.invalid';
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'ps499-test-service-role-key';
-  process.env.SUPABASE_ANON_KEY ??= 'ps499-test-anon-key';
-  process.env.SESSION_SECRET ??= 'ps499-test-session-secret-value-not-real';
+  // Obviously fake, and assigned UNCONDITIONALLY. With `??=` a developer shell
+  // that already exported real Supabase credentials would keep them in this
+  // process, quietly breaking the guarantee that only fake values are present.
+  process.env.SUPABASE_URL = 'https://ps499-test.supabase.invalid';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'ps499-test-service-role-key';
+  process.env.SUPABASE_ANON_KEY = 'ps499-test-anon-key';
+  process.env.SESSION_SECRET = 'ps499-test-session-secret-value-not-real';
 
   assertLoopbackOnly(process.env.DATABASE_URL);
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV must be test');
@@ -242,6 +244,17 @@ export async function startHarness(): Promise<Harness> {
     await next();
   });
   app.route('/billing', billingRoute);
+
+  // Mirrors the production handler at src/main.ts:222 exactly. Without it, errors
+  // the route relies on the app to translate — BillingFinalizedLockError carries
+  // status 409 — would surface as a bare 500 and the suite would be asserting the
+  // harness's behaviour rather than production's.
+  app.onError((err, c) => {
+    const status = (err as { status?: number }).status ?? 500;
+    const isSafeClientError = status >= 400 && status < 500;
+    const message = isSafeClientError && err.message ? err.message : 'Internal server error';
+    return c.json({ error: message }, status as 500);
+  });
 
   const query = async <T = Record<string, unknown>>(text: string): Promise<T[]> => {
     const result = await pg.query<T>(text);
