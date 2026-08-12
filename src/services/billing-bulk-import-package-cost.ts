@@ -83,8 +83,13 @@ export async function resolveBulkImportPackageCost(
 
   // Every configured price for this client, not just this box: `clientHasBoxPricing`
   // is the gate decidePackageCostLine uses to decide whether this client is billed
-  // for boxes AT ALL. A client with no price rows must get no box line, exactly as
-  // in generation — not a 422.
+  // for boxes AT ALL.
+  //
+  // Note the difference from GENERATION: there, a client with no box pricing simply
+  // gets no box line. Here the operator has explicitly pasted a box, so silently
+  // producing nothing would leave that stated intent unapplied and unexplained.
+  // Imported box intent without an authoritative package-cost decision fails
+  // closed — the route turns it into a 422 naming the package.
   const priceRows = await rows<{ package_id: number; price: string | null }>(executor, sql`
     select package_id, price
     from client_package_prices

@@ -589,9 +589,14 @@ const detailPatchSchema = z.object({
   // PS-499: which SURFACE produced this patch, so the route can hold the two to
   // different contracts. The Edit Billing modal is a deliberate full edit and may
   // send every money field; the pasted Box Size / Shipping import is sparse and
-  // may send only what the operator actually pasted. Absent means manual_edit —
-  // the pre-PS-499 behavior — so external and stale clients are unaffected.
-  source: z.enum(['manual_edit', 'bulk_import']).optional(),
+  // may send only what the operator actually pasted.
+  //
+  // REQUIRED, with no default. An absent discriminator defaulting to manual_edit
+  // would make a stale pre-PS-499 bulk payload — no source, every money field —
+  // indistinguishable from a deliberate full edit, so none of the bulk rejections
+  // below would run and the July override/waiver defect could recur mid-deploy.
+  // A stale caller must fail visibly with a 400 and refresh.
+  source: z.enum(['manual_edit', 'bulk_import']),
   pickPack: z.coerce.number().nonnegative().optional(),
   additional: z.coerce.number().nonnegative().optional(),
   packageCost: z.coerce.number().nonnegative().optional(),
@@ -1291,6 +1296,11 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
       }
 
       const amount = money(decision.amount);
+      // Initial description only — the column is NOT NULL so the line needs one at
+      // insert time. The PS-207 block below owns the FINAL canonical value. Both
+      // names come from the same owner (resolvedPackageDisplayName, via
+      // decidePackageCostLine here), so this is one formula written twice, never
+      // two formulas that can drift apart.
       const description = `Box (${decision.pkgName})`;
       const rows = await tx
         .update(billingLineItems)
@@ -1432,7 +1442,18 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
       const priceChanged =
         body.packageCost !== undefined && money(body.packageCost) !== currentBoxAmountBeforeEdit;
 
-      if (boxChanged || priceChanged) {
+      // PS-499: a pasted box is EXPLICIT intent, so it is detected by PRESENCE,
+      // not by diffing against the currently stamped package. The diff gate above
+      // is right for the manual modal (which always submits every field, so only a
+      // change is a decision) but wrong here: when an operator pastes the box that
+      // is already stamped, `boxChanged` is false and `priceChanged` is false —
+      // the whole block was skipped, so a resolved package_cost line could be
+      // written while `package_cost_missing` survived beside it, any stale
+      // `override_price` was left pinned, and no durable directive was recorded.
+      const bulkBoxIntent =
+        isBulkImport && body.packageId !== undefined && body.packageId !== null;
+
+      if (bulkBoxIntent || boxChanged || priceChanged) {
         const [existing] = await tx
           .select()
           .from(billingBoxResolutions)
@@ -1463,11 +1484,17 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
         const isAutofillOfConfigured =
           submittedAmount !== null && configuredRaw !== null && submittedAmount === configuredRaw;
 
-        const overridePrice = priceChanged && !isAutofillOfConfigured
-          ? submittedAmount
-          : boxChanged
-            ? null
-            : existing?.overridePrice ?? null;
+        // PS-499: a bulk import never pins a price, so it always clears any
+        // existing override — including when the box id is unchanged. Leaving a
+        // prior override in place would keep billing the old pinned amount while
+        // the resolved configured price sat on the line.
+        const overridePrice = bulkBoxIntent
+          ? null
+          : priceChanged && !isAutofillOfConfigured
+            ? submittedAmount
+            : boxChanged
+              ? null
+              : existing?.overridePrice ?? null;
 
         const resolvedBy = (c.get('email' as never) as string | undefined) ?? null;
         await tx
@@ -1631,7 +1658,7 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
         // rows, and only one of them creates a durable override. Omitted fields
         // are recorded BY NAME — never as 0, null, or a synthesized value — so a
         // future incident can tell a silent resend from a real decision.
-        source: body.source ?? 'manual_edit',
+        source: body.source,
         patchIntent: {
           included: {
             ...(body.pickPack !== undefined ? { pickPack: { requested: money(body.pickPack) } } : {}),

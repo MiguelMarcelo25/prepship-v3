@@ -19,9 +19,17 @@
  * have to import from components/ to know its own contract.
  */
 
-/** The Edit Billing modal: every money field explicitly chosen by the operator. */
+/**
+ * The Edit Billing modal: every money field explicitly chosen by the operator.
+ *
+ * `source` is REQUIRED on both variants, deliberately. Defaulting an absent
+ * discriminator to `manual_edit` would let a stale pre-PS-499 bundle — whose bulk
+ * payload carries no source and every money field — be read as a deliberate full
+ * edit, bypassing every bulk guard and recreating the July underbilling during a
+ * deploy window. A visible 400 that forces a refresh is the safer failure.
+ */
 export type BillingManualEditPatch = {
-  source?: 'manual_edit'
+  source: 'manual_edit'
   pickPack: number
   additional: number
   packageCost: number

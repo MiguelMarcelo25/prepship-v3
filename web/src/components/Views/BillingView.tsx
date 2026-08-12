@@ -1483,6 +1483,10 @@ export default function BillingView() {
     setBillingEditModal((current) => current ? { ...current, saving: true, error: null } : current)
     try {
       await apiClient.updateBillingDetail(orderId, detailState.clientId, {
+        // PS-499: the modal is a DELIBERATE full edit — every field below was seen
+        // and chosen by the operator — so it declares itself and keeps the right to
+        // send them all. The route requires this discriminator.
+        source: 'manual_edit',
         pickPack: parseMoneyDraft(billingEditModal.draft.pickPack),
         additional: parseMoneyDraft(billingEditModal.draft.additional),
         packageCost: parseMoneyDraft(billingEditModal.draft.packageCost),

@@ -167,6 +167,54 @@ check('handleBulkImportRow no longer reads the current row to refill the payload
   }
 });
 
+check('the route requires an explicit source discriminator', () => {
+  // Hermes blocker 1. An optional discriminator defaulting to manual_edit lets a
+  // stale pre-PS-499 bundle — no source, every money field — be read as a
+  // deliberate full edit, so none of the bulk rejections run and the July
+  // override/waiver defect recurs mid-deploy. Stale callers must 400 and refresh.
+  const route = readFileSync('src/routes/billing.ts', 'utf8');
+  assert.match(
+    route,
+    /source: z\.enum\(\['manual_edit', 'bulk_import'\]\),/,
+    'source must be required in detailPatchSchema — no .optional(), no .default()',
+  );
+  assert.doesNotMatch(
+    route,
+    /source: z\.enum\(\['manual_edit', 'bulk_import'\]\)\.(optional|default)/,
+    'an optional or defaulted source reopens the stale-bundle bypass',
+  );
+
+  const patch = readFileSync('web/src/lib/billing-detail-patch.ts', 'utf8');
+  assert.doesNotMatch(patch, /source\?: 'manual_edit'/, 'the manual contract must require source');
+
+  const view = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
+  assert.match(view, /source: 'manual_edit',/, 'the Edit Billing modal must declare its source');
+});
+
+check('a pasted box is intent by PRESENCE, even when it equals the stamped box', () => {
+  // Hermes blocker 2. The PS-207 gate detects box decisions by DIFF, which is right
+  // for the modal (it always submits every field) and wrong for a paste: pasting the
+  // already-stamped box left boxChanged and priceChanged both false, so the durable
+  // directive was never written, a stale override_price stayed pinned, and
+  // package_cost_missing survived next to a freshly resolved package_cost line.
+  const route = readFileSync('src/routes/billing.ts', 'utf8');
+  assert.match(
+    route,
+    /const bulkBoxIntent =\s*\n?\s*isBulkImport && body\.packageId !== undefined && body\.packageId !== null/,
+    'bulk box intent must be presence-based',
+  );
+  assert.match(
+    route,
+    /if \(bulkBoxIntent \|\| boxChanged \|\| priceChanged\) \{/,
+    'the box-resolution block must run for a bulk box intent regardless of diff',
+  );
+  assert.match(
+    route,
+    /const overridePrice = bulkBoxIntent\s*\n?\s*\? null/,
+    'a bulk import must always clear override_price — it never pins a price',
+  );
+});
+
 check('the API client no longer accepts an untyped billing patch', () => {
   const client = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
   const fn = client.slice(client.indexOf('updateBillingDetail('), client.indexOf('hugrabBillingShippingFloor('));
