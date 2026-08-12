@@ -10,6 +10,7 @@
 
 import { ApiRequestError, api, qs } from './api';
 import { API_BASE } from './api-base';
+import type { BillingDetailPatch } from './billing-detail-patch';
 // PS-325 (slice 4): the additive analytics provenance envelope, shared backend+frontend.
 import type { DashboardProvenance } from '../../../src/lib/analytics-provenance';
 import { getCachedAuthToken } from './auth-session-cache';
@@ -2762,7 +2763,7 @@ export const apiClient = {
   updateBillingDetail(
     orderId: number,
     clientId: number,
-    data: Record<string, unknown>,
+    data: BillingDetailPatch,
     options?: { deferReads?: boolean },
   ): Promise<any> {
     return api.patch<any>(`/billing/details/${orderId}`, {

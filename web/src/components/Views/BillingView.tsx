@@ -86,6 +86,7 @@ import { BillingPackagePricingTable } from './BillingPackagePricingTable'
 import { BillingDetailModalStack } from './BillingDetailModalStack'
 import { BillingBulkImportModal } from './BillingBulkImportModal'
 import type { BulkImportReadyRow } from './billing-bulk-import'
+import { toBillingBulkImportPatch } from './billing-bulk-import-patch'
 import {
   BillingCloseWorkflowPanel,
   type BillingCreditDraft,
@@ -1456,29 +1457,14 @@ export default function BillingView() {
   // selected, and a resolved `ready` row has a non-null orderId by type. Nothing
   // here decides whether the edit is permitted — the backend still does.
   async function handleBulkImportRow(clientId: number, row: BulkImportReadyRow, reason: string) {
-    const current = detailRows.find((detail) => Number(detail.orderId ?? detail.order_id) === row.orderId)
-    await apiClient.updateBillingDetail(row.orderId, clientId, {
-      // Only the pasted fields move; everything else is resent at its current value.
-      pickPack: Number(current?.pickPack ?? current?.pick_pack ?? 0) || 0,
-      additional: Number(current?.additional ?? 0) || 0,
-      // Same rule the manual Box Size change applies: a new box takes that box's
-      // saved client price. Falls back to the current cost when the client has no
-      // price row for it, exactly as handleBillingEditPackageChange does.
-      packageCost: row.packageId != null && billingEditPackagePrices[row.packageId] != null
-        ? billingEditPackagePrices[row.packageId]
-        : Number(current?.packageCost ?? current?.package_cost ?? 0) || 0,
-      shipping: row.shipping != null
-        ? row.shipping
-        : Number(current?.shipping ?? 0) || 0,
-      packageId: row.packageId != null
-        ? row.packageId
-        : (current?.packageId ? Number(current.packageId) : null),
-      reason,
-      // PS-498: only sent when the row actually carries one. Omitting the key is
-      // what tells the backend to leave any stored description alone — an empty
-      // string would be rejected, not treated as a clear.
-      ...(row.description ? { orderDescription: row.description } : {}),
-    }, { deferReads: true })
+    // PS-499: mapper plus transport, nothing else. This function used to read the
+    // current detail row and resend every money field, which is what waived July's
+    // prep fees — a resent field is a PRESENT field, and the route reads presence
+    // as a durable operator decision. It no longer reads `current` at all: the
+    // untouched fields are absent from the payload, and the server owns package
+    // pricing via decidePackageCostLine.
+    const patch = toBillingBulkImportPatch(row, reason)
+    await apiClient.updateBillingDetail(row.orderId, clientId, patch, { deferReads: true })
   }
 
   async function handleBulkImportFinished() {

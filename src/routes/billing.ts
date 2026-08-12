@@ -50,6 +50,7 @@ import {
   isNonBillableDuplicate,
 } from '../services/billing-duplicate-order-policy';
 import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
+import { resolveBulkImportPackageCost } from '../services/billing-bulk-import-package-cost';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
@@ -585,6 +586,12 @@ const detailsSchema = generateRawSchema
 
 const detailPatchSchema = z.object({
   clientId: z.coerce.number().int().positive(),
+  // PS-499: which SURFACE produced this patch, so the route can hold the two to
+  // different contracts. The Edit Billing modal is a deliberate full edit and may
+  // send every money field; the pasted Box Size / Shipping import is sparse and
+  // may send only what the operator actually pasted. Absent means manual_edit —
+  // the pre-PS-499 behavior — so external and stale clients are unaffected.
+  source: z.enum(['manual_edit', 'bulk_import']).optional(),
   pickPack: z.coerce.number().nonnegative().optional(),
   additional: z.coerce.number().nonnegative().optional(),
   packageCost: z.coerce.number().nonnegative().optional(),
@@ -629,6 +636,23 @@ const hugrabShippingFloorSchema = hugrabShippingFloorRawSchema
   .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
     message: 'dateFrom and dateTo are required (YYYY-MM-DD)',
   });
+
+/**
+ * PS-499 — a bulk box import named a box the server cannot price. Thrown INSIDE
+ * the money transaction so every line, sidecar, description and audit mutation
+ * rolls back together; the handler maps it to 422. Rejecting is deliberate:
+ * keeping the previous box's amount, or inventing 0, is how a wrong invoice
+ * ships silently.
+ */
+class BulkImportPackageCostUnresolvedError extends Error {
+  constructor(
+    readonly packageId: number,
+    readonly unresolvedReason: string,
+  ) {
+    super(`Bulk import could not resolve a package cost for package ${packageId} (${unresolvedReason})`);
+    this.name = 'BulkImportPackageCostUnresolvedError';
+  }
+}
 
 const EDITABLE_BILLING_LINES = [
   ['pickPack', 'pick_pack', 'Pick & Pack'],
@@ -1001,6 +1025,48 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
   const actor = auditActorFromContext(c);
   if (!actor.actorId) return c.json({ error: 'Authenticated actor is required' }, 401);
 
+  // ─── PS-499: bulk-import contract, enforced BEFORE any write ────────────────
+  // Frontend typing cannot protect this route — stale bundles, external callers
+  // and plain JavaScript all reach it. A bulk import may carry ONLY the intents
+  // an operator can actually paste. Pick & Pack, Additional Units and Box Cost
+  // are generated amounts owned by the server; their mere PRESENCE here would be
+  // read as a durable operator decision (a present `pickPack: 0` is the PS-389
+  // prep-fee waiver), which is how July's HUGRAB rows were underbilled.
+  const isBulkImport = body.source === 'bulk_import';
+  if (isBulkImport) {
+    const forbidden = (['pickPack', 'additional', 'packageCost'] as const).filter(
+      (field) => body[field] !== undefined,
+    );
+    if (forbidden.length) {
+      return c.json(
+        {
+          error: 'BULK_IMPORT_FORBIDDEN_FIELDS',
+          message: `A bulk import may not send generated money fields: ${forbidden.join(', ')}`,
+          fields: forbidden,
+        },
+        400,
+      );
+    }
+    // `null` clears the box override — a deliberate manual act, never something a
+    // paste expresses. Absent is how an import says "I did not touch the box".
+    if (body.packageId === null) {
+      return c.json(
+        { error: 'BULK_IMPORT_NULL_PACKAGE_ID', message: 'A bulk import cannot clear the box override' },
+        400,
+      );
+    }
+    // An empty money patch would still burn an audited write and a reason.
+    if (body.packageId === undefined && body.shipping === undefined) {
+      return c.json(
+        {
+          error: 'BULK_IMPORT_EMPTY_PATCH',
+          message: 'A bulk import must carry a box, a shipping amount, or both',
+        },
+        400,
+      );
+    }
+  }
+
   const [base] = await db
     .select({
       id: billingLineItems.id,
@@ -1040,6 +1106,11 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
       originalPrepAmount: number | null;
     } | null;
   } = { current: null };
+  // PS-499: what the SERVER decided a bulk-imported box costs. Recorded under
+  // `resolvedEffects` in the audit so it is never mistaken for operator input.
+  const bulkImportResolvedPackageCostRef: {
+    current: { amount: string; packageId: number; pkgName: string } | null;
+  } = { current: null };
   const manualBillingOverrideAuditRefs: Array<{
     lineType: ManualBillingOverrideLineType;
     amount: string;
@@ -1073,7 +1144,9 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
   if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
   if (body.orderDescription !== undefined) await ensureBillingOrderDescriptionsSchema();
 
-  await db.transaction(async (tx) => {
+  // PS-499: `bulkImportRejection` is a 422 Response when the transaction aborted
+  // because an imported box could not be priced; undefined on success.
+  const bulkImportRejection = await db.transaction(async (tx) => {
     await assertBillingOrdersEditable(
       {
         orderIds: [orderId],
@@ -1194,6 +1267,69 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
         });
         inserted += 1;
       }
+    }
+
+    // ─── PS-499: server-resolved package cost for a bulk box import ───────────
+    // The loop above only writes fields the request carried, and a bulk import
+    // deliberately carries no `packageCost`. Without this block an imported box
+    // would be stamped while the PREVIOUS box's cost stayed on the line until the
+    // next regeneration — quietly wrong, and invoiceable in that window.
+    //
+    // The amount comes from decidePackageCostLine (configured client price +
+    // package-cost markup), the same owner generation uses, so a bulk import and
+    // a regenerate agree for the same facts. Fails closed: an unresolvable box
+    // aborts the transaction, so no line, sidecar, description or audit row is
+    // written and the operator sees which box could not be priced.
+    if (isBulkImport && body.packageId !== undefined && body.packageId !== null) {
+      const decision = await resolveBulkImportPackageCost(tx, {
+        clientId: body.clientId,
+        packageId: body.packageId,
+      });
+
+      if (decision.kind === 'unresolved') {
+        throw new BulkImportPackageCostUnresolvedError(decision.packageId, decision.reason);
+      }
+
+      const amount = money(decision.amount);
+      const description = `Box (${decision.pkgName})`;
+      const rows = await tx
+        .update(billingLineItems)
+        .set({ qty: '1.00', unitCost: amount, totalCost: amount, description })
+        .where(
+          and(
+            eq(billingLineItems.clientId, body.clientId),
+            eq(billingLineItems.orderId, orderId),
+            eq(billingLineItems.lineType, 'package_cost'),
+          ),
+        )
+        .returning({ id: billingLineItems.id });
+
+      if (rows.length === 0) {
+        // No box line yet (the order was previously unpriced or in review).
+        await tx.insert(billingLineItems).values({
+          clientId: body.clientId,
+          orderId,
+          orderNumber: base.orderNumber,
+          shipmentId: base.shipmentId,
+          shipDate: base.shipDate,
+          billingEffectiveDate: base.billingEffectiveDate,
+          billingPolicyVersion: base.billingPolicyVersion,
+          lineType: 'package_cost',
+          description,
+          qty: '1.00',
+          unitCost: amount,
+          totalCost: amount,
+        });
+        inserted += 1;
+      } else {
+        updated += rows.length;
+      }
+
+      bulkImportResolvedPackageCostRef.current = {
+        amount,
+        packageId: decision.packageId,
+        pkgName: decision.pkgName,
+      };
     }
 
     // PS — billing-line-only Box Size override. Stamp the chosen package id on
@@ -1489,11 +1625,64 @@ app.patch('/details/:orderId{[0-9]+}', requireAdmin, requirePermission('financia
         orderId,
         reason: body.reason,
         orderDescription: descriptionWritten ? body.orderDescription : null,
+        // ─── PS-499: which fields the CALLER intended, included vs omitted ────
+        // before/after proves the result but not the intent: a field that was
+        // never sent and a field sent at its current value produce identical
+        // rows, and only one of them creates a durable override. Omitted fields
+        // are recorded BY NAME — never as 0, null, or a synthesized value — so a
+        // future incident can tell a silent resend from a real decision.
+        source: body.source ?? 'manual_edit',
+        patchIntent: {
+          included: {
+            ...(body.pickPack !== undefined ? { pickPack: { requested: money(body.pickPack) } } : {}),
+            ...(body.additional !== undefined ? { additional: { requested: money(body.additional) } } : {}),
+            ...(body.packageCost !== undefined ? { packageCost: { requested: money(body.packageCost) } } : {}),
+            ...(body.shipping !== undefined ? { shipping: { requested: money(body.shipping) } } : {}),
+            ...(body.packageId !== undefined ? { packageId: { requested: body.packageId } } : {}),
+            ...(body.orderDescription !== undefined
+              ? { orderDescription: { requested: body.orderDescription } }
+              : {}),
+          },
+          omitted: (
+            ['pickPack', 'additional', 'packageCost', 'shipping', 'packageId', 'orderDescription'] as const
+          ).filter((field) => body[field] === undefined),
+        },
+        // Server-decided amounts. Deliberately NOT under `included` — the
+        // operator never stated this price; decidePackageCostLine derived it.
+        resolvedEffects: bulkImportResolvedPackageCostRef.current
+          ? {
+              packageCost: {
+                amount: bulkImportResolvedPackageCostRef.current.amount,
+                authority: 'billing_box_policy',
+                packageId: bulkImportResolvedPackageCostRef.current.packageId,
+                pkgName: bulkImportResolvedPackageCostRef.current.pkgName,
+                overridePrice: null,
+              },
+            }
+          : {},
         before,
         after,
       },
     });
+  }).catch((error) => {
+    // PS-499: the one typed rejection this route raises from inside the money
+    // transaction. Everything it touched has already rolled back.
+    if (error instanceof BulkImportPackageCostUnresolvedError) {
+      return c.json(
+        {
+          error: 'BULK_IMPORT_PACKAGE_PRICE_UNRESOLVED',
+          message: error.message,
+          packageId: error.packageId,
+          reason: error.unresolvedReason,
+        },
+        422,
+      );
+    }
+    throw error;
   });
+
+  // Nothing was written — do not emit the follow-up waiver audit or a success body.
+  if (bulkImportRejection) return bulkImportRejection;
 
   const manualPrepFeeAudit = manualPrepFeeAuditRef.current;
   if (manualPrepFeeAudit) {

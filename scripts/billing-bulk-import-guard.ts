@@ -231,8 +231,14 @@ check('the import writes through the existing audited detail PATCH', () => {
     /handleBulkImportRow[\s\S]{0,900}apiClient\.updateBillingDetail\(/,
     'the import must call the same detail PATCH a manual edit uses',
   );
-  // No \n anchor here: these files are CRLF, so `reason,\n` never matches.
-  assert.match(view, /handleBulkImportRow[\s\S]{0,1600}reason,/, 'every imported row carries a reason');
+  // PS-499: the payload is now built by the mapper, so the reason reaches the
+  // PATCH through it. That every patch carries one is asserted behaviorally in
+  // scripts/ps-499-billing-bulk-import-patch-guard.ts.
+  assert.match(
+    view,
+    /handleBulkImportRow[\s\S]{0,900}toBillingBulkImportPatch\(row, reason\)/,
+    'every imported row carries a reason',
+  );
 });
 
 check('each row shows its own spinner, clears on success, keeps data on failure', () => {
@@ -306,14 +312,26 @@ check('the import defers read invalidation until the batch finishes', () => {
   );
 });
 
-check('a pasted box takes that box\'s saved client price', () => {
-  // Same rule as the manual Box Size change; otherwise an imported box keeps the
-  // previous box's cost and the invoice is quietly wrong.
+check('a pasted box does NOT get priced on the frontend', () => {
+  // PS-499 inverted this check. It used to require the import to look the price
+  // up through `billingEditPackagePrices` and send `packageCost`. That was a
+  // second billing calculator: it bypassed the package-cost markup that
+  // decidePackageCostLine applies during generation, and — because the route
+  // reads a present `packageCost` as an explicit override — it pinned
+  // billing_box_resolutions.override_price on every imported row.
+  //
+  // The price decision now belongs to the server, which resolves it from the
+  // packageId the import sends. The original intent of this check (an imported
+  // box must not keep the PREVIOUS box's cost) is preserved by the backend
+  // parity test asserting the PATCH and generation agree for the same facts.
   const view = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
-  assert.match(
-    view,
-    /packageCost: row\.packageId != null && billingEditPackagePrices\[row\.packageId\] != null/,
+  const block = view.slice(
+    view.indexOf('async function handleBulkImportRow'),
+    view.indexOf('async function handleBulkImportFinished'),
   );
+  assert.ok(block.length > 200, 'handleBulkImportRow slice is empty — negatives below would pass vacuously');
+  assert.doesNotMatch(block, /packageCost/, 'the import must not send a package cost');
+  assert.doesNotMatch(block, /billingEditPackagePrices/, 'the import must not price boxes on the frontend');
 });
 
 // ---------------------------------------------------------------------------
@@ -454,12 +472,11 @@ check('the Apply gate and the send path use the SAME reason function', () => {
 check('the import sends the description only when the row carries one', () => {
   // Omitting the key is what tells the backend to leave a stored description
   // alone. Sending '' would be rejected, and sending the reason would clobber.
-  const view = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
-  const block = view.slice(
-    view.indexOf('async function handleBulkImportRow'),
-    view.indexOf('async function handleBulkImportFinished'),
-  );
-  assert.ok(block.length > 400, 'handleBulkImportRow slice is empty or truncated — negatives below would pass vacuously');
+  // PS-499: payload construction moved out of BillingView into the mapper, so
+  // this reads the mapper. The behavior itself is asserted in
+  // scripts/ps-499-billing-bulk-import-patch-guard.ts.
+  const block = readFileSync('web/src/components/Views/billing-bulk-import-patch.ts', 'utf8');
+  assert.ok(block.length > 400, 'mapper slice is empty or truncated — negatives below would pass vacuously');
   assert.match(block, /\.\.\.\(row\.description \? \{ orderDescription: row\.description \} : \{\}\)/);
   assert.doesNotMatch(block, /orderDescription: reason/, 'the description must never be the reason');
   assert.doesNotMatch(block, /orderDescription: ''/, 'never send an explicit blank');
