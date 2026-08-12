@@ -68,14 +68,72 @@ assert(
   healthSource.includes('Promise.race') && healthSource.includes('timeoutMs'),
   'deep readiness checks run under explicit timeouts'
 );
+// PS-503 (2026-08-12): this assertion used to pin the literal destructure
+// `const [db, dbWrite, eventLoop] = await Promise.all([`. That is a VALUE pin,
+// not a property pin: it blocked adding any probe to the stage, including
+// checkMainPool, which runs on db/client's pool and consumes none of the health
+// pool budget this rule exists to protect. Third instance of that failure mode
+// in this repo. Repointed at the property itself — no concurrent stage may
+// exceed the health pool's max of 3 — so a legitimate probe on another pool
+// passes while a genuine over-subscription still fails.
+const HEALTH_POOL_MAX = 3;
+// Probes that do NOT draw from healthSql. Adding to this list is a deliberate,
+// reviewable act: get it wrong and the budget check silently under-counts.
+const NON_HEALTH_POOL_PROBES = new Set([
+  'checkEventLoopDelay', // pure event-loop timing, no DB
+  'checkMainPool', // PS-503: queries db/client's main pool
+]);
+
+function functionBody(name) {
+  const start = healthSource.indexOf(`async function ${name}`);
+  assert.notEqual(start, -1, `${name} exists`);
+  return healthSource.slice(start, healthSource.indexOf('\n}', start));
+}
+
+// PS-503: budget BOTH readiness checkers. This previously covered only
+// checkDeepReadiness, leaving checkReadyReadiness — the endpoint Render actually
+// rotates on — free to over-subscribe the health pool undetected.
+let stagesChecked = 0;
+for (const checker of ['checkReadyReadiness', 'checkDeepReadiness']) {
+  const body = functionBody(checker);
+  const stages = [...body.matchAll(/await Promise\.all\(\[([\s\S]*?)\]\)/g)];
+  assert(stages.length >= 1, `${checker} still stages its probes`);
+  for (const [, stage] of stages) {
+    const healthPoolProbes = [...stage.matchAll(/\b(check[A-Za-z]+)\s*\(/g)]
+      .map((match) => match[1])
+      .filter((name) => !NON_HEALTH_POOL_PROBES.has(name));
+    assert(
+      healthPoolProbes.length <= HEALTH_POOL_MAX,
+      `${checker} issues ${healthPoolProbes.length} health-pool probes ` +
+        `(max ${HEALTH_POOL_MAX}): ${healthPoolProbes.join(', ')}. On Render these ` +
+        `queue client-side until their timeout and never reach Postgres.`
+    );
+    stagesChecked += 1;
+  }
+}
+assert(stagesChecked >= 3, 'both readiness checkers were budget-checked');
+
 assert(
-  /const \[db, dbWrite, eventLoop\] = await Promise\.all\(\[/.test(healthSource) &&
-    /const \[orders, printQueue, printQueueWorker\] = await Promise\.all\(\[/.test(healthSource) &&
-    /const syncFreshness = await checkSyncFreshness\(\)/.test(healthSource) &&
-    /const fulfillmentOutbox = await checkFulfillmentOutboxWorker\(\)/.test(healthSource) &&
-    /const components = \[[\s\S]*db,[\s\S]*dbWrite,[\s\S]*orders,[\s\S]*printQueue,[\s\S]*printQueueWorker,[\s\S]*syncFreshness,[\s\S]*fulfillmentOutbox,[\s\S]*eventLoop,[\s\S]*\]/.test(healthSource),
-  'deep readiness stages DB probes within the bounded health pool'
+  /const syncFreshness = await checkSyncFreshness\(\)/.test(healthSource) &&
+    /const fulfillmentOutbox = await checkFulfillmentOutboxWorker\(\)/.test(healthSource),
+  'the two heaviest probes stay sequential'
 );
+for (const component of [
+  'db',
+  'dbWrite',
+  'mainPool',
+  'orders',
+  'printQueue',
+  'printQueueWorker',
+  'syncFreshness',
+  'fulfillmentOutbox',
+  'eventLoop',
+]) {
+  assert(
+    new RegExp(`const components = \\[[\\s\\S]*?\\b${component},`).test(healthSource),
+    `deep readiness reports the ${component} component`
+  );
+}
 assert(
   healthSource.includes('evaluateWorkerJobSkipHealth') &&
     healthSource.includes("worker.status?.jobs['prepship.sync.fulfillment-outbox']") &&

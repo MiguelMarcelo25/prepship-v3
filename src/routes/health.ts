@@ -7,6 +7,10 @@ import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchd
 import { getPersistedWorkerStatus } from '../services/worker-status';
 import { evaluateWorkerJobSkipHealth } from '../services/worker-job-skip-health';
 import { readInventoryClaimReviewHealth } from '../services/inventory-claim-review-health';
+// PS-503: the pool that actually serves traffic. `healthSql` below has its own
+// sockets, so it cannot observe this one dying.
+import { sql as mainSql } from '../db/client';
+import { createMainPoolHealthTracker } from '../services/main-pool-health';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
@@ -30,6 +34,7 @@ type CancelableQuery<T> = Promise<T> & { cancel?: () => void };
 type ReadinessComponentName =
   | 'db'
   | 'dbWrite'
+  | 'mainPool'
   | 'orders'
   | 'syncFreshness'
   | 'fulfillmentOutbox'
@@ -93,6 +98,44 @@ const checkDb = () =>
   checkComponent('db', async () => {
     await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
   });
+
+const mainPoolTracker = createMainPoolHealthTracker(env.DB_MAIN_POOL_SATURATION_TOLERANCE);
+
+/**
+ * PS-503: probe the pool that actually serves requests.
+ *
+ * Every other probe here runs on `healthSql`, which owns separate sockets. On
+ * 2026-08-11 the Supavisor pooler closed the MAIN pool's connections twice
+ * (`write CONNECTION_CLOSED …pooler.supabase.com:6543`); readiness answered 200
+ * in ~0.7s through both outages because `healthSql` was untouched.
+ *
+ * Deliberately not written with `checkComponent`: that helper discards the error
+ * (`catch {}`), and the error is the whole signal. A closed socket must fail
+ * readiness at once, while a merely busy pool must not — the main pool is shared
+ * with live traffic, so failing on first timeout would turn a load spike into a
+ * restart loop. See services/main-pool-health.ts for the classification.
+ */
+async function checkMainPool(): Promise<ReadinessComponent> {
+  const startedAt = Date.now();
+  try {
+    await withTimeout(mainSql`select 1`, env.DB_MAIN_POOL_HEALTH_TIMEOUT_MS);
+    mainPoolTracker.recordSuccess();
+    return { name: 'mainPool', status: 'ok', latencyMs: Date.now() - startedAt };
+  } catch (error) {
+    const verdict = mainPoolTracker.recordFailure(error);
+    return {
+      name: 'mainPool',
+      // A tolerated saturation stays green, but still reports why, so an
+      // operator can see the pool straining before it trips.
+      status: verdict.healthy ? 'ok' : 'fail',
+      latencyMs: Date.now() - startedAt,
+      details: {
+        poolState: verdict.failure ?? 'unknown',
+        consecutiveSaturated: verdict.consecutiveSaturated,
+      },
+    };
+  }
+}
 
 async function checkPrintQueueWorker(): Promise<ReadinessComponent> {
   const startedAt = Date.now();
@@ -222,6 +265,8 @@ async function checkReadyReadiness() {
   const components = await Promise.all([
     checkDb(),
     checkDbWrite(),
+    // PS-503: runs on the main pool, so it adds no load to healthSql's max:3.
+    checkMainPool(),
     checkEventLoopDelay(),
   ]);
   return {
@@ -256,9 +301,12 @@ async function checkDeepReadiness() {
   // at once; on Render the dependency probes stayed client-queued until their
   // 12s timeout and never reached Postgres. Stage the cheap serving checks
   // first, then run the two diagnostic table probes together.
-  const [db, dbWrite, eventLoop] = await Promise.all([
+  // PS-503: checkMainPool runs on the MAIN pool, so it does not count against
+  // the max:3 budget this staging protects.
+  const [db, dbWrite, mainPool, eventLoop] = await Promise.all([
     checkDb(),
     checkDbWrite(),
+    checkMainPool(),
     checkEventLoopDelay(),
   ]);
   const [orders, printQueue, printQueueWorker] = await Promise.all([
@@ -316,6 +364,7 @@ async function checkDeepReadiness() {
   const components = [
     db,
     dbWrite,
+    mainPool,
     orders,
     printQueue,
     printQueueWorker,

@@ -1265,6 +1265,24 @@ const REQUIRED_GUARDS = [
   'test:audit-billing-close-workflow-ux',
   'test:audit-po-box-eligibility',
   'test:audit-table-virtualization',
+  // PS-503 (2026-08-12). Readiness probed only `healthSql`, a dedicated max:3
+  // pool, so /health/ready answered 200 in ~0.7s through TWO total outages on
+  // 2026-08-11 in which the Supavisor pooler closed every connection on the MAIN
+  // pool. Nothing could have paged; both were found by a human watching a screen.
+  // The new guard proves the main pool is probed AND that a closed socket fails
+  // readiness immediately while mere saturation is tolerated — all three
+  // mutations (drop the probe, probe the wrong pool, downgrade unreachable to
+  // saturated) were verified to fail it.
+  //
+  // health-deep-readiness existed, passed, and ran NOWHERE — not this pack, not
+  // any master suite — which is the same guard-rot pattern called out five times
+  // above. It also had to be repointed: it pinned the literal destructure
+  // `const [db, dbWrite, eventLoop]` instead of the health-pool budget it claims
+  // to protect, so it blocked a probe on a different pool. It now budgets BOTH
+  // readiness checkers (it previously ignored /ready, the Render rotation
+  // signal). Both are hermetic — file reads plus one dependency-free module.
+  'test:health-deep-readiness',
+  'test:ps-503-main-pool-readiness',
 ];
 
 const npmCli = process.env.npm_execpath;

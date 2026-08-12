@@ -866,6 +866,7 @@
     "shipstation:timestamps:repair": "tsx scripts/repair-shipstation-legacy-timestamps.ts",
     "test:testing-coverage-standard": "node scripts/testing-coverage-standard-guard.mjs",
     "test:health-deep-readiness": "node scripts/health-deep-readiness-guard.mjs",
+    "test:ps-503-main-pool-readiness": "tsx scripts/ps-503-main-pool-readiness-guard.ts",
     "status:sync": "tsx scripts/status-sync.ts",
     "test:status:sync": "tsx scripts/status-sync.ts --check",
     "test:sync-advisory-lock": "node scripts/sync-advisory-lock-guard.mjs",

@@ -79,6 +79,17 @@ const schema = z.object({
   // Max inbound webhook body size (bytes) before rejection.
   WEBHOOK_MAX_BODY_BYTES: z.coerce.number().int().positive().default(1_000_000),
   DB_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  // PS-503 (2026-08-12): readiness probes the MAIN pool, not just the dedicated
+  // health pool. Deliberately far below DB_HEALTH_TIMEOUT_MS — a probe that has
+  // to queue for a free connection must fail fast rather than hold the whole
+  // readiness response for 12s and blow Render's own health-check deadline.
+  DB_MAIN_POOL_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
+  // Consecutive SATURATED main-pool probes tolerated before readiness fails.
+  // Unlike the health pool, the main pool is shared with live traffic and can
+  // legitimately be busy, so a single slow moment must not hand Render a restart
+  // loop. An UNREACHABLE pool (closed socket) ignores this and fails on the
+  // first probe -- that is the condition that went undetected on 2026-08-11.
+  DB_MAIN_POOL_SATURATION_TOLERANCE: z.coerce.number().int().positive().default(3),
   DB_POOL_MAX: z.coerce.number().int().positive().max(20).default(4),
   DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
   // Audit 1.9 (2026-07-13, read-only incident hardening): max lifetime of a
