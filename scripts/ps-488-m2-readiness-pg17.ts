@@ -196,7 +196,8 @@ async function main(): Promise<void> {
         /^\s*SYSTEM READINESS: BLOCKED\s*$/m,
         'the blocked status must be stated as its own line',
       );
-      assert.match(out, /SYSTEM READINESS: BLOCKED/);
+      // The loose substring form that used to sit here is subsumed by the anchored
+      // assertion above — anything satisfying the anchor satisfies the substring.
     }),
   );
 

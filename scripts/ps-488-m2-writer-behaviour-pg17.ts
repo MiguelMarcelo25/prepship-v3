@@ -285,11 +285,31 @@ async function main(): Promise<void> {
 
   await check('legacy rows with return_id NULL remain writable and readable — history compatibility', async (db) => {
     await seed(db);
+    // The fixture already seeds a return_label row, so a flat count of 1 was wrong:
+    // it counted the seeded row and the newly written one. Assert the DELTA, which
+    // does not assume an empty fixture and still fails if the insert is refused.
+    const before = await countWhere(db, `line_type = 'return_label' and return_id is null`);
+
     await db`insert into public.billing_line_items
         (client_id, order_id, ship_date, billing_effective_date, line_type, description, unit_cost, total_cost)
       values (17, 3075, now(), now(), 'return_label', 'frozen history', '1.11','1.11')`;
-    const legacy = await countWhere(db, `line_type = 'return_label'`);
-    assert.equal(legacy, 1, 'frozen legacy history must stay readable');
+
+    const after = await countWhere(db, `line_type = 'return_label' and return_id is null`);
+    assert.equal(after, before + 1, 'a legacy row with NULL identity must still be writable');
+
+    // Read the exact row back. Proves readability of THIS row rather than inferring
+    // it from a total, so the assertion cannot be satisfied by the seeded row.
+    assert.equal(
+      await countWhere(
+        db,
+        `line_type = 'return_label'
+           and return_id is null
+           and order_id = 3075
+           and description = 'frozen history'`,
+      ),
+      1,
+      'the newly written legacy row must be readable by its own identity',
+    );
   });
 
   if (failures) {
