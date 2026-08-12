@@ -964,7 +964,9 @@
     "inventory:ps-506-plan": "tsx scripts/ps-506-reconcile-stranded-deductions.ts",
     "test:ps-498-rates-missing-money": "tsx scripts/ps-498-rates-missing-money-guard.ts",
     "test:ps-500-rate-money-classifier": "tsx scripts/ps-500-rate-money-classifier-guard.ts",
-    "test:ps-500-mutation-matrix": "tsx scripts/ps-500-mutation-matrix.ts"
+    "test:ps-500-mutation-matrix": "tsx scripts/ps-500-mutation-matrix.ts",
+    "test:ps-488-m2-readiness-pg17": "tsx scripts/ps-488-m2-readiness-pg17.ts",
+    "test:ps-488-m2-writer-behaviour-pg17": "tsx scripts/ps-488-m2-writer-behaviour-pg17.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

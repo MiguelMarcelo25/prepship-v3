@@ -93,6 +93,7 @@ import {
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 import { planReturnBillingLines } from './billing-return-line-planner';
 import {
+  CANONICAL_RETURN_WRITE_LINE_TYPES,
   RETURN_PROCESSING_LINE_TYPE,
   RETURN_SHIPPING_LINE_TYPE,
 } from './billing-return-event-contract';
@@ -1750,6 +1751,23 @@ export async function generateLineItems(input: GenerateInput) {
             : undefined,
           billingLineItemScopePredicate(input),
           billingLineItemIsEditablePredicate(),
+          // PS-488 M2: the outbound sweep must never delete a canonical return row.
+          //
+          // This delete rebuilds OUTBOUND lines. Return lines are owned by the
+          // separate RETURN_BILLING_ENABLED pass below, which only re-creates them
+          // when the flag is on. Without this exclusion, regenerating a range with
+          // the flag OFF deletes existing canonical return charges and nothing puts
+          // them back — the charge silently disappears from the invoice. The flag
+          // was meant to gate whether return billing is WRITTEN, not to make
+          // regeneration destroy return money that is already there.
+          //
+          // Frozen legacy aliases are deliberately NOT excluded: they predate the
+          // relational contract and the historical sweep behaviour for them is
+          // unchanged.
+          sql`${billingLineItems.lineType} not in (${sql.join(
+            CANONICAL_RETURN_WRITE_LINE_TYPES.map((t) => sql`${t}`),
+            sql`, `,
+          )})`,
         ),
       );
       for (let i = 0; i < editableRows.length; i += CHUNK) {

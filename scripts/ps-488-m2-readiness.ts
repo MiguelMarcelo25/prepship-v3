@@ -134,7 +134,7 @@ export const PS488_M2_LEGACY_SQL = `
  * connection is opened, so a DML statement introduced by a later edit fails the
  * command rather than reaching the database.
  */
-const FORBIDDEN = /\b(insert|update|delete|truncate|alter|drop|create|grant|revoke|copy)\b/i;
+const FORBIDDEN = /\b(insert|update|delete|truncate|alter|drop|create|grant|revoke|copy|call|do|merge)\b/i;
 
 export function assertProductionQueriesAreReadOnly(): void {
   const statements = [
@@ -173,6 +173,70 @@ export function assertDisposableHost(rawUrl: string): void {
 }
 
 type GateResult = { key: string; label: string; count: number };
+
+/**
+ * RLS visibility proof — fail closed, not warn and continue.
+ *
+ * billing_line_items has RLS enabled with NO policies
+ * (drizzle/0018_security_hardening.sql:42), which is deny-all for any role that does
+ * not bypass it. A non-bypassing session therefore reads four zeros and looks
+ * perfectly healthy. Zeros produced by insufficient privilege are indistinguishable
+ * from zeros produced by clean data, so the command must prove it can legitimately
+ * see the protected rows before it reports on them.
+ *
+ * Legitimate visibility is either BYPASSRLS, or table ownership while the table is
+ * not FORCE'd. Anything else is a refusal.
+ */
+async function assertRlsVisibility(sql: postgres.Sql): Promise<string> {
+  const [row] = await sql<
+    {
+      current_role_name: string;
+      is_superuser: boolean;
+      has_bypassrls: boolean;
+      is_owner: boolean;
+      rls_enabled: boolean;
+      rls_forced: boolean;
+    }[]
+  >`
+    select current_user::text                                as current_role_name,
+           r.rolsuper                                        as is_superuser,
+           r.rolbypassrls                                    as has_bypassrls,
+           (c.relowner = r.oid)                              as is_owner,
+           c.relrowsecurity                                  as rls_enabled,
+           c.relforcerowsecurity                             as rls_forced
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_roles r on r.rolname = current_user
+     where n.nspname = 'public' and c.relname = 'billing_line_items'`;
+
+  if (!row) throw new Error('STOP: public.billing_line_items not found');
+
+  const bypasses = row.is_superuser || row.has_bypassrls;
+  const ownerUnforced = row.is_owner && !row.rls_forced;
+  const visible = !row.rls_enabled || bypasses || ownerUnforced;
+
+  const proof =
+    `role=${row.current_role_name} superuser=${row.is_superuser} ` +
+    `bypassrls=${row.has_bypassrls} owner=${row.is_owner} ` +
+    `rls_enabled=${row.rls_enabled} rls_forced=${row.rls_forced}`;
+
+  if (!visible) {
+    throw new Error(
+      `STOP: this session cannot legitimately see protected rows, so every count ` +
+        `would read 0 for the wrong reason.\n  ${proof}\n` +
+        '  Connect as the service role, a BYPASSRLS role, or the table owner.',
+    );
+  }
+  return proof;
+}
+
+/** Proof the session really is in a PostgreSQL READ ONLY transaction. */
+async function assertReadOnlyTransaction(tx: postgres.Sql): Promise<void> {
+  const [row] = await tx<{ ro: string }[]>`show transaction_read_only`;
+  if (row?.ro !== 'on') {
+    throw new Error(`STOP: transaction_read_only is '${row?.ro}', expected 'on'`);
+  }
+}
 
 async function runReport(sql: postgres.Sql): Promise<{ gates: GateResult[]; clean: boolean }> {
   const gates: GateResult[] = [];
@@ -279,58 +343,153 @@ async function main(): Promise<void> {
   }
 
   const sql = postgres(url, { max: 1, prepare: false, onnotice: () => {} });
+  let clean = false;
   try {
+    if (SELF_TEST) await seedSelfTestFixture(sql);
+
+    const rlsProof = await assertRlsVisibility(sql);
+    console.log(`  RLS proof: ${rlsProof}`);
+
+    const before = SELF_TEST ? await snapshotForReadOnlyProof(sql) : null;
+
+    // The real mutation barrier is PostgreSQL, not the keyword scanner. Everything
+    // the report issues runs inside a READ ONLY transaction, and the session is
+    // asked to confirm it — a SELECT calling a mutating function fails here, which
+    // static scanning cannot catch.
+    clean = await sql.begin('read only', async (tx) => {
+      const t = tx as unknown as postgres.Sql;
+      await assertReadOnlyTransaction(t);
+      console.log('  transaction: READ ONLY confirmed (transaction_read_only = on)');
+      const result = await runReport(t);
+      return result.clean;
+    }) as unknown as boolean;
+
     if (SELF_TEST) {
-      await seedSelfTestFixture(sql);
-      const before = await snapshotForReadOnlyProof(sql);
-      const { clean } = await runReport(sql);
       const after = await snapshotForReadOnlyProof(sql);
       if (before !== after) {
         throw new Error('STOP: the report mutated data — before/after snapshots differ');
       }
-      console.log('\n  read-only proof: before/after snapshots byte-identical  ok');
-      reportWriterStatus(clean);
-    } else {
-      const { clean } = await runReport(sql);
-      reportWriterStatus(clean);
+      console.log('\n  read-only proof: full-column snapshots identical before/after  ok');
     }
+
+    reportWriterStatus(clean);
   } finally {
     await sql.end({ timeout: 5 });
   }
+
+  // A dirty gate is a failure, not a note. Counts are printed above either way.
+  if (!clean) {
+    console.error('\nFAIL: one or more relational-identity gates is non-zero.');
+    process.exit(1);
+  }
 }
 
-/** Self-test only. Never reachable in production mode — the mode check gates it. */
+/**
+ * Self-test fixture. Models the REAL 0092 catalog contract, not merely enough
+ * columns for the queries to parse — otherwise the self-test proves the SQL is
+ * syntactically valid and nothing about the invariants it exists to check.
+ *
+ * Reproduced from drizzle/0092_ps488_return_identity_reconciliation.sql:
+ *   FK ON DELETE RESTRICT, validated canonical-type CHECK, partial UNIQUE
+ *   (return_id, line_type), the 0089 lookup index, and the description-based
+ *   survivor indexes.
+ *
+ * `billing_effective_date` is present because the canary buckets on
+ * coalesce(billing_effective_date, ship_date); the first version of this fixture
+ * omitted it and the self-test could not run at all.
+ *
+ * Self-test only. The mode check gates it — production mode never reaches here.
+ */
 async function seedSelfTestFixture(sql: postgres.Sql): Promise<void> {
   await sql.unsafe(`
-    create table if not exists public.returns (id serial primary key, order_id integer);
-    create table if not exists public.billing_line_items (
-      id serial primary key, client_id integer not null, order_id integer,
-      ship_date timestamptz, line_type text not null, description text not null,
-      unit_cost numeric(10,2) not null, total_cost numeric(10,2) not null,
-      invoiced boolean not null default false, return_id integer
+    drop table if exists public.billing_line_items cascade;
+    drop table if exists public.returns cascade;
+
+    create table public.returns (id serial primary key, order_id integer);
+
+    create table public.billing_line_items (
+      id serial primary key,
+      client_id integer not null,
+      order_id integer,
+      order_number text,
+      shipment_id integer,
+      ship_date timestamptz,
+      billing_effective_date timestamptz,
+      line_type text not null,
+      description text not null,
+      qty numeric(10,2) not null default '1',
+      unit_cost numeric(10,2) not null,
+      total_cost numeric(10,2) not null,
+      package_id integer,
+      storage_month text,
+      invoiced boolean not null default false,
+      return_id integer
     );
-    truncate public.billing_line_items restart identity;
-    truncate public.returns restart identity cascade;
+
+    -- The 0092 contract, as applied.
+    alter table public.billing_line_items
+      add constraint billing_line_items_return_id_returns_id_fk
+      foreign key (return_id) references public.returns(id) on delete restrict;
+    alter table public.billing_line_items
+      add constraint billing_li_return_id_canonical_type_check
+      check (return_id is null or line_type in ('return_postage','return_processing_fee'));
+    create index billing_li_return_id_idx
+      on public.billing_line_items (return_id) where return_id is not null;
+    create unique index billing_li_return_identity_unq
+      on public.billing_line_items (return_id, line_type) where return_id is not null;
+    -- Survivor indexes 0092 must preserve.
+    create unique index billing_li_order_unique_idx
+      on public.billing_line_items (order_id, line_type, description) where order_id is not null;
+    create unique index billing_li_shipment_unique_idx
+      on public.billing_line_items (shipment_id, line_type, description) where shipment_id is not null;
+    create unique index billing_li_storage_unique_idx
+      on public.billing_line_items (client_id, storage_month) where storage_month is not null;
+
     insert into public.returns (id, order_id) values (25, 3074), (26, 3075);
+    select setval('public.returns_id_seq', 100);
+
     insert into public.billing_line_items
-      (client_id, order_id, ship_date, line_type, description, unit_cost, total_cost, return_id)
+      (client_id, order_id, order_number, ship_date, billing_effective_date,
+       line_type, description, unit_cost, total_cost, return_id)
     values
-      (17, 3074, now(), 'return_postage',        'p', '7.73', '7.73', 25),
-      (17, 3074, now(), 'return_processing_fee', 'r', '3.00', '3.00', 25),
-      (17, 3074, now(), 'return_label',          'legacy', '1.11', '1.11', null),
-      (17, 3074, now(), 'pick_pack',             'pp', '2.50', '2.50', null);
+      (17, 3074, '3074-RETURN', now(), now(), 'return_postage',        'postage',    '7.73', '7.73', 25),
+      (17, 3074, '3074-RETURN', now(), now(), 'return_processing_fee', 'processing', '3.00', '3.00', 25),
+      (17, 3074, '3074',        now(), now(), 'return_label',          'legacy',     '1.11', '1.11', null),
+      (17, 3074, '3074',        now(), now(), 'pick_pack',             'pick pack',  '2.50', '2.50', null);
   `);
 }
 
+/**
+ * Full-column mutation snapshot across BOTH tables the report reads.
+ *
+ * The earlier version hashed only id/line_type/total_cost/return_id, so it would have
+ * missed a change to client, order, dates, description, unit cost or invoiced state,
+ * and missed any change to `returns` entirely — while the output claimed
+ * "byte-identical". The READ ONLY transaction is the real barrier; this is the
+ * corroborating evidence, and it now covers what it claims to.
+ */
 async function snapshotForReadOnlyProof(sql: postgres.Sql): Promise<string> {
-  const [row] = await sql<{ digest: string }[]>`
+  const [lines] = await sql<{ digest: string }[]>`
     select coalesce(md5(string_agg(
-      id::text || ':' || line_type || ':' || total_cost::text || ':' || coalesce(return_id::text, '-'),
+      concat_ws('|', id::text, client_id::text, coalesce(order_id::text,'-'),
+        coalesce(order_number,'-'), coalesce(shipment_id::text,'-'),
+        coalesce(ship_date::text,'-'), coalesce(billing_effective_date::text,'-'),
+        line_type, description, qty::text, unit_cost::text, total_cost::text,
+        coalesce(package_id::text,'-'), coalesce(storage_month,'-'),
+        invoiced::text, coalesce(return_id::text,'-')),
       ',' order by id)), 'empty') as digest
     from public.billing_line_items`;
-  return row!.digest;
+  const [returnsRows] = await sql<{ digest: string }[]>`
+    select coalesce(md5(string_agg(
+      concat_ws('|', id::text, coalesce(order_id::text,'-')), ',' order by id)), 'empty') as digest
+    from public.returns`;
+  return `${lines!.digest}:${returnsRows!.digest}`;
 }
 
-if (process.argv[1] && process.argv[1].includes('ps-488-m2-readiness')) {
+// Exact basename, not a substring. `includes('ps-488-m2-readiness')` also matched
+// ps-488-m2-readiness-pg17.ts, so merely IMPORTING the confirmation token from this
+// module made the PG17 suite execute the readiness command instead of its own tests.
+const invokedAs = (process.argv[1] ?? '').replace(/\\/g, '/').split('/').pop();
+if (invokedAs === 'ps-488-m2-readiness.ts') {
   await main();
 }

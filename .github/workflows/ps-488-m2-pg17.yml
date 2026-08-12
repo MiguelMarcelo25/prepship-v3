@@ -1,0 +1,115 @@
+# PS-488 M2 — real PostgreSQL 17 proofs for the readiness command and the writer
+# boundary.
+#
+# These cannot be proven on PGlite: they depend on RLS enforcement, role capabilities
+# (BYPASSRLS, ownership, FORCE), catalog metadata and READ ONLY transaction semantics.
+# Both suites FAIL rather than skip when their admin URL is absent, so this job cannot
+# go green without actually exercising the database.
+name: PS-488 M2 PG17 proofs
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'review/ps-488-**'
+    paths:
+      - 'scripts/ps-488-m2-*.ts'
+      - 'scripts/ps-487-return-billing-wiring-guard.ts'
+      - 'src/services/billing.ts'
+      - 'src/services/billing-return-event-contract.ts'
+      - 'src/services/billing-return-line-planner.ts'
+      - '.github/workflows/ps-488-m2-pg17.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-488-m2-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg17-proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps488
+          POSTGRES_PASSWORD: ps488
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps488"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable here and
+      # no deploy secret is exposed to this job.
+      PS488_PG17_ADMIN_URL: postgres://ps488:ps488@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # tsx -e compiles as CommonJS, where top-level await is a hard error. The async
+      # IIFE keeps the await inside a function.
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          set -euo pipefail
+          version="$(npx tsx -e "
+            const postgres = require('postgres');
+            (async () => {
+              const sql = postgres(process.env.PS488_PG17_ADMIN_URL, { max: 1, prepare: false });
+              try {
+                const [row] = await sql\`show server_version\`;
+                console.log(row.server_version);
+              } finally {
+                await sql.end({ timeout: 5 });
+              }
+            })().catch((e) => { console.error(e); process.exit(1); });
+          ")"
+          echo "server_version=${version}"
+          case "${version}" in
+            17*) ;;
+            *) echo "Expected PostgreSQL 17, got ${version}"; exit 1 ;;
+          esac
+
+      - name: Readiness PG17 proof (every gate, clean and dirty)
+        run: npm run test:ps-488-m2-readiness-pg17
+
+      - name: Writer behaviour PG17 proof
+        run: npm run test:ps-488-m2-writer-behaviour-pg17
+
+      - name: Focused billing and finalization suite
+        run: |
+          npm run test:ps-487-return-billing-contract
+          npm run test:ps-487-return-line-planner
+          npm run test:ps-487-return-billing-wiring
+          npm run test:ps-488-billing-row-reference
+          npm run test:ps-488-invoice-reconcile
+          npm run test:ps-412-finalized-billing
+          npm run test:ps-449-billing-finalization
+          npm run test:ps-323-billing-sot-parity
+          npm run test:ps-362-billing-detail-sot-export
+          npm run test:ps-372-billing-read-divergence
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build:web
+
+      - name: Whitespace check
+        run: git diff --check
