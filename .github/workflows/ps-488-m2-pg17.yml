@@ -91,6 +91,16 @@ jobs:
       - name: Writer behaviour PG17 proof
         run: npm run test:ps-488-m2-writer-behaviour-pg17
 
+      # M3. The invoice grouping key is otherwise only source-text asserted, and the change
+      # rests on a claim about the DATABASE rather than about the text: GROUP BY treats
+      # NULLs as equal, so a column that is NULL on every outbound line cannot shatter
+      # outbound invoice rows. Runs the clause EXTRACTED from src/routes/billing.ts, with a
+      # control that reproduces the pre-M3 merge so the split is attributable to the key.
+      # Placed after the version gate above, so this is a real PostgreSQL 17 result — the
+      # local PGlite runner is a convenience and reports its own, different version.
+      - name: Invoice grain PG17 proof (M3)
+        run: npm run test:ps-488-m3-invoice-grain-pg17
+
       - name: Focused billing and finalization suite
         run: |
           npm run test:ps-487-return-billing-contract
