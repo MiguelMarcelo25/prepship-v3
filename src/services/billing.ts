@@ -93,10 +93,13 @@ import {
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 import { planReturnBillingLines } from './billing-return-line-planner';
 import {
-  CANONICAL_RETURN_WRITE_LINE_TYPES,
   RETURN_PROCESSING_LINE_TYPE,
   RETURN_SHIPPING_LINE_TYPE,
 } from './billing-return-event-contract';
+import {
+  deleteOutboundBillingLinesForRebuild,
+  type OutboundSweepExecutor,
+} from './billing-outbound-sweep';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
@@ -1742,7 +1745,13 @@ export async function generateLineItems(input: GenerateInput) {
         },
         tx,
       );
-      await tx.delete(billingLineItems).where(
+      // PS-488 M2: the sweep is owned by billing-outbound-sweep.ts, which contributes
+      // the return-preservation term and performs the delete. Production and the
+      // PostgreSQL 17 proof call this same function, so a test cannot pass while
+      // production diverges — the previous shape had the predicate inline here and a
+      // reproduced copy in the test.
+      await deleteOutboundBillingLinesForRebuild(
+        tx as unknown as OutboundSweepExecutor,
         and(
           sql`${billingLineItems.orderId} is not null`,
           orderLinesToRebuild,
@@ -1751,23 +1760,6 @@ export async function generateLineItems(input: GenerateInput) {
             : undefined,
           billingLineItemScopePredicate(input),
           billingLineItemIsEditablePredicate(),
-          // PS-488 M2: the outbound sweep must never delete a canonical return row.
-          //
-          // This delete rebuilds OUTBOUND lines. Return lines are owned by the
-          // separate RETURN_BILLING_ENABLED pass below, which only re-creates them
-          // when the flag is on. Without this exclusion, regenerating a range with
-          // the flag OFF deletes existing canonical return charges and nothing puts
-          // them back — the charge silently disappears from the invoice. The flag
-          // was meant to gate whether return billing is WRITTEN, not to make
-          // regeneration destroy return money that is already there.
-          //
-          // Frozen legacy aliases are deliberately NOT excluded: they predate the
-          // relational contract and the historical sweep behaviour for them is
-          // unchanged.
-          sql`${billingLineItems.lineType} not in (${sql.join(
-            CANONICAL_RETURN_WRITE_LINE_TYPES.map((t) => sql`${t}`),
-            sql`, `,
-          )})`,
         ),
       );
       for (let i = 0; i < editableRows.length; i += CHUNK) {

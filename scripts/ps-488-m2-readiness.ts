@@ -230,9 +230,16 @@ async function assertRlsVisibility(sql: postgres.Sql): Promise<string> {
   return proof;
 }
 
-/** Proof the session really is in a PostgreSQL READ ONLY transaction. */
+/**
+ * Proof the session really is in a PostgreSQL READ ONLY transaction.
+ *
+ * `show transaction_read_only` returns the value in a column NAMED
+ * transaction_read_only, not `ro` — reading `row.ro` yielded undefined and made every
+ * case abort with "transaction_read_only is 'undefined'". current_setting() with an
+ * explicit alias removes the guesswork about the result shape.
+ */
 async function assertReadOnlyTransaction(tx: postgres.Sql): Promise<void> {
-  const [row] = await tx<{ ro: string }[]>`show transaction_read_only`;
+  const [row] = await tx<{ ro: string }[]>`select current_setting('transaction_read_only') as ro`;
   if (row?.ro !== 'on') {
     throw new Error(`STOP: transaction_read_only is '${row?.ro}', expected 'on'`);
   }

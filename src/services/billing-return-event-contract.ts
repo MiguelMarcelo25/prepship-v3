@@ -70,6 +70,24 @@ export const LEGACY_RETURN_READ_ONLY_LINE_TYPES = [
   'return_processing',
 ] as const;
 
+/**
+ * PS-488 M2 — every line type that carries RETURN money, canonical or frozen.
+ *
+ * This is the set an unrelated owner must never destroy. "Frozen/read-only" means no
+ * new writes; it does not make an existing row disposable. A legacy row without
+ * relational identity still carries real historical return money, and nothing would
+ * put it back: outbound regeneration does not recreate return lines, the canonical
+ * writer never emits legacy aliases, the disabled flag stops the return pass
+ * entirely, and pre-cutover policy permanently excludes old returns from rebuild.
+ *
+ * Legacy cleanup or conversion belongs in a separately reviewed reconciliation, never
+ * as collateral damage from outbound regeneration.
+ */
+export const ALL_GOVERNED_RETURN_LINE_TYPES = [
+  ...CANONICAL_RETURN_WRITE_LINE_TYPES,
+  ...LEGACY_RETURN_READ_ONLY_LINE_TYPES,
+] as const;
+
 export type CanonicalReturnWriteLineType = (typeof CANONICAL_RETURN_WRITE_LINE_TYPES)[number];
 
 /** True only for a type a new write may emit. Legacy aliases return false. */

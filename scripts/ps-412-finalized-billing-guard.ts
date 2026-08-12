@@ -222,9 +222,19 @@ async function main(): Promise<void> {
   );
   check(
     'generator atomically sweeps and rebuilds order lines before clearing dirty state',
-    /db\.transaction\(async\(tx\)=>[\s\S]*assertBillingOrdersEditable[\s\S]*tx\.delete\(billingLineItems\)[\s\S]*tx[\s\S]*\.insert\(billingLineItems\)[\s\S]*setBillingOrdersDirty/.test(
+    // PS-488 M2: the sweep moved from an inline `tx.delete(billingLineItems)` to
+    // deleteOutboundBillingLinesForRebuild, the single owner shared by production and
+    // the PG17 proof, so that a test cannot pass while production diverges. The
+    // ORDERING this check exists to protect is unchanged and still pinned: open the
+    // transaction, assert editability, sweep, rebuild, then clear dirty state.
+    /db\.transaction\(async\(tx\)=>[\s\S]*assertBillingOrdersEditable[\s\S]*deleteOutboundBillingLinesForRebuild\([\s\S]*tx[\s\S]*\.insert\(billingLineItems\)[\s\S]*setBillingOrdersDirty/.test(
       billingService.replace(/\s+/g, ''),
     ),
+  );
+  check(
+    'the outbound sweep is delegated to its owner, not hand-rolled in the generator',
+    /deleteOutboundBillingLinesForRebuild/.test(billingService) &&
+      /billing-outbound-sweep/.test(billingService),
   );
   check(
     'generator delete excludes finalized rows and finalized-order siblings',

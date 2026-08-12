@@ -8,17 +8,16 @@
 name: PS-488 M2 PG17 proofs
 
 on:
+  # No paths filter, deliberately. The previous filter listed a few obvious files and
+  # omitted direct behavioural dependencies — billing-finalization-policy.ts,
+  # db/schema/billing.ts, the 0092 migration — so a change to the editable predicate
+  # or the schema contract could have bypassed this proof entirely. On a protected
+  # money path, running it every time is cheaper than maintaining a list of everything
+  # that could possibly affect it.
   push:
     branches:
       - prepshipv4-stable
       - 'review/ps-488-**'
-    paths:
-      - 'scripts/ps-488-m2-*.ts'
-      - 'scripts/ps-487-return-billing-wiring-guard.ts'
-      - 'src/services/billing.ts'
-      - 'src/services/billing-return-event-contract.ts'
-      - 'src/services/billing-return-line-planner.ts'
-      - '.github/workflows/ps-488-m2-pg17.yml'
   workflow_dispatch:
 
 permissions:

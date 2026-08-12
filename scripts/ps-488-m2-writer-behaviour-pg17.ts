@@ -17,11 +17,18 @@
  * UNSKIPPABLE: absent PS488_PG17_ADMIN_URL this FAILS.
  */
 import assert from 'node:assert/strict';
+import { and, eq, sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { billingLineItems } from '../src/db/schema/billing.js';
 import {
   CANONICAL_RETURN_WRITE_LINE_TYPES,
   LEGACY_RETURN_READ_ONLY_LINE_TYPES,
 } from '../src/services/billing-return-event-contract.js';
+import {
+  deleteOutboundBillingLinesForRebuild,
+  type OutboundSweepExecutor,
+} from '../src/services/billing-outbound-sweep.js';
 
 const ADMIN_URL = process.env.PS488_PG17_ADMIN_URL;
 if (!ADMIN_URL) {
@@ -92,10 +99,10 @@ async function drop(name: string): Promise<void> {
   }
 }
 
-async function check(name: string, fn: (db: postgres.Sql) => Promise<void>): Promise<void> {
-  const { name: dbName, db } = await fresh();
+async function check(name: string, fn: (db: postgres.Sql, url: string) => Promise<void>): Promise<void> {
+  const { name: dbName, url, db } = await fresh();
   try {
-    await fn(db);
+    await fn(db, url);
     console.log(`ok   ${name}`);
   } catch (error) {
     failures += 1;
@@ -106,13 +113,53 @@ async function check(name: string, fn: (db: postgres.Sql) => Promise<void>): Pro
   }
 }
 
-/** Mirrors the production sweep's shape, including the M2 exclusion under test. */
-function outboundSweep(excludeCanonicalReturns: boolean): string {
-  const exclusion = excludeCanonicalReturns ? `and line_type not in (${canonicalList})` : '';
-  return `delete from public.billing_line_items
-           where order_id is not null and invoiced = false ${exclusion}`;
+/**
+ * Runs the PRODUCTION sweep owner — not a reproduced DELETE.
+ *
+ * deleteOutboundBillingLinesForRebuild is the same function src/services/billing.ts
+ * calls, so this cannot pass while production diverges. A copied statement would only
+ * ever prove the copy's semantics. The scope predicate mirrors the generator's
+ * window/editability terms; the return-preservation term comes from the owner itself
+ * and is deliberately NOT restated here.
+ */
+async function runProductionSweep(url: string): Promise<void> {
+  const client = postgres(url, { max: 1, prepare: false, onnotice: () => {} });
+  try {
+    const db = drizzle(client, { casing: 'snake_case' });
+    await deleteOutboundBillingLinesForRebuild(
+      db as unknown as OutboundSweepExecutor,
+      and(sql`${billingLineItems.orderId} is not null`, eq(billingLineItems.invoiced, false)),
+    );
+  } finally {
+    await client.end({ timeout: 5 });
+  }
 }
 
+/**
+ * The PRE-M2 behaviour, for the contrast case only: the same scope with no
+ * return-preservation term. This exists solely to prove the fix is load-bearing, and
+ * is never used as the definition of correct behaviour.
+ */
+async function runUnprotectedSweep(url: string): Promise<void> {
+  const client = postgres(url, { max: 1, prepare: false, onnotice: () => {} });
+  try {
+    await client.unsafe(
+      `delete from public.billing_line_items where order_id is not null and invoiced = false`,
+    );
+  } finally {
+    await client.end({ timeout: 5 });
+  }
+}
+
+const legacyList = LEGACY_RETURN_READ_ONLY_LINE_TYPES.map((t) => `'${t}'`).join(', ');
+
+/**
+ * Fixture carries BOTH vocabularies, uninvoiced and therefore sweepable.
+ *
+ * The legacy rows are the ones the previous submission left exposed: they hold real
+ * historical return money, carry no relational identity, and nothing recreates them
+ * if an outbound sweep deletes them.
+ */
 async function seed(db: postgres.Sql): Promise<void> {
   await db.unsafe(`
     insert into public.returns (id, order_id) values (25, 3074), (26, 3074);
@@ -121,11 +168,18 @@ async function seed(db: postgres.Sql): Promise<void> {
       (client_id, order_id, ship_date, billing_effective_date, line_type, description,
        unit_cost, total_cost, invoiced, return_id)
     values
-      (17, 3074, now(), now(), 'pick_pack',             'pp',        '2.50','2.50', false, null),
-      (17, 3074, now(), now(), 'return_postage',        'postage 25','7.73','7.73', false, 25),
-      (17, 3074, now(), now(), 'return_processing_fee', 'proc 25',   '3.00','3.00', false, 25),
-      (17, 3074, now(), now(), 'return_postage',        'postage 26','6.77','6.77', false, 26),
-      (17, 3074, now(), now(), 'return_postage',        'frozen',    '9.99','9.99', true,  null);
+      (17, 3074, now(), now(), 'pick_pack',             'pp',         '2.50','2.50', false, null),
+      (17, 3074, now(), now(), 'additional_unit',       'addl',       '0.75','0.75', false, null),
+      -- canonical, relationally identified
+      (17, 3074, now(), now(), 'return_postage',        'postage 25', '7.73','7.73', false, 25),
+      (17, 3074, now(), now(), 'return_processing_fee', 'proc 25',    '3.00','3.00', false, 25),
+      (17, 3074, now(), now(), 'return_postage',        'postage 26', '6.77','6.77', false, 26),
+      -- frozen legacy history: real money, no identity, uninvoiced and sweepable
+      (17, 3074, now(), now(), 'return_label',          'legacy lbl', '1.11','1.11', false, null),
+      (17, 3074, now(), now(), 'return_processing',     'legacy proc','2.22','2.22', false, null),
+      (17, 3074, now(), now(), 'return',                'legacy bare','3.33','3.33', false, null),
+      -- finalized row, must never be swept
+      (17, 3074, now(), now(), 'return_postage',        'frozen',     '9.99','9.99', true,  null);
   `);
 }
 
@@ -139,34 +193,63 @@ const countWhere = async (db: postgres.Sql, where: string): Promise<number> => {
 async function main(): Promise<void> {
   console.log('PS-488 M2 writer behaviour — real PostgreSQL 17\n');
 
-  await check('THE M2 BLOCKER: the outbound sweep must not delete canonical return rows', async (db) => {
+  await check('THE M2 BLOCKER: the PRODUCTION sweep preserves CANONICAL return rows', async (db, url) => {
     await seed(db);
-    const before = await countWhere(db, `line_type in (${canonicalList})`);
-    assert.equal(before, 4, 'fixture must start with four canonical return rows');
+    assert.equal(await countWhere(db, `line_type in (${canonicalList}) and invoiced = false`), 3);
 
-    // The corrected sweep, as now shipped in src/services/billing.ts.
-    await db.unsafe(outboundSweep(true));
+    await runProductionSweep(url);
 
-    const after = await countWhere(db, `line_type in (${canonicalList})`);
-    assert.equal(after, 4, 'every canonical return row must survive an outbound regeneration');
-    const outbound = await countWhere(db, `line_type = 'pick_pack'`);
-    assert.equal(outbound, 0, 'the sweep must still remove editable outbound rows');
+    assert.equal(
+      await countWhere(db, `line_type in (${canonicalList}) and invoiced = false`),
+      3,
+      'every canonical return row must survive an outbound regeneration',
+    );
   });
 
-  await check('the OLD sweep would have destroyed them — proving the fix is load-bearing', async (db) => {
+  await check('THE M2 BLOCKER: the PRODUCTION sweep preserves FROZEN LEGACY return rows', async (db, url) => {
     await seed(db);
-    // Same statement WITHOUT the exclusion: the pre-M2 behaviour.
-    await db.unsafe(outboundSweep(false));
-    const survived = await countWhere(db, `line_type in (${canonicalList}) and invoiced = false`);
-    assert.equal(survived, 0, 'the old sweep deleted uninvoiced return rows — this is the defect');
-    // With RETURN_BILLING_ENABLED false nothing re-creates them, so the charge is gone.
+    assert.equal(await countWhere(db, `line_type in (${legacyList})`), 3, 'fixture must seed all three legacy types');
+
+    await runProductionSweep(url);
+
+    assert.equal(
+      await countWhere(db, `line_type in (${legacyList})`),
+      3,
+      'legacy return rows carry real historical money and nothing recreates them',
+    );
   });
 
-  await check('finalized/invoiced return rows are never swept, old sweep or new', async (db) => {
+  await check('the production sweep still removes eligible outbound rows', async (db, url) => {
     await seed(db);
-    await db.unsafe(outboundSweep(true));
-    const frozen = await countWhere(db, `invoiced = true`);
-    assert.equal(frozen, 1, 'a finalized row must remain');
+    assert.equal(await countWhere(db, `line_type in ('pick_pack','additional_unit')`), 2);
+    await runProductionSweep(url);
+    assert.equal(
+      await countWhere(db, `line_type in ('pick_pack','additional_unit')`),
+      0,
+      'preservation must not turn the sweep into a no-op',
+    );
+  });
+
+  await check('the UNPROTECTED sweep destroys both vocabularies — the fix is load-bearing', async (db, url) => {
+    await seed(db);
+    // Pre-M2 behaviour, for contrast only. Never the definition of correct.
+    await runUnprotectedSweep(url);
+    assert.equal(
+      await countWhere(db, `line_type in (${canonicalList}) and invoiced = false`),
+      0,
+      'the old sweep deleted uninvoiced canonical return rows',
+    );
+    assert.equal(
+      await countWhere(db, `line_type in (${legacyList})`),
+      0,
+      'and it deleted frozen legacy return money too — permanently, since nothing recreates it',
+    );
+  });
+
+  await check('finalized/invoiced rows are never swept', async (db, url) => {
+    await seed(db);
+    await runProductionSweep(url);
+    assert.equal(await countWhere(db, `invoiced = true`), 1, 'a finalized row must remain');
   });
 
   await check('two returns on one order remain two separate rows', async (db) => {
