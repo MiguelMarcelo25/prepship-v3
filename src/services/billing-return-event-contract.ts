@@ -33,6 +33,51 @@ export const RETURN_PROCESSING_LINE_TYPE = 'return_processing_fee';
 export const RETURN_SHIPPING_LINE_TYPE = 'return_postage';
 
 /**
+ * PS-488 M2 — the canonical WRITE vocabulary, and the boundary around it.
+ *
+ * A new return billing row may carry ONLY these two types, and only with a non-null
+ * relational `return_id`. That pairing is the whole point: `line_type` says what the
+ * charge is, `return_id` says which return produced it. Migration 0092 enforces both
+ * halves in PostgreSQL — a CHECK restricting a non-null `return_id` to these types,
+ * and a partial UNIQUE on `(return_id, line_type)` so one return cannot accumulate
+ * two postage rows.
+ *
+ * Kept as an exported set rather than a comment so the writer guard can assert
+ * against the owner instead of re-listing the vocabulary somewhere else. Two lists
+ * of the same fact is how the original `return_processing` / `return_label`
+ * divergence happened.
+ */
+export const CANONICAL_RETURN_WRITE_LINE_TYPES = [
+  RETURN_SHIPPING_LINE_TYPE,
+  RETURN_PROCESSING_LINE_TYPE,
+] as const;
+
+/**
+ * PS-488 M2 — frozen legacy types. READ-ONLY, permanently.
+ *
+ * Historical rows carry these and are never rewritten merely to rename them; a
+ * frozen invoice is financial history. Readers must keep classifying them — the
+ * cancelled-order guard, the detail read model and the invoice aggregates all
+ * depend on it, and deleting those reads would silently drop real charges from
+ * historical invoices.
+ *
+ * What must never happen is one of these appearing on a NEW write. That is what
+ * turns a compatibility alias into a second policy owner.
+ */
+export const LEGACY_RETURN_READ_ONLY_LINE_TYPES = [
+  'return',
+  'return_label',
+  'return_processing',
+] as const;
+
+export type CanonicalReturnWriteLineType = (typeof CANONICAL_RETURN_WRITE_LINE_TYPES)[number];
+
+/** True only for a type a new write may emit. Legacy aliases return false. */
+export function isCanonicalReturnWriteLineType(value: unknown): value is CanonicalReturnWriteLineType {
+  return (CANONICAL_RETURN_WRITE_LINE_TYPES as readonly unknown[]).includes(value);
+}
+
+/**
  * Forward-only cutover. DJ's decision, 2026-08-05: the returns that pre-date PS-487 are
  * NOT billed retroactively.
  *

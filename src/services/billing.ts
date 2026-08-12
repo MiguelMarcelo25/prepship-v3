@@ -1785,8 +1785,14 @@ export async function generateLineItems(input: GenerateInput) {
 
   // ── PS-487: return billing ────────────────────────────────────────────────
   // Default OFF. Flipping RETURN_BILLING_ENABLED is what starts putting
-  // return_processing / return_label lines on real invoices, so it is a deliberate
-  // Render env change after canary — never a deploy side effect.
+  // return_postage / return_processing_fee lines on real invoices, so it is a
+  // deliberate Render env change after canary — never a deploy side effect.
+  //
+  // PS-488 M2: those two are the CANONICAL write vocabulary, and this pass is the
+  // only writer in this repository allowed to emit them. `return_label` and
+  // `return_processing` are frozen legacy types: still read for historical rows,
+  // never written again. The comment here previously named the legacy pair, which
+  // described the wrong contract.
   //
   // Modelled on the storage pass below: its own delete+insert inside one transaction,
   // fenced by billingLineItemIsEditablePredicate() so a finalized or invoiced period is

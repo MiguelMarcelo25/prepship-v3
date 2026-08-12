@@ -244,6 +244,59 @@ check('the return insert is the ONLY writer of return line types', () => {
   assert.match(billing, /lineType: 'storage'/, 'storage insert still identified');
 });
 
+// ── PS-488 M2 — canonical write vocabulary and writer boundary ────────────────
+// Four assertions closing gaps found by an adversarial audit of this guard. Each
+// targets a mutation that previously left it green.
+
+check('M2: ReturnBillingLinePlan.returnId is required — anchored to the right type', () => {
+  // The existing assertion above uses a file-wide /^\s*returnId: number;$/m.
+  // ReturnBillingSkip declares the same field, so it satisfies that regex on its own:
+  // making ReturnBillingLinePlan.returnId OPTIONAL left the guard green. Anchor to
+  // the declaring block so the decoy cannot answer for it.
+  const planner = readFileSync('src/services/billing-return-line-planner.ts', 'utf8');
+  const start = planner.indexOf('export type ReturnBillingLinePlan = {');
+  assert.notEqual(start, -1, 'ReturnBillingLinePlan must exist');
+  const block = planner.slice(start, planner.indexOf('};', start));
+  assert.match(block, /^\s*returnId: number;$/m, 'ReturnBillingLinePlan.returnId must be required');
+  assert.doesNotMatch(block, /^\s*returnId\?: number;$/m, 'returnId must not become optional');
+});
+
+check('M2: the canonical write vocabulary is owned by the contract', () => {
+  const contract = readFileSync('src/services/billing-return-event-contract.ts', 'utf8');
+  assert.match(contract, /CANONICAL_RETURN_WRITE_LINE_TYPES/, 'the owner must export the write set');
+  assert.match(contract, /LEGACY_RETURN_READ_ONLY_LINE_TYPES/, 'the owner must export the frozen read set');
+  assert.match(contract, /RETURN_SHIPPING_LINE_TYPE = 'return_postage'/);
+  assert.match(contract, /RETURN_PROCESSING_LINE_TYPE = 'return_processing_fee'/);
+});
+
+check('M2: no writer emits a frozen legacy alias as a NEW write type', () => {
+  // An alias becoming a write type is how a second policy owner is born.
+  for (const file of ['src/services/billing.ts', 'src/services/billing-return-line-planner.ts']) {
+    const executable = readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//') && !line.trim().startsWith('*'))
+      .join('\n');
+    for (const legacy of ['return_label', 'return_processing']) {
+      assert.doesNotMatch(
+        executable,
+        new RegExp(`lineType:\\s*'${legacy}'`),
+        `${file} must never write the frozen legacy type '${legacy}'`,
+      );
+    }
+  }
+});
+
+check('M2: the return insert carries returnId and lets duplicates abort', () => {
+  const billing = readFileSync('src/services/billing.ts', 'utf8');
+  const start = billing.indexOf('returnPlan.lines.map');
+  assert.notEqual(start, -1, 'the return insert must exist');
+  const block = billing.slice(start, start + 1200);
+  assert.match(block, /returnId: line\.returnId,/, 'every return row must carry its relational identity');
+  // No conflict swallowing on this insert: a duplicate (return_id, line_type) must
+  // abort loudly against 0092's partial unique index, never be silently ignored.
+  assert.doesNotMatch(block, /onConflictDoNothing/, 'a duplicate return charge must not be ignored');
+});
+
 if (failures > 0) {
   console.error(`\nFAIL PS-487 return billing wiring guard (${failures} failing)`);
   process.exit(1);
