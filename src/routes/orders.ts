@@ -3,6 +3,10 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
+// PS-504: the Orders list is the surface that failed visibly during the
+// 2026-08-11 pooler incidents. It is read-only (verified: no insert/update/
+// delete anywhere in ordersListResponse), so a dropped socket is safe to retry.
+import { withDbReadRetry } from '../db/read-retry';
 import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { orderHazmatDeclarations } from '../db/schema/hazmat';
@@ -2642,19 +2646,19 @@ async function ordersListResponse(
 }
 
 app.get('/', zValidator('query', listQuery), (c) =>
-  ordersListResponse(c, c.req.valid('query')),
+  withDbReadRetry(() => ordersListResponse(c, c.req.valid('query'))),
 );
 
 // Per user override unlock shipped data on 2026-07-14: this read-only endpoint
 // reuses the canonical Orders list DTO; mutation guards and lifecycle locks are unchanged.
 app.post('/bulk-snapshot', zValidator('json', bulkSnapshotBody), (c) => {
   const orderIds = normalizeOrderBulkSnapshotIds(c.req.valid('json').orderIds);
-  return ordersListResponse(c, {
+  return withDbReadRetry(() => ordersListResponse(c, {
     page: 1,
     pageSize: orderIds.length,
     includeTotal: false,
     includeInactiveClients: true,
-  }, orderIds);
+  }, orderIds));
 });
 
 type LatestShipmentRow = {

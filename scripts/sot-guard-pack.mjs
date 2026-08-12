@@ -1283,6 +1283,18 @@ const REQUIRED_GUARDS = [
   // signal). Both are hermetic — file reads plus one dependency-free module.
   'test:health-deep-readiness',
   'test:ps-503-main-pool-readiness',
+  // PS-504 (2026-08-12). postgres.js already reconnects — `closed()` calls
+  // `reconnect()`, backoff caps at 20s, and the counter resets on any successful
+  // connect — so the gap was never "add reconnect". It is that the query in
+  // flight when the socket dies still rejects, and the user sees a 500 even
+  // though the next request would work. `withDbReadRetry` closes that for READS.
+  //
+  // The load-bearing assertion in this guard is the one that keeps WRITES out:
+  // CONNECTION_CLOSED is ambiguous for a write (it may have committed with only
+  // the reply lost), so retrying one can duplicate a charge, a label, or a
+  // ledger movement. Mutation-verified — wrapping a db.update in the retry fails
+  // the guard, as does retrying a saturated pool or unwrapping the Orders list.
+  'test:ps-504-read-retry',
 ];
 
 const npmCli = process.env.npm_execpath;

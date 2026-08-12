@@ -73,9 +73,26 @@ export type MainPoolVerdict = {
   consecutiveSaturated: number;
 };
 
+/**
+ * Lifetime evidence, surfaced on /health/deep.
+ *
+ * PS-504: the 2026-08-11 incidents were diagnosed from a screenshot because
+ * nothing counted pool failures. A raw postgres.js `onclose` counter is not the
+ * answer — `idle_timeout` is 10s, so connections recycle constantly and clean
+ * closes would swamp the signal. Counting failed PROBES has a clean zero
+ * baseline: any non-zero unreachableCount is a real dropped socket.
+ */
+export type MainPoolHealthSnapshot = {
+  unreachableCount: number;
+  saturatedCount: number;
+  consecutiveSaturated: number;
+  lastFailure: MainPoolFailure | null;
+};
+
 export type MainPoolHealthTracker = {
   recordSuccess: () => MainPoolVerdict;
   recordFailure: (error: unknown) => MainPoolVerdict;
+  snapshot: () => MainPoolHealthSnapshot;
 };
 
 /**
@@ -87,6 +104,11 @@ export type MainPoolHealthTracker = {
 export function createMainPoolHealthTracker(saturationTolerance: number): MainPoolHealthTracker {
   const tolerance = Math.max(1, Math.trunc(saturationTolerance));
   let consecutiveSaturated = 0;
+  // Lifetime counters are never reset by a success — a pool that dropped
+  // sockets an hour ago and recovered is still evidence worth keeping.
+  let unreachableCount = 0;
+  let saturatedCount = 0;
+  let lastFailure: MainPoolFailure | null = null;
 
   return {
     recordSuccess() {
@@ -95,16 +117,22 @@ export function createMainPoolHealthTracker(saturationTolerance: number): MainPo
     },
     recordFailure(error: unknown) {
       const failure = classifyMainPoolFailure(error);
+      lastFailure = failure;
       if (failure === 'unreachable') {
+        unreachableCount += 1;
         consecutiveSaturated = 0;
         return { healthy: false, failure, consecutiveSaturated: 0 };
       }
+      saturatedCount += 1;
       consecutiveSaturated += 1;
       return {
         healthy: consecutiveSaturated < tolerance,
         failure,
         consecutiveSaturated,
       };
+    },
+    snapshot() {
+      return { unreachableCount, saturatedCount, consecutiveSaturated, lastFailure };
     },
   };
 }

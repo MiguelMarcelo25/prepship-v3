@@ -120,7 +120,15 @@ async function checkMainPool(): Promise<ReadinessComponent> {
   try {
     await withTimeout(mainSql`select 1`, env.DB_MAIN_POOL_HEALTH_TIMEOUT_MS);
     mainPoolTracker.recordSuccess();
-    return { name: 'mainPool', status: 'ok', latencyMs: Date.now() - startedAt };
+    return {
+      name: 'mainPool',
+      status: 'ok',
+      latencyMs: Date.now() - startedAt,
+      // PS-504: a healthy pool that dropped sockets earlier is still evidence.
+      // Omitted entirely while the counters are clean, so a normal response
+      // stays quiet.
+      ...lifetimeDetails(),
+    };
   } catch (error) {
     const verdict = mainPoolTracker.recordFailure(error);
     return {
@@ -132,9 +140,21 @@ async function checkMainPool(): Promise<ReadinessComponent> {
       details: {
         poolState: verdict.failure ?? 'unknown',
         consecutiveSaturated: verdict.consecutiveSaturated,
+        ...(lifetimeDetails().details ?? {}),
       },
     };
   }
+}
+
+/**
+ * PS-504: lifetime main-pool failure counts. Returns nothing while clean, so
+ * `/health` stays silent on a healthy service and any appearance of these keys
+ * means a real dropped socket has happened since boot.
+ */
+function lifetimeDetails(): { details?: Record<string, number | string> } {
+  const { unreachableCount, saturatedCount } = mainPoolTracker.snapshot();
+  if (unreachableCount === 0 && saturatedCount === 0) return {};
+  return { details: { unreachableCount, saturatedCount } };
 }
 
 async function checkPrintQueueWorker(): Promise<ReadinessComponent> {
