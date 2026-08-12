@@ -181,7 +181,21 @@ async function main(): Promise<void> {
       assert.equal(code, 0, `expected exit 0, got ${code}\n${out}`);
       assert.match(out, /transaction_read_only = on/);
       assert.match(out, /RLS proof: role=/);
-      assert.doesNotMatch(out, /SYSTEM: READY/, 'the command must never claim system readiness');
+      // Line-anchored, not substring. The command's own prose says "This command
+      // cannot report SYSTEM: READY", so a substring check fired on the sentence
+      // EXPLAINING the absence — the assertion rejected its own negated explanation.
+      // Anchoring to a whole line tests the forbidden output SHAPE (an affirmative
+      // status line) rather than the appearance of two words anywhere in the output.
+      assert.doesNotMatch(
+        out,
+        /^\s*SYSTEM(?: READINESS)?: READY\s*$/m,
+        'the command must never print an affirmative readiness status line',
+      );
+      assert.match(
+        out,
+        /^\s*SYSTEM READINESS: BLOCKED\s*$/m,
+        'the blocked status must be stated as its own line',
+      );
       assert.match(out, /SYSTEM READINESS: BLOCKED/);
     }),
   );
