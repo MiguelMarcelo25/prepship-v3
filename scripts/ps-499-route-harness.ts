@@ -74,10 +74,12 @@ function splitStatements(text: string): string[] {
       current += ch;
       continue;
     }
-    if (text.startsWith('$$', i)) {
+    // Dollar quoting can be tagged ($function$, $body$), not just $$.
+    const dollarTag = /^\$[A-Za-z_]*\$/.exec(text.slice(i, i + 24));
+    if (dollarTag) {
       inDollar = !inDollar;
-      current += '$$';
-      i += 1;
+      current += dollarTag[0];
+      i += dollarTag[0].length - 1;
       continue;
     }
     if (ch === ';' && !inDollar) {
@@ -109,6 +111,39 @@ async function applyMigrations(pg: PGlite): Promise<void> {
     .sort();
 
   for (const file of files) {
+    // `returns` is defined in src/db/schema/returns.ts but has no CREATE TABLE
+    // migration — later migrations only ALTER it, and the runtime readiness guard
+    // demands it. Create it just before the first migration that touches it, so
+    // those ALTERs land and verifyRuntimeSchema passes.
+    if (file.startsWith('0088_')) {
+      await pg
+        .exec(`CREATE TABLE IF NOT EXISTS returns (
+          id serial PRIMARY KEY,
+          order_id integer NOT NULL REFERENCES orders(id),
+          client_id integer,
+          return_shipment_id integer,
+          return_to_location_id integer,
+          status text NOT NULL,
+          initiated_by text NOT NULL,
+          initiated_by_email text,
+          reason text,
+          admin_override boolean NOT NULL DEFAULT false,
+          admin_override_by text,
+          admin_override_reason text,
+          requested_at timestamptz NOT NULL DEFAULT now(),
+          closed_at timestamptz,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          delivery_method text,
+          delivery_status text,
+          delivery_error text,
+          return_reference text,
+          return_customer_shipping_rate numeric(10,2),
+          return_recipient_name text
+        );`)
+        .catch(() => {});
+    }
+
     const text = readFileSync(`drizzle/${file}`, 'utf8').replace(/CONCURRENTLY/gi, '');
     for (const statement of splitStatements(text)) {
       // Every migration opens with a comment block, and splitting on ';' leaves it
