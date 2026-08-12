@@ -51,22 +51,6 @@ export const CLAIM_ALARM_COUNT_MILESTONE_STEP = 500;
 export const CLAIM_ALARM_COUNT_MILESTONE_FLOOR = 3000;
 /** Age milestones in days: 30, 45, 60, then every 30. */
 export const CLAIM_ALARM_AGE_MILESTONES = [30, 45, 60, 90, 120, 150, 180];
-/**
- * How long an ALREADY-KNOWN immediate finding stays quiet before it may page again.
- *
- * PS-497. Immediate findings were the one level-triggered signal in this module: `page` was
- * set from `reasons.length > 0` with no state, so a fixed-path regression that was not
- * repaired within 24h paged on EVERY hourly run. On 2026-08-12 that reached 36 consecutive
- * pages and the watchdog workflow was red continuously — the exact "cries wolf hourly, gets
- * muted, next regression goes unseen" failure this module's header warns about, arrived at
- * from the inside.
- *
- * Edge-triggering changes only how often an already-detected finding RE-notifies. It does not
- * narrow what is measured: a code never seen before still pages on its first sighting, which
- * is what keeps "one stranded event on a repaired path is the 22-day outage on day one" true.
- */
-export const CLAIM_ALARM_IMMEDIATE_REPAGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
 /** An incident stays reminder-active while any of these hold. */
 export const CLAIM_ALARM_REMINDER_COUNT = 1000;
 export const CLAIM_ALARM_REMINDER_AGE_DAYS = 7;
@@ -87,79 +71,12 @@ export function initialClaimAlarmState() {
   return {
     version: 1,
     perSource: {},
-    /**
-     * Ledger of immediate findings currently in effect, keyed by reason code.
-     * Empty here on purpose: a lost state file must re-page every live finding rather than
-     * inherit a silence it cannot justify.
-     */
-    immediate: {},
     lastSeveritySnapshotAt: null,
     lastReviewCount: null,
     lastIncidentReminderAt: null,
     lastCountMilestone: null,
     lastAgeMilestone: null,
   };
-}
-
-/**
- * Should an immediate finding that has ALREADY paged page again?
- *
- * Called only for a code carried over from a previous run — a code's first sighting always
- * pages before this is consulted, so nothing here can suppress a new regression.
- *
- * @param {{ firstSeenMs: number, lastPagedMs: number, occurrences: number }} seen
- *        `firstSeenMs` when the finding first appeared, `lastPagedMs` when it last paged,
- *        `occurrences` how many runs have observed it (including this one's predecessor).
- * @param {number} nowMs
- * @returns {boolean} true to page again now.
- */
-export function shouldRepageImmediate(seen, nowMs) {
-  // A repaired path that is still stranding claims is a live money-path defect, so silence
-  // is a loan against it, not a write-off: re-page on the same daily cadence the open-incident
-  // reminder uses. Matching that constant keeps one escalation rhythm across the module rather
-  // than two competing ones an operator has to hold in their head.
-  return nowMs - seen.lastPagedMs >= CLAIM_ALARM_IMMEDIATE_REPAGE_INTERVAL_MS;
-}
-
-/**
- * Fold this run's immediate findings against the ledger of ones already known.
- *
- * Absent codes are DROPPED rather than aged out. A finding that clears and returns is new
- * information and must page again — carrying a stale entry forward is how a repair→regress
- * cycle goes silent after its first occurrence.
- */
-export function evaluateImmediateFindings(state, immediateReasons, nowMs) {
-  const seen = state?.immediate ?? {};
-  const nextImmediate = {};
-  const reasons = [];
-  let page = false;
-
-  for (const reason of immediateReasons ?? []) {
-    if (!reason?.code) continue;
-    const prior = seen[reason.code];
-
-    if (prior == null) {
-      // Never seen: page. This is the sensitivity guarantee — edge-triggering must never
-      // delay a finding nobody has been told about yet.
-      page = true;
-      reasons.push(reason);
-      nextImmediate[reason.code] = { firstSeenMs: nowMs, lastPagedMs: nowMs, occurrences: 1 };
-      continue;
-    }
-
-    const repage = shouldRepageImmediate(prior, nowMs);
-    if (repage) {
-      page = true;
-      reasons.push(reason);
-    }
-    nextImmediate[reason.code] = {
-      firstSeenMs: prior.firstSeenMs,
-      lastPagedMs: repage ? nowMs : prior.lastPagedMs,
-      occurrences: (prior.occurrences ?? 1) + 1,
-    };
-  }
-
-  return { page, reasons, nextImmediate };
 }
 
 /**
@@ -350,13 +267,8 @@ export function evaluateSeverity(state, severity, nowMs) {
 export function evaluateClaimAlarm(input) {
   const state = input.state ?? initialClaimAlarmState();
   const perSource = { ...(state.perSource ?? {}) };
-  // Immediate findings are edge-triggered here, like every other signal in this module. Only
-  // findings that actually page enter `reasons` — a non-paging carry-over stays out of the
-  // alert payload, exactly as a non-firing EWMA or milestone does. The condition remains
-  // visible through `state` below, which reports `open_incident` rather than `ok`.
-  const immediate = evaluateImmediateFindings(state, input.immediateReasons, input.nowMs);
-  const reasons = [...immediate.reasons];
-  let page = immediate.page;
+  const reasons = [...(input.immediateReasons ?? [])];
+  let page = reasons.length > 0;
 
   const ratioStates = {};
   for (const window of input.completedWindows ?? []) {
@@ -378,7 +290,7 @@ export function evaluateClaimAlarm(input) {
   if (severity.page) page = true;
   reasons.push(...severity.reasons);
 
-  const nextState = { ...severity.state, perSource, immediate: immediate.nextImmediate };
+  const nextState = { ...severity.state, perSource };
   const state_ =
     page ? 'alarm'
     : severity.reminderDue ? 'incident_reminder'
