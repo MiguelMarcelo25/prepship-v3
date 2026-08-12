@@ -35,6 +35,8 @@ import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibilit
 import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
 import { roundMoney } from '../lib/money';
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
+// PS-500: money completeness is classified before the defaulting in this file.
+import { classifyRateMoney } from './shipping-workflow/shipping-rate-money-classifier';
 import { isPricedRate } from './rates-combined';
 import { stampRateSourceDisplay } from './rate-source-display';
 // PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
@@ -48,6 +50,17 @@ export interface OrderBestRateDto {
   serviceCode: string | null;
   serviceName: string | null;
   packageType: string | null;
+  // PS-500: `shipmentCost` and `otherCost` below are the DISPLAY values and are
+  // still defaulted to 0 when the payload omitted them, which is why a consumer
+  // cannot tell "the backend sent nothing" from "the backend sent zero" by
+  // reading them. The three fields below are classified BEFORE that defaulting
+  // and are the only honest answer to "was this money actually supplied".
+  //
+  // Money only. Selectability also needs quote proof, freshness, eligibility and
+  // carrier completeness, which are owned elsewhere — hence the name.
+  rateMoneyComplete: boolean;
+  rateMoneyUnavailableReason: string | null;
+  rateMoneyUnavailableMessage: string | null;
   shipmentCost: number;
   otherCost: number;
   insuranceCost: number | null;
@@ -584,6 +597,13 @@ export function normalizeOrderBestRateDto(
   const rawHouseBadgeVisible = record.houseBadgeVisible ?? record.house_badge_visible ?? null;
   const houseBadgeVisible =
     rawHouseBadgeVisible == null ? (houseApplied === true ? true : null) : readBoolean(rawHouseBadgeVisible, `${path}.houseBadgeVisible`);
+  // PS-500: classify BEFORE any defaulting. `record` is the payload as received.
+  const verdict = classifyRateMoney(record);
+  const moneyVerdict = {
+    rateMoneyComplete: verdict.rateMoneyComplete,
+    rateMoneyUnavailableReason: verdict.rateMoneyUnavailableReason,
+    rateMoneyUnavailableMessage: verdict.rateMoneyUnavailableMessage,
+  };
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(
@@ -591,6 +611,11 @@ export function normalizeOrderBestRateDto(
       `${path}.serviceName`,
     ),
     packageType: readNullableString(record.packageType ?? record.package_type ?? null, `${path}.packageType`),
+    // PS-500: classified from the ORIGINAL record, before the defaulting above
+    // turned an absent shipmentCost/otherCost into 0. Reading the normalized
+    // values here would be circular — they can no longer say whether the
+    // backend supplied anything.
+    ...moneyVerdict,
     shipmentCost,
     otherCost,
     insuranceCost,

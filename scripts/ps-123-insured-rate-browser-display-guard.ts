@@ -120,7 +120,20 @@ check(
   // rate.insurance_amount, stamps otherCost); the modal seed now consumes the
   // backend-stamped otherCost alias verbatim instead of re-deriving component math.
   'Rate Browser saved-rate seed consumes the backend-stamped otherCost (insurance folded backend-side)',
-  modal.includes('const otherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost) ?? 0;') &&
+  // Repointed again (PS-500 — second guard-rot fix on this same line). It pinned
+  // the literal `... ?? toFiniteNumber(raw.otherCost) ?? 0;`. That trailing
+  // `?? 0` is precisely what PS-500 removes — an absent add-on is unknown, not
+  // zero — so the value pin blocked the fix, while the intent it exists to
+  // protect (consume the backend-stamped alias; never re-derive component math)
+  // is unchanged. Asserted as a property now, including that the default is gone.
+  (() => {
+    // Scoped to the seed body: rateRowDedupeKey legitimately keeps its own
+    // `?? 0` because it builds a grouping key, not a money claim.
+    const seedStart = modal.indexOf('function buildOrderBestRateSeed');
+    const seed = modal.slice(seedStart, modal.indexOf('\n}', seedStart));
+    return /const otherCost = toFiniteNumber\(bestRate\.otherCost\) \?\? toFiniteNumber\(raw\.otherCost\)/.test(seed)
+      && !/const otherCost[^\n]*\?\?\s*0\s*;/.test(seed);
+  })() &&
     purchaseAliases.includes('otherCost: money.otherCost,') &&
     purchaseAliases.includes('moneyObjectMaxAmount(rate.insurance_amount, raw.insurance_amount)'),
 );

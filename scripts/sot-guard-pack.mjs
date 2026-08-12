@@ -1320,6 +1320,16 @@ const REQUIRED_GUARDS = [
   // owned $0.00 as missing), and the unsafe Number() coercion. Hermetic —
   // rates-parity.ts imports nothing.
   'test:ps-498-rates-missing-money',
+  // PS-500 (2026-08-12). The Rate Browser seeded a SELECTABLE row from
+  // reconstructed money: absent add-ons became 0, a TOTAL (`amount`) was
+  // accepted as the shipment COMPONENT, and Math.max(0, amount - otherCost)
+  // clamped a contradiction into a plausible $0.00 — on a row that feeds
+  // Apply -> persisted best_rate_json -> Create Label, so an invented shipment
+  // cost could reach a real label. classifyRateMoney runs BEFORE any defaulting,
+  // so "the backend sent nothing" stays distinguishable from "the backend sent
+  // zero". Zero is field-specific: otherCost 0 is valid, shipmentCost 0 is not.
+  // Mutation-verified, all five caught.
+  'test:ps-500-rate-money-classifier',
 ];
 
 const npmCli = process.env.npm_execpath;

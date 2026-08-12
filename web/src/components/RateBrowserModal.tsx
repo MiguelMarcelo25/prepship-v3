@@ -628,6 +628,27 @@ export function getModalRateSourceLabel(
   return label ?? 'Unknown source';
 }
 
+/**
+ * PS-500: the backend-owned money verdict for a saved rate.
+ *
+ * Legacy rows persisted before the stamp carry no verdict. They are treated as
+ * INCOMPLETE rather than trusted, because the whole point is that a row whose
+ * money was never classified cannot be shown to be sound — and this seed feeds
+ * a purchasable path.
+ */
+function rateMoneyIsComplete(bestRate: unknown): boolean {
+  const record = (bestRate && typeof bestRate === 'object' ? bestRate : {}) as Record<string, unknown>;
+  return record.rateMoneyComplete === true;
+}
+
+/** The operator-facing reason, owned and worded by the backend. */
+export function savedRateUnavailableMessage(bestRate: unknown): string | null {
+  const record = (bestRate && typeof bestRate === 'object' ? bestRate : {}) as Record<string, unknown>;
+  if (record.rateMoneyComplete === true) return null;
+  const message = record.rateMoneyUnavailableMessage;
+  return typeof message === 'string' && message.trim() ? message : 'Saved rate unavailable — browse again';
+}
+
 function buildOrderBestRateSeed(
   order: RbOrderSummaryDto | null,
   shippingAccounts: RbCarrierAccountDto[]
@@ -638,18 +659,34 @@ function buildOrderBestRateSeed(
   const raw = (bestRate.raw && typeof bestRate.raw === 'object'
     ? bestRate.raw
     : bestRate) as Record<string, unknown>;
-  const rawAmount = toFiniteNumber(raw.amount);
+  // PS-500: the backend now classifies this rate's money BEFORE it defaults
+  // anything, and says so on the DTO. An incomplete saved rate must not become a
+  // seeded row, because a seeded row is SELECTABLE and feeds Apply → persisted
+  // best_rate_json → Create Label. An invented shipment cost here can reach a
+  // real label.
+  //
+  // This function no longer decides validity. It reads the verdict.
+  if (!rateMoneyIsComplete(bestRate)) return null;
+
   const amount =
     toFiniteNumber(bestRate.amount) ??
-    rawAmount ??
+    toFiniteNumber(raw.amount) ??
     toFiniteNumber(bestRate.totalCost) ??
     toFiniteNumber(raw.totalCost) ??
     toFiniteNumber(raw.total_cost);
-  const otherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost) ?? 0;
-  const shipmentCostAlias =
-    toFiniteNumber(bestRate.shipmentCost) ??
-    toFiniteNumber(raw.shipmentCost);
-  const shipmentCost = shipmentCostAlias ?? (amount != null ? Math.max(0, amount - otherCost) : null);
+  // Canonical only. The frontend no longer:
+  //   - defaults a missing otherCost to 0 (absent add-ons are not zero),
+  //   - accepts `amount` — a TOTAL — as the shipment COMPONENT,
+  //   - reconstructs `amount - otherCost`,
+  //   - clamps a contradiction to $0.00 with Math.max.
+  // The classifier guarantees both fields are present and sane by this point.
+  const otherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost);
+  const shipmentCost = toFiniteNumber(bestRate.shipmentCost) ?? toFiniteNumber(raw.shipmentCost);
+  // Unreachable when the backend verdict is honest: rateMoneyComplete already
+  // proved both fields present. Narrowed explicitly rather than asserted with
+  // `!`, so a future DTO change that breaks that promise degrades to "no seed"
+  // instead of putting a null through as money.
+  if (shipmentCost == null || otherCost == null) return null;
   const cShippingRateAmount =
     toFiniteNumber(bestRate.cShippingRateAmount) ??
     toFiniteNumber(raw.cShippingRateAmount);
@@ -953,6 +990,11 @@ export default function RateBrowserModal({
   const [rateErrorsByPid, setRateErrorsByPid] = useState<Record<string, string>>({});
   const [carrierStatusByPid, setCarrierStatusByPid] = useState<Record<string, CarrierRateStatus>>({});
   const [rateBrowseInfo, setRateBrowseInfo] = useState<RateBrowseInfo>({ source: null });
+  // PS-500: the backend-owned reason a saved rate could not be seeded. Shown
+  // instead of silently opening with no rate — the operator needs to know the
+  // saved rate was rejected, not assume it was never there. Wording is the
+  // backend's; this only renders it.
+  const [savedRateNotice, setSavedRateNotice] = useState<string | null>(null);
   const [carrierTimingByPid, setCarrierTimingByPid] = useState<Record<string, number>>({});
   const [rateBrowserTiming, setRateBrowserTiming] = useState<RateBrowserTimingDiagnostics | null>(null);
   const [rateBrowserFailure, setRateBrowserFailure] = useState<RateBrowserFailureDiagnostic | null>(null);
@@ -1117,6 +1159,7 @@ export default function RateBrowserModal({
     setViewMode('all');
     canonicalBestRef.current = null;
     const seededBestRate = buildOrderBestRateSeed(order, rateShippingAccounts);
+    setSavedRateNotice(seededBestRate ? null : savedRateUnavailableMessage(order?.bestRate));
     setSelectedPid(
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
@@ -1353,6 +1396,7 @@ export default function RateBrowserModal({
     setBrowsing(true);
     if (options.forceLive !== true) resetRateBrowseWorkflow();
     const seededBestRate = buildOrderBestRateSeed(order, rateShippingAccounts);
+    setSavedRateNotice(seededBestRate ? null : savedRateUnavailableMessage(order?.bestRate));
     const seededPid =
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
@@ -2714,6 +2758,19 @@ export default function RateBrowserModal({
           <div
             className="flex min-w-0 flex-1 flex-col bg-surface"
           >
+            {/* PS-500: the saved rate was rejected because its money was
+                incomplete. Say so — opening with an empty list and no
+                explanation reads as "no rate was ever saved", which is a
+                different and misleading fact. Backend-owned wording. */}
+            {savedRateNotice ? (
+              <div
+                data-rate-browser="savedRateUnavailable"
+                className="shrink-0 border-b border-amber-200 bg-amber-50 px-[18px] py-2 text-[11.5px] font-semibold text-amber-900"
+              >
+                {savedRateNotice}
+              </div>
+            ) : null}
+
             {/* Rates top bar */}
             <div
               className="flex shrink-0 items-center gap-2.5 border-b border-line bg-surface-2 px-[18px] py-2.5"
