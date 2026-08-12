@@ -957,7 +957,8 @@
     "test:ps-487-return-date-route": "tsx scripts/ps-487-return-date-route-guard.ts",
     "test:ps-488-billing-row-reference": "tsx scripts/ps-488-billing-row-reference-guard.ts",
     "test:ps-488-invoice-reconcile": "tsx scripts/ps-488-invoice-reconcile-guard.ts",
-    "test:ps-466-execution-pause": "tsx scripts/ps-466-execution-pause-guard.ts"
+    "test:ps-466-execution-pause": "tsx scripts/ps-466-execution-pause-guard.ts",
+    "inventory:ps-506-plan": "tsx scripts/ps-506-reconcile-stranded-deductions.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
