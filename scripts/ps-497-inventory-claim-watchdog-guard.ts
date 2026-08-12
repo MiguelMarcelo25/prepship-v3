@@ -14,7 +14,9 @@
 // real predicate rather than a copy, so the two cannot drift apart.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // The watchdog reads its config from the environment at MODULE LOAD, so the secret must exist
 // before the module is evaluated. Static imports are hoisted above statements, so this uses a
@@ -24,7 +26,9 @@ process.env.WATCHDOG_CRON_SECRET ||= 'guard-only-not-a-real-secret';
 const {
   checkInventoryClaimAlarm,
   hasRestartEligibleFailure,
+  readState,
   summarizeHealth,
+  writeState,
 } = await import('./production-watchdog.mjs');
 
 let failures = 0;
@@ -270,6 +274,45 @@ await acheck('reported details carry stable reason codes and no free prose', asy
       'an advance that is never written back replays the same days forever');
     assert.match(src, /inventoryClaimAlarm:\s*\r?\n?\s*parsed\.inventoryClaimAlarm/,
       'readState rebuilds a fixed shape, so an unlisted key is silently dropped on every run');
+  });
+  // PS-497: the assertion above reads SOURCE, and this repo has already been bitten once by a
+  // guard that could be satisfied without the behaviour holding. The immediate-finding ledger
+  // is nested inside `inventoryClaimAlarm`, so it survives only because that key is passed
+  // through wholesale. Prove it by actually writing and re-reading a state file: if someone
+  // later rebuilds the alarm state field-by-field, the ledger dies and the watchdog silently
+  // returns to paging every hour — green tests, dead alarm.
+  check('the immediate-finding ledger survives a real state-file round trip', () => {
+    const statePath = join(
+      mkdtempSync(join(tmpdir(), 'ps505-watchdog-state-')),
+      'production-watchdog-state.json',
+    );
+    const advanced = {
+      version: 1,
+      perSource: { shipment_sync: { ewma: 0.25, lastProcessedWindowKey: '2026-08-11' } },
+      immediate: {
+        'inventory_claim.fixed_regression.shipment_sync': {
+          firstSeenMs: 1_760_000_000_000,
+          lastPagedMs: 1_760_000_000_000,
+          occurrences: 7,
+        },
+      },
+      lastCountMilestone: 3000,
+    };
+
+    writeState(statePath, { consecutiveFailures: 4, inventoryClaimAlarm: advanced });
+    const reloaded = readState(statePath);
+
+    assert.deepEqual(
+      reloaded.inventoryClaimAlarm, advanced,
+      'the detector state must survive the file verbatim, ledger and all',
+    );
+    assert.equal(
+      reloaded.inventoryClaimAlarm.immediate[
+        'inventory_claim.fixed_regression.shipment_sync'
+      ].occurrences,
+      7,
+      'a dropped ledger re-pages every known finding on every hourly run',
+    );
   });
   check('the check declares itself restart-ineligible on every return path', () => {
     const start = src.indexOf('export async function checkInventoryClaimAlarm');
