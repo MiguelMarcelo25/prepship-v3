@@ -169,6 +169,92 @@ check('outbound and return stay SEPARATE rows and no fee hides behind #1234', ()
 });
 
 
+// ── AC-1: the identity fields reach the DTO from the QUERY, not from a fixture ──
+check('billingDetails selects the relational return identity it classifies on', () => {
+  // Every behavioural check in this file hand-builds its input rows, so all of them
+  // would still pass if the production query never selected returnId/returnReference —
+  // the classifier would receive undefined for both, and EVERY return would render as
+  // an Outbound row carrying the outbound order's number. The fixtures cannot see that;
+  // this is the only offline assertion that can.
+  //
+  // Scoped to the billingDetails BODY. A file-wide match is satisfied by the return-plan
+  // builder ~800 lines earlier, which selects `returnReference: returns.returnReference`
+  // for its own purposes — deleting the select from the detail query still passed.
+  const service = stripGuardComments(readFileSync('src/services/billing.ts', 'utf8'));
+  const start = service.indexOf('export async function billingDetails(');
+  assert.ok(start >= 0, 'billingDetails not found — re-anchor this guard');
+  const after = service.slice(start + 1);
+  const end = after.search(/^export (?:async )?function /m);
+  const details = end >= 0 ? after.slice(0, end) : after;
+
+  assert.ok(/returnId:\s*billingLineItems\.returnId/.test(details),
+    'the detail query must select billing_line_items.return_id');
+  assert.ok(/returnReference:\s*returns\.returnReference/.test(details),
+    'the detail query must select the STORED reference from returns');
+  // returnReference lives on `returns`, so selecting it requires the join. Asserted on
+  // the primary key: joining on anything non-unique would fan the row set out and
+  // silently multiply every order's money.
+  assert.ok(/leftJoin\(\s*returns\s*,\s*eq\(\s*billingLineItems\.returnId\s*,\s*returns\.id\s*\)\s*\)/.test(details),
+    'returns must be joined on its primary key, or the join fans out billing money');
+});
+
+
+// ── AC-6: the UI reads the canonical NAMES the DTO actually emits ────────────
+check('the field names the UI reads exist on a real DTO row', () => {
+  // BillingDetailDto on the web side is `BillingAnyRecord` — an index signature. tsc
+  // therefore accepts row.displayRefrence and renders undefined forever. The expected
+  // names are read off LIVE SOT output rather than hardcoded, so this check tracks a
+  // rename of the field instead of pinning a string that could drift out of the DTO.
+  const [returnRow] = toBillingDetailOrderRows([
+    { ...base, returnId: 7, returnReference: '1234-RETURN' },
+  ]);
+  for (const field of ['displayReference', 'rowType', 'grandTotal', 'returnId'] as const) {
+    assert.ok(field in returnRow, `${field} is not on the DTO — the UI reads a name that does not exist`);
+  }
+  // Each assertion below is anchored to ITS OWN call site. A file-wide /row\.displayReference/
+  // is satisfied by any one of the three sites, so deleting the reference from the rendered
+  // cell still passed while the sort comparator kept the name alive. Mutation-checked: each
+  // of these six sites, broken individually, now fails this guard.
+  const table = stripGuardComments(readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8'));
+  const invoice = stripGuardComments(readFileSync('web/src/pages/Invoice.tsx', 'utf8'));
+
+  assert.ok(/\{row\.displayReference \|\| row\.orderNumber\}/.test(table),
+    'the rendered Order # cell must show the backend reference');
+  assert.ok(/case 'orderNumber': return row\.displayReference \|\|/.test(table),
+    'the Order # sort must order on the backend reference, or a Return sorts under the outbound number');
+  assert.ok(/`return:\$\{row\.returnId\}`/.test(table),
+    'the table row key must be the relational return id');
+
+  assert.ok(/\{l\.displayReference \?\? l\.orderNumber \?\? l\.orderId \?\? '—'\}/.test(invoice),
+    'the invoice Order # cell must show the backend reference');
+  assert.ok(/case 'order':\s*return line\.displayReference \?\?/.test(invoice),
+    'the invoice Order # sort must order on the backend reference');
+  assert.ok(/`return:\$\{line\.returnId\}`/.test(invoice),
+    'the invoice row key must be the relational return id');
+});
+
+check('the invoice page reads aggregate money, not the stamped component field', () => {
+  // toBillingDetailOrderRows stamps totalCost to a literal 0 on the aggregate and puts
+  // the real money in grandTotal, so a row rendered from totalCost is $0.00 for every
+  // line of every invoice. Pinned because the page still LOOKS correct: the summary
+  // block above the table is fed by a different query and shows the true totals.
+  const [row] = toBillingDetailOrderRows([{ ...base, totalCost: '2.50' }]);
+  assert.equal(row.totalCost, 0, 'the aggregate must keep stamping the component field to 0');
+  assert.equal(row.grandTotal, 2.5, 'the aggregate money must be on grandTotal');
+
+  const invoice = stripGuardComments(readFileSync('web/src/pages/Invoice.tsx', 'utf8'));
+  assert.ok(/fmtMoney\(invoiceRowTotal\(l\)\)/.test(invoice),
+    'the Amount cell must read the aggregate total');
+  assert.ok(!/fmtMoney\(l\.totalCost\)/.test(invoice),
+    'the Amount cell must not read the stamped component field');
+  // lineType is stamped to the constant 'billing_order' by the same aggregation, so a
+  // Type column reading it says "billing order" on every row.
+  assert.equal(row.lineType, 'billing_order');
+  assert.ok(!/\{l\.lineType\.replace/.test(invoice),
+    'the Type column must not render the stamped lineType as its primary value');
+});
+
+
 // ── AC-6: the four Billing columns render, and derive nothing ────────────────
 check('the four AC-6 columns exist in the registry and are visible by default', () => {
   const parity = readFileSync('web/src/components/Views/billing-parity.ts', 'utf8');

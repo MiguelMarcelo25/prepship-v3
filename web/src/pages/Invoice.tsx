@@ -36,6 +36,16 @@ type LineItem = {
   qty: string;
   unitCost: string;
   totalCost: string;
+  // PS-488 M3 — the canonical fields /billing/details already emits. This page was
+  // typed against the RAW line-item shape it was written for years ago, so it read
+  // lineType (always 'billing_order' after aggregation) and totalCost (always 0 on an
+  // aggregate, because the money lives in grandTotal). The columns were therefore
+  // structurally wrong for EVERY row, not only returns; returns simply made it visible.
+  displayReference?: string | null;
+  rowType?: 'Outbound' | 'Return';
+  grandTotal?: number;
+  returnId?: number | null;
+  displayQty?: string;
 };
 
 type Client = {
@@ -70,6 +80,35 @@ type InvoiceLineSortKey =
 function fmtMoney(s: string | number) {
   const n = Number(s);
   return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—';
+}
+
+/**
+ * PS-488 M3 — the money for a /billing/details row.
+ *
+ * These rows are AGGREGATES: toBillingDetailOrderRows collapses every component line
+ * of a business row into one row and puts the summed money in `grandTotal`, stamping
+ * the component field `totalCost` to a literal 0. This page read `totalCost`, so the
+ * per-line Amount column rendered $0.00 for every row while the summary block above
+ * it (fed by billingInvoiceHeaderTotals) showed the real money. grandTotal is the
+ * only correct source; totalCost survives solely as a fallback for any caller still
+ * handing this component a pre-aggregation row.
+ */
+function invoiceRowTotal(line: LineItem): number {
+  const grand = Number(line.grandTotal);
+  if (Number.isFinite(grand)) return grand;
+  const legacy = Number(line.totalCost);
+  return Number.isFinite(legacy) ? legacy : 0;
+}
+
+/**
+ * PS-488 M3 — a stable React/sort key.
+ *
+ * `id` belongs to one COMPONENT line of the aggregate, so it is not a durable identity
+ * for the business row. A Return keys on its relational returnId: two returns raised on
+ * one order share an orderId and an orderNumber and would otherwise collide.
+ */
+function invoiceRowKey(line: LineItem): string | number {
+  return line.returnId != null ? `return:${line.returnId}` : line.id;
 }
 
 function startOfMonthIso(d = new Date()) {
@@ -123,7 +162,13 @@ export default function Invoice() {
         clientId: Number.isFinite(clientId) ? clientId : undefined,
         dateFrom: fromDateInputStart(dateFrom),
         dateTo: fromDateInputEnd(dateTo),
-        limit: 2000,
+        // PS-488 M3 — `limit` removed. GET /billing/details never forwarded it to
+        // billingDetails() (the handler passes only clientId/dateFrom/dateTo), so it
+        // capped nothing; it only forked this page's React Query cache key away from
+        // every other consumer of the same range. Dropping it removes a parameter that
+        // read as a safety bound while providing none. A real cap has to be enforced
+        // server-side, and would have to be applied AFTER aggregation or it would
+        // truncate a business row mid-collapse.
       }),
     [clientId, dateFrom, dateTo]
   );
@@ -152,6 +197,13 @@ export default function Invoice() {
       (row) => row.type
     );
   }, [summarySort, totals]);
+  const rowCounts = useMemo(
+    () => ({
+      total: lines.length,
+      returns: lines.filter((line) => line.rowType === 'Return').length,
+    }),
+    [lines]
+  );
   const sortedLines = useMemo(
     () =>
       sortRows(
@@ -162,9 +214,9 @@ export default function Invoice() {
             case 'date':
               return line.billingEffectiveDate ?? line.shipDate;
             case 'order':
-              return line.orderNumber ?? line.orderId;
+              return line.displayReference ?? line.orderNumber ?? line.orderId;
             case 'type':
-              return line.lineType;
+              return line.rowType ?? line.lineType;
             case 'description':
               return line.description;
             case 'qty':
@@ -172,12 +224,12 @@ export default function Invoice() {
             case 'unit':
               return Number(line.unitCost);
             case 'total':
-              return Number(line.totalCost);
+              return invoiceRowTotal(line);
             default:
               return '';
           }
         },
-        (line) => line.id
+        invoiceRowKey
       ),
     [lineSort, lines]
   );
@@ -277,7 +329,17 @@ export default function Invoice() {
                     {dateFrom} → {dateTo}
                   </div>
                   <div className="text-tiny text-ink-3 mt-2">
-                    {lines.length} line item{lines.length === 1 ? '' : 's'}
+                    {/* PS-488 M3 — these are aggregated BUSINESS ROWS, not raw line
+                        items: a shipment charging pick&pack + package + shipping is one
+                        row here and three rows in billing_line_items. Calling the count
+                        "line items" understated the real line count and, once returns
+                        became their own rows, made an invoice look like it had grown
+                        extra fee lines. Returns are called out separately because they
+                        are the rows an operator most needs to be able to find. */}
+                    {rowCounts.total} billing row{rowCounts.total === 1 ? '' : 's'}
+                    {rowCounts.returns > 0
+                      ? ` · ${rowCounts.returns} return${rowCounts.returns === 1 ? '' : 's'}`
+                      : ''}
                   </div>
                 </div>
               </div>
@@ -354,7 +416,7 @@ export default function Invoice() {
                     </tr>
                   )}
                   {sortedLines.map((l) => (
-                    <tr key={l.id} className="border-b border-line">
+                    <tr key={invoiceRowKey(l)} className="border-b border-line">
                       <td className="py-1 text-ink-2 whitespace-nowrap">
                         {l.rolledFromWeekend ? (
                           <span className="flex flex-col leading-tight">
@@ -364,10 +426,16 @@ export default function Invoice() {
                         ) : formatBillingShipDate(l.billingEffectiveDate ?? l.shipDate)}
                       </td>
                       <td className="py-1 font-mono text-brand">
-                        {l.orderNumber ?? l.orderId ?? '—'}
+                        {/* PS-488 M3 — the backend's persisted reference. orderId was
+                            never a customer-facing number and is now the last resort. */}
+                        {l.displayReference ?? l.orderNumber ?? l.orderId ?? '—'}
                       </td>
                       <td className="py-1 text-ink-2 capitalize">
-                        {l.lineType.replace(/_/g, ' ')}
+                        {/* PS-488 M3 — rowType ('Outbound' / 'Return') is the real kind of
+                            this row. lineType is stamped to the constant 'billing_order'
+                            by the aggregator, so this column previously read
+                            "billing order" on every line of every invoice. */}
+                        {l.rowType ?? l.lineType.replace(/_/g, ' ')}
                       </td>
                       <td className="py-1 text-ink truncate max-w-[300px]">
                         {l.description}
@@ -377,7 +445,7 @@ export default function Invoice() {
                         {fmtMoney(l.unitCost)}
                       </td>
                       <td className="py-1 text-right font-mono font-semibold">
-                        {fmtMoney(l.totalCost)}
+                        {fmtMoney(invoiceRowTotal(l))}
                       </td>
                     </tr>
                   ))}

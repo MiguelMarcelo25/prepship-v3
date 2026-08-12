@@ -65,7 +65,11 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
   const metrics = computeBillingDetailMetrics(row)
   switch (key) {
     case 'actions': return ''
-    case 'orderNumber': return row.orderNumber || row.orderId
+    // PS-488 M3: sort on the backend's displayReference so a Return sorts under its own
+    // identity (#1234-RETURN, #1234-RETURN-2) rather than the outbound order number it
+    // shares with the shipment row. orderNumber/orderId remain the fallback for rows
+    // with no reference; orderId stays navigation-only and is never visible identity.
+    case 'orderNumber': return row.displayReference || row.orderNumber || row.orderId
     case 'billingStatus': return row.billingStatusLabel || row.billingLifecycleStatus || ''
     case 'shipDate': return billingShipDateSortValue(row.billingEffectiveDate ?? row.shipDate)
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
@@ -395,7 +399,12 @@ export function BillingDetailTable({
                         onClick={(e) => { e.stopPropagation(); onOpenOrderDetail(row.orderId as number) }}
                         style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
                       >
-                        {row.orderNumber}
+                        {/* PS-488 M3: the backend owns visible identity. A Return row
+                            shows its persisted reference (#1234-RETURN); the outbound
+                            row shows its order number. The click target still opens the
+                            related order — navigation by orderId, identity by
+                            displayReference. No suffix is assembled here. */}
+                        {row.displayReference || row.orderNumber}
                       </button>
                       {row.destinationIsInternational === true ? (
                         <span
@@ -689,7 +698,14 @@ export function BillingDetailTable({
           defaultHidden,
         } satisfies TableColumn<BillingDetailDto>
       })}
-      rowKey={(row) => row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? 'row'}`}
+      rowKey={(row) => (
+        // PS-488 M3: a Return row keys on its relational returnId, so two returns on one
+        // order get stable distinct keys that depend on neither orderNumber (which they
+        // share with the outbound row) nor on which component line the aggregate kept.
+        row.returnId != null
+          ? `return:${row.returnId}`
+          : row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? 'row'}`
+      )}
       storageKey="billing-detail-table-v3-newest-first"
       defaultSort={{ key: 'shipDate', direction: 'desc' }}
       paginated
