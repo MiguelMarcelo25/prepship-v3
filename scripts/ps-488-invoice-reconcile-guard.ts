@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { reconcileInvoiceRows } from '../src/routes/billing-invoice-reconcile';
 import { toBillingDetailOrderRows } from '../src/services/billing-detail-row-sot';
+import { renderInvoiceCsv, INVOICE_CSV_HEADERS } from '../src/routes/billing-invoice-csv';
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
@@ -139,6 +140,80 @@ check('the reconciler performs no I/O', () => {
   for (const forbidden of ['db.select', 'billingDetails(', 'await ', 'sql`', 'fetch(']) {
     assert.ok(!src.includes(forbidden), `the reconciler must not contain ${forbidden}`);
   }
+});
+
+
+// ── PS-488 M3: the projection is WIRED, and its output actually renders ──────
+//
+// Everything above ran against camelCase fixtures. billingInvoiceData produces snake_case
+// rows straight out of SQL, and every invoice renderer addresses columns by snake_case
+// name — so all of the above could pass while the live invoice matched nothing and
+// rendered appended returns as blank lines. These checks use the PRODUCTION row shape and
+// finish in the real CSV serializer.
+
+/** The snake_case shape billingInvoiceData actually passes in. */
+const SQL_OUTBOUND = [
+  {
+    order_id: 4242, order_number: '1234', shipment_id: 501, return_id: null,
+    ship_date: '2026-05-05', billing_effective_date: '2026-05-05',
+    base_qty: '1', addl_qty: '0', pickpack_amt: '2.50', additional_amt: '0',
+    shipping_amt: '0', storage_amt: '0', package_cost_amt: '0',
+    return_postage_amt: '0', return_processing_amt: '0', row_total: '2.50',
+    billing_status_label: 'Fulfilled', skus: null, box_label: 'S', box_review: false,
+    fee_waived: false, destination: 'International', order_number_label: '1234',
+  },
+];
+
+check('the reconciler matches on order_id, the column the invoice actually has', () => {
+  const rows = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: CANONICAL });
+  const outbound = rows.find((r) => r.rowType === 'Outbound')!;
+  assert.equal(outbound.displayReference, '#1234',
+    'a snake_case invoice row must still match its canonical counterpart');
+});
+
+check('a canonical MISS never erases a value the invoice already had', () => {
+  // The stamp used to be `canonical?.destination ?? undefined`, so an order with no
+  // canonical counterpart lost a destination the invoice had classified correctly.
+  const rows = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: [] });
+  assert.equal(rows[0]!.destination, 'International', 'a lookup gap must not blank a shipped cell');
+});
+
+check('an appended return row RENDERS — it is not a blank line', () => {
+  const rows = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: CANONICAL });
+  const ret = rows.find((r) => r.rowType === 'Return')! as Record<string, unknown>;
+
+  // The snake_case set the three exports address by name.
+  assert.equal(ret.order_id, 4242);
+  assert.equal(ret.return_id, 7);
+  assert.equal(ret.shipment_id, null, 'a return has no shipment');
+  assert.equal(ret.row_total, '10.73');
+  assert.equal(ret.return_postage_amt, '7.73');
+  assert.equal(ret.return_processing_amt, '3');
+  assert.equal(ret.order_number_label, '#1234-RETURN', 'the STORED reference, not a minted suffix');
+  for (const outboundBucket of ['pickpack_amt', 'additional_amt', 'shipping_amt', 'storage_amt', 'package_cost_amt']) {
+    assert.equal(ret[outboundBucket], '0', `${outboundBucket} must stay empty on a return row`);
+  }
+
+  // End to end through the real serializer: this is what an operator downloads.
+  const csv = renderInvoiceCsv(rows as never).split('\r\n');
+  const cell = (line: string, header: string) => line.split(',')[INVOICE_CSV_HEADERS.indexOf(header as never)];
+  const returnLine = csv.find((l) => l.includes('#1234-RETURN'))!;
+  assert.ok(returnLine, 'the return row must reach the CSV at all');
+  assert.equal(cell(returnLine, 'Total'), '10.73');
+  assert.equal(cell(returnLine, 'Return Postage'), '7.73');
+  assert.equal(cell(returnLine, 'Return Processing'), '3');
+  assert.equal(cell(returnLine, 'Shipping'), '0', 'return postage must not surface as Shipping');
+});
+
+check('return money appears exactly once in the RENDERED invoice', () => {
+  // The whole-invoice property, asserted on the serialized document rather than the
+  // in-memory rows: if the caller ever stops filtering return_id-bearing SQL rows, the
+  // same money ships twice and the invoice silently overcharges.
+  const rows = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: CANONICAL });
+  const csv = renderInvoiceCsv(rows as never).split('\r\n').slice(1).filter(Boolean);
+  const idx = INVOICE_CSV_HEADERS.indexOf('Return Postage' as never);
+  const totalPostage = csv.reduce((sum, line) => sum + Number(line.split(',')[idx] || 0), 0);
+  assert.equal(totalPostage, 7.73, 'return postage must total 7.73 across the document, not a multiple');
 });
 
 if (failures > 0) {

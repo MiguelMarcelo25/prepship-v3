@@ -303,18 +303,33 @@ check('the invoice xlsx carries Return Postage and Return Processing', () => {
     'the export aggregate must accept both return-processing spellings');
 });
 
-check('the export is STILL a second read path — this is a stopgap, not AC-6', () => {
-  // Deliberately asserts the DEFECT, so it cannot be quietly forgotten. AC-6 requires
-  // the invoice to reconcile from the canonical DTO; today it runs its own query, so
-  // the table and the invoice are two independent derivations of the same money that
-  // merely agree. When the export is routed through toBillingDetailOrderRows this
-  // check flips and must be rewritten — that is the signal AC-6 is actually done.
-  const billing = readFileSync('src/routes/billing.ts', 'utf8');
-  const usesCanonicalDto = /toBillingDetailOrderRows/.test(billing);
-  assert.equal(usesCanonicalDto, false,
-    'export now uses the canonical DTO — remove this stopgap assertion and close AC-6');
-  assert.ok(/PS-488 AC-6 STOPGAP/.test(billing),
-    'the stopgap must stay labelled in the code it applies to');
+check('AC-6 CLOSED: the invoice reconciles from the canonical DTO', () => {
+  // This assertion used to be INVERTED — it asserted the defect (`usesCanonicalDto ===
+  // false`) so a stopgap could not be quietly forgotten, and said in its own message that
+  // it must be rewritten once the export was routed through the canonical owner. M3 did
+  // that, so it is rewritten here in the direction it was always meant to end up.
+  const billing = stripGuardComments(readFileSync('src/routes/billing.ts', 'utf8'));
+  const start = billing.indexOf('async function billingInvoiceData(');
+  assert.ok(start >= 0, 'billingInvoiceData not found — re-anchor this guard');
+  const after = billing.slice(start + 1);
+  const end = after.search(/^(?:export )?(?:async )?function /m);
+  const invoiceData = end >= 0 ? after.slice(0, end) : after;
+
+  assert.ok(/await billingDetails\(/.test(invoiceData),
+    'the invoice builder must read the canonical DTO, not only its own aggregate');
+  assert.ok(/reconcileInvoiceRows\(/.test(invoiceData),
+    'the invoice builder must reconcile through the shared projection');
+  // The complementary predicates are what make "exactly one producer per return" true.
+  // Without the filter the SQL return rows and the appended canonical rows both ship and
+  // every return is billed twice on the invoice — the single worst outcome this ticket
+  // could produce, and invisible in any assertion that only checks a total is non-zero.
+  assert.ok(/outbound:\s*details\.filter\(\(row\) => row\.return_id == null\)/.test(invoiceData),
+    'return-bearing SQL rows must be dropped, or returns are double-counted');
+  assert.ok(/canonical:\s*canonicalRows/.test(invoiceData));
+  // The stopgap label must be gone from the code it applied to, so the next reader is not
+  // told the export is still a second read path.
+  assert.ok(!/PS-488 AC-6 STOPGAP/.test(billing),
+    'the stopgap label must be removed now that the cutover has happened');
 });
 if (failures > 0) {
   console.error(`\nFAIL PS-488 billing row reference guard (${failures} failing)`);

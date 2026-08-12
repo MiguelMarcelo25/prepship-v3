@@ -45,6 +45,9 @@ import {
   type BillingDestination,
 } from '../services/billing-destination-international';
 import { isBillingReturnLineType } from '../services/billing-row-status';
+// PS-488 AC-6: the invoice's reconciliation projection. Pure — it fetches nothing; both
+// of its inputs are supplied by billingInvoiceData.
+import { reconcileInvoiceRows } from './billing-invoice-reconcile';
 import {
   duplicateOrderStatusLabel,
   isNonBillableDuplicate,
@@ -2502,10 +2505,43 @@ async function billingInvoiceData(
     };
   });
 
+  // ── PS-488 AC-6: the canonical DTO becomes the owner of return rows ──────────
+  //
+  // Until now the invoice ran its own aggregate and the Billing table ran
+  // toBillingDetailOrderRows, so the two were independent derivations of the same money
+  // that merely agreed. Return rows now come from the canonical owner; outbound rows keep
+  // the frozen SHIPMENT grain this query owns and are only STAMPED from it.
+  //
+  // Exactly one producer per return, by complementary predicates:
+  //   * a canonical Return row exists iff return_id is non-null (billingRowIdentity
+  //     classifies on the relational column, never on reference text);
+  //   * this SQL's return-only groups are exactly the rows with return_id non-null,
+  //     since return lines are the only lines that carry it.
+  // So dropping return_id-bearing SQL rows and appending canonical Return rows can
+  // neither double-count nor drop.
+  //
+  // KNOWN GAP, deliberately left visible: return lines written by the Client Portal carry
+  // return_id NULL (CP-059). Those are not canonical Return rows and are not dropped here
+  // — they continue to flow through the SQL path exactly as before, which is why this
+  // change moves no money for them. Closing that gap is CP-059's job, not this one's.
+  const canonicalRows = await billingDetails({
+    clientId,
+    dateFrom,
+    dateTo,
+    scopeClientIds: invoiceScope.clientIds,
+    scopeStoreIds: invoiceScope.storeIds,
+    scopeIsGlobal: invoiceScope.isGlobal,
+    scopeRestricted: invoiceScope.isRestricted,
+  });
+  const reconciled = reconcileInvoiceRows({
+    outbound: details.filter((row) => row.return_id == null),
+    canonical: canonicalRows,
+  }) as unknown as InvoiceDetailRow[];
+
   return {
     clientName: clientRow[0]!.name,
     totals,
-    details,
+    details: reconciled,
   };
 }
 
@@ -2777,13 +2813,19 @@ export async function renderInvoiceXlsx(args: {
     { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
     { header: 'Total', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
     { header: 'Shipment #', key: 'shipmentId', width: 14 },
-    // PS-488 AC-6 STOPGAP — appended LAST on purpose. ps-425 pins invoice cells by
-    // POSITION, so inserting anywhere earlier shifts what existing assertions read.
-    // These reconcile with the Billing table's columns but are computed by THIS query
-    // rather than the canonical DTO: the invoice builder still has its own read path.
-    // Type is absent because this export groups by ORDER and has no row-type concept —
-    // that still needs the DTO cutover. (PS-490 since added Destination, which does not:
-    // it is a property of the order, not of a row type.)
+    // PS-488 AC-6 — appended LAST on purpose. ps-425 pins invoice cells by POSITION, so
+    // inserting anywhere earlier shifts what existing assertions read.
+    //
+    // No longer a stopgap. These were computed by THIS query while the invoice was still
+    // a second, independent read path; as of M3 return rows are produced by the canonical
+    // DTO and appended by reconcileInvoiceRows, so these two columns now carry the same
+    // owner's numbers the Billing table shows rather than a parallel derivation that
+    // merely agreed. The remaining per-order aggregate stays for OUTBOUND rows, where it
+    // owns the frozen shipment grain the DTO does not model.
+    //
+    // Type is still absent from this sheet: the row-type concept now exists (returns are
+    // their own rows), but adding a column is a visible layout change, not a correctness
+    // one, and this ticket is not authorised to redesign the invoice.
     { header: 'Return Postage', key: 'returnPostage', width: 14, style: { numFmt: NUMBER_FMT } },
     { header: 'Return Processing', key: 'returnProcessing', width: 16, style: { numFmt: NUMBER_FMT } },
     // PS-490: appended LAST for the same position-pinning reason as the AC-6 columns

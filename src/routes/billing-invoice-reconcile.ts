@@ -37,6 +37,21 @@ function orderKey(value: unknown): string | null {
   return String(value);
 }
 
+/**
+ * PS-488 M3 — the order id of an invoice row, under EITHER spelling.
+ *
+ * This module was written against `orderId`, but billingInvoiceData produces snake_case
+ * `order_id` rows straight out of SQL. Wired as originally written, every lookup missed:
+ * the reconciler would have run, matched nothing, and stamped `destination: undefined`
+ * and `displayReference: null` onto every outbound row on the invoice — silently, since
+ * a miss is indistinguishable from an order with no canonical counterpart.
+ *
+ * snake_case is checked FIRST because that is the shape the production caller passes.
+ */
+function outboundOrderKey(row: InvoiceOutboundRow): string | null {
+  return orderKey(row.order_id ?? row.orderId);
+}
+
 function num(value: unknown): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -68,13 +83,21 @@ export function reconcileInvoiceRows(input: {
   }
 
   const stamped: ReconciledInvoiceRow[] = input.outbound.map((row) => {
-    const key = orderKey(row.orderId);
+    const key = outboundOrderKey(row);
     const canonical = key ? canonicalByOrder.get(key) : undefined;
     return {
       ...row,
       rowType: 'Outbound',
-      destination: (canonical?.destination as string | undefined) ?? undefined,
-      displayReference: (canonical?.displayReference as string | null | undefined) ?? null,
+      // PS-488 M3 — fall back to the row's OWN value when the canonical lookup misses.
+      // Written as `canonical?.destination ?? undefined`, a miss actively erased a
+      // destination the invoice had already classified correctly, turning a lookup gap
+      // into a blank cell on a shipped invoice. The canonical row still wins when present;
+      // it just may no longer destroy on absence.
+      destination: (canonical?.destination as string | undefined) ?? (row.destination as string | undefined),
+      displayReference:
+        (canonical?.displayReference as string | null | undefined)
+        ?? (row.display_reference as string | null | undefined)
+        ?? null,
       // Return money is NEVER carried on an outbound row. Explicit zeros rather than
       // undefined, so a future reader cannot mistake "absent" for "not yet computed".
       returnPostage: 0,
@@ -98,6 +121,51 @@ export function reconcileInvoiceRows(input: {
       orderId: row.orderId as number | string | null,
       orderNumber: row.orderNumber,
       rowType: 'Return',
+      // ── PS-488 M3: the InvoiceDetailRow shape the three exports actually render ──
+      //
+      // The camelCase fields below were the module's original output. Every invoice
+      // renderer (HTML, XLSX, CSV) addresses rows by snake_case column name, so an
+      // appended row rendered as a blank line across every column — present in the row
+      // count, invisible in the money. Both spellings are emitted: the snake_case set is
+      // what ships, the camelCase set is what this module's behavioural guard asserts on,
+      // and they are written from the SAME canonical values so they cannot drift.
+      order_id: row.orderId as number | null,
+      order_number: row.orderNumber as string | null,
+      // A return has no shipment. The exports render this as "External".
+      shipment_id: null,
+      return_id: (row.returnId ?? null) as number | null,
+      ship_date: (row.shipDate ?? null) as string | null,
+      billing_effective_date: (row.billingEffectiveDate ?? null) as string | null,
+      billing_policy_version: null,
+      billing_adjustment_id: null,
+      source_finalization_id: null,
+      adjustment_description: null,
+      base_qty: '0',
+      addl_qty: '0',
+      // Outbound money buckets stay at zero so no return charge can be read as an
+      // outbound one, and so the outbound column totals across the invoice are unchanged
+      // by the presence of returns.
+      pickpack_amt: '0',
+      additional_amt: '0',
+      shipping_amt: '0',
+      storage_amt: '0',
+      package_cost_amt: '0',
+      return_postage_amt: String(num(row.returnPostageTotal)),
+      return_processing_amt: String(num(row.returnProcessingTotal)),
+      row_total: String(num(row.grandTotal)),
+      billing_status_label: (row.billingStatusLabel as string | undefined) ?? 'Return',
+      item_names: null,
+      skus: null,
+      carrier_code: null,
+      box_label: '—',
+      box_review: false,
+      fee_waived: false,
+      // AC-1: the STORED reference, passed through. PrepShip never mints a -RETURN
+      // suffix — the portal owns the numbering, and a second generator here would render
+      // #1234-RETURN for a return already stored as #1234-RETURN-2.
+      order_number_label:
+        (row.displayReference as string | null | undefined)
+        ?? String(row.orderNumber ?? row.orderId ?? ''),
       // AC-3: a return INHERITS the original outbound order's classification. The return
       // physically ships to the US warehouse, so classifying it from its own destination
       // would read an international order's return as Domestic. The order is the fact;
