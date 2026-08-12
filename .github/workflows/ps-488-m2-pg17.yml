@@ -108,6 +108,7 @@ jobs:
           npm run test:ps-487-return-billing-wiring
           npm run test:ps-488-billing-row-reference
           npm run test:ps-488-invoice-reconcile
+          npm run test:ps-488-invoice-return-presence
           npm run test:ps-412-finalized-billing
           npm run test:ps-449-billing-finalization
           npm run test:ps-323-billing-sot-parity

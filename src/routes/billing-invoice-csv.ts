@@ -21,6 +21,7 @@ import {
   invoiceOneLineCell,
 } from './billing-invoice-text';
 import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
+import { resolveBillingInvoiceReturnFee } from '../services/billing-invoice-return-cell';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
@@ -124,12 +125,19 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   // PS-488 M3 — presence decides whether the cell renders at all. `0` and `absent` are
   // different facts: a return that was never charged processing and one that was charged
   // $0.00 must not export the same cell. Branching on the flag, never on the number.
-  const returnPostageAmt = row.has_return_postage_line === true
-    ? num(Number(row.return_postage_amt ?? 0) || 0)
-    : '';
-  const returnProcessingAmt = row.has_return_processing_line === true
-    ? num(Number(row.return_processing_amt ?? 0) || 0)
-    : '';
+  // Routed through the SAME owner the HTML and XLSX serializers use, so the three
+  // renderings of one invoice cannot disagree about whether a fee exists. Each renderer
+  // now makes only a formatting choice; the three-state question is answered once.
+  const returnPostageCell = resolveBillingInvoiceReturnFee({
+    present: row.has_return_postage_line,
+    amount: row.return_postage_amt,
+  });
+  const returnProcessingCell = resolveBillingInvoiceReturnFee({
+    present: row.has_return_processing_line,
+    amount: row.return_processing_amt,
+  });
+  const returnPostageAmt = returnPostageCell === null ? '' : num(returnPostageCell);
+  const returnProcessingAmt = returnProcessingCell === null ? '' : num(returnProcessingCell);
   // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
   // CSV delegates the read-only total fallback to the backend owner.
   const total = resolveBillingInvoiceRowTotal({

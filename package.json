@@ -968,7 +968,8 @@
     "test:ps-488-m2-readiness-pg17": "tsx scripts/ps-488-m2-readiness-pg17.ts",
     "test:ps-488-m2-writer-behaviour-pg17": "tsx scripts/ps-488-m2-writer-behaviour-pg17.ts",
     "test:ps-488-m3-invoice-grain-pg17": "tsx scripts/ps-488-m3-invoice-grain-pg17.ts",
-    "test:ps-488-m3-invoice-grain-local": "node scripts/ps-488-pglite-local-runner.mjs scripts/ps-488-m3-invoice-grain-pg17.ts"
+    "test:ps-488-m3-invoice-grain-local": "node scripts/ps-488-pglite-local-runner.mjs scripts/ps-488-m3-invoice-grain-pg17.ts",
+    "test:ps-488-invoice-return-presence": "tsx scripts/ps-488-invoice-return-presence-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

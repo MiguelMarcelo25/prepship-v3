@@ -109,6 +109,7 @@ import {
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 import { resolveBillingRowStatus, resolveBillingReturnRowStatus } from '../services/billing-row-status';
 import { billingRowIdentity } from '../services/billing-row-reference';
+import { resolveBillingInvoiceReturnFee } from '../services/billing-invoice-return-cell';
 import {
   cancelledNoChargeBillingAmountSql,
   isCancelledBillingStatus,
@@ -2667,6 +2668,17 @@ export function renderInvoiceHtml(args: {
         shipping: shippingAmt,
         storage: storageAmt,
       });
+      // PS-488 M3: resolved through the shared three-state owner, identically to the XLSX
+      // and CSV serializers, so the three renderings of one invoice cannot disagree about
+      // whether a fee exists.
+      const returnPostageCell = resolveBillingInvoiceReturnFee({
+        present: d.has_return_postage_line,
+        amount: d.return_postage_amt,
+      });
+      const returnProcessingCell = resolveBillingInvoiceReturnFee({
+        present: d.has_return_processing_line,
+        amount: d.return_processing_amt,
+      });
       const billingDate = invoiceShipDateTimeCell(
         d.billing_effective_date ?? d.ship_date,
       );
@@ -2693,6 +2705,13 @@ export function renderInvoiceHtml(args: {
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
         <td class="mono">${escHtml(d.billing_adjustment_id ? 'Adjustment' : d.shipment_id == null ? 'External' : `#${d.shipment_id}`)}</td>
         <td>${escHtml(d.billing_adjustment_id ? '—' : d.destination)}</td>
+        <!-- PS-488 M3: three states, not two. An em-dash means the fee was never charged;
+             $0.00 means it was charged at no cost. fmt() is applied only once the shared
+             owner has confirmed the line exists, so a present zero cannot be softened to
+             a dash and an absent fee cannot be hardened into a zero. These are display
+             buckets — they are NOT added into Total, which already includes them. -->
+        <td class="num">${returnPostageCell === null ? '—' : fmt(returnPostageCell)}</td>
+        <td class="num">${returnProcessingCell === null ? '—' : fmt(returnProcessingCell)}</td>
       </tr>`;
     })
     .join('');
@@ -2785,6 +2804,12 @@ export function renderInvoiceHtml(args: {
         <!-- PS-490: appended LAST on purpose. ps-425 and the layout guards pin invoice
              cells by POSITION, so inserting a column earlier shifts what they read. -->
         <th>Destination</th>
+        <!-- PS-488 M3: appended last for the same reason. The XLSX sheet and the CSV both
+             carry these two columns; the HTML invoice did not, so the operator-facing
+             document showed a return row's Total with no way to see what it was made of —
+             and no way at all to tell an absent fee from a $0.00 one. -->
+        <th class="num">Return Postage</th>
+        <th class="num">Return Processing</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -2800,6 +2825,13 @@ export function renderInvoiceHtml(args: {
         <td class="num" style="font-size:14px">${fmt(grandTotal)}</td>
         <td></td>
         <!-- PS-490: matches the appended Destination column so the footer stays aligned. -->
+        <td></td>
+        <!-- PS-488 M3: two more, matching the appended return columns. Left EMPTY rather
+             than totalled: the footer's Total already includes return money (row_total is
+             a sum over every line type), so a Return Postage total here would invite the
+             reader to add it again. The footer sums what the columns above it sum; these
+             two are a breakdown OF the Total, not an addition to it. -->
+        <td></td>
         <td></td>
       </tr>
     </tfoot>
@@ -2927,8 +2959,18 @@ export async function renderInvoiceXlsx(args: {
       qty: baseQty + addlQty,
       pickPackFee: pickPackFeeAmt,
       additional: addlQty > 0 ? Number(d.additional_amt) : 0,
-      returnPostage: Number(d.return_postage_amt ?? 0),
-      returnProcessing: Number(d.return_processing_amt ?? 0),
+      // PS-488 M3: `Number(d.return_postage_amt ?? 0)` turned every absent fee into a
+      // numeric 0 in the spreadsheet — the one place a reader is most likely to SUM a
+      // column, so an invented zero silently joined a total. null leaves the cell empty;
+      // a present zero stays a real numeric 0 and still sums correctly.
+      returnPostage: resolveBillingInvoiceReturnFee({
+        present: d.has_return_postage_line,
+        amount: d.return_postage_amt,
+      }),
+      returnProcessing: resolveBillingInvoiceReturnFee({
+        present: d.has_return_processing_line,
+        amount: d.return_processing_amt,
+      }),
       boxCost: packageCostAmt,
       boxSize: invoiceOneLineCell(d.box_label),
       shipping: shippingAmt,
