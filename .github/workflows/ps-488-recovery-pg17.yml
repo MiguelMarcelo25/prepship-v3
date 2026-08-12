@@ -62,15 +62,23 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
+      # `tsx -e` compiles the snippet as CommonJS, where top-level await is a hard
+      # error — that is what made the previous run red before any database case ran.
+      # An async IIFE keeps the await inside a function.
       - name: Confirm PostgreSQL 17 is the server under test
         run: |
           set -euo pipefail
           version="$(npx tsx -e "
-            import postgres from 'postgres';
-            const sql = postgres(process.env.PS488_PG17_ADMIN_URL, { max: 1, prepare: false });
-            const [row] = await sql\`show server_version\`;
-            console.log(row.server_version);
-            await sql.end({ timeout: 5 });
+            const postgres = require('postgres');
+            (async () => {
+              const sql = postgres(process.env.PS488_PG17_ADMIN_URL, { max: 1, prepare: false });
+              try {
+                const [row] = await sql\`show server_version\`;
+                console.log(row.server_version);
+              } finally {
+                await sql.end({ timeout: 5 });
+              }
+            })().catch((error) => { console.error(error); process.exit(1); });
           ")"
           echo "server_version=${version}"
           case "${version}" in
@@ -84,8 +92,19 @@ jobs:
       - name: Real PostgreSQL 17 proof (executes the actual runner)
         run: npm run test:ps-488-recovery-pg17
 
+      - name: Existing PS-488 guards
+        run: |
+          npm run test:ps-488-billing-row-reference
+          npm run test:ps-488-invoice-reconcile
+
       - name: Typecheck
         run: npm run typecheck
+
+      # The handoff names `npm run build`, which does not exist in this repo. The
+      # real script is `build:web`, and it is what ci.yml itself runs. Using the
+      # actual script rather than inventing a `build` alias.
+      - name: Build
+        run: npm run build:web
 
       - name: Whitespace check
         run: git diff --check

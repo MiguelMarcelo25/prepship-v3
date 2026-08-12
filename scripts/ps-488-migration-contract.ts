@@ -30,6 +30,18 @@ import { readFileSync } from 'node:fs';
 export const PS488_MIGRATION_FILE = 'drizzle/0092_ps488_return_identity_reconciliation.sql';
 
 /**
+ * The canonical LF-normalised digest of the REVIEWED 0092 SQL.
+ *
+ * Pinning this is what binds execution to reviewed content. Computing the digest
+ * from whatever is on disk only ever proves the file matches itself: edit the
+ * migration, run without --digest, and the altered SQL would be accepted. The runner
+ * asserts this constant before inspection and before apply, so a modified migration
+ * is refused whether or not the operator supplies a digest.
+ */
+export const PS488_0092_EXPECTED_DIGEST =
+  'a08ed909b92cf3a5af2201d8fdeea49a9920785f2f82110b0203586e2dcf55b0';
+
+/**
  * Exact confirmation the operator must type. Deliberately NOT the 0089 token, and
  * deliberately not reusable: a stale muscle-memory paste of the 0089 confirmation
  * must be a no-op against this runner.
@@ -78,10 +90,60 @@ export function digestOfFile(path: string): string {
   return normalisedDigest(readFileSync(path, 'utf8'));
 }
 
-/** Reads the authorised migration and returns its text plus digest. */
+/**
+ * Reads the authorised migration and REFUSES unless it is content-identical to the
+ * reviewed SQL under canonical LF normalisation. Every consumer goes through here,
+ * so no path can execute unreviewed migration text.
+ */
 export function loadAuthorisedMigration(): { sql: string; digest: string } {
   const sql = readFileSync(PS488_MIGRATION_FILE, 'utf8');
-  return { sql, digest: normalisedDigest(sql) };
+  const digest = normalisedDigest(sql);
+  if (digest !== PS488_0092_EXPECTED_DIGEST) {
+    throw new Error(
+      `STOP: ${PS488_MIGRATION_FILE} digest is ${digest}, expected ${PS488_0092_EXPECTED_DIGEST}. ` +
+        'The migration on disk is not the reviewed SQL.',
+    );
+  }
+  return { sql, digest };
+}
+
+/**
+ * Fail-closed database-host gate for the PostgreSQL 17 proof.
+ *
+ * The suite creates and drops databases and terminates sessions. Requiring only that
+ * an admin URL EXISTS is not a safety property — someone running the package command
+ * directly could point it at a real database. Loopback is permitted, plus one
+ * explicitly named CI service host that must also carry a test-only marker. Anything
+ * else is refused before a connection is opened.
+ */
+export function assertDisposablePostgresUrl(rawUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error('STOP: PS488_PG17_ADMIN_URL is not a valid URL');
+  }
+
+  const host = url.hostname.toLowerCase();
+  const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  // The GitHub Actions service container is reachable under this alias.
+  const ciService = host === 'postgres' && /ps488/i.test(url.username + url.password + url.pathname);
+
+  if (!loopback && !ciService) {
+    throw new Error(
+      `STOP: refusing to run against host "${host}". This suite creates and drops ` +
+        'databases and terminates sessions. Only loopback, or the named CI service ' +
+        'host carrying a ps488 marker, is permitted.',
+    );
+  }
+
+  // Belt and braces: never a managed provider, even if one somehow resolved to a
+  // permitted hostname.
+  for (const banned of ['supabase', 'render.com', 'rds.amazonaws', 'neon.tech', 'azure', 'pooler']) {
+    if (rawUrl.toLowerCase().includes(banned)) {
+      throw new Error(`STOP: PS488_PG17_ADMIN_URL mentions "${banned}"; this must be an ephemeral database.`);
+    }
+  }
 }
 
 /**

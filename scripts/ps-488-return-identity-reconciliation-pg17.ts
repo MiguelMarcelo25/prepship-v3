@@ -26,13 +26,17 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import postgres from 'postgres';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
+  PS488_0092_EXPECTED_DIGEST,
   PS488_CHECK_NAME,
   PS488_FK_NAME,
   PS488_LOOKUP_INDEX,
+  PS488_MIGRATION_FILE,
   PS488_PRESERVED_UNIQUE_INDEXES,
   PS488_RECOVERY_CONFIRMATION,
   PS488_UNIQUE_INDEX,
+  assertDisposablePostgresUrl,
   loadAuthorisedMigration,
 } from './ps-488-migration-contract.js';
 
@@ -44,6 +48,16 @@ if (!ADMIN_URL) {
       'database is missing reports green while proving nothing. Provide an ephemeral\n' +
       'PostgreSQL 17 admin URL.',
   );
+  process.exit(1);
+}
+
+// Fail-closed host gate. This suite CREATEs and DROPs databases and terminates
+// sessions; "the variable is set" is not a safety property. Refused before any
+// connection is opened.
+try {
+  assertDisposablePostgresUrl(ADMIN_URL);
+} catch (error) {
+  console.error(`FAIL: ${error instanceof Error ? error.message : error}`);
   process.exit(1);
 }
 
@@ -163,9 +177,9 @@ async function dropDatabase(name: string): Promise<void> {
 }
 
 /** Runs the REAL runner as a subprocess. */
-function runRunner(url: string, args: string[]): { code: number; out: string } {
+function runRunner(url: string, args: string[], extraEnv: Record<string, string> = {}): { code: number; out: string } {
   const result = spawnSync('npx', ['tsx', RUNNER, ...args], {
-    env: { ...process.env, DATABASE_URL: url },
+    env: { ...process.env, DATABASE_URL: url, ...extraEnv },
     encoding: 'utf8',
     shell: process.platform === 'win32',
   });
@@ -467,10 +481,127 @@ async function main(): Promise<void> {
     }),
   );
 
+  await check('a failure AFTER successful DDL and verification rolls everything back', () =>
+    withDatabase(async (url) => {
+      const before = await facts(url);
+      // Injected at the very end of the transaction, after the DDL has succeeded and
+      // the catalog has verified exactly. Proves the rollback covers otherwise-valid
+      // attempted DDL, not merely early refusals.
+      const { code, out } = runRunner(url, APPLY_ARGS, {
+        NODE_ENV: 'test',
+        PS488_FORCE_POST_VERIFY_FAILURE: '1',
+      });
+      const after = await facts(url);
+
+      assert.notEqual(code, 0, 'the injected failure must abort the apply');
+      assert.match(out, /post-verification failure/i);
+      assert.equal(after.deleteAction, 'n', 'the FK repair must be rolled back');
+      assert.equal(after.uniqueDef, null, 'the unique index must not survive');
+      assert.equal(after.checkValidated, null, 'the CHECK must not survive');
+      assert.equal(after.checksum, before.checksum);
+    }),
+  );
+
+  await check('the post-verification injection is refused outside NODE_ENV=test', () =>
+    withDatabase(async (url) => {
+      const { code, out } = runRunner(url, APPLY_ARGS, {
+        NODE_ENV: 'production',
+        PS488_FORCE_POST_VERIFY_FAILURE: '1',
+      });
+      assert.notEqual(code, 0);
+      assert.match(out, /test-only/i, 'the injection must refuse to run outside tests');
+      const after = await facts(url);
+      assert.equal(after.deleteAction, 'n', 'nothing may commit when the injection is refused');
+    }),
+  );
+
+  await check('an orphan return_id is refused by preflight and nothing is written', () =>
+    withDatabase(async (url) => {
+      const db = postgres(url, { max: 1, prepare: false });
+      try {
+        // A true orphan cannot be inserted while the 0089 FK is enforced, so the FK
+        // is briefly dropped and re-added NOT VALID — reproducing a database that
+        // drifted before this migration ran.
+        await db.unsafe(`ALTER TABLE public.billing_line_items DROP CONSTRAINT ${PS488_FK_NAME}`);
+        await db`insert into public.billing_line_items
+                   (client_id, line_type, description, unit_cost, total_cost, return_id)
+                 values (17, 'return_postage', 'orphan', '1.00', '1.00', 9999)`;
+        await db.unsafe(
+          `ALTER TABLE public.billing_line_items ADD CONSTRAINT ${PS488_FK_NAME} ` +
+            'FOREIGN KEY (return_id) REFERENCES public.returns(id) ON DELETE SET NULL NOT VALID',
+        );
+      } finally {
+        await db.end({ timeout: 5 });
+      }
+
+      const before = await facts(url);
+      const { code, out } = runRunner(url, APPLY_ARGS);
+      const after = await facts(url);
+
+      assert.notEqual(code, 0, 'an orphan must abort the apply');
+      assert.match(out, /missing return|orphan/i);
+      assert.equal(after.uniqueDef, null);
+      assert.equal(after.checkValidated, null);
+      assert.equal(after.checksum, before.checksum);
+    }),
+  );
+
+  await check('a malformed pre-existing catalog object refuses and rolls back', () =>
+    withDatabase(async (url) => {
+      const db = postgres(url, { max: 1, prepare: false });
+      try {
+        // Same NAME, wrong DEFINITION: not partial, and keyed the wrong way round.
+        // CREATE UNIQUE INDEX IF NOT EXISTS then becomes a silent no-op, so only an
+        // EXACT definition check catches it. A presence check would pass here.
+        await db.unsafe(
+          `CREATE UNIQUE INDEX ${PS488_UNIQUE_INDEX} ` +
+            'ON public.billing_line_items (line_type, return_id)',
+        );
+      } finally {
+        await db.end({ timeout: 5 });
+      }
+
+      const before = await facts(url);
+      const { code, out } = runRunner(url, APPLY_ARGS);
+      const after = await facts(url);
+
+      assert.notEqual(code, 0, 'exact-definition drift must abort the apply');
+      assert.match(out, /definition does not match|keys are/i);
+      assert.equal(after.deleteAction, 'n', 'the FK repair must be rolled back');
+      assert.equal(after.checkValidated, null, 'the CHECK must not survive');
+      assert.equal(after.checksum, before.checksum);
+    }),
+  );
+
+  await check('a tampered 0092 is refused even without --digest', () =>
+    withDatabase(async (url) => {
+      const original = readFileSync(PS488_MIGRATION_FILE, 'utf8');
+      let code = 0;
+      let out = '';
+      try {
+        writeFileSync(PS488_MIGRATION_FILE, original.replace('ON DELETE RESTRICT', 'ON DELETE CASCADE'));
+        ({ code, out } = runRunner(url, APPLY_ARGS));
+      } finally {
+        writeFileSync(PS488_MIGRATION_FILE, original);
+      }
+      const after = await facts(url);
+
+      assert.notEqual(code, 0, 'a tampered migration must be refused');
+      assert.match(out, /not the reviewed SQL/i);
+      assert.equal(after.deleteAction, 'n', 'nothing may be written from tampered SQL');
+      assert.equal(
+        loadAuthorisedMigration().digest,
+        PS488_0092_EXPECTED_DIGEST,
+        'the migration file must be restored exactly',
+      );
+    }),
+  );
+
   await check('the reviewed SQL digest is stable across reads', () => {
     const a = loadAuthorisedMigration().digest;
     const b = loadAuthorisedMigration().digest;
     assert.equal(a, b);
+    assert.equal(a, PS488_0092_EXPECTED_DIGEST);
     return Promise.resolve();
   });
 
