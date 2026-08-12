@@ -982,6 +982,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.3",
+    "@electric-sql/pglite-socket": "^0.2.7",
     "@playwright/test": "^1.60.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
