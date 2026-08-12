@@ -252,6 +252,61 @@ check('legacy rows with no verdict are treated as incomplete', () => {
     'only an explicit true may pass; absent must not be trusted');
 });
 
+// ── Availability consumes the verdict — the path a mutation matrix found bare ──
+// These three checks exist because the first 28 passed while `rateBlockedReason`
+// could be stripped of its money check entirely. The fix was present; nothing
+// defended it. A guard that documents a fix instead of defending it is a guard
+// that will be green on the day the bug comes back.
+check('availability consults the money verdict FIRST', () => {
+  const start = modalSource.indexOf('function rateBlockedReason(');
+  const body = modalSource.slice(start, modalSource.indexOf('\n}', start));
+  const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const moneyAt = code.indexOf('savedRateUnavailableMessage(rate)');
+  const legacyAt = code.indexOf('rateBrowserUnavailableReason(');
+  assert(moneyAt !== -1,
+    'availability must consult money completeness — the reason owner it delegates to covers ' +
+    'proof, freshness and eligibility, and has never inspected whether the money was supplied');
+  assert(legacyAt !== -1, 'the existing reason owner must still run for every other cause');
+  assert(moneyAt < legacyAt,
+    'money must be read BEFORE the downstream reason, or an unpriceable row gets described ' +
+    'by an unrelated cause and the operator is told the wrong thing');
+  assert(/if\s*\(moneyReason\)\s*return moneyReason/.test(code),
+    'the verdict must short-circuit — computing it and falling through leaves the row selectable');
+});
+
+check('every emitting path gates on that one boundary', () => {
+  // handleRateClick -> onApplyRate is the manual Apply. toAppliedRate -> the
+  // auto-best emission that persists best_rate_json. Both feed Create Label.
+  for (const [fn, emit] of [
+    ['function handleRateClick', 'onApplyRate({'],
+    ['function toAppliedRate', 'return {'],
+  ] as const) {
+    const start = modalSource.indexOf(fn);
+    assert(start !== -1, `${fn} must exist — it is a named boundary in this contract`);
+    const body = modalSource.slice(start, modalSource.indexOf('\n  }', start));
+    const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // The gate must be an early RETURN, not merely a call. `void
+    // isBackendUnavailableRate(...)` keeps the call site, keeps the ordering,
+    // and ships the bug — and a refactor that "kept the call" reads as safe in
+    // review. Assert the control flow, not the presence.
+    const gate = /if\s*\(\s*isBackendUnavailableRate\([^)]*\)\s*\)\s*return/.exec(code);
+    const emitAt = code.indexOf(emit);
+    assert(gate, `${fn} must REFUSE on the availability boundary — consulting it and ` +
+      'discarding the answer leaves an unpriceable row selectable');
+    assert(emitAt !== -1, `${fn} must still emit on the happy path`);
+    assert(gate.index < emitAt, `${fn} must refuse BEFORE it emits, not after`);
+  }
+});
+
+check('the availability boundary is the one the gate calls', () => {
+  // If isBackendUnavailableRate stopped delegating to rateBlockedReason, both
+  // gates above would pass while consulting nothing.
+  const start = modalSource.indexOf('function isBackendUnavailableRate(');
+  const body = modalSource.slice(start, modalSource.indexOf('\n}', start));
+  assert(/rateBlockedReason\(/.test(body),
+    'the gate must delegate to the reason owner that reads the money verdict');
+});
+
 check('the operator sees the backend-owned reason', () => {
   assert.match(modalSource, /data-rate-browser="savedRateUnavailable"/,
     'the refusal must be visible, not silent');

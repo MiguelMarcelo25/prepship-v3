@@ -1328,7 +1328,17 @@ const REQUIRED_GUARDS = [
   // cost could reach a real label. classifyRateMoney runs BEFORE any defaulting,
   // so "the backend sent nothing" stays distinguishable from "the backend sent
   // zero". Zero is field-specific: otherCost 0 is valid, shipmentCost 0 is not.
-  // Mutation-verified, all five caught.
+  // Mutation-verified against the FULL path — all ten caught, each by the check
+  // that owns it: `npm run test:ps-500-mutation-matrix`.
+  //
+  // That matrix is deliberately NOT a member of this pack. It rewrites source
+  // files in place and restores them, so running it alongside the pack would let
+  // a mutation be visible to a neighbouring guard. Run it on a clean tree.
+  //
+  // It earned its keep on the first run: the guard had 31 green checks while the
+  // availability gate could be replaced with `void isBackendUnavailableRate(...)`
+  // — call site kept, ordering kept, refusal gone. Presence-and-ordering checks
+  // do not defend control flow; assert the early return itself.
   'test:ps-500-rate-money-classifier',
 ];
 
