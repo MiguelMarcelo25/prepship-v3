@@ -97,6 +97,7 @@
     "test:ps-499-bulk-import-package-cost": "tsx scripts/ps-499-bulk-import-package-cost-integration.ts",
     "test:ps-499-route": "tsx scripts/ps-499-route-integration.ts",
     "test:ps-499": "npm run test:ps-499-billing-bulk-import-patch && npm run test:ps-499-bulk-import-package-cost && npm run test:ps-499-route",
+    "seed:ps-499-step12": "tsx scripts/ps-499-step12-qa-fixture.ts",
     "test:billing-order-description": "tsx scripts/billing-order-description-guard.ts",
     "best-rate:dims:dry-run": "tsx scripts/clear-invalid-best-rates.ts",
     "best-rate:dims:apply": "tsx scripts/clear-invalid-best-rates.ts --apply",

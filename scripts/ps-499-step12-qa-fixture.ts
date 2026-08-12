@@ -1,61 +1,91 @@
 /**
  * PS-499 Step 12 — disposable QA fixture for the manual runtime/UI pass.
  *
- * Seeds one clearly-named throwaway client with one order per QA scenario, so the
- * operator running the Billing bulk-import UI has known starting values and can
- * assert exact expected outcomes rather than eyeballing whatever happens to be in
- * the local database.
+ * Seeds clearly-named throwaway orders — one per QA scenario — so the operator
+ * running the Billing bulk-import UI has known starting values and can assert exact
+ * expected outcomes rather than eyeballing whatever happens to be in the database.
  *
  * SAFE BY DEFAULT — three modes:
  *   1. no flags    → PLAN (read-only): print exactly what would be written.
- *   2. --apply     → APPLY: write the fixture inside one transaction.
- *   3. --teardown  → remove the fixture (see the finalized-order caveat below).
+ *   2. --apply     → APPLY, behind the full interlock below.
+ *   3. --teardown  → remove one run's fixture.
  *
- *   npx tsx scripts/ps-499-step12-qa-fixture.ts
- *   npx tsx scripts/ps-499-step12-qa-fixture.ts --apply
- *   npx tsx scripts/ps-499-step12-qa-fixture.ts --teardown
+ *   npm run seed:ps-499-step12
+ *   npm run seed:ps-499-step12 -- --apply --confirm=PS499-STEP12-DISPOSABLE
+ *   npm run seed:ps-499-step12 -- --teardown --run=<runId>
  *
- * REFUSES TO RUN against anything but a loopback database. This writes billing
- * rows; pointing it at a shared or production DATABASE_URL would create real
- * client records. There is no --force.
+ * --apply REQUIRES ALL OF:
+ *   NODE_ENV=test
+ *   DATABASE_URL host is exactly loopback
+ *   the database NAME carries a disposable marker (ps499 / qa / test / disposable / scratch)
+ *   --confirm=PS499-STEP12-DISPOSABLE
+ *   no existing fixture for the same run id
  *
- * Touches only: a QA-named client, its orders/shipments/billing lines, QA-named
- * packages and that client's package prices and billing config. It never reads or
- * modifies another client's data, never calls a carrier, never regenerates billing
- * and never mutates an invoice.
+ * There is deliberately NO --force and no remote escape hatch. Loopback alone is
+ * not sufficient: localhost can be an SSH tunnel, a proxy, a shared staging socket
+ * or a developer's valuable database, which is why the database-name marker and the
+ * confirmation token are also required.
  *
- * Expected arithmetic, so the operator can check the UI against fixed numbers:
+ * PREFERRED LIFECYCLE — a dedicated disposable database, so teardown is dropping the
+ * database rather than deleting rows the application protects:
+ *
+ *   createdb prepship_ps499_qa
+ *   DATABASE_URL=postgres://.../prepship_ps499_qa npm run migrate
+ *   NODE_ENV=test DATABASE_URL=.../prepship_ps499_qa \
+ *     npm run seed:ps-499-step12 -- --apply --confirm=PS499-STEP12-DISPOSABLE
+ *   ... run the UI QA, capture evidence ...
+ *   dropdb prepship_ps499_qa
+ *
+ * Dropping a disposable database is environment teardown, not an application-level
+ * invoice mutation. It never weakens the finalized-billing trigger. Row-level
+ * teardown cannot remove the finalized scenario order — correctly so — which is
+ * exactly why the disposable database is preferred.
+ *
+ * Never calls a carrier, never regenerates billing, never mutates a real invoice,
+ * never reads another client's data.
+ *
+ * Expected arithmetic, so the operator checks fixed numbers rather than impressions:
  *   package_cost_markup = 10%
- *   QA BOX A  configured 5.00 → bills 5.50
- *   QA BOX B  configured 8.00 → bills 8.80
- *   QA BOX C  no configured price → a bulk import of it must 422
+ *   BOX A  configured 5.00 → bills 5.50
+ *   BOX B  configured 8.00 → bills 8.80
+ *   BOX C  no configured price → a bulk import of it must 422
  */
 import { sql } from '../src/db/client';
 
-const APPLY = process.argv.includes('--apply');
-const TEARDOWN = process.argv.includes('--teardown');
+const ARGS = process.argv.slice(2);
+const APPLY = ARGS.includes('--apply');
+const TEARDOWN = ARGS.includes('--teardown');
+const CONFIRM_TOKEN = 'PS499-STEP12-DISPOSABLE';
+const argValue = (name: string): string | null => {
+  const hit = ARGS.find((a) => a.startsWith(`--${name}=`));
+  return hit ? hit.slice(name.length + 3) : null;
+};
 
-const CLIENT_NAME = 'PS-499 QA (disposable)';
+/** Unique per run, so repeated applies cannot silently collide or be reused. */
+const RUN_ID = argValue('run') ?? new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+
+const clientName = (runId: string) => `PS-499 QA disposable ${runId}`;
+const orderNumber = (runId: string, n: number) => `PS499-QA-${runId}-${n}`;
+
 const MARKUP = '10.00';
-
 const BOX_A = 'PS499-QA BOX A 9x6x3';
 const BOX_B = 'PS499-QA BOX B 12x10x3';
 const BOX_C = 'PS499-QA BOX C 8x8x8 (unpriced)';
 
-/** One order per scenario, so a mistake in one case cannot contaminate another. */
 const SCENARIOS = [
-  { order: 'PS499-QA-1', label: 'A · shipping-only, positive amount' },
-  { order: 'PS499-QA-2', label: 'B · shipping-only, explicit $0' },
-  { order: 'PS499-QA-3', label: 'C · box-only, different box (B → bills 8.80)' },
-  { order: 'PS499-QA-4', label: 'D · box-only, SAME box already stamped (stale pin + review line)' },
-  { order: 'PS499-QA-5', label: 'E · combined box + shipping' },
-  { order: 'PS499-QA-6', label: 'F · blank cells must omit, not resend' },
-  { order: 'PS499-QA-7', label: 'G · unpriced box → visible 422, row stays editable' },
-  { order: 'PS499-QA-8', label: 'H · manual Edit Billing modal regression' },
-  { order: 'PS499-QA-9', label: 'I · finalized/invoiced lockdown' },
+  { n: 1, label: 'A · shipping-only, positive amount' },
+  { n: 2, label: 'B · shipping-only, explicit $0' },
+  { n: 3, label: 'C · box-only, different box (B → bills 8.80)' },
+  { n: 4, label: 'D · box-only, SAME box already stamped (stale pin + review line)' },
+  { n: 5, label: 'E · combined box + shipping' },
+  { n: 6, label: 'F1 · blank SHIPPING must omit (box pasted, shipping blank)' },
+  { n: 7, label: 'F2 · blank BOX must omit (shipping pasted, box blank)' },
+  { n: 8, label: 'G · unpriced box → visible 422, durable state unchanged' },
+  { n: 9, label: 'H · manual Edit Billing modal regression' },
+  { n: 10, label: 'I · finalized/invoiced lockdown' },
 ] as const;
 
-/** Baseline money on every fixture order, so "unchanged" is checkable by eye. */
+/** Baseline money on every fixture order, so "unchanged" is checkable and non-default. */
 const BASELINE = {
   pickPack: '3.50',
   additional: '0.75',
@@ -63,10 +93,15 @@ const BASELINE = {
   shipping: '12.00',
 };
 
-function assertLoopback(): void {
-  const url = process.env.DATABASE_URL ?? '';
-  if (!url) throw new Error('DATABASE_URL is not set');
-  const host = new URL(url).hostname;
+type Preflight = { host: string; port: string; database: string; schema: string };
+
+function preflight(requireApplyInterlock: boolean): Preflight {
+  const raw = process.env.DATABASE_URL ?? '';
+  if (!raw) throw new Error('DATABASE_URL is not set');
+  const url = new URL(raw);
+  const host = url.hostname;
+  const database = url.pathname.replace(/^\//, '') || '(none)';
+
   if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
     throw new Error(
       `Refusing to run: DATABASE_URL host is ${host}, not loopback. ` +
@@ -76,37 +111,72 @@ function assertLoopback(): void {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('Refusing to run with NODE_ENV=production');
   }
+
+  if (requireApplyInterlock) {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('Refusing to --apply unless NODE_ENV=test');
+    }
+    if (!/ps499|qa|test|disposable|scratch/i.test(database)) {
+      throw new Error(
+        `Refusing to --apply: database "${database}" carries no disposable marker. ` +
+          'Loopback alone is not proof of a throwaway database — it can be a tunnel, a ' +
+          'proxy, or your real dev data. Use something like prepship_ps499_qa.',
+      );
+    }
+    if (argValue('confirm') !== CONFIRM_TOKEN) {
+      throw new Error(`Refusing to --apply without --confirm=${CONFIRM_TOKEN}`);
+    }
+  }
+
+  return { host, port: url.port || '5432', database, schema: 'public' };
 }
 
-async function findClientId(): Promise<number | null> {
-  const rows = await sql<{ id: number }[]>`select id from clients where name = ${CLIENT_NAME} limit 1`;
+function printTarget(p: Preflight, mode: string): void {
+  console.log(`PS-499 Step 12 QA fixture — ${mode}\n`);
+  console.log(`  host      : ${p.host}:${p.port}`);
+  console.log(`  database  : ${p.database}`);
+  console.log(`  schema    : ${p.schema}`);
+  console.log(`  NODE_ENV  : ${process.env.NODE_ENV ?? '(unset)'}`);
+  console.log(`  run id    : ${RUN_ID}`);
+  console.log(`  client    : ${clientName(RUN_ID)}`);
+  console.log(`  orders    : ${orderNumber(RUN_ID, 1)} … ${orderNumber(RUN_ID, SCENARIOS.length)}\n`);
+}
+
+async function findClientId(runId: string): Promise<number | null> {
+  const rows = await sql<{ id: number }[]>`select id from clients where name = ${clientName(runId)} limit 1`;
   return rows[0]?.id ?? null;
 }
 
-async function plan(): Promise<void> {
-  const existing = await findClientId();
-  console.log('PS-499 Step 12 QA fixture — PLAN (read-only, nothing written)\n');
-  console.log(`client            : ${CLIENT_NAME}${existing ? ` (exists, id ${existing})` : ' (would be created)'}`);
-  console.log(`billing config    : package_cost_markup = ${MARKUP}%`);
-  console.log(`packages          : ${BOX_A} @ 5.00, ${BOX_B} @ 8.00, ${BOX_C} @ (no price)`);
-  console.log(`baseline per order: pick&pack ${BASELINE.pickPack}, additional ${BASELINE.additional}, ` +
-    `box ${BASELINE.packageCost}, shipping ${BASELINE.shipping}`);
-  console.log('\norders:');
-  for (const s of SCENARIOS) console.log(`  ${s.order.padEnd(12)} ${s.label}`);
-  console.log('\nPS499-QA-4 additionally gets a stale box override_price of 99.00 and a');
-  console.log('package_cost_missing review line, so the same-package import has something');
-  console.log('real to clear.');
-  console.log('PS499-QA-9 is marked invoiced, so the finalized lockdown actually fires.');
-  console.log('\nRe-run with --apply to write it.');
+async function plan(p: Preflight): Promise<void> {
+  printTarget(p, 'PLAN (read-only, nothing written)');
+  const existing = await findClientId(RUN_ID);
+  const others = await sql<{ name: string }[]>`
+    select name from clients where name like 'PS-499 QA disposable %' order by name`;
+
+  console.log(`planned rows: 1 client, 1 billing_config, 3 packages, 2 client_package_prices,`);
+  console.log(`              ${SCENARIOS.length} orders + shipments, ${SCENARIOS.length * 4} billing lines,`);
+  console.log(`              1 stale box resolution, 1 package_cost_missing line\n`);
+  console.log('scenarios:');
+  for (const s of SCENARIOS) console.log(`  ${orderNumber(RUN_ID, s.n).padEnd(28)} ${s.label}`);
+
+  if (existing) console.log(`\nWARNING: run ${RUN_ID} already exists (client id ${existing}); --apply will refuse.`);
+  if (others.length) {
+    console.log(`\nexisting PS-499 QA fixtures in this database: ${others.length}`);
+    for (const o of others) console.log(`  ${o.name}`);
+  }
+  console.log(`\nTo write it:\n  NODE_ENV=test npm run seed:ps-499-step12 -- --apply --confirm=${CONFIRM_TOKEN}`);
 }
 
-async function apply(): Promise<void> {
+async function apply(p: Preflight): Promise<void> {
+  printTarget(p, 'APPLY');
+  if (await findClientId(RUN_ID)) {
+    throw new Error(`Refusing to --apply: run ${RUN_ID} already exists. Use a new --run= id or tear it down.`);
+  }
+
   await sql.begin(async (tx) => {
     const [client] = await tx<{ id: number }[]>`
-      insert into clients (name, active) values (${CLIENT_NAME}, true)
-      on conflict do nothing returning id`;
-    const clientId = client?.id ?? (await findClientId());
-    if (!clientId) throw new Error('could not create or find the QA client');
+      insert into clients (name, active) values (${clientName(RUN_ID)}, true) returning id`;
+    const clientId = client!.id;
 
     await tx`insert into billing_config (client_id, package_cost_markup)
       values (${clientId}, ${MARKUP})
@@ -114,27 +184,24 @@ async function apply(): Promise<void> {
 
     const packageIds: Record<string, number> = {};
     for (const [name, price] of [[BOX_A, '5.00'], [BOX_B, '8.00'], [BOX_C, null]] as const) {
-      const [existing] = await tx<{ id: number }[]>`select id from packages where name = ${name} limit 1`;
-      let id = existing?.id;
-      if (!id) {
-        const [created] = await tx<{ id: number }[]>`
-          insert into packages (name, source) values (${name}, 'custom') returning id`;
-        id = created!.id;
-      }
+      const [found] = await tx<{ id: number }[]>`select id from packages where name = ${name} limit 1`;
+      const id = found?.id
+        ?? (await tx<{ id: number }[]>`insert into packages (name, source) values (${name}, 'custom') returning id`)[0]!.id;
       packageIds[name] = id;
       if (price) {
         await tx`insert into client_package_prices (client_id, package_id, price)
           values (${clientId}, ${id}, ${price}) on conflict do nothing`;
       }
     }
+    const boxA = packageIds[BOX_A]!;
 
     for (const scenario of SCENARIOS) {
+      const number = orderNumber(RUN_ID, scenario.n);
       const [order] = await tx<{ id: number }[]>`
-        insert into orders (order_number) values (${scenario.order}) returning id`;
+        insert into orders (order_number) values (${number}) returning id`;
       const orderId = order!.id;
       const [shipment] = await tx<{ id: number }[]>`insert into shipments default values returning id`;
       const shipmentId = shipment!.id;
-      const boxA = packageIds[BOX_A]!;
 
       for (const [lineType, description, amount] of [
         ['pick_pack', 'Pick & Pack', BASELINE.pickPack],
@@ -145,41 +212,44 @@ async function apply(): Promise<void> {
         await tx`insert into billing_line_items
           (client_id, order_id, order_number, shipment_id, ship_date, line_type, description,
            qty, unit_cost, total_cost, package_id)
-          values (${clientId}, ${orderId}, ${scenario.order}, ${shipmentId}, now(),
+          values (${clientId}, ${orderId}, ${number}, ${shipmentId}, now(),
                   ${lineType}, ${description}, '1.00', ${amount}, ${amount}, ${boxA})`;
       }
 
-      if (scenario.order === 'PS499-QA-4') {
-        // A stale pinned price and a leftover review line, so the same-package
-        // import has real state to clear rather than passing vacuously.
+      // Scenario D: a stale pinned price and a leftover review line, so the
+      // same-package import has real state to clear rather than passing vacuously.
+      if (scenario.n === 4) {
         await tx`insert into billing_box_resolutions (order_id, package_id, override_price, note)
           values (${orderId}, ${boxA}, '99.00', 'PS-499 QA stale pin')`;
         await tx`insert into billing_line_items
           (client_id, order_id, order_number, shipment_id, ship_date, line_type, description,
            qty, unit_cost, total_cost)
-          values (${clientId}, ${orderId}, ${scenario.order}, ${shipmentId}, now(),
+          values (${clientId}, ${orderId}, ${number}, ${shipmentId}, now(),
                   'package_cost_missing', 'No box cost', '1.00', '0.00', '0.00')`;
       }
 
-      if (scenario.order === 'PS499-QA-9') {
+      // Scenario I: invoiced, so the finalized lockdown actually fires.
+      if (scenario.n === 10) {
         await tx`update billing_line_items set invoiced = true where order_id = ${orderId}`;
       }
     }
 
-    console.log(`applied. QA client id = ${clientId}`);
+    console.log(`applied. client id ${clientId}, run id ${RUN_ID}`);
+    console.log(`record this run id in the evidence bundle.`);
   });
 }
 
-async function teardown(): Promise<void> {
-  const clientId = await findClientId();
+async function teardown(p: Preflight): Promise<void> {
+  printTarget(p, 'TEARDOWN');
+  const clientId = await findClientId(RUN_ID);
   if (!clientId) {
-    console.log('nothing to remove — QA client not present');
+    console.log(`nothing to remove — no fixture for run ${RUN_ID}`);
     return;
   }
   const orders = await sql<{ id: number; order_number: string }[]>`
     select distinct order_id as id, order_number from billing_line_items where client_id = ${clientId}`;
 
-  let blocked = 0;
+  const retained: string[] = [];
   for (const order of orders) {
     try {
       await sql.begin(async (tx) => {
@@ -190,25 +260,28 @@ async function teardown(): Promise<void> {
         await tx`delete from billing_line_items where order_id = ${order.id}`;
       });
     } catch {
-      // The finalized scenario order is protected by the production
-      // block-finalized-mutation trigger. That is correct behaviour, not a bug:
-      // finalized billing is not deletable. Leave it and say so.
-      blocked += 1;
+      // The finalized order is protected by the production block-finalized-mutation
+      // trigger. That is correct: finalized billing is immutable. Do NOT weaken the
+      // trigger or un-invoice the row to clean up.
+      retained.push(order.order_number);
     }
   }
-  console.log(`removed billing rows for ${orders.length - blocked} QA order(s).`);
-  if (blocked) {
-    console.log(`${blocked} finalized QA order(s) left in place — finalized billing is ` +
-      'immutable by design. Drop the local database if you need a clean slate.');
+
+  console.log(`removed billing rows for ${orders.length - retained.length} of ${orders.length} order(s).`);
+  if (retained.length) {
+    console.log(`\nRETAINED (finalized billing is immutable by design):`);
+    for (const number of retained) console.log(`  ${number}`);
+    console.log(`\nThis is why a dedicated disposable database is preferred: drop the`);
+    console.log(`database instead. Do not un-invoice or weaken the trigger to clean up.`);
   }
   console.log('Audit rows are append-only and are deliberately not removed.');
 }
 
 async function main(): Promise<void> {
-  assertLoopback();
-  if (TEARDOWN) await teardown();
-  else if (APPLY) await apply();
-  else await plan();
+  const p = preflight(APPLY);
+  if (TEARDOWN) await teardown(p);
+  else if (APPLY) await apply(p);
+  else await plan(p);
   await sql.end({ timeout: 5 });
 }
 
