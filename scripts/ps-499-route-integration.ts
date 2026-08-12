@@ -487,10 +487,14 @@ async function main(): Promise<void> {
         // code, so the message is what identifies the lock here — the production
         // handler is mirrored rather than changed to suit the test.
         eq(res.status, 409, `body ${JSON.stringify(res.body)}`);
-        const message = String(res.body.error ?? '');
-        if (!/finalized/i.test(message)) {
-          throw new Error(`expected the finalized-lock message, got ${JSON.stringify(message)}`);
-        }
+        // Exact equality, not a keyword match: a regex on "finalized" would accept
+        // any 409 mentioning the word, including one produced after the
+        // BillingFinalizedLockError contract had drifted.
+        eq(
+          res.body.error,
+          `Billing for order ${ORDER} is finalized and cannot be modified.`,
+          'established finalized-lock message',
+        );
       });
     }
 
