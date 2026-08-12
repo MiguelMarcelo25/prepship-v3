@@ -109,6 +109,24 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
   const lineTypes = normalizedLineTypes(input);
   const hasLine = (lineType: string) => lineTypes.includes(lineType);
 
+  // PS-488 M3 — the CANONICAL return types get the same precedence as the legacy three.
+  //
+  // These are the names the generator actually writes (RETURN_SHIPPING_LINE_TYPE and
+  // RETURN_PROCESSING_LINE_TYPE in billing-return-event-contract.ts). Both were already
+  // declared in the BillingLifecycleStatus union but had no branch here, so every
+  // canonical return row fell past cancellation and conflict handling to the
+  // 'fulfilled' terminal below — a return charge on a cancelled outbound order was
+  // labelled by the ORDER's state instead of its own. A Return attached to a cancelled
+  // order is still a Return, and its persisted return money is its own.
+  //
+  // Placed above billing_adjustment / conflict / cancelled deliberately: the precedence
+  // IS the fix, not merely the presence of a branch.
+  if (hasLine('return_postage')) {
+    return result('return_postage', 'Return postage', 'purple', null, null, input);
+  }
+  if (hasLine('return_processing_fee')) {
+    return result('return_processing_fee', 'Return processing fee', 'purple', null, null, input);
+  }
   if (hasLine('return_processing')) {
     return result('return_processing', 'Return processing', 'purple', null, null, input);
   }

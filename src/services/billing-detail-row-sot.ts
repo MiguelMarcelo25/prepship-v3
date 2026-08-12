@@ -321,6 +321,12 @@ const TEXT_CARRY_FIELDS = [
   'orderDescription',
   'orderDescriptionSavedBy',
   'orderDescriptionSavedAt',
+  // PS-488 M3: the persisted return reference. Every line under one return identity
+  // resolves it from the same relational row, so the value is identical across them —
+  // but it survived the collapse only through the first-line spread, which is the
+  // accident this table exists to remove. Declared so the guarantee holds regardless
+  // of which component line arrives first.
+  'returnReference',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [
@@ -382,6 +388,19 @@ function applyCancelledNoCharge(row: BillingDetailRowDto): void {
   if (!isCancelledNoChargeBillingRow(row)) return;
   if (textValue(row.fulfillmentConflictCode)) return;
 
+  // PS-488 M3 — a Return row is never zeroed by the outbound order's cancellation.
+  //
+  // The aggregate rewrites lineType to the generic order type before this runs, so the
+  // line-type exclusion inside isCancelledNoChargeBillingRow can no longer recognise a
+  // return and the row reached the zeroing below on its related order's state alone.
+  // That produced a visible contradiction: the return breakout fields kept their money
+  // (they are not in the list below) while Total and every generic bucket read zero.
+  //
+  // A return is its own business event. Cancelling the outbound order does not refund
+  // what the return cost, so the Return row keeps its persisted money. The outbound
+  // row's cancelled-no-charge behaviour is unchanged.
+  if (row.rowType === 'Return') return;
+
   // Per user override unlock shipped data on 2026-07-06: cancelled Billing rows
   // remain visible for audit, but stale prep/box/shipping generated lines and
   // their review badges cannot contribute money or review noise.
@@ -438,9 +457,12 @@ function applyRowIdentity(row: BillingDetailRowDto): void {
 }
 
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
+  // PS-488 M3 — identity FIRST. applyCancelledNoCharge must know whether this is a
+  // Return row before it decides whether to zero it, and rowType is what tells it.
+  // Running the zeroing first meant the decision was made with the answer missing.
+  applyRowIdentity(row);
   applyCancelledNoCharge(row);
   applyDestinationInternational(row);
-  applyRowIdentity(row);
   row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
   const orderNumber = orderNumberValue(row);
   if (orderNumber && duplicatedOrderNumbers.has(orderNumber)) {
@@ -508,6 +530,31 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
       existing.shippingTotal +
       existing.storageTotal;
     existing.grandTotal = numberValue(existing.grandTotal) + metrics.total;
+
+    // PS-488 M3 — deterministic aggregate display fields.
+    //
+    // id, description, qty and unitCost all belong to a COMPONENT line, not to the
+    // aggregate. They survived the collapse purely by first-line spread, so reversing
+    // the order the source rows arrived in changed the row the operator saw — and `id`
+    // is the table/React key, so one business row could change key between fetches.
+    //
+    // Pinned to the HIGHEST component id rather than nulled. Nulling is order-
+    // independent but destroys real display data: qty feeds displayQty, which ordinary
+    // multi-line outbound aggregates depend on. The live query orders by
+    // desc(billing_line_items.id), so the highest-id line is the one that arrives first
+    // today — pinning to it leaves current output byte-identical while making it
+    // independent of arrival order.
+    //
+    // Identity is never taken from these fields; it comes from the relational column.
+    const existingId = Number(existing.id);
+    const incomingId = Number(row.id);
+    if (Number.isFinite(incomingId) && (!Number.isFinite(existingId) || incomingId > existingId)) {
+      existing.id = row.id;
+      existing.description = row.description;
+      existing.qty = row.qty;
+      existing.unitCost = row.unitCost;
+    }
+
     existing.hasPackageCostLine = existing.hasPackageCostLine === true || hasPackageCostLine;
     existing.boxCostNoCharge = existing.boxCostNoCharge === true || boxCostNoCharge;
 

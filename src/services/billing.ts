@@ -2635,11 +2635,26 @@ export async function billingDetails(input: GenerateInput) {
       // externallyFulfilled above reads raw. Classification is NOT done here: the
       // canonical owner is classifyDestinationCountry (billing-destination-international).
       destinationCountry: sql<string | null>`nullif(trim(${orders.raw}->'shipTo'->>'country'), '')`,
+      // PS-488 M3 — LIVE relational return identity.
+      //
+      // billing-detail-row-sot.ts has always been able to group by return identity and
+      // derive rowType/displayReference from it, but nothing ever handed it the value:
+      // this column was written by the generator and never read back. Every return line
+      // therefore fell to the per-line fallback key and rendered as its own row, and
+      // the reference had to be inferred downstream.
+      //
+      // Selected here, at the imperfect-data boundary, so the aggregation owner
+      // receives identity as a fact. No description parsing, no minted suffixes.
+      returnId: billingLineItems.returnId,
+      returnReference: returns.returnReference,
     })
     .from(billingLineItems)
     .leftJoin(shipments, eq(billingLineItems.shipmentId, shipments.id))
     .leftJoin(orders, eq(billingLineItems.orderId, orders.id))
     .leftJoin(orderOverrides, eq(billingLineItems.orderId, orderOverrides.orderId))
+    // returns.id is a serial primary key, so this cannot fan out rows. Client/store
+    // scope is unchanged — the join adds a column, never a row and never reach.
+    .leftJoin(returns, eq(billingLineItems.returnId, returns.id))
     .where(
       and(
         // PS-208: `to` is the EXCLUSIVE day-after midnight. The canonical
