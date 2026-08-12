@@ -1295,6 +1295,18 @@ const REQUIRED_GUARDS = [
   // ledger movement. Mutation-verified — wrapping a db.update in the retry fails
   // the guard, as does retrying a saturated pool or unwrapping the Orders list.
   'test:ps-504-read-retry',
+  // PS-505 (2026-08-12). `shipment_sync` is a FIXED path in the claim alarm, so any review
+  // inflow is a zero-threshold regression — and that is the alarm which has been firing
+  // (`inventory_claim.fixed_regression.shipment_sync`). Cause: when ShipStation omits
+  // `shipmentItems`, sync went straight to `kind: 'unavailable'` and deducted nothing.
+  // Production on 2026-08-12: 95.9% of our shipped orders never deducted before PS-497,
+  // 9.1% after, and ALL 15 residual orders had exactly one outbound shipment.
+  //
+  // The load-bearing assertion is that the whole-order fallback stays GATED on
+  // isSoleOutboundShipment. Ungated, a split order deducts the same lines once per
+  // shipment. Mutation-verified: removing the gate, ignoring the provider payload, or
+  // dropping the caller-liveness check each fail the guard.
+  'test:ps-505-sync-line-fallback',
 ];
 
 const npmCli = process.env.npm_execpath;

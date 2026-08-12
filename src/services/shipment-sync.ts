@@ -12,6 +12,10 @@ import {
   listShipStationV2Shipments,
 } from '../connectors/carrier/shipstation';
 import { applyOrderLifecycleCommandInTransaction, applyOrderLifecycleCommand } from './order-lifecycle-command';
+// PS-505: rescue a shipment whose provider payload carried no line quantities, but only
+// when this shipment is provably the order's sole outbound one.
+import { loadWholeOrderShipmentLines } from './shipment-fulfillment-lines';
+import { isSoleOutboundShipment } from './fulfillment/sole-outbound-shipment';
 import { consumeOutboundPackageInTransaction } from './package-consumption';
 import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 import { getSettingNumber, setSetting } from './settings';
@@ -560,9 +564,30 @@ async function upsertShipmentsBatch(
             isTest: sourceAccountIsTest,
           };
           if (row.orderId && !row.voided && !row.isReturn) {
-            const fulfillmentFacts =
+            // PS-505: when ShipStation omits shipmentItems this went straight to
+            // `unavailable`, which strands the claim and deducts nothing. Measured against
+            // production on 2026-08-12: 96% of our shipped orders never deducted before
+            // PS-497 and 9% after — and every one of the remaining cases was an order with
+            // exactly ONE outbound shipment, which is the case PS-497 already knows how to
+            // answer safely.
+            //
+            // The order's lines are valid shipment truth only when the shipment's scope
+            // equals the order's scope, so this is gated on that being provably true. A
+            // split order still falls through to `unavailable` rather than over-deducting
+            // every line against every shipment.
+            const providerLines =
               Array.isArray(candidate?.source.shipmentItems) && candidate.source.shipmentItems.length > 0
-                ? { kind: 'exact' as const, lines: candidate.source.shipmentItems }
+                ? candidate.source.shipmentItems
+                : null;
+            const wholeOrderLines = providerLines
+              ? null
+              : (await isSoleOutboundShipment(tx, row.orderId, row.id))
+                ? await loadWholeOrderShipmentLines(row.orderId, tx)
+                : null;
+            const fulfillmentFacts = providerLines
+              ? { kind: 'exact' as const, lines: providerLines }
+              : wholeOrderLines
+                ? { kind: 'exact' as const, lines: wholeOrderLines }
                 : {
                     kind: 'unavailable' as const,
                     description: 'ShipStation shipment did not include fulfillment-line quantities',
