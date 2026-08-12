@@ -39,6 +39,12 @@ export type InvoiceCsvDetailRow = {
   shipping_amt: string;
   storage_amt: string;
   row_total: string;
+  /**
+   * PS-488 M3 — return money, already bucketed by the backend aggregate. Optional so a
+   * caller that has not been updated serializes 0 rather than NaN into a money column.
+   */
+  return_postage_amt?: string | null;
+  return_processing_amt?: string | null;
   billing_status_label?: string | null;
   skus: string | null;
   package_cost_amt: string;
@@ -72,6 +78,12 @@ export const INVOICE_CSV_HEADERS = [
   // PS-490: appended LAST. ps-468 pins CSV cells by position, same constraint as the
   // XLSX sheet, so a column inserted earlier would shift every existing assertion.
   'Destination',
+  // PS-488 M3: return money, appended last for the same reason. The XLSX sheet already
+  // carried these two columns; the CSV did not, so a return row exported with a non-zero
+  // Total and every component column at 0.00 — the row could not be reconciled against
+  // its own breakdown, and the two exports of one invoice disagreed on what was shown.
+  'Return Postage',
+  'Return Processing',
 ] as const;
 
 /** RFC-4180 quote a field, with spreadsheet formula-injection neutralization:
@@ -100,6 +112,13 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const packageCostAmt = Number(row.package_cost_amt);
   const shippingAmt = Number(row.shipping_amt);
   const storageAmt = Number(row.storage_amt);
+  // PS-488 M3 — NOT fed into resolveBillingInvoiceRowTotal below. That helper's fallback
+  // reconstructs a total from the outbound components when row_total is absent, and its
+  // shape is pinned by PS-468/Audit B-9. row_total already includes return money (it is
+  // a sum over every line type), so adding these here would double-count on every row
+  // that has a real row_total. They are display buckets only.
+  const returnPostageAmt = Number(row.return_postage_amt ?? 0) || 0;
+  const returnProcessingAmt = Number(row.return_processing_amt ?? 0) || 0;
   // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
   // CSV delegates the read-only total fallback to the backend owner.
   const total = resolveBillingInvoiceRowTotal({
@@ -140,6 +159,11 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     // PS-490: an adjustment has no shipment and therefore no destination — blank, not
     // "Needs Review", which would imply a gap worth chasing.
     row.billing_adjustment_id ? '' : (row.destination ?? ''),
+    // PS-488 M3: the backend's own return buckets, never borrowed from shipping_amt.
+    // Rendered through the same num() as every other money cell so an absent value
+    // becomes 0, matching how the XLSX sheet carries these two columns.
+    num(returnPostageAmt),
+    num(returnProcessingAmt),
   ];
   return cells.map(csvField).join(',');
 }

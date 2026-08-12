@@ -33,8 +33,15 @@ const { renderInvoiceCsv, INVOICE_CSV_HEADERS } = await import('../src/routes/bi
 
 // ── the column exists, at the END ──────────────────────────────────────────
 check('Destination is a CSV column', INVOICE_CSV_HEADERS.includes('Destination' as never));
-check('Destination is appended LAST, so position-pinned assertions do not shift',
-  INVOICE_CSV_HEADERS[INVOICE_CSV_HEADERS.length - 1] === 'Destination',
+// PS-488 M3 — this used to require Destination be the LAST header. The rule it was
+// protecting is that Destination sits AFTER every column PS-490 inherited, so the
+// positional assertions in ps-468 do not shift. "Last overall" expressed that only while
+// PS-490 happened to be the most recent change; appending Return Postage / Return
+// Processing behind it violates the literal while honouring the rule. Re-anchored to the
+// rule: Destination comes after Shipment #, the last column that predates PS-490.
+check('Destination is appended AFTER every pre-PS-490 column, so positions do not shift',
+  INVOICE_CSV_HEADERS.indexOf('Destination' as never)
+    > INVOICE_CSV_HEADERS.indexOf('Shipment #' as never),
   [...INVOICE_CSV_HEADERS]);
 
 // ── the classification the export must render ──────────────────────────────
@@ -65,13 +72,20 @@ const base = {
 const csvFor = (over: Record<string, unknown>) =>
   renderInvoiceCsv([{ ...base, order_number: 'N1', ...over } as never]).split('\r\n')[1] ?? '';
 
-check('an International order ends its row with International',
-  csvFor({ destination: 'International' }).endsWith(',International'),
+// PS-488 M3 — these read the Destination CELL BY POSITION instead of asserting the row
+// ends with it. endsWith() silently tested "Destination is the final column" as well as
+// its real subject; once two columns were appended, all three failed without any of them
+// having anything to do with returns. Reading the cell keeps each check on its own topic.
+const DESTINATION_CELL = INVOICE_CSV_HEADERS.indexOf('Destination' as never);
+const destinationCellFor = (over: Record<string, unknown>) => csvFor(over).split(',')[DESTINATION_CELL];
+
+check('an International order renders International in the Destination cell',
+  destinationCellFor({ destination: 'International' }) === 'International',
   csvFor({ destination: 'International' }));
 check('a Needs Review order says so rather than rendering blank',
-  csvFor({ destination: 'Needs Review' }).endsWith(',Needs Review'));
+  destinationCellFor({ destination: 'Needs Review' }) === 'Needs Review');
 check('an ADJUSTMENT has no destination and renders blank, not Needs Review',
-  csvFor({ destination: 'Needs Review', billing_adjustment_id: 'adj-12345678' }).endsWith(','),
+  destinationCellFor({ destination: 'Needs Review', billing_adjustment_id: 'adj-12345678' }) === '',
   csvFor({ destination: 'Needs Review', billing_adjustment_id: 'adj-12345678' }));
 
 // ── the Return indicator on the Order # cell ───────────────────────────────

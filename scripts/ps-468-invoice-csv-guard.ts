@@ -39,8 +39,16 @@ function read(path: string): string {
 // ── 1. Behavioral: derivation parity with the XLSX Line Items sheet ──────────
 
 // Header columns must mirror the operator-facing invoice line item sheet, in order.
+//
+// PS-488 M3 — the intent of this assertion is that EXISTING cell positions never shift,
+// because the rest of this guard (and ps-467-468) addresses cells by index. Pinning the
+// whole array made "append a column at the end" — the one safe way to add one — look
+// identical to "insert a column in the middle", which is the unsafe one. Split into a
+// prefix pin plus a full pin so the two failures now read differently: a prefix failure
+// means positions moved and downstream index assertions are wrong; a full-list failure
+// means a column was appended and only this list needs updating.
 assert.deepEqual(
-  INVOICE_CSV_HEADERS,
+  INVOICE_CSV_HEADERS.slice(0, 14),
   [
     'Billing / Activity Date (Los Angeles)',
     'Order #',
@@ -58,6 +66,17 @@ assert.deepEqual(
     // PS-490: appended LAST, after Shipment #. This guard pins column ORDER by position,
     // which is exactly why the new column goes on the end rather than beside Order #.
     'Destination',
+  ],
+  'the first 14 CSV columns must not move — every positional assertion below depends on it',
+);
+assert.deepEqual(
+  INVOICE_CSV_HEADERS.slice(14),
+  [
+    // PS-488 M3: appended LAST, same rule as Destination. The XLSX sheet already carried
+    // both; without them a return row exported a non-zero Total with every component
+    // column at 0, so the CSV could not be reconciled against its own breakdown.
+    'Return Postage',
+    'Return Processing',
   ],
   'CSV columns must keep the operator-facing line item order and omit Prep Fee Waiver',
 );
@@ -124,9 +143,66 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International',
+  // PS-488 M3: two trailing 0 cells. This fixture carries NO return money — it is an
+  // outbound shipment row that merely wears a " - Return" label, which is exactly the
+  // merged shape the M3 grouping key separates. It stays as-is to prove the new columns
+  // are 0 on a row with no return charges; returnMoneyRow below covers the real case.
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,0,0',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
+
+// PS-488 M3 — a REAL return row: return money only, no outbound components.
+//
+// Before the two columns existed this row exported Total 10.73 with Box Cost, Qty,
+// Pick & Pack, Additional, Shipping and Storage all 0 — a money row whose own breakdown
+// summed to nothing, and which the XLSX export of the same invoice showed differently.
+const returnMoneyRow: InvoiceCsvDetailRow = {
+  order_id: 4242,
+  order_number: '1234',
+  // Return lines are written with shipment_id NULL, so the Shipment # cell reads External.
+  shipment_id: null,
+  ship_date: '2026-05-06',
+  billing_effective_date: '2026-05-06',
+  base_qty: '0',
+  addl_qty: '0',
+  pickpack_amt: '0',
+  additional_amt: '0',
+  shipping_amt: '0',
+  storage_amt: '0',
+  return_postage_amt: '7.73',
+  return_processing_amt: '3.00',
+  row_total: '10.73',
+  billing_status_label: 'Return postage',
+  skus: null,
+  package_cost_amt: '0',
+  box_label: '—',
+  box_review: false,
+  fee_waived: false,
+  destination: 'Domestic',
+  order_number_label: '#1234-RETURN',
+};
+
+const returnCells = renderInvoiceCsvRow(returnMoneyRow).split(',');
+assert.equal(returnCells.length, INVOICE_CSV_HEADERS.length, 'every header must get a cell');
+assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Return Postage')], '7.73');
+assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Return Processing')], '3');
+assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Total')], '10.73',
+  'the return Total must stay the backend row_total');
+// The breakdown must now account for the Total. This is the property the missing columns
+// broke, and it is asserted as arithmetic rather than as a pinned string so it keeps
+// meaning if an unrelated column is appended later.
+const sumOf = (header: string) => Number(returnCells[INVOICE_CSV_HEADERS.indexOf(header)]);
+assert.equal(
+  sumOf('Box Cost') + sumOf('Pick & Pack Fee') + sumOf('Shipping') + sumOf('Storage')
+    + sumOf('Return Postage') + sumOf('Return Processing'),
+  sumOf('Total'),
+  'a return row must reconcile against its own component columns',
+);
+// Return money must never be laundered through the outbound buckets.
+assert.equal(sumOf('Shipping'), 0, 'return postage must not appear as Shipping');
+assert.equal(sumOf('Pick & Pack Fee'), 0, 'return processing must not appear as a prep fee');
+// PS-488 AC-1: the label is the backend's STORED reference, passed through untouched.
+assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Order #')], '#1234-RETURN');
 
 // PS-490: a row from a caller that has not been updated must still emit a correct order
 // number and an empty Destination — never a blank Order # cell.
@@ -134,10 +210,24 @@ assert.ok(
   lines[2]?.includes(',PO-9002,'),
   'a row without order_number_label falls back to the plain order number',
 );
-assert.ok(
-  lines[2]?.endsWith(','),
-  'a row without a destination ends with an empty Destination cell, not a missing column',
+// PS-488 M3: was `lines[2].endsWith(',')`, which only worked while Destination happened
+// to be the final column — it asserted "Destination is last" as a side effect of testing
+// "an absent field still emits its cell". Re-anchored to the intent itself, by cell
+// count and by position, so appending a column can never make it silently vacuous.
+const fallbackCells = lines[2]!.split(',');
+assert.equal(
+  fallbackCells.length,
+  INVOICE_CSV_HEADERS.length,
+  'a row with absent optional fields must still emit every column',
 );
+assert.equal(
+  fallbackCells[INVOICE_CSV_HEADERS.indexOf('Destination')],
+  '',
+  'a row without a destination emits an empty Destination cell, not a missing column',
+);
+// The same rule for the two return columns: absent means 0, never NaN or blank.
+assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Postage')], '0');
+assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Processing')], '0');
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
 // pickPackFee(3) + package cost(2) + shipping(2) + storage(1) = 8. Empty SKUs serialize blank.
@@ -145,7 +235,11 @@ assert.equal(
   lines[2],
   // PS-490: trailing empty cell is the Destination column — this fixture carries no
   // country, and an unknown destination on a row with no order context renders blank.
-  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021,',
+  // PS-488 M3: two trailing 0 cells. row_total 0 still triggers the component fallback,
+  // and the fallback deliberately does NOT include the return buckets — row_total is a
+  // sum over every line type, so folding returns into the fallback would double-count on
+  // every row that has a real total.
+  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021,,0,0',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

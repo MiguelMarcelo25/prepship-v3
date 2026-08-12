@@ -2158,6 +2158,13 @@ type InvoiceDetailRow = {
   order_id: number | null;
   order_number: string | null;
   shipment_id: number | null;
+  /**
+   * PS-488 M3 — the return event this row belongs to; NULL on every outbound, storage
+   * and adjustment row. It is a grouping key, not display: the visible reference comes
+   * from the canonical DTO via reconcileInvoiceRows, which reads the STORED
+   * returns.return_reference. PrepShip never mints a -RETURN suffix.
+   */
+  return_id: number | null;
   ship_date: string | null;
   billing_effective_date: string | null;
   billing_policy_version: string | null;
@@ -2297,6 +2304,14 @@ async function billingInvoiceData(
       b.order_number,
       -- PS-425: invoice cardinality follows the frozen shipment-scoped lines.
       b.shipment_id,
+      -- PS-488 M3: return cardinality follows the RETURN EVENT, the same grain the
+      -- Billing table uses. Return lines are written with shipment_id NULL, so before
+      -- this key every return raised on one order in one billing day collapsed into a
+      -- single group: two returns became one invoice row, its money summed and its
+      -- "1234 - Return" label unable to say which return it was. The total stayed
+      -- correct, which is why it went unnoticed — the invoice and the Billing table
+      -- simply reported different row counts for the same period.
+      b.return_id,
       -- PS-208: ship_date is a calendar day stored at UTC midnight — extract
       -- the day AT UTC. The previous America/Los_Angeles conversion turned a
       -- May 1 row into April 30 before display even started.
@@ -2363,10 +2378,24 @@ async function billingInvoiceData(
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
       and ${invoiceEffectiveDay} >= ${dateFrom}::timestamptz
       and ${invoiceEffectiveDay} < ${dateTo}::timestamptz
-    group by b.order_id, b.order_number, b.shipment_id, b.ship_date,
+    -- PS-488 M3: b.return_id added. It cannot split an OUTBOUND group: the only writer
+    -- of return_id is the return-line insert in billing.ts, so every outbound and
+    -- storage line has it NULL, and GROUP BY treats NULLs as equal. It splits exactly
+    -- the groups that were wrong — two return events on one order in one billing day.
+    -- 0092's partial UNIQUE (return_id, line_type) caps each resulting group at one
+    -- postage line plus one processing line.
+    group by b.order_id, b.order_number, b.shipment_id, b.return_id, b.ship_date,
       b.billing_effective_date, b.billing_policy_version,
       b.billing_adjustment_id, b.source_finalization_id
-    order by ${invoiceEffectiveDay} desc, b.order_id desc, b.shipment_id desc nulls last
+    -- PS-488 M3: b.return_id is the tiebreak the new grouping key made necessary. Two
+    -- returns on one order in one billing day now produce two rows that agree on the
+    -- effective day, the order and a NULL shipment_id — without this the invoice could
+    -- order them differently between two renders of the same frozen period. NULLS LAST
+    -- keeps every outbound row ahead of the returns for that order, so the existing
+    -- outbound sequence is untouched. Ascending return_id matches the tiebreak in
+    -- reconcileInvoiceRows, so the two return orderings cannot disagree.
+    order by ${invoiceEffectiveDay} desc, b.order_id desc, b.shipment_id desc nulls last,
+      b.return_id asc nulls first
   `);
 
   // PS-217: resolve the human-readable billed box from the stamped package_id.
@@ -2435,6 +2464,7 @@ async function billingInvoiceData(
       order_id: r.order_id,
       order_number: r.order_number,
       shipment_id: r.shipment_id,
+      return_id: r.return_id,
       ship_date: r.ship_date,
       billing_effective_date: r.billing_effective_date,
       billing_policy_version: r.billing_policy_version,

@@ -47,7 +47,21 @@ assert.doesNotMatch(
 assert.match(billing, /\.returning\(\{[\s\S]{0,180}shipmentId:[\s\S]{0,180}totalCost:/);
 
 assert.match(route, /b\.shipment_id,/);
-assert.match(route, /group by b\.order_id, b\.order_number, b\.shipment_id, b\.ship_date/);
+// PS-488 M3 — this pinned the grouping key as one literal string, so inserting b.return_id
+// between shipment_id and ship_date failed it. The rule PS-425 owns is that the invoice
+// groups PER SHIPMENT: two shipments of one order must stay two invoice rows. That rule is
+// about shipment_id being present in the key, not about what follows it. Asserted per key,
+// so this guard now fails only when the shipment grain is actually lost.
+const invoiceGroupBy = /\n\s*group by ([\s\S]*?)\n\s*(?:--|order by)/.exec(route)?.[1] ?? '';
+assert.ok(invoiceGroupBy.includes('b.shipment_id'),
+  'PS-425: the invoice must group per shipment, or two shipments of one order collapse into one row');
+assert.ok(invoiceGroupBy.includes('b.order_id') && invoiceGroupBy.includes('b.ship_date'),
+  'the invoice grouping key must keep order and ship date');
+// PS-488 M3: a return event is a grain of its own. Without this key two returns raised on
+// one order in one billing day merge into a single invoice row — the money stays right
+// while the row count silently disagrees with the Billing table for the same period.
+assert.ok(invoiceGroupBy.includes('b.return_id'),
+  'PS-488 M3: the invoice must group per return event');
 assert.match(route, /<th>Shipment #<\/th>/);
 assert.match(route, /header: 'Shipment #', key: 'shipmentId'/);
 assert.match(csv, /'Shipment #'/);
