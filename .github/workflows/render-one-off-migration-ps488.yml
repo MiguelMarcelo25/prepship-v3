@@ -1,0 +1,207 @@
+# PS-488 — migration 0092, the return-identity reconciliation, as a Render one-off job.
+#
+# WHY THIS LANE
+#
+# Production execution belongs to the designated operator lane, not a developer
+# session (scripts/ps-488-m2-readiness.ts:16). The Render job runs inside the
+# environment that already holds the production DATABASE_URL, so no local
+# credential is needed, none is minted, and none passes through a workstation.
+#
+# INSPECT IS THE DEFAULT. The runner is fail-closed: with no flags it reports and
+# writes nothing. `apply` is a separate, explicit dispatch that additionally
+# demands the exact confirmation token. Run inspect first, read the FK delete
+# action and the row/total counts, then dispatch apply.
+#
+# FILES ARE SHIPPED IN, not assumed present. The deployed service runs whatever
+# commit is live, which does not yet contain 0092. The archive carries the
+# reviewed SQL, the runner, the frozen contract module, and 0089 — the runner
+# asserts 0089's digest via assert0089Untouched() and cannot start without it.
+# Same pattern as the PS-465/466 lane.
+#
+# The digest is passed explicitly as well. The contract module already pins it, so
+# this is a second, independent binding that also proves the archive arrived
+# untampered.
+name: Render One-Off Migration (PS-488 / 0092)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'inspect = read-only report (safe, default). apply = commit the reconciliation.'
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - apply
+      confirm:
+        description: 'apply only — type APPLY-PS-488-0092-RETURN-IDENTITY-RECONCILIATION. Leave blank for inspect.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-one-off-migration-ps-488
+  # Never cancel a migration mid-flight.
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # A blank or wrong token in apply mode must stop here, before any Render
+      # call. Inspect ignores the token entirely — it has no path that writes.
+      - name: Validate mode and confirmation
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          expected='APPLY-PS-488-0092-RETURN-IDENTITY-RECONCILIATION'
+          case "$MODE" in
+            inspect)
+              echo 'Mode: INSPECT — read-only. The runner writes nothing without --apply.'
+              ;;
+            apply)
+              test "${CONFIRM:-}" = "$expected" || {
+                echo '::error::apply requires the exact confirmation token. Nothing was dispatched.'
+                exit 1
+              }
+              echo 'Mode: APPLY — confirmation accepted.'
+              ;;
+            *)
+              echo "::error::Unknown mode '${MODE}'."
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      # Proves this checkout holds the reviewed SQL before anything is shipped.
+      # The runner re-checks inside the job from its own pinned constants; this
+      # fails faster and on the archive that is actually about to travel.
+      #
+      # Digests are LF-normalised, matching normalisedDigest() in the contract
+      # module — this repo runs core.autocrlf=true, so hashing raw bytes would be
+      # environment dependent.
+      - name: Reviewed-content digests
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { createHash } = require('node:crypto');
+          const { readFileSync } = require('node:fs');
+          const norm = (p) => createHash('sha256')
+            .update(readFileSync(p, 'utf8').replace(/\r\n/g, '\n'), 'utf8').digest('hex');
+          const checks = [
+            ['drizzle/0092_ps488_return_identity_reconciliation.sql',
+             'a08ed909b92cf3a5af2201d8fdeea49a9920785f2f82110b0203586e2dcf55b0'],
+            ['drizzle/0089_billing_line_items_return_id.sql',
+             '2a8b35b8f03ebee77a7787537ba086329d10d7a27bfb6e4b74da3549782ba1dc'],
+          ];
+          let failed = false;
+          for (const [file, expected] of checks) {
+            const actual = norm(file);
+            if (actual === expected) {
+              console.log('ok   ' + file);
+            } else {
+              console.error('STOP: ' + file + '\n  actual:   ' + actual + '\n  expected: ' + expected);
+              failed = true;
+            }
+          }
+          process.exit(failed ? 1 : 0);
+          NODE
+
+      - name: Fast contract proof
+        run: npm run test:ps-488-recovery-contract
+
+      - name: Run the PS-488 runner as a Render one-off job
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo '::error::RENDER_API_KEY and RENDER_SERVICE_ID are required.'
+            exit 1
+          fi
+
+          # 0089 travels too: assert0089Untouched() reads it and the runner
+          # refuses to start if it is missing or altered.
+          files=(
+            scripts/apply-ps-488-return-identity-reconciliation.ts
+            scripts/ps-488-migration-contract.ts
+            drizzle/0092_ps488_return_identity_reconciliation.sql
+            drizzle/0089_billing_line_items_return_id.sql
+          )
+          archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
+
+          digest='a08ed909b92cf3a5af2201d8fdeea49a9920785f2f82110b0203586e2dcf55b0'
+          runner='npx tsx scripts/apply-ps-488-return-identity-reconciliation.ts'
+          if [ "$MODE" = 'apply' ]; then
+            confirm='APPLY-PS-488-0092-RETURN-IDENTITY-RECONCILIATION'
+            run_args="--digest=${digest} --apply --confirm=${confirm}"
+          else
+            run_args="--digest=${digest}"
+          fi
+
+          start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && ${runner} ${run_args}"
+          payload=$(START_COMMAND="$start_command" node -e \
+            'process.stdout.write(JSON.stringify({startCommand: process.env.START_COMMAND}))')
+          response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+          http_code=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+          if [ "$http_code" != '201' ]; then
+            echo "::error::Render one-off job creation failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+          job_id=$(BODY="$body" node -e \
+            'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.id||""))')
+          test -n "$job_id" || { echo '::error::Render returned no job id.'; exit 1; }
+          echo "Render ${MODE} job created: ${job_id}"
+
+          for attempt in $(seq 1 90); do
+            sleep 10
+            job=$(curl -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs/${job_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H 'Accept: application/json')
+            status=$(BODY="$job" node -e \
+              'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.status||""))')
+            echo "${MODE} status=${status} (poll ${attempt})"
+            case "$status" in
+              succeeded)
+                if [ "$MODE" = 'apply' ]; then
+                  echo 'PS-488 0092 reconciliation committed and verified.'
+                else
+                  echo 'PS-488 inspection complete. Nothing was written. Read the job log in Render.'
+                fi
+                exit 0
+                ;;
+              failed|canceled)
+                echo "::error::${MODE} job ended in ${status}."
+                exit 1
+                ;;
+            esac
+          done
+
+          echo '::error::Job did not finish within the polling window.'
+          exit 1
