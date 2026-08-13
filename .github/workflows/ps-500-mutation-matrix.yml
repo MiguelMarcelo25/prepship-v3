@@ -1,0 +1,90 @@
+# PS-500 — mutation matrix for the rate-money classifier.
+#
+# WHY THIS IS ITS OWN WORKFLOW
+#
+# The matrix rewrites source files in place and restores them. That is why it is
+# deliberately NOT a member of the SOT guard pack (see the PS-500 entry in
+# scripts/sot-guard-pack.mjs): a mutation on disk would be visible to whichever
+# guard ran next. ci.yml runs every check as steps of a single job sharing one
+# working tree, so the same hazard applies there if the matrix ever dies midway
+# and leaves a mutation behind. An isolated job on an ephemeral runner cannot
+# contaminate anything else.
+#
+# Until this existed the matrix ran NOWHERE automatically — the guard-rot pattern
+# the pack's own comments call out repeatedly. It earned its keep on its first
+# run: the guard held 31 green checks while the availability gate could still be
+# replaced with `void isBackendUnavailableRate(...)` — call site kept, ordering
+# kept, refusal gone.
+#
+# It must FAIL, never skip. A mutation proof that skips reports green while
+# proving nothing.
+name: PS-500 mutation matrix
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+  pull_request:
+    branches:
+      - prepshipv4-stable
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-500-mutation-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation-matrix:
+    name: Rate-money classifier mutation matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      # A checkout is clean by construction. Asserting it anyway means the
+      # after-check below can only ever be blamed on the matrix itself.
+      - name: Working tree is clean before the matrix
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Working tree was already dirty before the matrix ran:"
+            git status --porcelain
+            exit 1
+          fi
+
+      - name: Mutation matrix
+        run: npm run test:ps-500-mutation-matrix
+
+      # THE LOAD-BEARING ASSERTION. The matrix reports its own restoration, but a
+      # run that mutates source and exits without restoring would otherwise be
+      # indistinguishable from a clean pass. Byte-level proof, independent of what
+      # the matrix claims about itself.
+      - name: Working tree is clean after the matrix
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "The matrix did not restore every file it mutated:"
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+
+      # Restored byte-identical is necessary but not sufficient — this proves the
+      # restored tree still satisfies the guard the matrix was mutating against.
+      - name: Guard is green on the restored tree
+        run: npm run test:ps-500-rate-money-classifier
