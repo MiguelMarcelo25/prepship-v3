@@ -209,10 +209,16 @@ async function main(): Promise<void> {
     fulfillmentFeeTotal: 32,
   };
   const csv = renderInvoiceCsv(details);
-  // PS-490: Destination is now the last CSV column, so the per-shipment row no longer
-  // ends at the Shipment # cell. These fixtures carry no destination, which renders as an
-  // empty trailing field — the shipment cardinality this guard exists to pin is unchanged.
-  assert.match(csv, /,12,0,12,#501,\r?\n/);
+  // PS-488 M3: the end-of-line anchor is gone. PS-490 appended Destination and kept the
+  // `\r?\n` here, which only passed because that column was BOTH empty AND last — the row
+  // happened to end with the comma before the newline. Appending Return Postage and Return
+  // Processing broke it again, and that is the tell: the anchor was pinning "Shipment # is
+  // the final column", not the shipment cardinality this guard exists to prove.
+  //
+  // Now matched the same way #502 already was on the next line — the four cells in
+  // sequence, wherever the row happens to end. Appending a column can no longer break a
+  // shipment-grain assertion.
+  assert.match(csv, /,12,0,12,#501,/);
   assert.match(csv, /,20,0,20,#502,/);
   const html = renderInvoiceHtml({
     clientName: 'Fixture',

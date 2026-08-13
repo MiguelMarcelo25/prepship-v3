@@ -79,6 +79,13 @@ await assert.rejects(
 );
 
 const billing = readFileSync('src/services/billing.ts', 'utf8');
+
+// PS-488 M2 re-anchor: a comment-free view, for assertions that must see EXECUTABLE code.
+// Mutation-checked — commenting out the sweep-owner import still satisfied a raw-source
+// regex, so the delegation assertion below passed against code that no longer imported it.
+const billingCode = billing
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
 const packageJson = readFileSync('package.json', 'utf8');
 const guardPack = readFileSync('scripts/sot-guard-pack.mjs', 'utf8');
 
@@ -87,10 +94,29 @@ assert.match(
   /const orderLinesToRebuild = editableOrderIds\.length > 0[\s\S]*inArray\(billingLineItems\.orderId, editableOrderIds\)[\s\S]*requestedWindowOrderLines/,
   'generator must reconcile candidate order ids across periods and retain the window sweep',
 );
+// PS-488 M2 re-anchor. This pinned an INLINE `tx.delete(billingLineItems)` sitting between
+// the editability assertion and the predicate. M2 extracted the order-scoped sweep into
+// billing-outbound-sweep.ts so production and the PostgreSQL 17 proof call ONE owner — a
+// test can no longer pass while production diverges. The literal shape this matched
+// therefore no longer exists, and the regex became unsatisfiable: the four tokens now sit
+// in an order the file cannot produce, so it failed on every commit rather than on a
+// regression. (The remaining `tx.delete(billingLineItems)` in the file is the RETURN-line
+// delete, a different statement entirely.)
+//
+// The RULE is unchanged and is what is asserted here: the finalized-order policy must
+// still guard the order-scoped delete, and that delete must still carry the rebuild scope
+// and the editability predicate. Delegation to the extracted owner is asserted separately
+// so an inline copy cannot quietly come back.
 assert.match(
   billing,
-  /assertBillingOrdersEditable[\s\S]*tx\.delete\(billingLineItems\)[\s\S]*orderLinesToRebuild[\s\S]*billingLineItemIsEditablePredicate/,
-  'finalized-order policy must guard the order-scoped delete',
+  /assertBillingOrdersEditable[\s\S]*deleteOutboundBillingLinesForRebuild[\s\S]*orderLinesToRebuild[\s\S]*billingLineItemIsEditablePredicate/,
+  'finalized-order policy must guard the order-scoped delete, which now runs through '
+    + 'deleteOutboundBillingLinesForRebuild carrying the rebuild scope and editable predicate',
+);
+assert.match(
+  billingCode,
+  /deleteOutboundBillingLinesForRebuild,[\s\S]*from '\.\/billing-outbound-sweep'/,
+  'the sweep owner must be imported, never reimplemented inline',
 );
 assert.match(
   billing,

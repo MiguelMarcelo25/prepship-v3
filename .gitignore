@@ -45,3 +45,6 @@ web/ruvector.db
 
 # PS-107 master regression runner artifacts
 test-results/
+
+# PS-488 0092 operator evidence — production transcripts, never committed
+.ps488-evidence/
