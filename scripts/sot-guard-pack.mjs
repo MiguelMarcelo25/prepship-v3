@@ -1340,6 +1340,24 @@ const REQUIRED_GUARDS = [
   // — call site kept, ordering kept, refusal gone. Presence-and-ordering checks
   // do not defend control flow; assert the early return itself.
   'test:ps-500-rate-money-classifier',
+  // PS-499 (2026-08-14). Billing bulk import is a patch, not a full resend. The
+  // three guards here defend that at the real HTTP boundary (cases A-P) plus the
+  // package-cost adapter against real PGlite persistence.
+  //
+  // The load-bearing assertions are the zero-mutation ones: an empty or
+  // description-only patch, a source-less stale full-resend, and an unpriceable
+  // box must each be refused with NOTHING committed — a full-resend read of a
+  // patch payload silently clears fees the operator never touched. Case P pins
+  // the finalized-lock refusal across every bulk mode, so bulk import cannot
+  // become a side door into a closed period.
+  //
+  // These ran in NEITHER this pack nor any workflow until now — the same
+  // guard-rot pattern called out above. Verified green under OFFLINE_GUARD_ENV:
+  // PGlite is embedded and the route harness binds a local socket, so no entry
+  // reaches for DATABASE_URL.
+  'test:ps-499-billing-bulk-import-patch',
+  'test:ps-499-bulk-import-package-cost',
+  'test:ps-499-route',
 ];
 
 const npmCli = process.env.npm_execpath;
