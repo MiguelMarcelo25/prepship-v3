@@ -872,6 +872,8 @@
     "test:ps-504-read-retry": "tsx scripts/ps-504-read-retry-guard.ts",
     "test:ps-505-sync-line-fallback": "tsx scripts/ps-505-sync-line-fallback-guard.ts",
     "test:ps-505-return-economics": "tsx scripts/ps-505-return-economics-guard.ts",
+    "test:ps-507-persistence": "node scripts/ps-507-qa-stack.mjs -- npx playwright test -c playwright.ps507.config.js",
+    "qa:ps-507-stack": "node scripts/ps-507-qa-stack.mjs",
     "status:sync": "tsx scripts/status-sync.ts",
     "test:status:sync": "tsx scripts/status-sync.ts --check",
     "test:sync-advisory-lock": "node scripts/sync-advisory-lock-guard.mjs",

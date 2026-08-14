@@ -48,12 +48,14 @@ import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { spawn } from 'node:child_process';
 import { randomBytes, createHmac } from 'node:crypto';
+import { createServer } from 'node:http';
 
 const HOST = '127.0.0.1';
 // Dedicated, and deliberately not 5177. See the header.
 const PG_PORT = Number(process.env.PS507_PG_PORT ?? 55507);
 const API_PORT = Number(process.env.PS507_API_PORT ?? 45507);
 const WEB_PORT = Number(process.env.PS507_WEB_PORT ?? 35507);
+const QUERY_PORT = Number(process.env.PS507_QUERY_PORT ?? 25507);
 
 // ── Fail-closed gates ────────────────────────────────────────────────────────
 
@@ -240,6 +242,55 @@ export async function applyAllMigrations(pg, log = console.log) {
   return { applied: applied.length, tolerated };
 }
 
+/**
+ * A loopback, test-only SQL endpoint over the in-process database.
+ *
+ * WHY THIS EXISTS. PGlite's socket serves ONE connection and the API holds it, so a
+ * Playwright process cannot open its own connection to assert what was committed. Without
+ * this, "did the row land" could only be inferred from the UI — which is precisely the
+ * inference PS-507 exists to stop tests making.
+ *
+ * The surface is deliberately small and gated four ways: bound to 127.0.0.1 only, the
+ * remote address is re-checked per request, a per-run random token is required, and the
+ * whole thing only ever runs under NODE_ENV=test against an in-memory database that dies
+ * with the process. It is never reachable from another host and there is nothing durable
+ * behind it.
+ */
+export function startQueryEndpoint(pg, { port, token, log = console.log }) {
+  return new Promise((resolve) => {
+    const server = createServer(async (req, res) => {
+      const reply = (status, body) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      const remote = req.socket.remoteAddress ?? '';
+      if (!/^(::1|::ffff:127\.0\.0\.1|127\.0\.0\.1)$/.test(remote)) {
+        return reply(403, { error: 'loopback only' });
+      }
+      if (req.headers['x-ps507-token'] !== token) {
+        return reply(401, { error: 'bad or missing x-ps507-token' });
+      }
+      if (req.method !== 'POST' || !req.url.startsWith('/query')) {
+        return reply(404, { error: 'POST /query only' });
+      }
+      let raw = '';
+      for await (const chunk of req) raw += chunk;
+      try {
+        const { sql, params } = JSON.parse(raw || '{}');
+        if (typeof sql !== 'string' || !sql.trim()) return reply(400, { error: 'sql required' });
+        const result = await pg.query(sql, params ?? []);
+        reply(200, { rows: result.rows });
+      } catch (error) {
+        reply(500, { error: String(error && error.message || error).split('\n')[0] });
+      }
+    });
+    server.listen(port, HOST, () => {
+      log(`[ps-507] query     : http://${HOST}:${port}/query (loopback, token-gated)`);
+      resolve(server);
+    });
+  });
+}
+
 async function waitForHttp(url, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -285,10 +336,20 @@ export async function provisionQaStack({ withFrontend = true, log = console.log 
   await pgServer.start();
   log(`[ps-507] database  : ${databaseUrl} (disposable, in-memory)`);
 
+  // Per-run token, so a stray local process cannot query the QA database even on loopback.
+  const queryToken = randomBytes(24).toString('hex');
+  const queryUrl = `http://${HOST}:${QUERY_PORT}/query`;
+  assertDisposableTarget(queryUrl);
+  const queryServer = await startQueryEndpoint(pg, { port: QUERY_PORT, token: queryToken, log });
+
   const children = [];
   const stop = async () => {
     for (const child of children) { try { child.kill(); } catch { /* already gone */ } }
+    try { queryServer.close(); } catch { /* already closed */ }
     try { await pgServer.stop(); } catch { /* already stopped */ }
+    // Teardown IS the cleanup. The database is in-memory, so closing it destroys every
+    // fixture row deterministically — there is nothing left to delete, and therefore no
+    // cleanup step that can half-succeed and leave a polluted database behind.
     try { await pg.close(); } catch { /* already closed */ }
   };
 
@@ -343,7 +404,7 @@ export async function provisionQaStack({ withFrontend = true, log = console.log 
       log(`[ps-507] frontend  : ${webUrl}`);
     }
 
-    return { runId, databaseUrl, apiUrl, webUrl, jwtSecret, pg, stop };
+    return { runId, databaseUrl, apiUrl, webUrl, queryUrl, queryToken, jwtSecret, pg, migrationReport, stop };
   } catch (error) {
     await stop();
     throw error;
@@ -374,6 +435,15 @@ function run(cmd, args, extraEnv, log, label) {
 
 const invokedDirectly = process.argv[1] && process.argv[1].includes('ps-507-qa-stack');
 if (invokedDirectly) {
+  // DEFAULT NODE_ENV, do not override it. npm scripts run under cmd.exe on Windows,
+  // where the POSIX `NODE_ENV=test node …` prefix is a syntax error, and this repo has
+  // no cross-env — so requiring the caller to set it would make the npm script
+  // platform-specific. Defaulting keeps `npm run test:ps-507` working everywhere while
+  // an explicit NODE_ENV=production still refuses, which is the case the gate is for.
+  //
+  // The substantive protection is the loopback + banned-host check on every target: this
+  // CLI can only ever provision 127.0.0.1, whatever NODE_ENV says.
+  process.env.NODE_ENV ??= 'test';
   const sep = process.argv.indexOf('--');
   const command = sep === -1 ? [] : process.argv.slice(sep + 1);
   const stack = await provisionQaStack();
@@ -396,6 +466,8 @@ if (invokedDirectly) {
         PS507_WEB_URL: stack.webUrl,
         PS507_DATABASE_URL: stack.databaseUrl,
         PS507_JWT_SECRET: stack.jwtSecret,
+        PS507_QUERY_URL: stack.queryUrl,
+        PS507_QUERY_TOKEN: stack.queryToken,
       },
     });
     const code = await new Promise((r) => child.on('exit', r));
