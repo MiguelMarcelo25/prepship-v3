@@ -111,11 +111,19 @@ const b64url = (buf) => Buffer.from(buf).toString('base64url');
  * wrong secret here produces a 401 from the real middleware, which is the correct
  * failure and worth having.
  */
-export function mintQaToken({ secret, sub, email, role = 'admin', ttlSeconds = 3600, extraClaims = {} }) {
+export function mintQaToken({
+  secret, sub, email, role = 'admin', permissions = [], ttlSeconds = 3600, extraClaims = {},
+}) {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'HS256', typ: 'JWT' };
   const payload = {
     sub, email, role,
+    // Role and permissions ride in app_metadata because that is where the real
+    // middleware looks first (auth.ts:111-131). Permissions default to EMPTY, not to an
+    // admin set: a spec that needs financials:write must say so, which keeps QA users
+    // least-privilege and makes an authorisation regression fail loudly instead of being
+    // masked by a blanket token.
+    app_metadata: { role, permissions },
     aud: 'authenticated',
     iat: now,
     exp: now + ttlSeconds,
@@ -303,10 +311,58 @@ async function waitForHttp(url, timeoutMs, label) {
   throw new Error(`STOP: ${label} did not become reachable at ${url} within ${timeoutMs}ms`);
 }
 
-export async function provisionQaStack({ withFrontend = true, log = console.log } = {}) {
+/**
+ * Run a seeder over the socket BEFORE the API boots.
+ *
+ * Ordering is the whole trick. PGlite allows one CONCURRENT connection — sequential
+ * clients are fine, which is why this works and why running the same seeder while the
+ * API is up dies with `read ECONNRESET` inside the fixture's own first query. Seeding
+ * first lets the real ps-499-step12 fixture run UNMODIFIED, guards and all, instead of
+ * being forked into a QA-only variant that could drift from what the runbook describes.
+ */
+async function runSeeder({ label, argv, databaseUrl, log }) {
+  // ASYNC spawn, never spawnSync.
+  //
+  // The PGLite socket server runs in THIS process's event loop. spawnSync blocks that
+  // loop for the child's whole lifetime, so the server cannot accept the connection the
+  // child is opening — the seeder then dies with CONNECT_TIMEOUT against a socket that
+  // is up and healthy. A self-inflicted deadlock that reads exactly like a database
+  // fault, which is why it is called out here.
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [tsxCli(), ...argv], {
+      env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: databaseUrl },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('exit', (code) => {
+      if (code !== 0) {
+        reject(new Error(`STOP: seeder ${label} exited ${code}\n${(stderr || stdout).slice(-800)}`));
+        return;
+      }
+      log(`[ps-507] seeded    : ${label}`);
+      resolve(stdout);
+    });
+  });
+}
+
+export async function provisionQaStack({ withFrontend = true, seeders = [], log = console.log } = {}) {
   assertTestEnvironment(process.env.NODE_ENV);
 
-  const databaseUrl = `postgres://postgres:postgres@${HOST}:${PG_PORT}/postgres`;
+  // The advertised database NAME carries a disposable marker on purpose.
+  //
+  // scripts/ps-499-step12-qa-fixture.ts refuses to --apply unless the name matches
+  // ps499 / qa / test / disposable / scratch, alongside loopback, NODE_ENV=test and a
+  // confirmation token. That guard exists so nobody seeds fixtures into a real or a
+  // developer's valuable database. This name is accurate rather than a way around it:
+  // the database is in-memory and dies with the process.
+  //
+  // PGlite's socket serves the same instance whatever dbname is requested — verified —
+  // so this is purely how the stack DECLARES what it is, and it lets the real Step 12
+  // seeder run unmodified instead of being forked for QA.
+  const databaseUrl = `postgres://postgres:postgres@${HOST}:${PG_PORT}/prepship_ps507_qa`;
   const apiUrl = `http://${HOST}:${API_PORT}`;
   const webUrl = `http://${HOST}:${WEB_PORT}`;
   assertDisposableTarget(databaseUrl);
@@ -354,6 +410,12 @@ export async function provisionQaStack({ withFrontend = true, log = console.log 
   };
 
   try {
+    // Seeders run here — after the socket is up, before the API claims the connection.
+    const seedOutput = {};
+    for (const seeder of seeders) {
+      seedOutput[seeder.label] = await runSeeder({ ...seeder, databaseUrl, log });
+    }
+
     const apiEnv = {
       NODE_ENV: 'test',
       PORT: String(API_PORT),
@@ -413,7 +475,7 @@ export async function provisionQaStack({ withFrontend = true, log = console.log 
       log(`[ps-507] frontend  : ${webUrl}`);
     }
 
-    return { runId, databaseUrl, apiUrl, webUrl, queryUrl, queryToken, jwtSecret, pg, migrationReport, stop };
+    return { runId, databaseUrl, apiUrl, webUrl, queryUrl, queryToken, jwtSecret, pg, migrationReport, seedOutput, stop };
   } catch (error) {
     await stop();
     throw error;
@@ -455,7 +517,24 @@ if (invokedDirectly) {
   process.env.NODE_ENV ??= 'test';
   const sep = process.argv.indexOf('--');
   const command = sep === -1 ? [] : process.argv.slice(sep + 1);
-  const stack = await provisionQaStack();
+
+  // --seed-ps499-step12 runs the REAL Step 12 fixture, unmodified, so the QA database
+  // holds exactly the orders docs/ps-499-step12-qa-runbook.md describes.
+  const wantsStep12 = process.argv.includes('--seed-ps499-step12');
+  const seeders = wantsStep12
+    ? [{
+        label: 'ps-499-step12',
+        argv: ['scripts/ps-499-step12-qa-fixture.ts', '--apply', '--confirm=PS499-STEP12-DISPOSABLE'],
+      }]
+    : [];
+
+  const stack = await provisionQaStack({ seeders });
+
+  // The fixture prints its run id and every order is PS499-QA-<runId>-<n>; consumers key
+  // their assertions on it, so it is lifted out here rather than re-derived by parsing
+  // the same output in each spec.
+  const step12RunId = (stack.seedOutput?.['ps-499-step12'] ?? '').match(/run id\s*:\s*(\S+)/)?.[1] ?? '';
+  if (wantsStep12) console.log(`[ps-507] step12 run id: ${step12RunId}`);
 
   if (!command.length) {
     console.log('\n[ps-507] stack is up. Env for a consumer:');
@@ -477,6 +556,7 @@ if (invokedDirectly) {
         PS507_JWT_SECRET: stack.jwtSecret,
         PS507_QUERY_URL: stack.queryUrl,
         PS507_QUERY_TOKEN: stack.queryToken,
+        PS499_STEP12_RUN_ID: step12RunId,
       },
     });
     const code = await new Promise((r) => child.on('exit', r));

@@ -972,7 +972,9 @@
     "test:ps-488-m2-writer-behaviour-pg17": "tsx scripts/ps-488-m2-writer-behaviour-pg17.ts",
     "test:ps-488-m3-invoice-grain-pg17": "tsx scripts/ps-488-m3-invoice-grain-pg17.ts",
     "test:ps-488-m3-invoice-grain-local": "node scripts/ps-488-pglite-local-runner.mjs scripts/ps-488-m3-invoice-grain-pg17.ts",
-    "test:ps-488-invoice-return-presence": "tsx scripts/ps-488-invoice-return-presence-guard.ts"
+    "test:ps-488-invoice-return-presence": "tsx scripts/ps-488-invoice-return-presence-guard.ts",
+    "test:ps-507-step12": "node scripts/ps-507-qa-stack.mjs --seed-ps499-step12 -- npx playwright test -c playwright.ps507.config.js web/e2e/ps-507-ps499-step12.spec.js",
+    "test:ps-507": "node scripts/ps-507-qa-stack.mjs --seed-ps499-step12 -- npx playwright test -c playwright.ps507.config.js"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

@@ -96,10 +96,10 @@ const QA_PROJECT_REF = 'qaqaqaqaqaqaqaqaqaqa';
  * the run's SUPABASE_JWT_SECRET and is validated by the real middleware — a wrong secret
  * produces a genuine 401 rather than a passing test.
  */
-export async function signInAsQaUser(page, { sub = 'ps507-qa-user', email = 'qa@example.test', role = 'admin' } = {}) {
+export async function signInAsQaUser(page, { sub = 'ps507-qa-user', email = 'qa@example.test', role = 'admin', permissions = [] } = {}) {
   const { jwtSecret } = qaEnv();
   const { mintQaToken } = await import('../../../scripts/ps-507-qa-stack.mjs');
-  const accessToken = mintQaToken({ secret: jwtSecret, sub, email, role });
+  const accessToken = mintQaToken({ secret: jwtSecret, sub, email, role, permissions });
 
   await page.addInitScript(([ref, token, userId, userEmail]) => {
     window.localStorage.setItem(`sb-${ref}-auth-token`, JSON.stringify({
@@ -121,10 +121,10 @@ export async function signInAsQaUser(page, { sub = 'ps507-qa-user', email = 'qa@
  * For arranging preconditions and for asserting the API's own answer next to the
  * database's. Same token path the browser uses.
  */
-export async function qaApiFetch(path, { token, method = 'GET', body, headers = {} } = {}) {
+export async function qaApiFetch(path, { token, method = 'GET', body, headers = {}, permissions = [] } = {}) {
   const { apiUrl, jwtSecret } = qaEnv();
   const { mintQaToken } = await import('../../../scripts/ps-507-qa-stack.mjs');
-  const bearer = token ?? mintQaToken({ secret: jwtSecret, sub: 'ps507-qa-user', email: 'qa@example.test' });
+  const bearer = token ?? mintQaToken({ secret: jwtSecret, sub: 'ps507-qa-user', email: 'qa@example.test', permissions });
   return fetch(`${apiUrl}${path}`, {
     method,
     headers: {
