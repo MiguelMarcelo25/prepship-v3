@@ -1,0 +1,152 @@
+# BILL-DUP-OUTBOUND-CHARGE — read-only audit of duplicate outbound service charges.
+#
+# WHY A LANE AND NOT A LOCAL SCRIPT
+#
+# The audit needs production billing data. Running it locally would mean putting a
+# production database credential on a workstation; this runs the script as a Render
+# one-off job inside the environment that already holds one, so no local secret exists
+# to leak or rotate. Same pattern as the PS-488 migration lane, which is how 0092 was
+# applied and independently verified.
+#
+# STRICTLY READ-ONLY, TWO WAYS
+#
+# The script issues nothing but SELECT, and it pins the session READ ONLY at the server
+# so the database refuses a write regardless of what the code asks for. There is
+# therefore NO confirmation token: a token exists to gate a write, and this lane has no
+# write to gate. There is no --apply, no repair mode, and adding one belongs in a
+# separately authorized task with DJ's explicit approval — not here.
+#
+# WHAT IT ANSWERS
+#
+# Whether order #3074's two outbound charge sets are a duplicate service charge or two
+# legitimate billable events, and — more importantly — how many other orders are in the
+# same state and how much of that money has already been invoiced to clients.
+#
+# IDENTIFIER IS PROVISIONAL. `BILL-DUP-OUTBOUND-CHARGE` is a descriptive working
+# reference, not a Trello id. DJ alone creates and numbers cards; rename atomically once
+# an official successor exists.
+name: Render One-Off Read-Only Audit (billing duplicate outbound charge)
+
+on:
+  workflow_dispatch:
+    inputs:
+      order_number:
+        description: 'Order number to trace in full (default 3074)'
+        required: false
+        default: '3074'
+        type: string
+      client_id:
+        description: 'Optional client id to scope the population scan (blank = all clients)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-one-off-billing-duplicate-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      # Fail before dispatching if the script has grown a write. A read-only lane that
+      # silently starts writing is worse than no lane, and this is cheaper than trusting
+      # the header comment.
+      - name: Audit script contains no write statement
+        run: |
+          set -euo pipefail
+          if grep -nEi '\b(insert|update|delete|drop|alter|truncate|grant|create)\s' \
+               scripts/billing-duplicate-outbound-charge-audit.ts \
+             | grep -viE '^\s*[0-9]+:\s*(\*|//)' ; then
+            echo "::error::A write-shaped statement appeared in the audit script."
+            exit 1
+          fi
+          grep -q 'TRANSACTION READ ONLY' scripts/billing-duplicate-outbound-charge-audit.ts || {
+            echo '::error::The audit must pin the session READ ONLY.'
+            exit 1
+          }
+          echo "read-only contract holds"
+
+      - name: Run the audit as a Render one-off job
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          ORDER_NUMBER: ${{ inputs.order_number }}
+          CLIENT_ID: ${{ inputs.client_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo '::error::RENDER_API_KEY and RENDER_SERVICE_ID are required.'
+            exit 1
+          fi
+
+          files=( scripts/billing-duplicate-outbound-charge-audit.ts )
+          archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
+
+          env_prefix="AUDIT_ORDER_NUMBER='${ORDER_NUMBER:-3074}'"
+          if [ -n "${CLIENT_ID:-}" ]; then
+            env_prefix="${env_prefix} AUDIT_CLIENT_ID='${CLIENT_ID}'"
+          fi
+          runner="${env_prefix} npx tsx scripts/billing-duplicate-outbound-charge-audit.ts"
+          start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && ${runner}"
+
+          payload=$(START_COMMAND="$start_command" node -e \
+            'process.stdout.write(JSON.stringify({startCommand: process.env.START_COMMAND}))')
+          response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+          http_code=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+          if [ "$http_code" != '201' ]; then
+            echo "::error::Render one-off job creation failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+          job_id=$(BODY="$body" node -e \
+            'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.id||""))')
+          test -n "$job_id" || { echo '::error::Render returned no job id.'; exit 1; }
+          echo "Render audit job created: ${job_id}"
+
+          for attempt in $(seq 1 90); do
+            sleep 10
+            job=$(curl -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs/${job_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H 'Accept: application/json')
+            status=$(BODY="$job" node -e \
+              'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.status||""))')
+            echo "audit status=${status} (poll ${attempt})"
+            case "$status" in
+              succeeded)
+                echo 'Audit complete. Nothing was written.'
+                echo 'The findings packet is in the Render job log.'
+                exit 0
+                ;;
+              failed|canceled)
+                echo "::error::Audit job ended in ${status}."
+                exit 1
+                ;;
+            esac
+          done
+
+          echo '::error::Audit job did not finish within the polling window.'
+          exit 1
