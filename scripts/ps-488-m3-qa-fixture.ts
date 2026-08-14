@@ -61,8 +61,11 @@ const returnReference = (runId: string, n: number) => `PS488-M3-${runId}-R${n}`
 // mixes the two is visible as a wrong number rather than a coincidence.
 const OUTBOUND = { pickPack: '3.25', packageCost: '4.75', shipping: '11.50' } as const
 // Return money, distinct per return AND per line type for the same reason.
+// Return 2's postage is NOT 9.40, which would make both returns total the same and let a
+// merged read model hide behind a plausible sum. Every bucket, every per-return total and
+// the merged total are distinct numbers.
 const RETURN_1 = { postage: '7.10', processing: '2.30' } as const
-const RETURN_2 = { postage: '9.40' } as const
+const RETURN_2 = { postage: '6.75' } as const
 
 const sql = postgres(process.env.DATABASE_URL ?? '', { max: 1, onnotice: () => {} })
 

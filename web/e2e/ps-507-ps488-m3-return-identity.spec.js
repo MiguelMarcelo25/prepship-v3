@@ -72,7 +72,7 @@ test.describe('PS-488 M3 — return identity', () => {
     })
     // Asymmetric on purpose: if a read model merged the two returns, identical line sets
     // would still total plausibly. Different sets make a merge visible in the money.
-    expect(byReturn.get(String(returns[1].id))).toEqual({ return_postage: 9.4 })
+    expect(byReturn.get(String(returns[1].id))).toEqual({ return_postage: 6.75 })
   })
 
   test('the database REJECTS a second charge of the same kind on one return', async () => {
@@ -136,34 +136,84 @@ test.describe('PS-488 M3 — return identity', () => {
     )
   })
 
-  test('the authenticated read model keeps outbound money free of return money', async () => {
-    // The money half, through the real API with a real bearer. Outbound totals must be
-    // exactly what the fixture billed outbound — return_postage and return_processing_fee
-    // are separate buckets, so a read model that folded them in shows up here as a
-    // shipping or pick_pack figure that moved.
+  test('the read model projects THREE rows to the wire — one Outbound, two Returns', async () => {
+    // The identity claim as the operator actually receives it. Everything above proves
+    // the storage layer; this proves the projection, because a read model that groups by
+    // order would satisfy every constraint above and still hand the UI a single merged
+    // row. Asserted on the DTO the API really returns, over a real bearer.
     const id = runId()
-    const order = await expectExactlyOneRow(
-      'select id from public.orders where order_number = $1', [`PS488-M3-${id}-1`], 'fixture order')
-
-    const outbound = await qaQuery(
-      `select line_type, total_cost from public.billing_line_items
-        where order_id = $1 and return_id is null order by line_type`,
-      [order.id],
-    )
-    expect(Object.fromEntries(outbound.map((r) => [r.line_type, Number(r.total_cost)]))).toEqual({
-      pick_pack: 3.25,
-      package_cost: 4.75,
-      shipping: 11.5,
-    })
-
-    // The API answers for real — a 500 or a 401 here means the read path cannot serve
-    // this shape at all, which is itself the finding.
     const client = await expectExactlyOneRow(
       'select id from public.clients where name = $1', [`PS-488 M3 QA disposable ${id}`], 'fixture client')
-    const details = await qaApiFetch(
+
+    const res = await qaApiFetch(
       `/billing/details?dateFrom=2020-01-01T00:00:00.000Z&dateTo=2030-01-01T00:00:00.000Z&clientId=${client.id}`,
       { permissions },
     )
-    expect(details.status, 'the detail read model must serve an order carrying returns').toBe(200)
+    expect(res.status, 'the detail read model must serve an order carrying returns').toBe(200)
+    const body = await res.json()
+
+    // One order, three rows. A per-order key would give one; a per-line key would give six.
+    expect(body.data, 'two returns and one outbound must project as three rows').toHaveLength(3)
+    expect(body.data.map((r) => r.rowType).sort()).toEqual(['Outbound', 'Return', 'Return'])
+
+    const outbound = body.data.find((r) => r.rowType === 'Outbound')
+    const byReturnRef = new Map(
+      body.data.filter((r) => r.rowType === 'Return').map((r) => [r.returnReference, r]),
+    )
+
+    // AC-1: rowType comes from the relational returnId, so the outbound row must carry none.
+    expect(outbound.returnId, 'the outbound row must not borrow a return identity').toBeNull()
+    expect(outbound.returnReference).toBeNull()
+    expect(outbound.displayReference).toBe(`#PS488-M3-${id}-1`)
+    expect(outbound.lineTypes.slice().sort()).toEqual(['package_cost', 'pick_pack', 'shipping'])
+
+    // The outbound row's money is EXACTLY what was billed outbound. Return money folded in
+    // here is the PS-505 defect, and it would show as a moved bucket or a moved total.
+    expect(outbound.pickpackTotal).toBeCloseTo(3.25, 2)
+    expect(outbound.packageTotal).toBeCloseTo(4.75, 2)
+    expect(outbound.shippingTotal).toBeCloseTo(11.5, 2)
+    expect(outbound.returnTotal, 'an outbound row carries no return money').toBe(0)
+    expect(outbound.grandTotal).toBeCloseTo(19.5, 2)
+
+    // Return #1 — both canonical line types on one return.
+    const r1 = byReturnRef.get(`PS488-M3-${id}-R1`)
+    expect(r1, 'return #1 must have its own row').toBeTruthy()
+    expect(r1.lineTypes.slice().sort()).toEqual(['return_postage', 'return_processing_fee'])
+    expect(r1.returnPostageTotal).toBeCloseTo(7.1, 2)
+    expect(r1.returnProcessingTotal).toBeCloseTo(2.3, 2)
+    expect(r1.returnTotal).toBeCloseTo(9.4, 2)
+    expect(r1.hasReturnProcessingLine).toBe(true)
+
+    // Return #2 — postage only, and a DIFFERENT amount, so a merge cannot hide in a
+    // plausible sum: merged postage would read 13.85 and a merged total 16.15.
+    const r2 = byReturnRef.get(`PS488-M3-${id}-R2`)
+    expect(r2, 'return #2 must have its own row').toBeTruthy()
+    expect(r2.lineTypes).toEqual(['return_postage'])
+    expect(r2.returnPostageTotal).toBeCloseTo(6.75, 2)
+    expect(r2.returnProcessingTotal).toBe(0)
+    expect(r2.returnTotal).toBeCloseTo(6.75, 2)
+    expect(r2.hasReturnProcessingLine, 'return #2 was never billed processing').toBe(false)
+
+    // Neither return row may carry outbound money.
+    for (const [ref, row] of byReturnRef) {
+      expect(row.pickpackTotal, `${ref} must carry no pick/pack`).toBe(0)
+      expect(row.packageTotal, `${ref} must carry no box cost`).toBe(0)
+      expect(row.shippingTotal, `${ref} must carry no outbound shipping`).toBe(0)
+      expect(row.returnId, `${ref} must carry a relational return id`).toBeTruthy()
+      // displayReference is asserted as DISTINCT and reference-bearing, not as an exact
+      // format. AC-1's wording describes `#1234-RETURN` while the read model emits
+      // `#<returnReference>`; which is intended is a product question, and pinning either
+      // reading here would turn a guess into a verified fact.
+      expect(row.displayReference).toContain(ref)
+      expect(row.displayReference).not.toBe(outbound.displayReference)
+    }
+
+    // Return money reaches the client total exactly ONCE. The summary exposes no return
+    // bucket, so the check is arithmetic: the gap between grandTotal and the outbound
+    // buckets must equal the two returns combined. Double counting would make it 32.30.
+    const outboundBuckets =
+      body.totals.pickPackTotal + body.totals.additionalTotal + body.totals.packageTotal +
+      body.totals.shippingTotal + body.totals.storageTotal + body.totals.adjustmentTotal
+    expect(body.totals.grandTotal - outboundBuckets, 'return money must be counted once').toBeCloseTo(16.15, 2)
   })
 })

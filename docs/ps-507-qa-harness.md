@@ -148,13 +148,28 @@ spec red on that assertion, quoting the payload.
 
 **PS-488 M3** — the return-identity contract
 (`ps-507-ps488-m3-return-identity.spec.js`, fixture `--seed-ps488-m3`). Two returns
-against one order, billed asymmetrically so a merged read model shows up in the money.
-Its core is what static guards structurally cannot reach: migration 0092's constraints
-are attacked with real `INSERT`s, and the rejections are matched on the constraint NAMES
-(`billing_li_return_identity_unq`, `billing_li_return_id_canonical_type_check`) so a write
-failing for an unrelated reason cannot be mistaken for the constraint holding. A guard can
-prove the migration text declares a `NOT VALID` CHECK; only the engine can prove it was
-ever `VALIDATE`d.
+against one order, billed asymmetrically — every bucket, every per-return total and the
+merged total are distinct numbers, so a merge cannot hide behind a plausible sum.
+
+Two layers, because they fail independently:
+
+- *Storage.* Migration 0092's constraints are attacked with real `INSERT`s, and the
+  rejections are matched on the constraint NAMES (`billing_li_return_identity_unq`,
+  `billing_li_return_id_canonical_type_check`) so a write failing for an unrelated reason
+  cannot be mistaken for the constraint holding. A guard can prove the migration text
+  declares a `NOT VALID` CHECK; only the engine proves it was ever `VALIDATE`d.
+- *Projection.* The DTO `/billing/details` actually returns is asserted: three rows for
+  one order (one `Outbound`, two `Return`), each return keyed on its own `returnId`, with
+  per-return buckets, `lineTypes`, outbound money at zero on return rows, and the client
+  total counting return money exactly once. This layer is not redundant — mutating the SOT
+  row key to `return:<orderId>` merges the two returns into a single row while **every
+  storage assertion still passes**, so without it a per-order grouping regression would
+  ship green.
+
+`displayReference` is asserted as distinct and reference-bearing, not as an exact format:
+AC-1's wording describes `#1234-RETURN` while the read model emits `#<returnReference>`.
+Which is intended is a product question, and pinning either reading would turn a guess
+into a verified fact.
 
 `RETURN_BILLING_ENABLED` stays **false** here. The generator is PS-487's boundary and
 flipping the flag is a deliberate operator decision; the fixture writes the rows that pass
