@@ -374,6 +374,15 @@ export async function provisionQaStack({ withFrontend = true, log = console.log 
       // parallel, so this stack proves PERSISTENCE and AUTHORISATION, not concurrency
       // behaviour. Anything needing true parallelism belongs on a real PostgreSQL
       // service container, not here.
+      //
+      // ONE VISIBLE CONSEQUENCE, so nobody chases it as a bug: /health/ready returns 503
+      // on this stack while /health returns 200. health.ts:22 builds `healthSql` as a
+      // SEPARATE pool by design, so a saturated main pool cannot hide behind health
+      // checks — but PGlite has no second connection to give it, so `db` and `dbWrite`
+      // fail while `mainPool` and `eventLoop` pass. The app is right; the database is
+      // the constraint. Readiness is therefore NOT a usable gate here, which is why
+      // provisioning waits on /health, and the shape of that 503 is pinned by
+      // ps-507-persistence-proof.spec.js so it can never absorb a real regression.
       DB_POOL_MAX: '1',
       DB_IDLE_TIMEOUT_SECONDS: '120',
       DB_MAX_LIFETIME_SECONDS: '3600',

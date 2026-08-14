@@ -33,6 +33,36 @@ test.describe('PS-507 disposable QA stack', () => {
     expect(schema.tables).toBeGreaterThan(80)
   })
 
+  test('readiness is degraded for exactly ONE known reason, and no other', async () => {
+    // The QA stack reports /health/ready 503 while /health is 200. That is the app
+    // behaving CORRECTLY, not a defect: health.ts:22 builds `healthSql` as a SEPARATE
+    // pool on purpose, so a saturated main pool cannot hide behind health checks. PGlite
+    // serves ONE connection, the main pool holds it, and the health pool therefore waits
+    // and fails. A real deployment whose health pool cannot connect should report
+    // degraded, and this one does.
+    //
+    // Pinned rather than ignored. An unexplained 503 sitting in the QA stack is exactly
+    // what would later absorb a genuine readiness regression — so the SHAPE is asserted:
+    // db and dbWrite may fail for the single-connection reason, but mainPool and
+    // eventLoop must pass. If that changes, something real broke.
+    const { apiUrl } = qaEnv()
+
+    const health = await fetch(`${apiUrl}/health`)
+    expect(health.status, '/health must be ok — the API itself is up').toBe(200)
+
+    const ready = await fetch(`${apiUrl}/health/ready`)
+    const body = await ready.json()
+    const status = Object.fromEntries(body.components.map((c) => [c.name, c.status]))
+
+    expect(status.mainPool, 'the pool serving traffic must be healthy (PS-503)').toBe('ok')
+    expect(status.eventLoop).toBe('ok')
+    const failing = body.components.filter((c) => c.status !== 'ok').map((c) => c.name).sort()
+    expect(
+      failing,
+      'only the separate health pool may fail, and only because PGlite serves one connection',
+    ).toEqual(['db', 'dbWrite'])
+  })
+
   test('the auth boundary is REAL, not mocked', async () => {
     const { apiUrl } = qaEnv()
 
