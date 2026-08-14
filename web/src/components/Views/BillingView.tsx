@@ -1726,9 +1726,14 @@ export default function BillingView() {
       + parseMoneyDraft(billingEditModal.draft.packageCost)
       + parseMoneyDraft(billingEditModal.draft.shipping)
     : 0
-  const billingEditDraftMargin = billingEditModal && billingEditMetrics
+  // PS-505: the Edit modal's live margin preview is non-authoritative — the operator is
+  // typing a shipping amount and seeing the consequence before saving — but it still
+  // must not invent a cost. When the carrier cost was never proven the preview is
+  // unknowable, so it is null and renders blank rather than showing the full draft
+  // charge as profit.
+  const billingEditDraftMargin = billingEditModal && billingEditMetrics && billingEditMetrics.ourCost !== null
     ? parseMoneyDraft(billingEditModal.draft.shipping) - billingEditMetrics.ourCost
-    : 0
+    : null
 
   return (
     <div id="view-billing" className="view-content !p-5 !overflow-y-auto flex flex-col">

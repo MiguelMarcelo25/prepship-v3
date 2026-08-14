@@ -48,11 +48,12 @@ function read(path: string): string {
 // means positions moved and downstream index assertions are wrong; a full-list failure
 // means a column was appended and only this list needs updating.
 assert.deepEqual(
-  INVOICE_CSV_HEADERS.slice(0, 14),
+  // PS-505: 13, not 14 — 'Status' was removed, so every column after Order # shifted one
+  // position left. This list and the positional assertions below move together.
+  INVOICE_CSV_HEADERS.slice(0, 13),
   [
     'Billing / Activity Date (Los Angeles)',
     'Order #',
-    'Status',
     'SKUs',
     'Box Size',
     'Box Cost',
@@ -67,10 +68,11 @@ assert.deepEqual(
     // which is exactly why the new column goes on the end rather than beside Order #.
     'Destination',
   ],
-  'the first 14 CSV columns must not move — every positional assertion below depends on it',
+  'the first 13 CSV columns must not move — every positional assertion below depends on it',
 );
 assert.deepEqual(
-  INVOICE_CSV_HEADERS.slice(14),
+  // PS-505: 13, matching the slice above after 'Status' was removed.
+  INVOICE_CSV_HEADERS.slice(13),
   [
     // PS-488 M3: appended LAST, same rule as Destination. The XLSX sheet already carried
     // both; without them a return row exported a non-zero Total with every component
@@ -149,7 +151,7 @@ assert.equal(
   // return column on every shipment line of every invoice asserted a charge that was
   // never made. returnMoneyRow below covers a real return; the waived case is covered in
   // ps-488-billing-row-reference-guard, where the same number renders WITH presence.
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,',
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -282,7 +284,7 @@ assert.equal(
   // and the fallback deliberately does NOT include the return buckets — row_total is a
   // sum over every line type, so folding returns into the fallback would double-count on
   // every row that has a real total.
-  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,Small,2,1,3,0,2,1,8,#90021,,,',
+  '5/5/2026 12:00 AM PT,PO-9002,,Small,2,1,3,0,2,1,8,#90021,,,',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

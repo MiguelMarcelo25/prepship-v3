@@ -136,33 +136,45 @@ check('PS-393: collapsed detail DTO carries explicit status fields and keeps can
   assert.equal(dto.billingZeroReason, 'cancelled');
 });
 
-check('PS-393: CSV export includes backend status text near the left of each row', () => {
+// \u2500\u2500 PS-505 INVERTED THE FOUR COLUMN CHECKS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+//
+// PS-393 shipped a Billing Status column across the detail table and all three invoice
+// renderers. PS-505 removes that column as a deliberate capability removal \u2014 NOT because
+// the classification was wrong. The backend owner (billing-row-status.ts) is retained and
+// its facts still drive cancelled-no-charge behaviour, Return classification, review
+// conditions and row styling; every one of those is still pinned by the checks above and
+// below, which is why this guard survives rather than being deleted.
+//
+// These four are inverted rather than removed so the guard now ratchets the OTHER way: a
+// future change that reintroduces a Status column, in any of the four surfaces, fails
+// here instead of silently undoing the card.
+
+check('PS-505: CSV export carries NO Status column', () => {
   assert.deepEqual(INVOICE_CSV_HEADERS.slice(0, 3), [
     INVOICE_SHIP_DATE_HEADER,
     'Order #',
-    'Status',
+    'SKUs',
   ]);
+  assert.ok(!INVOICE_CSV_HEADERS.includes('Status'), 'Status must not reappear in the CSV');
+  // The cell that used to hold status text is now the SKUs cell.
   const cells = renderInvoiceCsvRow(baseCsvRow()).split(',');
-  assert.equal(cells[2], 'Cancelled \u00b7 No charge');
+  assert.notEqual(cells[2], 'Cancelled \u00b7 No charge', 'status text must not survive positionally');
 });
 
-check('PS-393: UI exposes a default-visible Billing Status column after Order #', () => {
+check('PS-505: the UI exposes NO Billing Status column', () => {
   const parity = read('web/src/components/Views/billing-parity.ts');
-  assert.ok(parity.includes("| 'billingStatus'"), 'missing BillingDetailColumnId billingStatus');
+  assert.ok(!parity.includes("| 'billingStatus'"), 'BillingDetailColumnId must not carry billingStatus');
   assert.ok(
-    /orderNumber'[\s\S]{0,180}billingStatus'[\s\S]{0,180}shipDate'/.test(parity),
-    'Billing Status must be ordered between Order # and Ship Date',
+    !/DEFAULT_BILLING_DETAIL_COLUMN_IDS[\s\S]{0,400}'billingStatus'/.test(parity),
+    'billingStatus must not be a default column',
   );
-  assert.ok(/DEFAULT_BILLING_DETAIL_COLUMN_IDS[\s\S]{0,120}'billingStatus'/.test(parity));
-  // Repointed 2026-08-04. This pinned billing_detail_cols_v6 exactly. The key is
-  // v7 now, because a later column change bumped it -- which is the correct thing
-  // to do: bumping resets every operator's saved column config so a new column is
-  // actually visible instead of hidden behind stale localStorage.
-  //
-  // Pinning a literal version turns that correct action into a red, and the
-  // tempting repair is to bump the guard to v7, which just defers the same break
-  // to the next column change. What PS-393 needs is that the key stays VERSIONED
-  // and never regresses below the reset it introduced.
+  assert.ok(
+    !/\{\s*id:\s*'billingStatus'/.test(parity),
+    'no column definition may declare billingStatus',
+  );
+  // Unchanged from PS-393: the key must stay VERSIONED and never regress below the reset
+  // PS-393 introduced. PS-505 bumped it to v8, which is the correct action \u2014 removing a
+  // column leaves a stale id in every operator's saved config until the key changes.
   const colsKey = /billing_detail_cols_v(\d+)/.exec(parity);
   assert.ok(colsKey, 'column storage key must stay versioned (billing_detail_cols_vN)');
   assert.ok(
@@ -171,21 +183,22 @@ check('PS-393: UI exposes a default-visible Billing Status column after Order #'
   );
 });
 
-check('PS-393: BillingDetailTable renders backend status label and row treatment', () => {
+check('PS-505: the table drops the Status cell but KEEPS backend lifecycle facts', () => {
   const table = read('web/src/components/Views/BillingDetailTable.tsx');
-  assert.ok(/case 'billingStatus'/.test(table), 'missing Billing Status render case');
-  assert.ok(/billingStatusLabel/.test(table), 'table must render backend billingStatusLabel');
-  assert.ok(/billingLifecycleStatus/.test(table), 'table must key row treatment off backend lifecycle');
+  assert.ok(!/case 'billingStatus'/.test(table), 'the Billing Status render case must be gone');
+  // Retained on purpose \u2014 removal is display-only. Row treatment, the cancelled/return
+  // classes and the essential badges all still consume the backend classification.
+  assert.ok(/billingStatusLifecycle/.test(table), 'row treatment must still key off backend lifecycle');
+  assert.ok(/billingStatusLabel/.test(table), 'badges must still read the backend label');
   assert.ok(!/row\.orderStatus === 'cancelled'/.test(table), 'FE must not infer status from orderStatus');
 });
 
-check('PS-393: invoice HTML and XLSX exports include Status from billingInvoiceData details', () => {
+check('PS-505: HTML and XLSX invoices carry NO Status column', () => {
   const route = read('src/routes/billing.ts');
-  assert.ok(/billing_status_label/.test(route), 'billingInvoiceData must populate billing_status_label');
-  assert.ok(/<th>Status<\/th>/.test(route), 'HTML invoice must include Status header');
-  assert.ok(/escHtml\(d\.billing_status_label/.test(route), 'HTML invoice row must render status text');
-  assert.ok(/header:\s*'Status',\s*key:\s*'status'/.test(route), 'XLSX invoice must include Status column');
-  assert.ok(/status:\s*d\.billing_status_label/.test(route), 'XLSX rows must write status text');
+  assert.ok(!/^\s*billing_status_label\s*[:?]/m.test(route), 'the export row must not declare it');
+  assert.ok(!/\bd\.billing_status_label\b/.test(route), 'no renderer may read it');
+  assert.ok(!/<th>Status<\/th>/.test(route), 'HTML invoice must not include a Status header');
+  assert.ok(!/header:\s*'Status',\s*key:\s*'status'/.test(route), 'XLSX must not include a Status column');
 });
 
 check('PS-393: safety pins no source-table shipped/cancelled mutation in status work', () => {

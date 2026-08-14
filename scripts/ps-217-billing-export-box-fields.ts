@@ -93,15 +93,19 @@ check('row-total owner preserves authoritative totals and includes box in fallba
   rowTotalOwner.includes('rowTotal !== 0')
     && rowTotalOwner.includes('Number.isFinite(rowTotal)')
     && rowTotalOwner.includes('roundMoney(rowTotal)')
-    && rowTotalOwner.includes('+ Number(input.packageCost)'));
+    // PS-505: the owner now routes every term through a shared `amount()` helper so an
+    // absent return bucket reads as 0 instead of NaN. Box cost is still a term.
+    && rowTotalOwner.includes('amount(input.packageCost)'));
 
 // 6. XLSX totals match the current one-sheet Invoice layout.
 // PS-393 (b95126dc) inserted the Status column, shifting every column one letter right
-// (Qty F->G, Box Cost I->J, Fulfillment Fee M->N). Pins are key-bound so they cannot
-// coincidentally match a neighboring column's SUM.
-check('XLSX Fulfillment Fee SUM targets column N', routes.includes('fulfillmentFee: { formula: `SUM(N${first}:N${last})`'));
-check('XLSX Qty SUM re-lettered to column G', routes.includes('qty: { formula: `SUM(G${first}:G${last})`'));
-check('XLSX totals include a Box Cost SUM (column J)', routes.includes('boxCost: { formula: `SUM(J${first}:J${last})`'));
+// (Qty F->G, Box Cost I->J, Fulfillment Fee M->N). PS-505 REMOVED that column, so every
+// letter shifts back left to where it was before PS-393. Pins are key-bound so they
+// cannot coincidentally match a neighboring column's SUM — which matters here because a
+// wrong letter sums the adjacent column silently instead of erroring.
+check('XLSX Fulfillment Fee SUM targets column M', routes.includes('fulfillmentFee: { formula: `SUM(M${first}:M${last})`'));
+check('XLSX Qty SUM re-lettered to column F', routes.includes('qty: { formula: `SUM(F${first}:F${last})`'));
+check('XLSX totals include a Box Cost SUM (column I)', routes.includes('boxCost: { formula: `SUM(I${first}:I${last})`'));
 
 // Self-wiring.
 check('package.json exposes test:ps-217-billing-export-box-fields',

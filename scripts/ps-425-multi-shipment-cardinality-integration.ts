@@ -239,10 +239,12 @@ async function main(): Promise<void> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(xlsx);
   const sheet = workbook.getWorksheet('Invoice');
-  assert.equal(sheet?.getRow(2).getCell(15).value, '#501');
-  assert.equal(sheet?.getRow(3).getCell(15).value, '#502');
-  assert.equal(sheet?.getRow(2).getCell(12).value, 12);
-  assert.equal(sheet?.getRow(3).getCell(12).value, 20);
+  // PS-505: one column left each — the XLSX Status column (previously column 2) was
+  // removed, so Shipment # moved 15 -> 14 and Shipping moved 12 -> 11.
+  assert.equal(sheet?.getRow(2).getCell(14).value, '#501');
+  assert.equal(sheet?.getRow(3).getCell(14).value, '#502');
+  assert.equal(sheet?.getRow(2).getCell(11).value, 12);
+  assert.equal(sheet?.getRow(3).getCell(11).value, 20);
 
   await client.exec(`UPDATE shipments SET voided = true WHERE id = 501`);
   const afterFirstVoid = await pg

@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 // Audit B-4 (2026-07-13): xact advisory lock serializes concurrent storage-line writers.
 import { advisoryLockKeyPair } from '../lib/advisory-lock';
@@ -102,7 +103,7 @@ import {
 } from './billing-outbound-sweep';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
-import { resolveBillingRowStatus } from './billing-row-status';
+import { isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
 import {
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,
@@ -2582,6 +2583,9 @@ export async function billingDetails(input: GenerateInput) {
   const to = new Date(input.dateTo);
   // PS-370: verify migration-owned selected-rate schema before reading it.
   await ensureShipmentsSelectedRateCostColumn();
+  // PS-505 — the return's own shipment, distinct from the outbound one the line's
+  // shipment_id points at. Declared as an alias so both can appear on one row.
+  const returnShipments = alias(shipments, 'return_shipments');
   const rows = await db
     .select({
       id: billingLineItems.id,
@@ -2647,6 +2651,23 @@ export async function billingDetails(input: GenerateInput) {
       // receives identity as a fact. No description parsing, no minted suffixes.
       returnId: billingLineItems.returnId,
       returnReference: returns.returnReference,
+      // PS-505 — the RETURN's own shipment, and that shipment's own cost tuple.
+      //
+      // `billing_line_items.shipment_id` is the OUTBOUND shipment. A return's proven
+      // cost lives on the shipment referenced by `returns.return_shipment_id`, and
+      // nothing joined it, so a canonical return-postage line had no path to its own
+      // carrier cost at all. Without this the only cost in scope for a return row was
+      // the related order's outbound shipment — a different event that merely shares an
+      // order id.
+      //
+      // Aliased rather than reusing the `shipments` join: the two must be resolvable in
+      // the same row without one overwriting the other.
+      returnShipmentId: returns.returnShipmentId,
+      returnSelectedRateCostRaw: returnShipments.selectedRateCost,
+      returnShipmentCost: returnShipments.cost,
+      returnShipmentLabelCost: returnShipments.labelCost,
+      returnShipmentOtherCost: returnShipments.otherCost,
+      returnShipmentSelectedRateJson: returnShipments.selectedRateJson,
     })
     .from(billingLineItems)
     .leftJoin(shipments, eq(billingLineItems.shipmentId, shipments.id))
@@ -2655,6 +2676,8 @@ export async function billingDetails(input: GenerateInput) {
     // returns.id is a serial primary key, so this cannot fan out rows. Client/store
     // scope is unchanged — the join adds a column, never a row and never reach.
     .leftJoin(returns, eq(billingLineItems.returnId, returns.id))
+    // PS-505 — shipments.id is likewise a primary key, so this adds columns, not rows.
+    .leftJoin(returnShipments, eq(returns.returnShipmentId, returnShipments.id))
     .where(
       and(
         // PS-208: `to` is the EXCLUSIVE day-after midnight. The canonical
@@ -2962,6 +2985,23 @@ export async function billingDetails(input: GenerateInput) {
         otherCost: row.otherCost ?? fallbackShipment?.otherCost,
         selectedRateJson: row.selectedRateJson ?? fallbackShipment?.selectedRateJson,
       });
+      // PS-505 — the return's proven cost, resolved from the RETURN shipment only.
+      //
+      // Deliberately does NOT consult fallbackShipment. That map is keyed by order id
+      // and order number, so for a return it would resolve the related order's OUTBOUND
+      // shipment and present an unrelated event's carrier cost as the return's. A
+      // missing return shipment, or one with no persisted cost, stays null and the cell
+      // stays blank — the same rule the resolver already applies to outbound rows.
+      const isReturnPostageLineRow = isBillingReturnPostageLineType(lineType);
+      const returnSelectedRateCost = isReturnPostageLineRow && !isCancelledNoChargeDetailRow
+        ? resolveBillingSelectedRateCost({
+            selectedRateCost: row.returnSelectedRateCostRaw,
+            cost: row.returnShipmentCost,
+            labelCost: row.returnShipmentLabelCost,
+            otherCost: row.returnShipmentOtherCost,
+            selectedRateJson: row.returnShipmentSelectedRateJson,
+          })
+        : null;
       const refUspsRate = toFiniteNumber(row.refUspsRate);
       const refUpsRate = toFiniteNumber(row.refUpsRate);
       const selectedPackageId = row.selectedPackageId ?? fallbackShipment?.selectedPackageId ?? null;
@@ -3036,6 +3076,14 @@ export async function billingDetails(input: GenerateInput) {
         refUspsRate: _refUspsRate,
         refUpsRate: _refUpsRate,
         overridePackageId: _overridePackageId,
+        // PS-505 — the raw return-shipment cost tuple is an INPUT to the resolver above,
+        // never part of the DTO. Leaving these on the row would hand consumers a second,
+        // unresolved cost source to compute from, which is the shape this card removes.
+        returnSelectedRateCostRaw: _returnSelectedRateCostRaw,
+        returnShipmentCost: _returnShipmentCost,
+        returnShipmentLabelCost: _returnShipmentLabelCost,
+        returnShipmentOtherCost: _returnShipmentOtherCost,
+        returnShipmentSelectedRateJson: _returnShipmentSelectedRateJson,
         ...rest
       } = row;
       return {
@@ -3068,7 +3116,13 @@ export async function billingDetails(input: GenerateInput) {
         clientHasBoxPricing: row.clientId != null ? boxPricingByClient.get(row.clientId) : undefined,
         // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto);
         // the snake_case mirrors this block used to write are deleted.
+        // The OUTBOUND selected-rate cost stays gated to the outbound shipping line: a
+        // pick&pack or box line has no carrier cost of its own. PS-505 does not widen
+        // this gate — a return's cost arrives on its own field below, resolved from its
+        // own shipment, rather than by loosening what an outbound line may claim.
         selectedRateCost: isShippingLine && !isCancelledNoChargeDetailRow ? selectedRateCost : null,
+        // PS-505 — proven return cost, or null. Never the outbound shipment's.
+        returnSelectedRateCost,
         shippingCostMissing:
           (isMissingShippingLine || fulfillmentConflict?.billingAction === 'shipping_missing_review') &&
           !isCancelledNoChargeDetailRow,

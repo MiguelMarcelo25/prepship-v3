@@ -45,9 +45,13 @@ function read(path: string): string {
 
 // Total column index in the CSV row (Ship Date, Order #, Status, SKUs, Box Size,
 // Box Cost, Qty, Pick & Pack Fee, Additional Units, Shipping, Storage, Total).
-const TOTAL_COL = 11;
-const ADDITIONAL_COL = 8;
-const QTY_COL = 6;
+// PS-505: each index moved one LEFT — the Status column was removed from the CSV, so
+// every column after Order # shifted. Header order is now
+// 0 Date | 1 Order # | 2 SKUs | 3 Box Size | 4 Box Cost | 5 Qty | 6 Pick & Pack |
+// 7 Additional Units | 8 Shipping | 9 Storage | 10 Total | 11 Shipment # | ...
+const TOTAL_COL = 10;
+const ADDITIONAL_COL = 7;
+const QTY_COL = 5;
 
 function baseRow(over: Partial<InvoiceCsvDetailRow>): InvoiceCsvDetailRow {
   return {
@@ -105,7 +109,12 @@ const billingRoute = read('src/routes/billing.ts');
 const rowTotalOwner = read('src/services/billing-invoice-row-total.ts');
 check('backend Total owner preserves signed non-zero row_total and includes package cost in the zero fallback',
   /Number\.isFinite\(rowTotal\) && rowTotal !== 0/.test(rowTotalOwner) &&
-  /Number\(input\.pickPackFee\)[\s\S]{0,80}Number\(input\.packageCost\)[\s\S]{0,80}Number\(input\.shipping\)[\s\S]{0,80}Number\(input\.storage\)/.test(rowTotalOwner));
+  // PS-505: the fallback routes every term through a shared `amount()` helper instead of
+  // a bare `Number()`, so an absent return bucket reads as 0 rather than NaN. The term
+  // ORDER — and the fact that package cost is one of them — is what this pins.
+  /amount\(input\.pickPackFee\)[\s\S]{0,80}amount\(input\.packageCost\)[\s\S]{0,80}amount\(input\.shipping\)[\s\S]{0,80}amount\(input\.storage\)/.test(rowTotalOwner) &&
+  // The return terms must be present exactly once each, in the same fallback.
+  /amount\(input\.returnPostage\)[\s\S]{0,80}amount\(input\.returnProcessing\)/.test(rowTotalOwner));
 check('CSV serializer delegates to the canonical backend Total owner',
   (csvSrc.match(/resolveBillingInvoiceRowTotal\s*\(\{/g) ?? []).length === 1);
 check('routes/billing.ts HTML + XLSX renderers BOTH delegate to the same backend Total owner',

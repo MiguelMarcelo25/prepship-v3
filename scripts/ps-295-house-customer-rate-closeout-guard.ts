@@ -163,10 +163,15 @@ check('closeout behavior bills customer_rate exactly with no carrier markup',
     billingDecision.markupApplied === false,
   JSON.stringify(billingDecision));
 
+// PS-505: margin is backend truth on the DTO now — the FE consumes it rather than
+// deriving `shipping - (Number(selectedRateCost ?? 0) || 0)`, which reported the whole
+// charge as profit whenever the cost was unproven. The fixture supplies what the real
+// read model stamps; the assertion proves the FE passes it through.
 const detailMetrics = computeBillingDetailMetrics({
   lineType: 'shipping',
   totalCost: '9.64',
   selectedRateCost: 8.5,
+  margin: 1.14,
   orderNumber: 'PS-295-HOUSE-CLOSEOUT',
 });
 check('closeout behavior billing detail margin is customer_rate minus DRP cost',
@@ -193,7 +198,8 @@ const csvCells = renderInvoiceCsvRow({
   fee_waived: false,
 }).split(',');
 check('closeout behavior invoice CSV consumes generated shipping_amt',
-  csvCells[9] === '9.64' && csvCells[11] === '9.64',
+  // PS-505: one index left each — the CSV Status column was removed.
+  csvCells[8] === '9.64' && csvCells[10] === '9.64',
   csvCells.join('|'));
 
 check('realized capture writes sidecar only, not locked shipments',

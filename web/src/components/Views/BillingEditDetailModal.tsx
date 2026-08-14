@@ -36,7 +36,8 @@ type BillingEditDetailModalProps = {
   from: string
   to: string
   draftTotal: number
-  draftMargin: number
+  /** PS-505: null when the carrier cost was never proven — the preview renders blank. */
+  draftMargin: number | null
   zeroShippingReviewSaving: boolean
   onClose: () => void
   onPackageChange: (value: string) => void
@@ -578,7 +579,9 @@ export function BillingEditDetailModal({
 
         <div className="billing-edit-total-row">
           <div><span>Total</span><strong>{formatBillingMoney(draftTotal)}</strong></div>
-          <div><span>Shipping Margin</span><strong style={{ color: billingMarginColor(draftMargin) }}>{draftMargin > 0 ? '+' : ''}${draftMargin.toFixed(2)}</strong></div>
+          <div><span>Shipping Margin</span>{draftMargin === null
+            ? <strong style={{ color: 'var(--text4)' }}>—</strong>
+            : <strong style={{ color: billingMarginColor(draftMargin) }}>{draftMargin > 0 ? '+' : ''}${draftMargin.toFixed(2)}</strong>}</div>
         </div>
 
         <label style={{ display: 'grid', gap: 6, marginTop: 12 }}>

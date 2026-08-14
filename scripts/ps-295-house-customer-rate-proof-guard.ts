@@ -126,14 +126,20 @@ check(
   JSON.stringify(billingDecision),
 );
 
+// PS-505: margin is BACKEND truth and the DTO now carries it. The FE used to derive it
+// as `shipping - (Number(selectedRateCost ?? 0) || 0)`, which reported the whole charge
+// as profit whenever the cost was unproven. This fixture therefore supplies the value the
+// real read model stamps, and the assertion proves the FE consumes it verbatim rather
+// than recomputing the spread.
 const detailMetrics = computeBillingDetailMetrics({
   lineType: 'shipping',
   totalCost: '9.64',
   selectedRateCost: 8.5,
+  margin: 1.14,
   orderNumber: 'PS-295-HOUSE',
 });
 check(
-  'billing detail metrics display billed shipping as customer_rate and margin as spread',
+  'billing detail metrics display billed shipping as customer_rate and consume backend margin',
   centsEqual(detailMetrics.shipping, 9.64) &&
     centsEqual(detailMetrics.ourCost, 8.5) &&
     centsEqual(detailMetrics.margin, 1.14),
@@ -159,8 +165,10 @@ const csvRow = renderInvoiceCsvRow({
 });
 const csvCells = csvRow.split(',');
 check(
+  // PS-505: indices moved one left — the Status column was removed, so Shipping is cell
+  // 8 and Total is cell 10.
   'invoice CSV row consumes the same shipping_amt customer_rate value',
-  csvCells[9] === '9.64' && csvCells[11] === '9.64',
+  csvCells[8] === '9.64' && csvCells[10] === '9.64',
   csvRow,
 );
 

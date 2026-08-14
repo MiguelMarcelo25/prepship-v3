@@ -157,11 +157,16 @@ check('outbound and return stay SEPARATE rows and no fee hides behind #1234', ()
   assert.equal(outbound.grandTotal, 2.5, 'no return fee may merge into the outbound row');
   assert.equal(ret.displayReference, '#1234-RETURN');
   assert.equal(ret.grandTotal, 10.73, '7.73 postage + 3.00 processing');
-  assert.equal(ret.shippingTotal, 7.73);
-  assert.equal(ret.pickpackTotal, 3);
-  // AC-6: the dedicated column buckets, which is what the Billing table renders. The
-  // generic shipping/pickpack totals above happen to agree here, but the columns must
-  // read their own backend fields rather than borrow those.
+  // PS-505 INVERTED. These previously asserted `ret.shippingTotal === 7.73` and
+  // `ret.pickpackTotal === 3` — the dual-bucket behaviour that put one return charge in
+  // two semantic buckets and let fulfillmentFeeTotal report it as a Fulfillment Fee. The
+  // note below already observed the two "happen to agree"; they agreed because the same
+  // money was written twice. A return line must reach its own bucket and nothing else.
+  assert.equal(ret.shippingTotal, 0, 'return postage must not also feed outbound Shipping');
+  assert.equal(ret.pickpackTotal, 0, 'return processing must not also feed Pick & Pack');
+  assert.equal(ret.fulfillmentFeeTotal, 0, 'return money is never a Fulfillment Fee');
+  assert.equal(ret.returnTotal, 10.73, 'the return keeps its own total');
+  // AC-6: the dedicated column buckets, which is what the Billing table renders.
   assert.equal(ret.returnPostageTotal, 7.73);
   assert.equal(ret.returnProcessingTotal, 3);
   assert.equal(outbound.returnPostageTotal, 0, 'an outbound row carries no return money');

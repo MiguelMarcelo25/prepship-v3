@@ -871,6 +871,7 @@
     "test:ps-503-main-pool-readiness": "tsx scripts/ps-503-main-pool-readiness-guard.ts",
     "test:ps-504-read-retry": "tsx scripts/ps-504-read-retry-guard.ts",
     "test:ps-505-sync-line-fallback": "tsx scripts/ps-505-sync-line-fallback-guard.ts",
+    "test:ps-505-return-economics": "tsx scripts/ps-505-return-economics-guard.ts",
     "status:sync": "tsx scripts/status-sync.ts",
     "test:status:sync": "tsx scripts/status-sync.ts --check",
     "test:sync-advisory-lock": "node scripts/sync-advisory-lock-guard.mjs",

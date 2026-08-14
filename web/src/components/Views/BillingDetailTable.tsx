@@ -32,8 +32,9 @@ const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 // <Table>-driven detail render. Anything not listed defaults to 110.
 const DETAIL_COLUMN_WIDTHS: Partial<Record<BillingDetailColumnId, number>> = {
   actions: 88,
-  orderNumber: 130,
-  billingStatus: 150,
+  // PS-505: the Order # cell now also carries the duplicate-order marker that used to
+  // live in the removed Status column, so it needs the width that column gave back.
+  orderNumber: 170,
   shipDate: 130,
   carrierNickname: 110,
   itemNames: 220,
@@ -70,7 +71,6 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     // shares with the shipment row. orderNumber/orderId remain the fallback for rows
     // with no reference; orderId stays navigation-only and is never visible identity.
     case 'orderNumber': return row.displayReference || row.orderNumber || row.orderId
-    case 'billingStatus': return row.billingStatusLabel || row.billingLifecycleStatus || ''
     case 'shipDate': return billingShipDateSortValue(row.billingEffectiveDate ?? row.shipDate)
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
     case 'itemNames': return row.itemNames || row.description
@@ -82,6 +82,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'destination': return (row.destination as string) ?? ''
     case 'returnPostage': return Number(row.returnPostageTotal ?? 0)
     case 'returnProcessing': return Number(row.returnProcessingTotal ?? 0)
+    case 'returnTotal': return metrics.returnTotal
     case 'pickpack': return metrics.pickPack
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
@@ -96,7 +97,11 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
   }
 }
 
-function marginColor(value: number) {
+function marginColor(value: number | null) {
+  // PS-505: null is "cost never proven", not zero. It gets the muted colour a blank
+  // cell should have rather than the neutral-zero colour, which would read as a
+  // margin of exactly nothing having been calculated.
+  if (value == null) return 'var(--text4)'
   if (value > 0) return 'var(--green)'
   if (value < 0) return 'var(--red)'
   return 'var(--text3)'
@@ -491,16 +496,11 @@ export function BillingDetailTable({
                   )
                 }
                 return <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
-              case 'billingStatus':
-                return (
-                  <span
-                    data-billing-status={billingStatusLifecycle(row)}
-                    title={billingStatusLabel(row)}
-                    style={billingStatusChipStyle(billingStatusTone(row))}
-                  >
-                    {billingStatusLabel(row)}
-                  </span>
-                )
+              // PS-505: the standalone Billing Status cell is removed. The backend
+              // lifecycle facts are still consumed — row styling, the cancelled/return
+              // classes and the essential badges all read billingStatusLifecycle/Tone
+              // below — but there is no Status column, and the duplicate-order marker
+              // now rides in the Order # cell rather than being re-surfaced here.
               case 'shipDate':
                 return row.rolledFromWeekend === true ? (
                   <span className="flex flex-col text-tiny leading-tight text-ink-2">
@@ -720,11 +720,25 @@ export function BillingDetailTable({
               case 'total':
                 return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.fulfillmentFee)}</span>
               case 'margin':
+                // PS-505: blank when the cost was never proven. Previously the FE
+                // coerced an absent selected-rate cost to $0.00 and rendered the whole
+                // shipping charge as margin — a fabricated profit on a money column.
+                if (metrics.margin === null) {
+                  return <span style={{ fontSize: 11, color: 'var(--text4)' }}>—</span>
+                }
                 return (
                   <span style={{ fontSize: 11, color: marginColor(metrics.margin), fontWeight: 600 }}>
                     {metrics.margin > 0 ? '+' : ''}${metrics.margin.toFixed(2)}
                   </span>
                 )
+              case 'returnTotal': {
+                // PS-505: a Return row's own money. Blank on outbound rows — zero return
+                // money is not a $0.00 return charge, it is the absence of a return.
+                if (row.rowType !== 'Return') {
+                  return <span style={{ color: 'var(--text4)' }}>—</span>
+                }
+                return <span style={{ fontWeight: 700 }}>{formatBillingMoney(metrics.returnTotal)}</span>
+              }
               default:
                 return null
             }

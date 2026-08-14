@@ -167,7 +167,6 @@ export function reconcileInvoiceRows(input: {
       has_return_postage_line: row.hasReturnPostageLine === true,
       has_return_processing_line: row.hasReturnProcessingLine === true,
       row_total: String(num(row.grandTotal)),
-      billing_status_label: (row.billingStatusLabel as string | undefined) ?? 'Return',
       item_names: null,
       skus: null,
       carrier_code: null,

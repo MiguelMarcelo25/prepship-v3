@@ -85,7 +85,12 @@ check('unique order-number orphan package row collapses into the shipped order r
   assert.equal(rows[0].orderNumber, '1008');
   assert.equal(rows[0].packageTotal, 0.65);
   assert.equal(rows[0].shippingTotal, 8.17);
-  assert.equal(rows[0].selectedRateCost, '8.17');
+  // PS-505: the DTO now normalizes selectedRateCost to `number | null` at the owner,
+  // matching the return-side field and margin. It previously passed through as whatever
+  // string the SQL row carried, which is what let the FE do `Number(x ?? 0) || 0` and
+  // turn an absent cost into a real-looking $0.00. The VALUE is unchanged; only the type
+  // is now stated once instead of being re-parsed by every consumer.
+  assert.equal(rows[0].selectedRateCost, 8.17);
   assert.equal(rows[0].trackingNumber, '9400100000000001008');
   assert.equal(rows[0].displayQty, '1');
 });

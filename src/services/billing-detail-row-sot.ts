@@ -79,6 +79,35 @@ export interface BillingDetailRowDto {
   returnPostageTotal?: number;
   returnProcessingTotal?: number;
   /**
+   * PS-505 — the Return row's own total, owned here rather than reassembled downstream.
+   *
+   * Distinct from `grandTotal` on purpose: grandTotal is the row's money whatever kind of
+   * row it is, while this is specifically the return economics. Both exist because the
+   * invoice row-total fallback and the Return Total column are different questions, and
+   * having one of them derived by a caller is how return money previously ended up
+   * double-counted through an outbound bucket.
+   */
+  returnTotal?: number;
+  /**
+   * PS-505 — the PROVEN cost of the return shipment, resolved from
+   * `returns.return_shipment_id`, or null when there is no return shipment or no
+   * persisted cost on it.
+   *
+   * Null is a real answer and must survive to the cell. It is never the outbound
+   * shipment's cost: the two events merely share an order, which is not evidence of
+   * anything about the return.
+   */
+  returnSelectedRateCost?: number | null;
+  /**
+   * PS-505 — backend-owned shipping margin, `number | null`.
+   *
+   * Previously computed in React as `shipping - (Number(selectedRateCost ?? 0) || 0)`,
+   * which turned an UNKNOWN cost into a real-looking zero and therefore reported the
+   * full charge as profit. Margin is money truth, so it is decided here: null when the
+   * cost is unknown, a number only when it was proven.
+   */
+  margin?: number | null;
+  /**
    * PS-488 M3 — PRESENCE, distinct from amount.
    *
    * `returnPostageTotal === 0` cannot tell a reader whether the return was charged
@@ -125,6 +154,20 @@ function numberValue(value: unknown): number {
   if (value === null || value === undefined || value === '') return 0;
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * PS-505 — absent money must stay absent.
+ *
+ * `numberValue` answers 0 for null/''/unparseable, which is correct for a total that is
+ * genuinely zero but wrong for a cost nobody proved. Margin and selected-rate cost need
+ * the distinction: `Number(null) === 0` is exactly the coercion that made an unknown
+ * carrier cost render as a 100% margin.
+ */
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function textValue(value: unknown): string | null {
@@ -210,36 +253,60 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
     // A cancelled no-charge row bills nothing, return money included (PS-377).
     return {
       pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, adjustment: 0, total: 0,
-      returnPostage: 0, returnProcessing: 0,
+      returnPostage: 0, returnProcessing: 0, returnTotal: 0,
     };
   }
 
   const lineType = row.lineType;
   const lineTotal = numberValue(row.totalCost);
-  const pickPack = numberValue(
-    row.pickpackTotal ??
-      // PS-488 AC-4: return_processing_fee is the canonical portal name for the same
-      // charge as return_processing. Missing it here sends the fee to no total at all.
-      (lineType === 'pick_pack' || lineType === 'pickpack'
-        || lineType === 'return_processing' || lineType === 'return_processing_fee'
-        ? lineTotal : 0),
+
+  // PS-505 — return money is classified FIRST, and a return line can never reach an
+  // outbound bucket.
+  //
+  // PS-488 AC-4/AC-6 added the dedicated return buckets but LEFT the older aliases in
+  // place: return_processing / return_processing_fee also fed pickPack, and
+  // return_label / return_postage / return also fed shipping. One return charge
+  // therefore occupied two semantic buckets at once, and because fulfillmentFeeTotal
+  // sums pickPack + additional + packageCost + shipping + storage, a return charge was
+  // reported to the operator and to the invoice as a Fulfillment Fee.
+  //
+  // The guard is on the LINE TYPE, not on the amount, and it wraps every outbound
+  // bucket rather than only the two that carried aliases — a return line must not reach
+  // an outbound total even via a pre-computed column on the source row.
+  const isReturnLine = isBillingReturnLineType(lineType);
+  const isReturnPostageLine = isBillingReturnPostageLineType(lineType);
+  const isReturnProcessingLine = isBillingReturnProcessingLineType(lineType);
+
+  const returnPostage = isReturnPostageLine ? lineTotal : 0;
+  const returnProcessing = isReturnProcessingLine ? lineTotal : 0;
+  // The bare legacy `return` type is a governed return line but is neither postage nor
+  // processing, so it matches neither predicate above. It previously reached the row
+  // total through `shipping`; removing that alias without giving it a home would
+  // silently drop real historical money from a frozen invoice. It funds the return
+  // total without being attributed to a component it cannot evidence, so no presence
+  // flag is set for it and neither breakout column claims it.
+  const returnOther = isReturnLine && !isReturnPostageLine && !isReturnProcessingLine
+    ? lineTotal
+    : 0;
+  const returnTotal = returnPostage + returnProcessing + returnOther;
+
+  const pickPack = isReturnLine ? 0 : numberValue(
+    row.pickpackTotal ?? (lineType === 'pick_pack' || lineType === 'pickpack' ? lineTotal : 0),
   );
-  const additional = numberValue(
+  const additional = isReturnLine ? 0 : numberValue(
     row.additionalTotal ??
       (lineType === 'additional_unit' || lineType === 'additional' ? lineTotal : 0),
   );
-  const packageCost = numberValue(
+  const packageCost = isReturnLine ? 0 : numberValue(
     row.packageTotal ?? (lineType === 'package_cost' ? lineTotal : 0),
   );
-  const shipping = numberValue(
-    // PS-488 AC-4: return_postage is the canonical portal name for return_label.
-    row.shippingTotal ?? (lineType === 'shipping' || lineType === 'return_label'
-      || lineType === 'return_postage' || lineType === 'return' ? lineTotal : 0),
+  const shipping = isReturnLine ? 0 : numberValue(
+    row.shippingTotal ?? (lineType === 'shipping' ? lineTotal : 0),
   );
-  const storage = numberValue(
+  const storage = isReturnLine ? 0 : numberValue(
     row.storageTotal ?? (lineType === 'storage' ? lineTotal : 0),
   );
-  const adjustment = numberValue(
+  const adjustment = isReturnLine ? 0 : numberValue(
     row.adjustmentTotal ?? (lineType === 'billing_adjustment' ? lineTotal : 0),
   );
   const explicitTotal = nonEmpty(row.grandTotal)
@@ -247,17 +314,15 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
     : nonEmpty(row.total)
       ? numberValue(row.total)
       : null;
+  // returnTotal is a term here because return money no longer arrives through an
+  // outbound bucket. Without it the fallback total for a Return row would be zero.
   const total = explicitTotal ??
-    pickPack + additional + packageCost + shipping + storage + adjustment;
+    pickPack + additional + packageCost + shipping + storage + adjustment + returnTotal;
 
-  // PS-488 AC-6: dedicated buckets so the Billing columns render a backend number
-  // rather than the FE inferring return money out of shipping/pickpack. Both the
-  // canonical portal names and PrepShip's historical ones count, since frozen rows
-  // carry the old spelling and are never rewritten.
-  const returnPostage = lineType === 'return_postage' || lineType === 'return_label' ? lineTotal : 0;
-  const returnProcessing = lineType === 'return_processing_fee' || lineType === 'return_processing' ? lineTotal : 0;
-
-  return { pickPack, additional, packageCost, shipping, storage, adjustment, total, returnPostage, returnProcessing };
+  return {
+    pickPack, additional, packageCost, shipping, storage, adjustment, total,
+    returnPostage, returnProcessing, returnTotal,
+  };
 }
 
 function rowKey(row: BillingDetailReadModelRow, orderNumberKey: Map<string, string>): string {
@@ -365,6 +430,11 @@ const VALUE_CARRY_FIELDS = [
   'billingBadges',
   'relatedOrderId',
   'returnId',
+  // PS-505 — the return's own shipment and that shipment's proven cost. Carried so the
+  // value survives the collapse regardless of which component line arrives first, the
+  // same reason returnReference is in the text table.
+  'returnShipmentId',
+  'returnSelectedRateCost',
   'manualBillingOverrideLineTypes',
   'manualBillingOverrideLabels',
 ] as const;
@@ -517,6 +587,37 @@ function applyReturnAggregate(row: BillingDetailRowDto): void {
   row.totalQty = null;
 }
 
+/**
+ * PS-505 — selected-rate cost and margin, decided at the owner instead of in React.
+ *
+ * Two defects collapse into one fix. The FE did
+ * `const ourCost = Number(selectedRateCost ?? 0) || 0; const margin = shipping - ourCost`,
+ * which (a) turned an unproven cost into a real-looking $0.00 and reported the entire
+ * charge as margin, and (b) left a money rule living in a table component. Both are
+ * resolved by answering here, in `number | null`, and letting the cell render blank.
+ *
+ * A Return row's rate truth is its OWN shipment's, resolved from
+ * `returns.return_shipment_id`. Assigning it here is also a fence: even if a caller
+ * leaked the related order's outbound shipment cost onto a return's source line, it
+ * cannot reach a Return row's Selected Rate or Margin cell. Two events sharing an order
+ * is not evidence of anything about the return.
+ */
+function applyRateEconomics(row: BillingDetailRowDto): void {
+  if (row.rowType === 'Return') {
+    const cost = numberOrNull(row.returnSelectedRateCost);
+    row.returnSelectedRateCost = cost;
+    row.selectedRateCost = cost;
+    row.margin = cost === null ? null : numberValue(row.returnPostageTotal) - cost;
+    return;
+  }
+  const cost = numberOrNull(row.selectedRateCost);
+  row.selectedRateCost = cost;
+  // An outbound row has no return shipment by definition. Stated rather than left
+  // undefined so every serializer sees the same explicit absence.
+  row.returnSelectedRateCost = null;
+  row.margin = cost === null ? null : numberValue(row.shippingTotal) - cost;
+}
+
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
   // PS-488 M3 — identity FIRST. applyCancelledNoCharge must know whether this is a
   // Return row before it decides whether to zero it, and rowType is what tells it.
@@ -524,6 +625,9 @@ function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Se
   applyRowIdentity(row);
   applyReturnAggregate(row);
   applyCancelledNoCharge(row);
+  // PS-505 — after cancellation zeroing, so a cancelled row's margin is computed against
+  // the money it actually bills rather than the stale generated amount.
+  applyRateEconomics(row);
   applyDestinationInternational(row);
   row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
   const orderNumber = orderNumberValue(row);
@@ -561,6 +665,7 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         shippingTotal: metrics.shipping,
         returnPostageTotal: metrics.returnPostage,
         returnProcessingTotal: metrics.returnProcessing,
+        returnTotal: metrics.returnTotal,
         storageTotal: metrics.storage,
         adjustmentTotal: metrics.adjustment,
         pickPackFeeTotal: metrics.pickPack + metrics.additional,
@@ -594,6 +699,7 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     existing.shippingTotal = numberValue(existing.shippingTotal) + metrics.shipping;
     existing.returnPostageTotal = numberValue(existing.returnPostageTotal) + metrics.returnPostage;
     existing.returnProcessingTotal = numberValue(existing.returnProcessingTotal) + metrics.returnProcessing;
+    existing.returnTotal = numberValue(existing.returnTotal) + metrics.returnTotal;
     existing.storageTotal = numberValue(existing.storageTotal) + metrics.storage;
     existing.adjustmentTotal = numberValue(existing.adjustmentTotal) + metrics.adjustment;
     existing.pickPackFeeTotal = existing.pickpackTotal + existing.additionalTotal;

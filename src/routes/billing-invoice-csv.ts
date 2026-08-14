@@ -49,7 +49,6 @@ export type InvoiceCsvDetailRow = {
   /** PS-488 M3 — whether the fee EXISTS. The cell is blank when false, 0 when a real zero. */
   has_return_postage_line?: boolean;
   has_return_processing_line?: boolean;
-  billing_status_label?: string | null;
   skus: string | null;
   package_cost_amt: string;
   box_label: string;
@@ -68,7 +67,8 @@ export type InvoiceCsvDetailRow = {
 export const INVOICE_CSV_HEADERS = [
   INVOICE_SHIP_DATE_HEADER,
   'Order #',
-  'Status',
+  // PS-505: 'Status' removed. Every later cell shifts one position left; the ps-468
+  // positional assertions move with it.
   'SKUs',
   'Box Size',
   'Box Cost',
@@ -116,11 +116,15 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const packageCostAmt = Number(row.package_cost_amt);
   const shippingAmt = Number(row.shipping_amt);
   const storageAmt = Number(row.storage_amt);
-  // PS-488 M3 — NOT fed into resolveBillingInvoiceRowTotal below. That helper's fallback
-  // reconstructs a total from the outbound components when row_total is absent, and its
-  // shape is pinned by PS-468/Audit B-9. row_total already includes return money (it is
-  // a sum over every line type), so adding these here would double-count on every row
-  // that has a real row_total. They are display buckets only.
+  // PS-505 — these ARE now fed into resolveBillingInvoiceRowTotal below.
+  //
+  // PS-488 M3 held them back on the reasoning that row_total already sums every line
+  // type, so passing them would double-count. That is not what happens: the helper
+  // returns a persisted nonzero row_total immediately and only reconstructs when the
+  // total is zero or absent. On a Return row every outbound component is zero, so the
+  // fallback summed to $0.00 and exported a return with real Return Postage and Return
+  // Processing cells as a zero-dollar line. Counted exactly once, in the branch that
+  // reconstructs.
   //
   // PS-488 M3 — presence decides whether the cell renders at all. `0` and `absent` are
   // different facts: a return that was never charged processing and one that was charged
@@ -146,6 +150,10 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     packageCost: packageCostAmt,
     shipping: shippingAmt,
     storage: storageAmt,
+    // The raw amounts, not the rendered cells: an absent fee is '' for display but 0 as
+    // a term, and the resolver must not be handed a formatting decision.
+    returnPostage: row.return_postage_amt,
+    returnProcessing: row.return_processing_amt,
   });
 
   const cells = [
@@ -160,7 +168,6 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
       ?? (row.billing_adjustment_id
         ? `Adjustment ${row.billing_adjustment_id.slice(0, 8)}`
         : String(row.order_number ?? row.order_id ?? '')),
-    row.billing_status_label || 'Fulfilled',
     invoiceOneLineCell(row.skus),
     invoiceOneLineCell(row.box_label),
     num(packageCostAmt),

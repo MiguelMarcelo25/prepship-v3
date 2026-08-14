@@ -1358,6 +1358,23 @@ const REQUIRED_GUARDS = [
   'test:ps-499-billing-bulk-import-patch',
   'test:ps-499-bulk-import-package-cost',
   'test:ps-499-route',
+  // PS-505 (2026-08-14) — the REAL Trello card yY4wWkDA, return billing economics. Not
+  // to be confused with 'test:ps-505-sync-line-fallback' above, which guards a
+  // shipment-sync inventory fix that was misnumbered PS-505 and is awaiting an official
+  // successor id from DJ before it can be renamed.
+  //
+  // PS-488 M3 delivered return identity, grouping and dedicated columns but left the
+  // MONEY wrong: return_processing* also fed pickPack and return_postage/return_label/
+  // return also fed shipping while the dedicated buckets were populated too, so one
+  // return charge sat in two semantic buckets and fulfillmentFeeTotal reported it as a
+  // Fulfillment Fee. A guard that only proves "returns form their own row" passes on the
+  // broken code, which is why the load-bearing assertion here is the #3074 row fixture:
+  // every outbound bucket on a Return row must be zero.
+  //
+  // Also pins that margin is `number | null` at the backend owner. The FE previously did
+  // `Number(selectedRateCost ?? 0) || 0` and reported the entire shipping charge as
+  // profit whenever the carrier cost was unproven.
+  'test:ps-505-return-economics',
 ];
 
 const npmCli = process.env.npm_execpath;

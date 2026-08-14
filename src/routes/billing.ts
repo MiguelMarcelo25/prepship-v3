@@ -2196,7 +2196,6 @@ type InvoiceDetailRow = {
   /** PS-488 AC-1 — returns.return_reference as persisted. Never minted here. */
   return_reference?: string | null;
   row_total: string;
-  billing_status_label: string;
   item_names: string | null;
   skus: string | null;
   carrier_code: string | null;
@@ -2223,7 +2222,7 @@ type InvoiceDetailRow = {
 
 // PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
 // fee_waived is NOT from the SQL aggregate (it's a separate billing_fee_waivers read) — omit it here.
-type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names' | 'billing_status_label' | 'destination' | 'order_number_label'> & {
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names' | 'destination' | 'order_number_label'> & {
   billed_package_id: number | null;
   /** PS-490: raw provider country; classified in TS, never compared in SQL. */
   ship_to_country: string | null;
@@ -2486,9 +2485,20 @@ async function billingInvoiceData(
     const baseOrderNumber = r.billing_adjustment_id
       ? `Adjustment ${r.billing_adjustment_id.slice(0, 8)}`
       : String(r.order_number ?? r.order_id ?? '');
-    const orderNumberLabel = !r.billing_adjustment_id && lineTypes.some(isBillingReturnLineType)
+    const returnSuffixedOrderNumber = !r.billing_adjustment_id && lineTypes.some(isBillingReturnLineType)
       ? `${baseOrderNumber} - Return`
       : baseOrderNumber;
+    // PS-505: the duplicate marker moves INTO the Order # identity cell.
+    //
+    // It previously rode in `billing_status_label`, which is the column this card
+    // removes — so without relocating it, PS-491's whole point would be lost: a
+    // suppressed copy exports as a $0 row and the only thing distinguishing it from an
+    // unfulfilled order was that label. It belongs on the identity cell anyway, because
+    // "this is a copy of order N" is a statement about WHICH ORDER the row is, not about
+    // its billing lifecycle. It must not become a replacement Status column.
+    const orderNumberLabel = duplicateLabel
+      ? `${returnSuffixedOrderNumber} (${duplicateLabel})`
+      : returnSuffixedOrderNumber;
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -2517,7 +2527,6 @@ async function billingInvoiceData(
       has_return_processing_line: r.has_return_processing_line === true,
       return_reference: r.return_reference ?? null,
       row_total: suppressed ? zero : r.row_total,
-      billing_status_label: duplicateLabel ?? billingStatus.billingStatusLabel,
       item_names: r.adjustment_description ?? itemSummary.itemNames,
       // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
       // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
@@ -2661,12 +2670,17 @@ export function renderInvoiceHtml(args: {
       // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
       // export display delegates the read-only legacy fallback to the backend
       // invoice owner; no order/shipment row is changed.
+      // PS-505: return money is a term in the zero-row fallback. Without it a Return row
+      // — whose outbound components are all zero — reconstructed to $0.00 on the invoice
+      // while its Return Postage / Return Processing cells showed real charges.
       const fulfillmentFeeAmt = resolveBillingInvoiceRowTotal({
         rowTotal: d.row_total,
         pickPackFee: pickPackFeeAmt,
         packageCost: packageCostAmt,
         shipping: shippingAmt,
         storage: storageAmt,
+        returnPostage: d.return_postage_amt,
+        returnProcessing: d.return_processing_amt,
       });
       // PS-488 M3: resolved through the shared three-state owner, identically to the XLSX
       // and CSV serializers, so the three renderings of one invoice cannot disagree about
@@ -2693,7 +2707,6 @@ export function renderInvoiceHtml(args: {
       <tr>
         <td class="ship-date">${dateCell}</td>
         <td class="mono">${escHtml(d.order_number_label)}</td>
-        <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
         <td class="num">${packageCostAmt > 0 ? fmt(packageCostAmt) : '—'}</td>
@@ -2790,7 +2803,6 @@ export function renderInvoiceHtml(args: {
       <tr>
         <th class="ship-date">${escHtml(INVOICE_SHIP_DATE_HEADER)}</th>
         <th>Order #</th>
-        <th>Status</th>
         <th>SKU(s)</th>
         <th>Box Size</th>
         <th class="num">Box Cost</th>
@@ -2815,7 +2827,10 @@ export function renderInvoiceHtml(args: {
     <tbody>${rowsHtml}</tbody>
     <tfoot>
       <tr>
-        <td colspan="5">Totals — ${orderCount} orders</td>
+        <!-- PS-505: 4, not 5. Removing the Status <th> narrowed the header by one
+             column, and a footer that still spanned 5 pushed every total one cell right
+             of the column it totals. -->
+        <td colspan="4">Totals — ${orderCount} orders</td>
         <td class="num">${packageTotal > 0 ? fmt(packageTotal) : '—'}</td>
         <td></td>
         <td class="num">${fmt(pickPackFeeTotal)}</td>
@@ -2888,7 +2903,6 @@ export async function renderInvoiceXlsx(args: {
   // PS-425: one operator-facing row per frozen shipment identity.
   invoice.columns = [
     { header: 'Order #', key: 'orderNumber', width: 12 },
-    { header: 'Status', key: 'status', width: 18 },
     { header: INVOICE_XLSX_SHIP_DATE_HEADER, key: 'shipDate', width: 12 },
     { header: 'Carrier', key: 'carrier', width: 12 },
     { header: 'Item Name', key: 'itemName', width: 36 },
@@ -2937,18 +2951,21 @@ export async function renderInvoiceXlsx(args: {
     const packageCostAmt = Number(d.package_cost_amt);
     const shippingAmt = Number(d.shipping_amt);
     const storageAmt = Number(d.storage_amt);
+    // PS-505: same zero-row fallback terms as the HTML renderer, so the two renderings
+    // of one invoice cannot disagree about a return's total.
     const fulfillmentFeeAmt = resolveBillingInvoiceRowTotal({
       rowTotal: d.row_total,
       pickPackFee: pickPackFeeAmt,
       packageCost: packageCostAmt,
       shipping: shippingAmt,
       storage: storageAmt,
+      returnPostage: d.return_postage_amt,
+      returnProcessing: d.return_processing_amt,
     });
     invoice.addRow({
       // PS-490: carries the " - Return" suffix; the adjustment label is already baked in
       // by the same owner, so the branch that used to live here is gone.
       orderNumber: d.order_number_label,
-      status: d.billing_status_label || 'Fulfilled',
       shipDate: invoiceBillingActivityDateCell(
         d.ship_date,
         d.billing_effective_date,
@@ -2993,13 +3010,19 @@ export async function renderInvoiceXlsx(args: {
       itemName: `Totals - ${totals.orderCount} orders`,
       // Box Cost is display-only here; it is already inside each row's
       // Fulfillment Fee, so it is never added a second time.
-      boxCost: { formula: `SUM(J${first}:J${last})` },
-      qty: { formula: `SUM(G${first}:G${last})` },
-      pickPackFee: { formula: `SUM(H${first}:H${last})` },
-      additional: { formula: `SUM(I${first}:I${last})` },
-      shipping: { formula: `SUM(L${first}:L${last})` },
-      storage: { formula: `SUM(M${first}:M${last})` },
-      fulfillmentFee: { formula: `SUM(N${first}:N${last})` },
+      // PS-505: every letter moved one LEFT. PS-393 inserted Status as column B and
+      // shifted these right; removing it shifts them back. A stale letter here does not
+      // error — it silently sums the neighbouring column, so the totals row would have
+      // reported Box Size under Box Cost and Shipment # under Total.
+      // A=Order# B=ShipDate C=Carrier D=ItemName E=SKU F=Qty G=Pick&Pack H=Addl
+      // I=BoxCost J=BoxSize K=Shipping L=Storage M=Total N=Shipment#
+      boxCost: { formula: `SUM(I${first}:I${last})` },
+      qty: { formula: `SUM(F${first}:F${last})` },
+      pickPackFee: { formula: `SUM(G${first}:G${last})` },
+      additional: { formula: `SUM(H${first}:H${last})` },
+      shipping: { formula: `SUM(K${first}:K${last})` },
+      storage: { formula: `SUM(L${first}:L${last})` },
+      fulfillmentFee: { formula: `SUM(M${first}:M${last})` },
     });
     totalsRow.font = { bold: true };
   }

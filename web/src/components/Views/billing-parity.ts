@@ -100,7 +100,7 @@ export type BillingDetailColumnId =
   | 'destination'
   | 'returnPostage'
   | 'returnProcessing'
-  | 'billingStatus'
+  | 'returnTotal'
   | 'shipDate'
   | 'carrierNickname'
   | 'itemNames'
@@ -145,8 +145,13 @@ export interface BillingDetailMetrics {
   storage: number
   fulfillmentFee: number
   total: number
-  ourCost: number
-  margin: number
+  // PS-505: `number | null`, straight from the backend. Null means the cost was never
+  // proven and the cell renders blank — it does NOT mean zero. Coercing it to 0 here is
+  // what reported an unknown carrier cost as 100% margin.
+  ourCost: number | null
+  margin: number | null
+  /** PS-505: the Return row's own money, backend-owned. Zero on outbound rows. */
+  returnTotal: number
   ssCharged: boolean
   chargedRate: 'selectedRate' | 'upsss' | 'uspsss' | null
 }
@@ -170,12 +175,19 @@ export interface BillingPackagePriceRow {
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
-  { id: 'billingStatus', label: 'Status', align: 'left', always: false },
-  // PS-488 AC-6. All four render backend-owned values verbatim; none is computed here.
+  // PS-505: the standalone Status column is REMOVED. billing-row-status.ts remains the
+  // backend owner and its facts still drive row styling and the essential badges — what
+  // is gone is the column, not the classification. The duplicate-order marker moved into
+  // the Order # identity cell and must not be reintroduced as a Status column here.
+  // PS-488 AC-6. All render backend-owned values verbatim; none is computed here.
   { id: 'rowType', label: 'Type', align: 'left', always: false },
   { id: 'destination', label: 'Destination', align: 'left', always: false },
   { id: 'returnPostage', label: 'Return Postage', align: 'right', always: false },
   { id: 'returnProcessing', label: 'Return Processing', align: 'right', always: false },
+  // PS-505: a Return row's own total. The 'total' column below is labelled Fulfillment
+  // Fee and is outbound economics, so it renders blank on a Return row — without this
+  // column a return's money would have no total of its own anywhere in the table.
+  { id: 'returnTotal', label: 'Return Total', align: 'right', always: false },
   { id: 'shipDate', label: 'Billing Date', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
@@ -198,16 +210,19 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
 // row actions so operators can audit/edit a full invoice line at once.
 // Bumping the storage key resets returning users to the new default
 // order; if they had custom toggles, they re-pick them once.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v7'
+// v8 (PS-505): Billing Status removed, Return Total added. The key bump is what resets a
+// returning operator's saved toggles to the new default set — without it they would keep
+// a stored id that no longer exists and never see the new column.
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v8'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
   'orderNumber',
-  'billingStatus',
   'rowType',
   'destination',
   'returnPostage',
   'returnProcessing',
+  'returnTotal',
   'shipDate',
   'carrierNickname',
   'itemNames',
@@ -462,8 +477,21 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   const totalValue = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? fulfillmentFee)
   const total = Number.isFinite(totalValue) ? totalValue : fulfillmentFee
   const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost
-  const ourCost = Number(selectedRateCost ?? 0) || 0
-  const margin = shipping - ourCost
+  // PS-505 — margin is backend truth, not a React expression.
+  //
+  // This was `const ourCost = Number(selectedRateCost ?? 0) || 0` followed by
+  // `const margin = shipping - ourCost`. Two defects in two lines: an unproven cost
+  // became a real-looking $0.00, which then reported the ENTIRE shipping charge as
+  // margin; and a money rule lived in a table helper. Both are answered by
+  // billing-detail-row-sot.ts now, in `number | null`, and consumed verbatim here.
+  const ourCost = selectedRateCost == null || selectedRateCost === ''
+    ? null
+    : Number.isFinite(Number(selectedRateCost)) ? Number(selectedRateCost) : null
+  const marginRaw = detail.margin
+  const margin = marginRaw == null || marginRaw === ''
+    ? null
+    : Number.isFinite(Number(marginRaw)) ? Number(marginRaw) : null
+  const returnTotal = Number(detail.returnTotal ?? detail.return_total ?? 0) || 0
   const refUpsRate = detail.refUpsRate ?? detail.ref_ups_rate
   const refUspsRate = detail.refUspsRate ?? detail.ref_usps_rate
   const ssCharged = shipping > 0 && selectedRateCost != null && shipping > Number(selectedRateCost) + 0.01
@@ -487,6 +515,7 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
     total,
     ourCost,
     margin,
+    returnTotal,
     ssCharged,
     chargedRate,
   }
