@@ -88,3 +88,63 @@ jobs:
           name: hazmat-browser-proof-failure
           path: test-results/
           retention-days: 7
+
+  # PS-507: the disposable QA stack and its consumers.
+  #
+  # This WIDENS the per-spec rule stated on hazmat-browser-proof above, and the reason it
+  # is allowed to is that PS-507 is not part of that flappy suite. It has its own
+  # playwright.ps507.config.js (testMatch /ps-507-.*\.spec\.js/, workers: 1, no webServer,
+  # no globalSetup) and provisions its own stack, so it shares no fixture, port or server
+  # with the legacy e2e run. Measured before wiring: 8 consecutive clean full-suite runs
+  # (5 + 3) at ~8s. The one flake ever observed was root-caused, not retried -- the query
+  # endpoint was calling pg.query() in-process and interleaving with socket-served queries.
+  #
+  # What this job is worth: before it, the only thing standing behind the harness in CI was
+  # test:ps-507-qa-harness, a STATIC guard that reads the source. A static guard cannot
+  # notice that the stack stopped provisioning, that a migration broke the QA schema, or
+  # that the persistence proof went vacuous -- exactly the failures this suite exists to
+  # catch. If it turns out to flap, root-cause it or remove the job; do not add retries,
+  # because this stack's failure mode lands on whatever request was in flight rather than
+  # on the cause, and a retry converts a visible fault into a silent one.
+  #
+  # This job alone is NOT a deploy gate. Despite its name, "Render Auto-Deploy (CI-gated)"
+  # does not wait on this workflow's conclusion -- it re-runs its own inline gate list.
+  # That workflow's own comment records why the lists must not diverge: the SOT pack was
+  # copied into it after "a red PS-464 could and did reach production while the general CI
+  # was failing". So the PS-507 suite is registered in BOTH, and the two must be changed
+  # together. The deploy-gate copy lives in render-auto-deploy.yml under the same name.
+  #
+  # Needs NO secrets. The database is in-memory PGlite behind a loopback socket, the
+  # bearer is signed with a per-run random secret, and the Supabase URL is a syntactically
+  # valid ref that never resolves. Nothing reaches a carrier, marketplace or mailbox.
+  ps-507-qa-stack-proofs:
+    name: PS-507 disposable QA stack proofs (PS-499 Step 12 + PS-488 M3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Seeds BOTH fixtures and runs all 13 specs: the persistence proof, the PS-499
+      # Step 12 API and browser legs, and the PS-488 M3 return-identity proofs.
+      - name: PS-507 persistence, authorisation and identity proofs
+        run: npm run test:ps-507
+
+      - name: Upload failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps-507-qa-stack-failure
+          path: test-results/
+          retention-days: 7

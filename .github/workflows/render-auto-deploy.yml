@@ -1,7 +1,8 @@
 name: Render Auto-Deploy (CI-gated)
 
-# Hands-off Render deploy that ONLY runs after the CI gate (typecheck + frontend build +
-# shipping-roundtrip-certification) passes on prepshipv4-stable. This replaces the manual
+# Hands-off Render deploy that ONLY runs after the CI gate (SOT guard pack + typecheck +
+# PS-421 + frontend build + shipping-roundtrip-certification + the PS-507 disposable QA
+# stack proofs) passes on prepshipv4-stable. This replaces the manual
 # "redeploy Render after a push" step WITHOUT removing the safety gate that Render's native
 # Auto-Deploy would bypass (native auto-deploy ships every push regardless of CI — unsafe for
 # this money/rate/label/insurance backend).
@@ -60,6 +61,32 @@ jobs:
         run: npm run build:web
       - name: Shipping roundtrip certification (offline gate)
         run: npm run test:shipping-roundtrip-certification
+
+      # PS-507. Last, because it is the slowest step and everything above fails faster.
+      #
+      # Here for the same reason the SOT guard pack is: this gate and ci.yml must not keep
+      # two different lists. The pack was copied in after a red PS-464 reached production
+      # while general CI was failing, and leaving the PS-507 suite in ci.yml alone would
+      # recreate exactly that divergence — for schema and persistence regressions, which
+      # is what this gate's path filter (src/**, drizzle/**) selects for. A migration that
+      # breaks the real schema is precisely the failure a typecheck and a frontend build
+      # cannot see.
+      #
+      # Needs no secrets: in-memory PGlite on loopback, a per-run random bearer secret,
+      # and a Supabase ref that never resolves.
+      - name: Install Chromium (PS-507 browser leg)
+        run: npx playwright install --with-deps chromium
+
+      - name: PS-507 disposable QA stack proofs (PS-499 Step 12 + PS-488 M3)
+        run: npm run test:ps-507
+
+      - name: Upload PS-507 failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps-507-deploy-gate-failure
+          path: test-results/
+          retention-days: 7
 
   deploy:
     needs: gate

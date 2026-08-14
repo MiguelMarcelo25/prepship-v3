@@ -224,6 +224,56 @@ check('gotoApp waits for readiness and never clicks past the maintenance page', 
   );
 });
 
+console.log('\nthe stack runs on a CLEAN checkout, not just a dev box');
+
+check('seeders receive the same SUPABASE_* contract the API child does', () => {
+  // The Step 12 fixture imports src/db/client -> src/lib/env.ts, which hard-requires the
+  // four SUPABASE_* values off-serverless and exits 1 without them. Passing them to the
+  // API spawn only worked because a dev machine has an untracked repo-root .env; on CI or
+  // a fresh clone the seeder died before a single spec ran. Asserted as ONE shared object
+  // rather than two literal lists, because the root cause was two spawns satisfying the
+  // same contract independently and drifting.
+  const code = stackSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(code, /const qaSupabaseEnv\s*=\s*\{/, 'the shared SUPABASE env object is gone');
+  for (const key of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_JWT_SECRET']) {
+    assert.ok(
+      new RegExp(`qaSupabaseEnv[\\s\\S]{0,400}${key}`).test(code),
+      `${key} is not in the shared qaSupabaseEnv object`,
+    );
+  }
+  assert.match(code, /runSeeder\([^)]*env:\s*qaSupabaseEnv/, 'runSeeder no longer receives the shared env');
+  assert.match(code, /\.\.\.qaSupabaseEnv/, 'the API env no longer spreads the shared object');
+});
+
+check('every tolerated migration pins the REASON, not just the filename', () => {
+  // Name-only tolerance absorbs a migration that starts failing for a NEW cause, which is
+  // the exact case the allowlist exists to catch. Each entry carries an `expect` pattern
+  // matched against the real error, and those patterns were captured from actual output
+  // rather than guessed -- the first guess here was wrong and this check caught it.
+  const entries = stackSrc.match(/\[\s*'0\d{3}[^']*\.sql'\s*,\s*\{[\s\S]*?\}\s*\]/g) ?? [];
+  assert.ok(entries.length >= 7, `expected the tolerated-migration allowlist, found ${entries.length} entries`);
+  for (const entry of entries) {
+    const file = /'([^']+\.sql)'/.exec(entry)?.[1];
+    assert.match(entry, /reason:\s*'/, `${file} has no stated reason`);
+    assert.match(entry, /expect:\s*\//, `${file} tolerates by NAME only — pin the expected error`);
+  }
+});
+
+check('the PS-507 suite is registered in BOTH CI and the deploy gate', () => {
+  // render-auto-deploy.yml does NOT wait on ci.yml; it re-runs its own list. The two
+  // diverging is how a red PS-464 once reached production, which is why the SOT pack was
+  // copied into the deploy gate. This suite must not recreate that gap.
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const deploy = readFileSync('.github/workflows/render-auto-deploy.yml', 'utf8');
+  for (const [label, src] of [['ci.yml', ci], ['render-auto-deploy.yml', deploy]] as const) {
+    assert.ok(src.includes('npm run test:ps-507'), `${label} does not run the PS-507 suite`);
+    assert.ok(
+      /playwright install[^\n]*chromium/.test(src),
+      `${label} runs the PS-507 suite without installing Chromium — the browser leg cannot run`,
+    );
+  }
+});
+
 console.log('\nself-wiring');
 
 check('package.json exposes the PS-507 commands', () => {

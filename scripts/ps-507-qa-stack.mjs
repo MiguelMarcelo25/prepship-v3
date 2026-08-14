@@ -204,12 +204,38 @@ export async function bootstrapForeignOwnedTables(pg, log = console.log) {
  * extension, and RLS on tables this repo does not own.
  */
 const TOLERATED_MIGRATION_FAILURES = new Map([
-  ['0018e_indexes.sql', 'CREATE INDEX CONCURRENTLY cannot run in PGlite\'s implicit transaction; indexes are performance, not correctness'],
-  ['0039_fk_covering_indexes.sql', 'same CONCURRENTLY constraint'],
-  ['0037_rls_reporting_metrics_inbound.sql', 'RLS over inbound_shipments, a table this repo does not own'],
-  ['0045_revoke_public_api_grants.sql', 'revokes from the Supabase `anon` role, which does not exist on PGlite'],
-  ['0069_public_billing_rls_hardening.sql', 'same Supabase-only role'],
-  ['0058_search_trgm_indexes.sql', 'pg_trgm extension is not available in PGlite'],
+  ['0018e_indexes.sql', {
+    reason: 'CREATE INDEX CONCURRENTLY cannot run in PGlite\'s implicit transaction; indexes are performance, not correctness',
+    expect: /CONCURRENTLY cannot run inside a transaction block/i,
+  }],
+  ['0039_fk_covering_indexes.sql', {
+    reason: 'same CONCURRENTLY constraint',
+    expect: /CONCURRENTLY cannot run inside a transaction block/i,
+  }],
+  ['0037_rls_reporting_metrics_inbound.sql', {
+    reason: 'RLS over inbound_shipments, a table this repo does not own',
+    expect: /relation "public.inbound_shipments" does not exist/i,
+  }],
+  ['0045_revoke_public_api_grants.sql', {
+    reason: 'revokes from the Supabase `anon` role, which does not exist on PGlite',
+    expect: /role "anon" does not exist/i,
+  }],
+  ['0069_public_billing_rls_hardening.sql', {
+    reason: 'same Supabase-only role',
+    expect: /role "anon" does not exist/i,
+  }],
+  ['0058_search_trgm_indexes.sql', {
+    reason: 'pg_trgm extension is not available in PGlite',
+    expect: /could not open extension control file|extension "pg_trgm" is not available/i,
+  }],
+  ['0094_pin_function_search_path.sql', {
+    // pg-boss creates its own schema and functions at RUNTIME, from the library, not from
+    // any migration in this repo. The QA stack never starts the worker
+    // (RUN_SYNC_SCHEDULER=false), so the schema legitimately does not exist and there is
+    // nothing to pin. Nothing this harness proves touches pg-boss.
+    reason: 'pgboss schema is created by the pg-boss library at runtime; the QA stack never starts the worker',
+    expect: /schema "pgboss" does not exist/i,
+  }],
 ]);
 
 /**
@@ -235,14 +261,22 @@ export async function applyAllMigrations(pg, log = console.log) {
       await pg.exec(sql.replace(/-->\s*statement-breakpoint/g, ';'));
       applied.push(file);
     } catch (error) {
-      const reason = TOLERATED_MIGRATION_FAILURES.get(file);
-      if (!reason) {
+      const entry = TOLERATED_MIGRATION_FAILURES.get(file);
+      const message = String(error && error.message || error).split('\n')[0];
+      if (process.env.PS507_DUMP_MIGRATION_ERRORS) log(`[ps-507] tolerated? ${file} :: ${message}`);
+      if (!entry) {
+        throw new Error(`STOP: migration ${file} failed for an untolerated reason:\n  ${message}`);
+      }
+      // The allowlist matches the REASON as well as the name. Name-only tolerance would
+      // absorb a migration that starts failing for a new cause — precisely the case the
+      // allowlist exists to catch — so a known file failing an unknown way is still fatal.
+      if (!entry.expect.test(message)) {
         throw new Error(
-          `STOP: migration ${file} failed for an untolerated reason:\n  ` +
-            String(error && error.message || error).split('\n')[0],
+          `STOP: migration ${file} is tolerated, but failed for a DIFFERENT reason than the ` +
+            `one on record.\n  expected: ${entry.expect}\n  actual  : ${message}`,
         );
       }
-      tolerated.push({ file, reason });
+      tolerated.push({ file, reason: entry.reason });
     }
   }
 
@@ -328,7 +362,7 @@ async function waitForHttp(url, timeoutMs, label) {
  * fixture's own uniqueness and FK errors surface as fixture output rather than as
  * mid-suite API failures.
  */
-async function runSeeder({ label, argv, databaseUrl, log }) {
+async function runSeeder({ label, argv, databaseUrl, env = {}, log }) {
   // ASYNC spawn, never spawnSync.
   //
   // The PGLite socket server runs in THIS process's event loop. spawnSync blocks that
@@ -338,7 +372,7 @@ async function runSeeder({ label, argv, databaseUrl, log }) {
   // fault, which is why it is called out here.
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [tsxCli(), ...argv], {
-      env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: databaseUrl },
+      env: { ...process.env, NODE_ENV: 'test', DATABASE_URL: databaseUrl, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -429,19 +463,36 @@ export async function provisionQaStack({ withFrontend = true, seeders = [], log 
 
   try {
     // Seeders run here — after the socket is up, before the API claims the connection.
+    // Every child that loads src/lib/env.ts needs these, not just the API.
+    //
+    // env.ts hard-requires the four SUPABASE_* values whenever the host is not serverless
+    // (env.ts:35-45 — `renderOnlySecret` is only optional under VERCEL / AWS_LAMBDA_* /
+    // AWS_REGION), and exits 1 on a parse failure. The ps-499-step12 fixture imports
+    // src/db/client, which imports env.ts, so it is bound by that contract exactly as the
+    // API is. Passing them to the API spawn alone worked ONLY because a developer machine
+    // has an untracked repo-root .env that `import 'dotenv/config'` picks up. On a clean
+    // checkout — CI, or a new clone — the seeder exits 1 and provisioning dies before a
+    // single spec runs.
+    //
+    // Shared here rather than repeated so the two spawns cannot satisfy the same contract
+    // independently and drift apart again, which is the actual root cause.
+    const qaSupabaseEnv = {
+      SUPABASE_URL: 'https://qa.invalid',
+      SUPABASE_ANON_KEY: 'qa-anon',
+      SUPABASE_SERVICE_ROLE_KEY: 'qa-service',
+      SUPABASE_JWT_SECRET: jwtSecret,
+    };
+
     const seedOutput = {};
     for (const seeder of seeders) {
-      seedOutput[seeder.label] = await runSeeder({ ...seeder, databaseUrl, log });
+      seedOutput[seeder.label] = await runSeeder({ ...seeder, databaseUrl, env: qaSupabaseEnv, log });
     }
 
     const apiEnv = {
       NODE_ENV: 'test',
       PORT: String(API_PORT),
       DATABASE_URL: databaseUrl,
-      SUPABASE_URL: 'https://qa.invalid',
-      SUPABASE_ANON_KEY: 'qa-anon',
-      SUPABASE_SERVICE_ROLE_KEY: 'qa-service',
-      SUPABASE_JWT_SECRET: jwtSecret,
+      ...qaSupabaseEnv,
       // The QA stack must never reach a carrier, marketplace or mailbox.
       INVENTORY_AUTO_DEDUCT: 'off',
       RETURN_BILLING_ENABLED: 'false',

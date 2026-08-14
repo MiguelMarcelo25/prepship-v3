@@ -133,6 +133,41 @@ migration failing for a *new* reason is fatal.
 it in its pre-`0088` shape and lets `0088`, `0089` and `0092` apply for real. The QA
 database reaches the reconciled return-identity contract by the same path production did.
 
+## Where it runs
+
+Registered in **two** places, and they must be changed together:
+
+- `.github/workflows/ci.yml` — job `ps-507-qa-stack-proofs`
+- `.github/workflows/render-auto-deploy.yml` — last step of the `gate` job
+
+The duplication is deliberate. Despite its name, "Render Auto-Deploy (CI-gated)" does not
+wait on the CI workflow's conclusion; it re-runs its own inline gate list. That workflow's
+comment records what happened when the two lists diverged — the SOT pack was copied into it
+after "a red PS-464 could and did reach production while the general CI was failing." A
+schema or persistence regression is exactly what a typecheck and a frontend build cannot
+see, and the deploy gate's path filter (`src/**`, `drizzle/**`) selects for precisely that.
+`test:ps-507-qa-harness` asserts both registrations exist.
+
+**It must run on a clean checkout, and that is not the same as running on a dev box.**
+The Step 12 fixture imports `src/db/client`, hence `src/lib/env.ts`, which hard-requires
+the four `SUPABASE_*` values off-serverless and calls `process.exit(1)` without them. The
+stack passed them to the API child only, and the seeder survived on a developer machine
+purely because an untracked repo-root `.env` was there for `dotenv/config` to find. On CI
+the seeder exited 1 before a single spec ran. They now come from one shared
+`qaSupabaseEnv` object used by both spawns, so the two cannot drift apart again.
+
+To reproduce a clean checkout without deleting your `.env`:
+
+```bash
+env -u SUPABASE_URL -u SUPABASE_ANON_KEY -u SUPABASE_SERVICE_ROLE_KEY -u SUPABASE_JWT_SECRET DOTENV_CONFIG_PATH=/nonexistent npm run test:ps-507
+```
+
+Tolerated migrations pin the **expected error**, not just the filename — a known file
+failing a new way is still fatal. `PS507_DUMP_MIGRATION_ERRORS=1` prints the real message
+for each, which is how those patterns were captured rather than guessed. `0094` is
+tolerated because `pgboss` is created by the pg-boss library at runtime and the QA stack
+never starts the worker.
+
 ## Scope today
 
 **PS-499 Step 12** — both halves. The API → persistence leg covers scenario D's four
