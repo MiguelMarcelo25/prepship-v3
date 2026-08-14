@@ -328,7 +328,17 @@ export function startQueryEndpoint(queryClient, { port, token, log = console.log
         // request happened to be in flight — a spec's own read-back could knock over an
         // unrelated GET the browser had just issued. Routing through the socket puts every
         // reader behind the same queue, at the cost of one connection.
-        const rows = await queryClient.unsafe(sql, params ?? []);
+        // `prepare: true` is load-bearing, not a tuning knob.
+        //
+        // postgres.js defaults unsafe() to prepare:false, which uses the UNNAMED prepared
+        // statement (""). PGlite serves every socket connection from one instance and that
+        // unnamed slot is shared across them, so a concurrent query from the API's own
+        // pool overwrites this one between parse and bind. On CI that surfaced as
+        // `bind message supplies 1 parameters, but prepared statement "" requires 8` —
+        // the 8 belonging to a completely unrelated API query. A named statement gets its
+        // own slot. With no parameters postgres.js uses the simple protocol and never
+        // binds at all, so that path is unaffected either way.
+        const rows = await queryClient.unsafe(sql, params ?? [], { prepare: true });
         reply(200, { rows: Array.from(rows) });
       } catch (error) {
         reply(500, { error: String(error && error.message || error).split('\n')[0] });
