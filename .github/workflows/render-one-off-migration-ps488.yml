@@ -27,12 +27,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'inspect = read-only report (safe, default). apply = commit the reconciliation.'
+        description: 'inspect = read-only report (default). verify = full post-apply read-back. apply = commit.'
         required: true
         default: inspect
         type: choice
         options:
           - inspect
+          - verify
           - apply
       confirm:
         description: 'apply only — type APPLY-PS-488-0092-RETURN-IDENTITY-RECONCILIATION. Leave blank for inspect.'
@@ -67,6 +68,11 @@ jobs:
           case "$MODE" in
             inspect)
               echo 'Mode: INSPECT — read-only. The runner writes nothing without --apply.'
+              ;;
+            verify)
+              # No token. The read-back is SELECT-only and additionally pins the session
+              # READ ONLY at the server, so it cannot write even if the code changed.
+              echo 'Mode: VERIFY — read-only post-apply read-back. No token required.'
               ;;
             apply)
               test "${CONFIRM:-}" = "$expected" || {
@@ -140,22 +146,36 @@ jobs:
 
           # 0089 travels too: assert0089Untouched() reads it and the runner
           # refuses to start if it is missing or altered.
-          files=(
-            scripts/apply-ps-488-return-identity-reconciliation.ts
-            scripts/ps-488-migration-contract.ts
-            drizzle/0092_ps488_return_identity_reconciliation.sql
-            drizzle/0089_billing_line_items_return_id.sql
-          )
-          archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
-
+          #
+          # verify ships a different set: the read-back imports the four violation
+          # gates from the readiness command rather than restating them, so that
+          # module and its own import travel with it.
           digest='a08ed909b92cf3a5af2201d8fdeea49a9920785f2f82110b0203586e2dcf55b0'
-          runner='npx tsx scripts/apply-ps-488-return-identity-reconciliation.ts'
-          if [ "$MODE" = 'apply' ]; then
-            confirm='APPLY-PS-488-0092-RETURN-IDENTITY-RECONCILIATION'
-            run_args="--digest=${digest} --apply --confirm=${confirm}"
+          if [ "$MODE" = 'verify' ]; then
+            files=(
+              scripts/ps-488-0092-readback.ts
+              scripts/ps-488-m2-readiness.ts
+              scripts/ps-488-migration-contract.ts
+              src/services/billing-return-event-contract.ts
+            )
+            runner='npx tsx scripts/ps-488-0092-readback.ts'
+            run_args=''
           else
-            run_args="--digest=${digest}"
+            files=(
+              scripts/apply-ps-488-return-identity-reconciliation.ts
+              scripts/ps-488-migration-contract.ts
+              drizzle/0092_ps488_return_identity_reconciliation.sql
+              drizzle/0089_billing_line_items_return_id.sql
+            )
+            runner='npx tsx scripts/apply-ps-488-return-identity-reconciliation.ts'
+            if [ "$MODE" = 'apply' ]; then
+              confirm='APPLY-PS-488-0092-RETURN-IDENTITY-RECONCILIATION'
+              run_args="--digest=${digest} --apply --confirm=${confirm}"
+            else
+              run_args="--digest=${digest}"
+            fi
           fi
+          archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
 
           start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && ${runner} ${run_args}"
           payload=$(START_COMMAND="$start_command" node -e \
@@ -189,11 +209,15 @@ jobs:
             echo "${MODE} status=${status} (poll ${attempt})"
             case "$status" in
               succeeded)
-                if [ "$MODE" = 'apply' ]; then
-                  echo 'PS-488 0092 reconciliation committed and verified.'
-                else
-                  echo 'PS-488 inspection complete. Nothing was written. Read the job log in Render.'
-                fi
+                case "$MODE" in
+                  apply)
+                    echo 'PS-488 0092 reconciliation committed and verified.' ;;
+                  verify)
+                    echo 'PS-488 0092 read-back complete. Nothing was written.'
+                    echo 'The postcondition packet is in the Render job log.' ;;
+                  *)
+                    echo 'PS-488 inspection complete. Nothing was written. Read the job log in Render.' ;;
+                esac
                 exit 0
                 ;;
               failed|canceled)
