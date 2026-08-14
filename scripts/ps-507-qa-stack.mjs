@@ -45,6 +45,7 @@
  *   node scripts/ps-507-qa-stack.mjs -- npx playwright test web/e2e/ps-507-*.spec.js
  */
 import { PGlite } from '@electric-sql/pglite';
+import postgres from 'postgres';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { spawn } from 'node:child_process';
 import { randomBytes, createHmac } from 'node:crypto';
@@ -264,7 +265,7 @@ export async function applyAllMigrations(pg, log = console.log) {
  * with the process. It is never reachable from another host and there is nothing durable
  * behind it.
  */
-export function startQueryEndpoint(pg, { port, token, log = console.log }) {
+export function startQueryEndpoint(queryClient, { port, token, log = console.log }) {
   return new Promise((resolve) => {
     const server = createServer(async (req, res) => {
       const reply = (status, body) => {
@@ -286,8 +287,15 @@ export function startQueryEndpoint(pg, { port, token, log = console.log }) {
       try {
         const { sql, params } = JSON.parse(raw || '{}');
         if (typeof sql !== 'string' || !sql.trim()) return reply(400, { error: 'sql required' });
-        const result = await pg.query(sql, params ?? []);
-        reply(200, { rows: result.rows });
+        // Over the SOCKET, deliberately, rather than the in-process PGlite handle.
+        //
+        // PGlite is single-threaded. An in-process pg.query() interleaving with queries
+        // the socket server is serving produced rare, unattributable failures in whatever
+        // request happened to be in flight — a spec's own read-back could knock over an
+        // unrelated GET the browser had just issued. Routing through the socket puts every
+        // reader behind the same queue, at the cost of one connection.
+        const rows = await queryClient.unsafe(sql, params ?? []);
+        reply(200, { rows: Array.from(rows) });
       } catch (error) {
         reply(500, { error: String(error && error.message || error).split('\n')[0] });
       }
@@ -314,11 +322,11 @@ async function waitForHttp(url, timeoutMs, label) {
 /**
  * Run a seeder over the socket BEFORE the API boots.
  *
- * Ordering is the whole trick. PGlite allows one CONCURRENT connection — sequential
- * clients are fine, which is why this works and why running the same seeder while the
- * API is up dies with `read ECONNRESET` inside the fixture's own first query. Seeding
- * first lets the real ps-499-step12 fixture run UNMODIFIED, guards and all, instead of
- * being forked into a QA-only variant that could drift from what the runbook describes.
+ * Seeding BEFORE the API boots keeps the fixtures honest: they run UNMODIFIED, interlocks
+ * and all, against a database nothing else is touching, instead of being forked into
+ * QA-only variants that could drift from what their runbooks describe. It also means a
+ * fixture's own uniqueness and FK errors surface as fixture output rather than as
+ * mid-suite API failures.
  */
 async function runSeeder({ label, argv, databaseUrl, log }) {
   // ASYNC spawn, never spawnSync.
@@ -381,14 +389,22 @@ export async function provisionQaStack({ withFrontend = true, seeders = [], log 
 
   // Schema is built IN-PROCESS, before the socket server starts.
   //
-  // Not a style choice. PGlite's socket server serves one client and stops accepting
-  // once that client disconnects, so migrating over the socket consumes the only
-  // connection and the API then boots into `read ECONNRESET` inside verifyRuntimeSchema
-  // — which reads like a database fault rather than a provisioning one.
+  // Not a style choice: it keeps provisioning failures legible. A migration fault raises
+  // here, with the failing statement, instead of surfacing later as a socket-level
+  // `read ECONNRESET` inside verifyRuntimeSchema — which reads like a database fault
+  // rather than a provisioning one.
   await bootstrapForeignOwnedTables(pg, log);
   const migrationReport = await applyAllMigrations(pg, log);
 
-  const pgServer = new PGLiteSocketServer({ db: pg, port: PG_PORT, host: HOST });
+  // maxConnections defaults to 1, and the API is not a single-connection client: the main
+  // Drizzle pool, the health probe pool (`max: 3`), the advisory lock, the sync queue, the
+  // lane lock, the stuck-job reaper and worker-status each construct their own postgres()
+  // client. At the default the second connection is refused, which tore down the active
+  // socket mid-request — `/health/ready` answered 503, the app rendered the maintenance
+  // page instead of the shell, and bulk-import PATCHes failed intermittently with a
+  // driver-level "Failed query". The pool sizes are the real budget; this only has to be
+  // above their sum. Queries are queued per-query, so extra connections idle cheaply.
+  const pgServer = new PGLiteSocketServer({ db: pg, port: PG_PORT, host: HOST, maxConnections: 6 });
   await pgServer.start();
   log(`[ps-507] database  : ${databaseUrl} (disposable, in-memory)`);
 
@@ -396,12 +412,14 @@ export async function provisionQaStack({ withFrontend = true, seeders = [], log 
   const queryToken = randomBytes(24).toString('hex');
   const queryUrl = `http://${HOST}:${QUERY_PORT}/query`;
   assertDisposableTarget(queryUrl);
-  const queryServer = await startQueryEndpoint(pg, { port: QUERY_PORT, token: queryToken, log });
+  const queryClient = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+  const queryServer = await startQueryEndpoint(queryClient, { port: QUERY_PORT, token: queryToken, log });
 
   const children = [];
   const stop = async () => {
     for (const child of children) { try { child.kill(); } catch { /* already gone */ } }
     try { queryServer.close(); } catch { /* already closed */ }
+    try { await queryClient.end({ timeout: 5 }); } catch { /* already ended */ }
     try { await pgServer.stop(); } catch { /* already stopped */ }
     // Teardown IS the cleanup. The database is in-memory, so closing it destroys every
     // fixture row deterministically — there is nothing left to delete, and therefore no
@@ -427,24 +445,15 @@ export async function provisionQaStack({ withFrontend = true, seeders = [], log 
       // The QA stack must never reach a carrier, marketplace or mailbox.
       INVENTORY_AUTO_DEDUCT: 'off',
       RETURN_BILLING_ENABLED: 'false',
-      // PGlite's socket server serves ONE connection. The API's default pool is 4, and
-      // the extra sockets are reset by the server — which surfaces as `read ECONNRESET`
-      // inside verifyRuntimeSchema on boot, not as a connection error, so it is worth
-      // naming here. Pinning the pool to 1 makes the QA stack serialise its queries.
-      //
-      // The cost is real and bounded: concurrent requests queue rather than run in
-      // parallel, so this stack proves PERSISTENCE and AUTHORISATION, not concurrency
-      // behaviour. Anything needing true parallelism belongs on a real PostgreSQL
-      // service container, not here.
-      //
-      // ONE VISIBLE CONSEQUENCE, so nobody chases it as a bug: /health/ready returns 503
-      // on this stack while /health returns 200. health.ts:22 builds `healthSql` as a
-      // SEPARATE pool by design, so a saturated main pool cannot hide behind health
-      // checks — but PGlite has no second connection to give it, so `db` and `dbWrite`
-      // fail while `mainPool` and `eventLoop` pass. The app is right; the database is
-      // the constraint. Readiness is therefore NOT a usable gate here, which is why
-      // provisioning waits on /health, and the shape of that 503 is pinned by
-      // ps-507-persistence-proof.spec.js so it can never absorb a real regression.
+      // No background cadence on the QA stack. Two independent reasons, either sufficient:
+      // a watchdog tick can mutate the very fixtures a spec is asserting on, and each
+      // background service constructs its OWN postgres() client, so the ticks add
+      // connection churn against a database that has a hard connection ceiling.
+      SHIPMENT_SYNC_WATCHDOG_ENABLED: 'false',
+      RUN_ORDERS_PERFORMANCE_MAINTENANCE: 'false',
+      RUN_SYNC_SCHEDULER: 'false',
+      // Kept modest so the pool sizes stay well inside the socket server's
+      // maxConnections budget above, with room for the other postgres() clients.
       DB_POOL_MAX: '1',
       DB_IDLE_TIMEOUT_SECONDS: '120',
       DB_MAX_LIFETIME_SECONDS: '3600',
@@ -521,12 +530,19 @@ if (invokedDirectly) {
   // --seed-ps499-step12 runs the REAL Step 12 fixture, unmodified, so the QA database
   // holds exactly the orders docs/ps-499-step12-qa-runbook.md describes.
   const wantsStep12 = process.argv.includes('--seed-ps499-step12');
-  const seeders = wantsStep12
-    ? [{
-        label: 'ps-499-step12',
-        argv: ['scripts/ps-499-step12-qa-fixture.ts', '--apply', '--confirm=PS499-STEP12-DISPOSABLE'],
-      }]
-    : [];
+  // --seed-ps488-m3 adds the return-identity fixture: one order carrying TWO returns, so
+  // migration 0092's partial unique index and line-type CHECK can be attacked directly.
+  const wantsM3 = process.argv.includes('--seed-ps488-m3');
+  const seeders = [
+    ...(wantsStep12 ? [{
+      label: 'ps-499-step12',
+      argv: ['scripts/ps-499-step12-qa-fixture.ts', '--apply', '--confirm=PS499-STEP12-DISPOSABLE'],
+    }] : []),
+    ...(wantsM3 ? [{
+      label: 'ps-488-m3',
+      argv: ['scripts/ps-488-m3-qa-fixture.ts', '--apply', '--confirm=PS488-M3-DISPOSABLE'],
+    }] : []),
+  ];
 
   const stack = await provisionQaStack({ seeders });
 
@@ -535,6 +551,8 @@ if (invokedDirectly) {
   // the same output in each spec.
   const step12RunId = (stack.seedOutput?.['ps-499-step12'] ?? '').match(/run id\s*:\s*(\S+)/)?.[1] ?? '';
   if (wantsStep12) console.log(`[ps-507] step12 run id: ${step12RunId}`);
+  const m3RunId = (stack.seedOutput?.['ps-488-m3'] ?? '').match(/run id\s*:\s*(\S+)/)?.[1] ?? '';
+  if (wantsM3) console.log(`[ps-507] ps-488 m3 run id: ${m3RunId}`);
 
   if (!command.length) {
     console.log('\n[ps-507] stack is up. Env for a consumer:');
@@ -557,6 +575,7 @@ if (invokedDirectly) {
         PS507_QUERY_URL: stack.queryUrl,
         PS507_QUERY_TOKEN: stack.queryToken,
         PS499_STEP12_RUN_ID: step12RunId,
+        PS488_M3_RUN_ID: m3RunId,
       },
     });
     const code = await new Promise((r) => child.on('exit', r));

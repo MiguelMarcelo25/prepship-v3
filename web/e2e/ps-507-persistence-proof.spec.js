@@ -33,18 +33,19 @@ test.describe('PS-507 disposable QA stack', () => {
     expect(schema.tables).toBeGreaterThan(80)
   })
 
-  test('readiness is degraded for exactly ONE known reason, and no other', async () => {
-    // The QA stack reports /health/ready 503 while /health is 200. That is the app
-    // behaving CORRECTLY, not a defect: health.ts:22 builds `healthSql` as a SEPARATE
-    // pool on purpose, so a saturated main pool cannot hide behind health checks. PGlite
-    // serves ONE connection, the main pool holds it, and the health pool therefore waits
-    // and fails. A real deployment whose health pool cannot connect should report
-    // degraded, and this one does.
+  test('readiness is FULLY green — every component, not just the main pool', async () => {
+    // Readiness is the assertion that catches provisioning drift early, so it is pinned
+    // as all-green rather than as a tolerated shape.
     //
-    // Pinned rather than ignored. An unexplained 503 sitting in the QA stack is exactly
-    // what would later absorb a genuine readiness regression — so the SHAPE is asserted:
-    // db and dbWrite may fail for the single-connection reason, but mainPool and
-    // eventLoop must pass. If that changes, something real broke.
+    // It was briefly the opposite. The stack ran the socket server at its default
+    // maxConnections of 1, and the API is not a one-connection client — health.ts builds
+    // `healthSql` as a SEPARATE pool on purpose, so a saturated main pool cannot hide
+    // behind health checks, and the advisory lock, sync queue, lane lock, reaper and
+    // worker-status each construct their own. The refused connections tore down the
+    // active socket, `db`/`dbWrite` failed, the web app rendered the maintenance page
+    // instead of the shell, and bulk-import PATCHes failed intermittently. Raising
+    // maxConnections fixed the harness. Asserting the degraded shape here would have
+    // preserved the harness fault as a specification.
     const { apiUrl } = qaEnv()
 
     const health = await fetch(`${apiUrl}/health`)
@@ -52,15 +53,10 @@ test.describe('PS-507 disposable QA stack', () => {
 
     const ready = await fetch(`${apiUrl}/health/ready`)
     const body = await ready.json()
-    const status = Object.fromEntries(body.components.map((c) => [c.name, c.status]))
-
-    expect(status.mainPool, 'the pool serving traffic must be healthy (PS-503)').toBe('ok')
-    expect(status.eventLoop).toBe('ok')
     const failing = body.components.filter((c) => c.status !== 'ok').map((c) => c.name).sort()
-    expect(
-      failing,
-      'only the separate health pool may fail, and only because PGlite serves one connection',
-    ).toEqual(['db', 'dbWrite'])
+
+    expect(failing, 'every readiness component must be ok on a correctly provisioned stack').toEqual([])
+    expect(ready.status).toBe(200)
   })
 
   test('the auth boundary is REAL, not mocked', async () => {

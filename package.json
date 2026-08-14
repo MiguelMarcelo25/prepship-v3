@@ -99,6 +99,7 @@
     "test:ps-499-bulk-import-package-cost": "tsx scripts/ps-499-bulk-import-package-cost-integration.ts",
     "test:ps-499-route": "tsx scripts/ps-499-route-integration.ts",
     "test:ps-499": "npm run test:ps-499-billing-bulk-import-patch && npm run test:ps-499-bulk-import-package-cost && npm run test:ps-499-route",
+    "seed:ps-488-m3": "tsx scripts/ps-488-m3-qa-fixture.ts",
     "seed:ps-499-step12": "tsx scripts/ps-499-step12-qa-fixture.ts",
     "test:billing-order-description": "tsx scripts/billing-order-description-guard.ts",
     "best-rate:dims:dry-run": "tsx scripts/clear-invalid-best-rates.ts",
@@ -974,7 +975,8 @@
     "test:ps-488-m3-invoice-grain-local": "node scripts/ps-488-pglite-local-runner.mjs scripts/ps-488-m3-invoice-grain-pg17.ts",
     "test:ps-488-invoice-return-presence": "tsx scripts/ps-488-invoice-return-presence-guard.ts",
     "test:ps-507-step12": "node scripts/ps-507-qa-stack.mjs --seed-ps499-step12 -- npx playwright test -c playwright.ps507.config.js web/e2e/ps-507-ps499-step12.spec.js",
-    "test:ps-507": "node scripts/ps-507-qa-stack.mjs --seed-ps499-step12 -- npx playwright test -c playwright.ps507.config.js",
+    "test:ps-507-m3": "node scripts/ps-507-qa-stack.mjs --seed-ps488-m3 -- npx playwright test -c playwright.ps507.config.js web/e2e/ps-507-ps488-m3-return-identity.spec.js",
+    "test:ps-507": "node scripts/ps-507-qa-stack.mjs --seed-ps499-step12 --seed-ps488-m3 -- npx playwright test -c playwright.ps507.config.js",
     "test:ps-507-qa-harness": "tsx scripts/ps-507-qa-harness-guard.ts"
   },
   "dependencies": {

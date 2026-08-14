@@ -74,23 +74,54 @@ agents' env-less Vite servers.
 
 ## Known constraints — read before debugging
 
-**One concurrent connection.** PGlite serves a single client, so the API pool is pinned
-to 1. Consequences, all deliberate:
+**Connections are capped, and the cap matters.** `PGLiteSocketServer` defaults to
+`maxConnections: 1`, and the API is emphatically not a one-connection client: the main
+Drizzle pool, the health probe pool (`src/routes/health.ts:22`, `max: 3`), the advisory
+lock, the sync job queue, the lane lock, the stuck-job reaper and worker-status each
+construct their own `postgres()` client. At the default, the refused connections tore
+down the *active* socket, which surfaced as `read ECONNRESET`, a 503 `/health/ready`, the
+web app rendering the maintenance page instead of the shell, and bulk-import `PATCH`es
+failing intermittently with a driver-level `Failed query`.
+
+The working configuration is `maxConnections: 6` against `DB_POOL_MAX=1` — enough sockets
+for the health pool to connect, while the app's own queries stay serialised on one. Three
+things had to be true together, each established by measurement rather than reasoning:
+
+- **Raising the cap alone made things worse.** PGlite is single-threaded WASM PostgreSQL.
+  At `maxConnections: 32` plain `GET /clients` returned 500 and connects timed out; at
+  `4` with `DB_POOL_MAX=2`, unrelated endpoints failed in bursts.
+- **Background cadence had to go.** `SHIPMENT_SYNC_WATCHDOG_ENABLED=false`,
+  `RUN_ORDERS_PERFORMANCE_MAINTENANCE=false`, `RUN_SYNC_SCHEDULER=false`. Two independent
+  reasons, either sufficient: a tick can mutate the very fixtures a spec asserts on, and
+  each worker builds its own client. This took the suite from 3.9 minutes with failures to
+  roughly 8 seconds.
+- **The query endpoint goes over the socket, not in-process.** It originally called
+  `pg.query()` on the PGlite handle directly, which interleaved with queries the socket
+  server was serving: a spec's own read-back could knock over an unrelated request the
+  browser had just issued. That was a 1-in-5 flake which always landed on the UI spec and
+  never on the spec that caused it. Routing it through the socket puts every reader behind
+  one queue — five consecutive full-suite runs clean at ~8.1s.
+
+Do not "fix" a future flake here by adding retries. This stack's failure mode is
+*unattributable* — it lands on whatever request was in flight, not on the cause — so a
+retry turns a visible provisioning fault into a slow, silent one.
+
+Remaining consequences, all deliberate:
 
 - The stack proves **persistence and authorisation, not concurrency**. Anything needing
-  real parallelism belongs on a PostgreSQL service container.
+  real parallelism or real background cadence belongs on a PostgreSQL service container.
 - Playwright runs `workers: 1`.
-- Seeders run **before** the API boots. Seeding while it is up dies with `ECONNRESET`.
-- Assertions go through the query endpoint, because a test process cannot open its own
-  connection.
+- Seeders run **before** the API boots.
+- Assertions go through the query endpoint rather than a direct connection.
 
-**`/health/ready` returns 503 while `/health` returns 200.** Not a bug.
-`src/routes/health.ts:22` builds `healthSql` as a *separate* pool by design, so a
-saturated main pool cannot hide behind health checks — and PGlite has no second
-connection to give it. `db` and `dbWrite` fail; `mainPool` and `eventLoop` pass. The app
-is right; the database is the constraint. Readiness is therefore **not a usable gate
-here**, provisioning waits on `/health`, and the exact shape of that 503 is asserted by
-`ps-507-persistence-proof.spec.js` so it can never absorb a real regression.
+**Readiness must be green, and specs depend on it.** `ServiceAvailabilityGate` polls
+`/health/ready` and renders `MaintenanceModePage` instead of the app shell on 503, so a
+UI spec against a mis-provisioned stack fails at whatever it clicked first rather than
+saying what is wrong. `gotoApp()` therefore waits for `/health/ready` to return 200
+before navigating (pools connect lazily, so the first seconds after boot can be 503
+legitimately) and throws a named error if the maintenance page appears anyway. The
+`Continue to app` bypass is deliberately **not** used — it would let a broken stack look
+healthy. `ps-507-persistence-proof.spec.js` asserts readiness is fully green.
 
 **`drizzle-kit migrate` cannot build this schema.** `drizzle/meta/_journal.json` holds 16
 entries against 104 `.sql` files — it stops at `0015`. The stack applies all 104 in
@@ -104,9 +135,31 @@ database reaches the reconciled return-identity contract by the same path produc
 
 ## Scope today
 
-Automated: the API → persistence half of PS-499 Step 12, including scenario D's four
-facts (two of them absences) and F1's sparse-payload omission.
+**PS-499 Step 12** — both halves. The API → persistence leg covers scenario D's four
+facts (two of them absences) and F1's sparse-payload omission. The browser leg
+(`ps-507-ps499-step12-ui.spec.js`) drives the real bulk-import paste in a real browser and
+captures the outgoing `PATCH` off the wire, which is the one thing the API leg cannot do:
+it asserts the request shape by *sending* it, which is an assumption about the frontend
+dressed as a test. The browser leg checks `hasOwnProperty('shipping')` rather than the
+value, because `shipping: 0` and an absent `shipping` are different instructions to the
+route — one clears the fee, the other leaves it alone — and `toBeUndefined()` passes for
+both. Verified by mutation: making the UI send `shipping: 0` for a blank cell turns the
+spec red on that assertion, quoting the payload.
 
-Not yet automated: driving the bulk-import paste through the browser UI. Request-shape
-checks are asserted by *sending* that shape, not by observing what the UI produced. That
-is the next slice, and PS-488 M3 is the second intended consumer.
+**PS-488 M3** — the return-identity contract
+(`ps-507-ps488-m3-return-identity.spec.js`, fixture `--seed-ps488-m3`). Two returns
+against one order, billed asymmetrically so a merged read model shows up in the money.
+Its core is what static guards structurally cannot reach: migration 0092's constraints
+are attacked with real `INSERT`s, and the rejections are matched on the constraint NAMES
+(`billing_li_return_identity_unq`, `billing_li_return_id_canonical_type_check`) so a write
+failing for an unrelated reason cannot be mistaken for the constraint holding. A guard can
+prove the migration text declares a `NOT VALID` CHECK; only the engine can prove it was
+ever `VALIDATE`d.
+
+`RETURN_BILLING_ENABLED` stays **false** here. The generator is PS-487's boundary and
+flipping the flag is a deliberate operator decision; the fixture writes the rows that pass
+would have produced, so the identity and read half is exercised without enabling the
+writer.
+
+Not automated: the return-billing generator itself, Supabase's own token issuance and
+refresh, and anything needing real concurrency or background cadence.

@@ -167,6 +167,63 @@ check('seeders are spawned asynchronously, never spawnSync', () => {
   assert.ok(!/spawnSync\s*\(/.test(code), 'the stack calls spawnSync — it must use async spawn');
 });
 
+console.log('\nthe stack stays provisionable');
+
+check('the socket server raises maxConnections above its default of 1', () => {
+  // The default is 1 and the API opens several independent postgres() clients, so at the
+  // default the refused connections tear down the ACTIVE socket: /health/ready answers
+  // 503, the web app renders the maintenance page instead of the shell, and bulk-import
+  // PATCHes fail intermittently with a driver-level "Failed query".
+  const code = stackSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const match = /maxConnections:\s*(\d+)/.exec(code);
+  assert.ok(match, 'the socket server does not set maxConnections');
+  assert.ok(Number(match[1]) > 1, `maxConnections is ${match[1]}; the default of 1 cannot serve this API`);
+});
+
+check('background cadence is disabled on the QA stack', () => {
+  // Either reason alone is sufficient: a watchdog tick can mutate the very fixtures a
+  // spec asserts on, and each background service builds its own postgres() client, so the
+  // ticks add connection churn against a database with a hard connection ceiling. Leaving
+  // these on cost the suite 3.9 minutes and intermittent failures.
+  const code = stackSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const flag of [
+    'SHIPMENT_SYNC_WATCHDOG_ENABLED',
+    'RUN_ORDERS_PERFORMANCE_MAINTENANCE',
+    'RUN_SYNC_SCHEDULER',
+  ]) {
+    assert.match(
+      code,
+      new RegExp(`${flag}:\\s*'false'`),
+      `${flag} must be set to 'false' in the QA environment`,
+    );
+  }
+});
+
+check('the query endpoint reads over the socket, not the in-process PGlite handle', () => {
+  // An in-process pg.query() interleaves with whatever the socket server is serving, and
+  // PGlite is single-threaded: a spec's own read-back could knock over an unrelated
+  // request the browser had just issued. The resulting failure lands on the request in
+  // flight rather than on the cause, which makes it near-impossible to attribute.
+  const code = stackSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(
+    !/\bpg\.query\s*\(/.test(code),
+    'the stack calls pg.query() in-process — route reads through the socket client instead',
+  );
+});
+
+check('gotoApp waits for readiness and never clicks past the maintenance page', () => {
+  // ServiceAvailabilityGate renders MaintenanceModePage on a 503 readiness, so a UI spec
+  // on a mis-provisioned stack otherwise fails at whatever it clicked first. Clicking
+  // "Continue to app" would let a broken stack look healthy, which is the one outcome
+  // this harness exists to prevent.
+  const code = harnessSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(code, /health\/ready/, 'gotoApp must wait on /health/ready before navigating');
+  assert.ok(
+    !/click\(\)[\s\S]{0,80}Continue to app|Continue to app[\s\S]{0,80}\.click\(\)/.test(code),
+    'the harness clicks past the maintenance gate — a broken stack would look healthy',
+  );
+});
+
 console.log('\nself-wiring');
 
 check('package.json exposes the PS-507 commands', () => {
