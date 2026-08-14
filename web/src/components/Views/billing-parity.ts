@@ -115,6 +115,7 @@ export type BillingDetailColumnId =
   | 'uspsss'
   | 'shipping'
   | 'total'
+  | 'rowTotal'
   | 'margin'
 
 export interface BillingDetailColumn {
@@ -201,7 +202,14 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'upsss', label: 'UPS SS', align: 'right', always: false },
   { id: 'uspsss', label: 'USPS SS', align: 'right', always: false },
   { id: 'shipping', label: 'Shipping', align: 'right', always: false },
+  // PS-505 corrective: THREE distinct money concepts, three columns, no overloading.
+  //   Fulfillment Fee = Pick & Pack + Additional Units + Box Cost  (4.49 on #3074)
+  //   Return Total    = Return Processing + Return Postage         (10.55 on the return)
+  //   Row Total       = Fulfillment Fee + Shipping + Storage + adjustments + Return Total
+  // Previously one column called "Fulfillment Fee" rendered the row total in its cells
+  // and a different total in its footer.
   { id: 'total', label: 'Fulfillment Fee', align: 'right', always: true },
+  { id: 'rowTotal', label: 'Row Total', align: 'right', always: true },
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
@@ -210,10 +218,11 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
 // row actions so operators can audit/edit a full invoice line at once.
 // Bumping the storage key resets returning users to the new default
 // order; if they had custom toggles, they re-pick them once.
+// v9 (PS-505 corrective): Row Total added alongside the corrected Fulfillment Fee.
 // v8 (PS-505): Billing Status removed, Return Total added. The key bump is what resets a
 // returning operator's saved toggles to the new default set — without it they would keep
 // a stored id that no longer exists and never see the new column.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v8'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v9'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
@@ -237,6 +246,7 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'uspsss',
   'shipping',
   'total',
+  'rowTotal',
   'margin',
 ]
 

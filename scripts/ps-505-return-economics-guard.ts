@@ -90,17 +90,35 @@ check('outbound components: 2.50 / 1.00 / 0.99 / 7.95', () => {
   assert.equal(money(outbound!.shippingTotal), 7.95);
 });
 
-check('outbound fulfillment-service subtotal is 4.49', () => {
-  // Pick & Pack + Additional Units + Box Cost. Shipping is a pass-through carrier
-  // charge, not a fulfillment service.
-  const subtotal = money(outbound!.pickpackTotal) + money(outbound!.additionalTotal)
-    + money(outbound!.packageTotal);
-  assert.equal(money(subtotal), 4.49);
+// THE assertion the first attempt got wrong. It asserted fulfillmentFeeTotal === 12.44,
+// which locked the defect in: Fulfillment Fee is the fulfillment SERVICE work only, and
+// the column labelled "Fulfillment Fee" was therefore rendering the row total. Shipping
+// is a pass-through carrier charge; Storage is a separate service. Neither is a
+// fulfillment fee.
+check('outbound Fulfillment Fee is 4.49 — services only, NOT the row total', () => {
+  assert.equal(
+    money(outbound!.fulfillmentFeeTotal), 4.49,
+    'Pick & Pack 2.50 + Additional 1.00 + Box 0.99 — no shipping, no storage',
+  );
 });
 
-check('outbound row total is 12.44', () => {
+check('outbound Row Total is 12.44 — Fulfillment Fee + shipping', () => {
   assert.equal(money(outbound!.grandTotal), 12.44);
-  assert.equal(money(outbound!.fulfillmentFeeTotal), 12.44);
+  // money() the SUM, not just the terms: 4.49 + 7.95 is 12.440000000000001 in IEEE754,
+  // which is exactly the class of artifact the backend margin rounding also exists for.
+  assert.equal(
+    money(money(outbound!.fulfillmentFeeTotal) + money(outbound!.shippingTotal)), 12.44,
+    'the two concepts must compose into the row total',
+  );
+});
+
+check('Fulfillment Fee and Row Total are DIFFERENT numbers on #3074', () => {
+  // The whole defect in one assertion: if these are ever equal on a row that has
+  // shipping, the two concepts have collapsed back into one.
+  assert.notEqual(
+    money(outbound!.fulfillmentFeeTotal), money(outbound!.grandTotal),
+    'a row with shipping must not report the same value for both',
+  );
 });
 
 check('outbound selected rate 7.95 and margin 0.00', () => {
@@ -124,9 +142,13 @@ check('return breakout: processing 2.50, postage 8.05', () => {
   assert.equal(returnRow!.hasReturnPostageLine, true);
 });
 
-check('return total and row total are both 10.55', () => {
+check('return total and row total are both 10.55, Fulfillment Fee is 0', () => {
   assert.equal(money(returnRow!.returnTotal), 10.55);
   assert.equal(money(returnRow!.grandTotal), 10.55);
+  assert.equal(
+    money(returnRow!.fulfillmentFeeTotal), 0,
+    'a return performs no fulfillment service work',
+  );
 });
 
 // THE load-bearing assertion. Before PS-505 the postage line also fed `shipping` and the
@@ -173,6 +195,78 @@ check('an unknown outbound cost yields a null margin, never full-charge profit',
     noCost[0]!.margin, null,
     'Number(null) === 0 would have reported the whole 7.95 charge as margin',
   );
+});
+
+console.log('\nHUGRAB integrated economics (policy owner -> PS-505 margin projection)');
+
+// Hermes's correction: PS-437 already proves the canonical customer-shipping policy
+// produces $6.77, so that calculation is NOT duplicated here. What this connects is the
+// policy owner's OUTPUT to the backend-owned PS-505 margin projection — the seam neither
+// guard covered on its own. Run alongside `npm run test:ps-437-customer-shipping-money`,
+// which owns the policy proof itself.
+process.env.DATABASE_URL ??= 'postgres://test:test@127.0.0.1:5432/test';
+process.env.SUPABASE_URL ??= 'https://example.supabase.co';
+process.env.SUPABASE_ANON_KEY ??= 'test-anon';
+process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service';
+process.env.SUPABASE_JWT_SECRET ??= 'test-jwt-secret-test-jwt-secret';
+const { resolveCustomerShippingMoney } = await import('../src/services/customer-shipping-money.js');
+
+check('$5.58 proven cost -> policy $6.77 postage -> backend margin exactly $1.19', () => {
+  // The customer rate comes FROM the policy owner, not from a literal in this file.
+  const policy = resolveCustomerShippingMoney({
+    selectedRateCost: 5.58,
+    billingMode: 'per_shipment',
+    carrierCode: 'stamps_com',
+    hugrabShippingRateOverride: { enabled: true, threshold: 6, amount: 6.77 },
+  });
+  assert.equal(policy.cShippingRateAmount, 6.77, 'policy owner must decide the customer rate');
+
+  const [row] = toBillingDetailOrderRows([
+    {
+      id: 60, orderId: 3074, orderNumber: '3074', lineType: 'return_postage',
+      totalCost: String(policy.cShippingRateAmount), returnId: 79,
+      returnReference: '3074-RETURN-HUGRAB',
+      returnSelectedRateCost: String(policy.selectedRateCost),
+    },
+  ]);
+
+  assert.equal(money(row!.returnPostageTotal), 6.77, 'customer postage');
+  assert.equal(money(row!.returnSelectedRateCost), 5.58, 'proven return cost');
+  // Exactly 1.19, not 1.1900000000000004. Routed through the backend money owner.
+  assert.equal(
+    row!.margin, 1.19,
+    'margin must be money-rounded at the owner, not a float subtraction',
+  );
+  assert.equal(money(row!.fulfillmentFeeTotal), 0, 'Fulfillment Fee blank/zero on a return');
+  assert.equal(money(row!.shippingTotal), 0, 'outbound Shipping blank/zero on a return');
+  assert.equal(money(row!.grandTotal), 6.77, 'row total is the return money');
+});
+
+check('margin needs BOTH facts — an absent postage line yields null even with a cost', () => {
+  const [row] = toBillingDetailOrderRows([
+    {
+      id: 61, orderId: 3074, orderNumber: '3074', lineType: 'return_processing_fee',
+      totalCost: '2.50', returnId: 80, returnReference: '3074-RETURN-NOPOSTAGE',
+      returnSelectedRateCost: '5.58',
+    },
+  ]);
+  assert.equal(row!.hasReturnPostageLine, false);
+  assert.equal(
+    row!.margin, null,
+    'no postage charge exists, so there is nothing for the cost to be a margin against',
+  );
+});
+
+check('an explicit ZERO on either side is a fact and still yields a margin', () => {
+  const [row] = toBillingDetailOrderRows([
+    {
+      id: 62, orderId: 3074, orderNumber: '3074', lineType: 'return_postage',
+      totalCost: '6.77', returnId: 81, returnReference: '3074-RETURN-ZEROCOST',
+      returnSelectedRateCost: '0',
+    },
+  ]);
+  assert.equal(row!.returnSelectedRateCost, 0, 'explicit zero is a proven cost, not absence');
+  assert.equal(row!.margin, 6.77, 'a free return label is 100% margin, and that is a real answer');
 });
 
 console.log('\nlegacy vocabulary');
@@ -237,9 +331,35 @@ check('no Billing Status column in the detail registry', () => {
   );
 });
 
-check('Return Total column exists', () => {
-  const ids = (BILLING_DETAIL_COLUMNS as BillingDetailColumn[]).map((c) => c.id);
-  assert.ok(ids.includes('returnTotal' as never), 'a Return row needs a total of its own');
+check('THREE distinct money columns exist, none overloaded', () => {
+  const cols = BILLING_DETAIL_COLUMNS as BillingDetailColumn[];
+  const ids = cols.map((c) => c.id);
+  assert.ok(ids.includes('total' as never), 'Fulfillment Fee column');
+  assert.ok(ids.includes('returnTotal' as never), 'Return Total column');
+  assert.ok(ids.includes('rowTotal' as never), 'Row Total column');
+  assert.equal(
+    cols.find((c) => c.id === 'total')?.label, 'Fulfillment Fee',
+    'the services column keeps its name',
+  );
+  assert.equal(cols.find((c) => c.id === 'rowTotal')?.label, 'Row Total');
+});
+
+check('each money column sorts and foots on the concept it renders', () => {
+  const table = readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8');
+  // The footer defect: the Fulfillment Fee column's cells rendered fulfillmentFee while
+  // its footer rendered detailTotals.total — two concepts under one heading.
+  assert.match(
+    table,
+    /case 'total': return <td[^>]*>\{formatBillingMoney\(detailTotals\.fulfillmentFee\)\}/,
+    'Fulfillment Fee footer must sum fulfillmentFee, not the row total',
+  );
+  assert.match(
+    table,
+    /case 'rowTotal': return <td[^>]*>\{formatBillingMoney\(detailTotals\.total\)\}/,
+    'Row Total footer must sum the row total',
+  );
+  assert.match(table, /case 'total': return metrics\.fulfillmentFee/, 'sort matches the cell');
+  assert.match(table, /case 'rowTotal': return metrics\.total/, 'sort matches the cell');
 });
 
 check('no Status column in the CSV invoice', () => {

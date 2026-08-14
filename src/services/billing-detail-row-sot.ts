@@ -1,3 +1,4 @@
+import { roundMoney } from '../lib/money';
 import { NO_BOX_COST_BILLING_BADGE, resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { isCancelledNoChargeBillingRow } from './billing-cancelled-no-charge';
 import {
@@ -607,7 +608,16 @@ function applyRateEconomics(row: BillingDetailRowDto): void {
     const cost = numberOrNull(row.returnSelectedRateCost);
     row.returnSelectedRateCost = cost;
     row.selectedRateCost = cost;
-    row.margin = cost === null ? null : numberValue(row.returnPostageTotal) - cost;
+    // PS-505 corrective: BOTH facts must be known. An explicit zero on either side is a
+    // fact and yields a margin; an ABSENT charge is not. Presence, not the number —
+    // `returnPostageTotal === 0` cannot by itself distinguish "postage was waived" from
+    // "this return was never charged postage", and only the first supports a margin.
+    const hasPostage = row.hasReturnPostageLine === true;
+    row.margin = cost === null || !hasPostage
+      ? null
+      // Rounded through the canonical money owner: 6.77 - 5.58 is 1.1900000000000004 in
+      // IEEE754, and a margin is money, not a float.
+      : roundMoney(numberValue(row.returnPostageTotal) - cost);
     return;
   }
   const cost = numberOrNull(row.selectedRateCost);
@@ -615,7 +625,7 @@ function applyRateEconomics(row: BillingDetailRowDto): void {
   // An outbound row has no return shipment by definition. Stated rather than left
   // undefined so every serializer sees the same explicit absence.
   row.returnSelectedRateCost = null;
-  row.margin = cost === null ? null : numberValue(row.shippingTotal) - cost;
+  row.margin = cost === null ? null : roundMoney(numberValue(row.shippingTotal) - cost);
 }
 
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
@@ -669,7 +679,14 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         storageTotal: metrics.storage,
         adjustmentTotal: metrics.adjustment,
         pickPackFeeTotal: metrics.pickPack + metrics.additional,
-        fulfillmentFeeTotal: metrics.pickPack + metrics.additional + metrics.packageCost + metrics.shipping + metrics.storage,
+        // PS-505 corrective: fulfillment SERVICE fees ONLY — Pick & Pack + Additional
+        // Units + Box Cost. Shipping is a pass-through carrier charge and Storage is a
+        // separate service; including them made this field equal the row total, so the
+        // column labelled "Fulfillment Fee" rendered 12.44 on #3074 instead of 4.49 and
+        // its own footer rendered a different number under the same heading.
+        // Return money is excluded by construction — every outbound bucket is 0 on a
+        // Return row — which keeps fulfillmentFeeTotal at 0 there.
+        fulfillmentFeeTotal: metrics.pickPack + metrics.additional + metrics.packageCost,
         grandTotal: metrics.total,
         totalCost: 0,
         hasPackageCostLine,
@@ -703,12 +720,13 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     existing.storageTotal = numberValue(existing.storageTotal) + metrics.storage;
     existing.adjustmentTotal = numberValue(existing.adjustmentTotal) + metrics.adjustment;
     existing.pickPackFeeTotal = existing.pickpackTotal + existing.additionalTotal;
+    // PS-505 corrective: same definition as the first-row branch above. These two must
+    // never drift — a one-line order would otherwise report a different Fulfillment Fee
+    // from a two-line order with identical charges.
     existing.fulfillmentFeeTotal =
       existing.pickpackTotal +
       existing.additionalTotal +
-      existing.packageTotal +
-      existing.shippingTotal +
-      existing.storageTotal;
+      existing.packageTotal;
     existing.grandTotal = numberValue(existing.grandTotal) + metrics.total;
 
     // PS-488 M3 — deterministic aggregate display fields.

@@ -854,7 +854,19 @@ export default function BillingView() {
     // Totals iterate the merged rows so we don't double-count an order
     // whose pick_pack and shipping arrived as separate API rows. Each
     // merged row holds the per-lineType subtotals on a single object.
-    return mergedDetailRows.reduce((acc, row) => {
+    // PS-505: the accumulator is annotated explicitly. Without it the shape is inferred
+    // from the ROW type, which is a loose record — so a missing footer concept would
+    // typecheck here and simply never reach the table.
+    return mergedDetailRows.reduce<{
+      pickPack: number
+      additional: number
+      packageCost: number
+      shipping: number
+      fulfillmentFee: number
+      returnTotal: number
+      total: number
+      margin: number | null
+    }>((acc, row) => {
       const metrics = computeBillingDetailMetrics(row)
       return {
         // PS — the "Pick & Pack" column shows the flat first-unit fee only;
@@ -864,10 +876,22 @@ export default function BillingView() {
         additional: acc.additional + metrics.additional,
         packageCost: acc.packageCost + metrics.packageCost,
         shipping: acc.shipping + metrics.shipping,
+        // PS-505 corrective: Fulfillment Fee and Row Total are DIFFERENT totals and each
+        // now has its own footer. Previously the Fulfillment Fee column's cells summed
+        // one concept while its footer summed another.
+        fulfillmentFee: acc.fulfillmentFee + metrics.fulfillmentFee,
+        returnTotal: acc.returnTotal + metrics.returnTotal,
         total: acc.total + metrics.total,
-        margin: acc.margin + metrics.margin,
+        // PS-505: margin is `number | null`. Adding null coerces to 0 and would report a
+        // column of unknown margins as a $0.00 total, so unknown rows are skipped and the
+        // footer stays null until at least one row has a proven margin.
+        margin: metrics.margin === null ? acc.margin : (acc.margin ?? 0) + metrics.margin,
       }
-    }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
+    }, {
+      pickPack: 0, additional: 0, packageCost: 0, shipping: 0,
+      fulfillmentFee: 0, returnTotal: 0, total: 0,
+      margin: null as number | null,
+    })
   }, [mergedDetailRows])
 
   useEffect(() => {
@@ -1877,7 +1901,7 @@ export default function BillingView() {
               selectedSummaryOrders={selectedSummaryOrders}
               selectedSummaryTotal={selectedSummaryTotal}
               sortedDetailRows={sortedDetailRows}
-              detailTotals={detailTotals as { pickPack: number; additional: number; packageCost: number; shipping: number; total: number; margin: number }}
+              detailTotals={detailTotals}
               columnsAnchorEl={detailColumnsAnchorEl}
               readOnlyReason={billingPeriodReadOnlyReason}
               onOpenBillingEdit={handleOpenBillingEdit}

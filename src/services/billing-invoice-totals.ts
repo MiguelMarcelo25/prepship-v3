@@ -122,9 +122,12 @@ export async function billingInvoiceHeaderTotals(
   const storageTotal = roundMoney(Number(s?.storage_total ?? 0));
   const adjustmentTotal = roundMoney(Number(s?.adjustment_total ?? 0));
   const grandTotal = roundMoney(Number(s?.grand_total ?? 0));
-  const fulfillmentFeeTotal = roundMoney(
-    shippingTotal + pickPackFeeTotal + packageTotal + storageTotal,
-  );
+  // PS-505 corrective: Fulfillment Fee is the FULFILLMENT SERVICE work only —
+  // Pick & Pack + Additional Units + Box Cost. Shipping is a pass-through carrier
+  // charge and Storage is a separate service, so neither belongs under this heading.
+  // Including them made the column labelled "Fulfillment Fee" render the row total,
+  // which is a different money concept under the same name.
+  const fulfillmentFeeTotal = roundMoney(pickPackFeeTotal + packageTotal);
 
   return {
     orderCount,

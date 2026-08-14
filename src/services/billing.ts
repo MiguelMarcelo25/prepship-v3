@@ -2541,9 +2541,9 @@ export async function billingSummary(
     const adjustmentTotal = roundMoney(toNum(r.adjustment_total));
     const grandTotal = roundMoney(toNum(r.grand_total));
     const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
-    const fulfillmentFeeTotal = roundMoney(
-      shippingTotal + pickPackFeeTotal + packageTotal + storageTotal,
-    );
+    // PS-505 corrective: fulfillment SERVICE fees only. Shipping and Storage are not
+    // fulfillment fees; grandTotal below is what carries the whole row.
+    const fulfillmentFeeTotal = roundMoney(pickPackFeeTotal + packageTotal);
     return {
       clientId: r.client_id,
       clientName: r.client_name,

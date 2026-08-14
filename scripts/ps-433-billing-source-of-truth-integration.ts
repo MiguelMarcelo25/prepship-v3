@@ -78,11 +78,22 @@ async function main(): Promise<void> {
     storageTotal: 4,
     adjustmentTotal: 0,
     grandTotal: 23,
-    fulfillmentFeeTotal: 18,
+    // PS-505 corrective: fulfillment SERVICE fees only — pickPackFee 3 + package 3 = 6.
+    // Previously 18 (all five buckets), which made this field a second row total.
+    fulfillmentFeeTotal: 6,
   });
   assert.equal(first.orderCount, 2, 'cardinality counts distinct in-scope orders, not line rows');
   assert.equal(first.shippingTotal, 8, 'cancelled non-return shipping is zeroed by the backend owner');
-  assert.equal(first.grandTotal - first.fulfillmentFeeTotal, 5, 'return lines remain independently billable');
+  // PS-505 corrective: with Fulfillment Fee narrowed to services, the residual after
+  // EVERY outbound term is what the return contributed. Expressed against all four
+  // outbound components rather than the old fee-vs-grand shorthand, which only isolated
+  // the return money while fulfillmentFeeTotal happened to equal the outbound row.
+  assert.equal(
+    first.grandTotal
+      - (first.fulfillmentFeeTotal + first.shippingTotal + first.storageTotal + first.adjustmentTotal),
+    5,
+    'return lines remain independently billable',
+  );
 
   const before = await client.query<{ count: number }>('select count(*)::int as count from billing_line_items');
   const second = await query();

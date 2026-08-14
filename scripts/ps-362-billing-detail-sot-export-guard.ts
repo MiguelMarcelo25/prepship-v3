@@ -89,9 +89,13 @@ check('PS-368 money totals are typed numbers, always present',
     row.lineType === 'billing_order' &&
     typeof row.boxCostAlert === 'boolean' &&
     Array.isArray(row.billingBadges)));
-check('PS-368 derived totals reconcile (pickPackFee = pickpack+addl; fulfillment = all five; grand)',
+// PS-505 corrective: fulfillmentFeeTotal is fulfillment SERVICE fees only —
+// pickPackFee + packageCost = 3.75 + 0.75 = 4.50. It previously summed all five buckets
+// and therefore equalled grandTotal, which is what made a column labelled "Fulfillment
+// Fee" render the row total. grandTotal is unchanged at 12.50.
+check('PS-368/PS-505 derived totals reconcile (pickPackFee = pickpack+addl; fulfillment = services; grand)',
   detailRows[0]?.pickPackFeeTotal === 3.75 &&
-  detailRows[0]?.fulfillmentFeeTotal === 12.5 &&
+  detailRows[0]?.fulfillmentFeeTotal === 4.5 &&
   detailRows[0]?.grandTotal === 12.5);
 const sotSrc = read('src/services/billing-detail-row-sot.ts');
 check('PS-368 billing-detail-row-sot has NO dual-casing tolerance left (no snake reads/writes)',

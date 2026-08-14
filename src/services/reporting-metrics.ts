@@ -1109,8 +1109,10 @@ export async function getFreshBillingSummaryMetrics(options: {
       const grandTotal = num(row.grand_total);
       const orderCount = num(row.order_count);
       const pickPackFeeTotal = pickPackTotal + additionalTotal;
-      const fulfillmentFeeTotal =
-        shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
+      // PS-505 corrective: fulfillment SERVICE fees only — Pick & Pack + Additional
+      // Units + Box Cost. Kept in lockstep with the billing summary and invoice owners
+      // so reporting cannot disagree with Billing about what a Fulfillment Fee is.
+      const fulfillmentFeeTotal = pickPackFeeTotal + packageTotal;
       return {
         clientId: row.client_id,
         clientName: row.client_name,

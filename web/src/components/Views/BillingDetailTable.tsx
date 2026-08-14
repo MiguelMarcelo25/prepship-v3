@@ -91,7 +91,10 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'upsss': return row.refUpsRate ?? row.ref_ups_rate
     case 'uspsss': return row.refUspsRate ?? row.ref_usps_rate
     case 'shipping': return metrics.shipping
-    case 'total': return metrics.total
+    // PS-505 corrective: the 'total' column is Fulfillment Fee and must sort on it, not
+    // on the row total — sorting a column by a number it does not display is its own bug.
+    case 'total': return metrics.fulfillmentFee
+    case 'rowTotal': return metrics.total
     case 'margin': return metrics.margin
     default: return ''
   }
@@ -280,8 +283,12 @@ export function BillingDetailTable({
     additional: number
     packageCost: number
     shipping: number
+    /** PS-505: fulfillment SERVICE fees only — matches the Fulfillment Fee cells. */
+    fulfillmentFee: number
+    returnTotal: number
+    /** PS-505: the Row Total column's footer. A different concept from fulfillmentFee. */
     total: number
-    margin: number
+    margin: number | null
   }
   columnsAnchorEl?: HTMLElement | null
   readOnlyReason: string | null
@@ -718,7 +725,12 @@ export function BillingDetailTable({
                   </MoneyWithBillingBadges>
                 )
               case 'total':
-                return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.fulfillmentFee)}</span>
+                // PS-505 corrective: fulfillment SERVICE fees. 4.49 on #3074, and 0 on a
+                // Return row because every outbound bucket is zero there.
+                return <span style={{ fontWeight: 700 }}>{formatBillingMoney(metrics.fulfillmentFee, { dashIfZero: true })}</span>
+              case 'rowTotal':
+                // PS-505 corrective: the whole row — 12.44 outbound, 10.55 on the return.
+                return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.total)}</span>
               case 'margin':
                 // PS-505: blank when the cost was never proven. Previously the FE
                 // coerced an absent selected-rate cost to $0.00 and rendered the whole
@@ -782,8 +794,15 @@ export function BillingDetailTable({
           case 'additional': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.additional, { dashIfZero: true })}</td>
           case 'packageCost': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.packageCost, { dashIfZero: true })}</td>
           case 'shipping': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.shipping)}</td>
-          case 'total': return <td key={c.key} style={{ ...td, fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(detailTotals.total)}</td>
-          case 'margin': return <td key={c.key} style={{ ...td, color: marginColor(detailTotals.margin) }}>${detailTotals.margin.toFixed(2)}</td>
+          // PS-505 corrective: each footer now sums the SAME concept its cells render.
+          case 'total': return <td key={c.key} style={{ ...td, fontWeight: 800 }}>{formatBillingMoney(detailTotals.fulfillmentFee)}</td>
+          case 'returnTotal': return <td key={c.key} style={{ ...td, fontWeight: 700 }}>{formatBillingMoney(detailTotals.returnTotal, { dashIfZero: true })}</td>
+          case 'rowTotal': return <td key={c.key} style={{ ...td, fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(detailTotals.total)}</td>
+          case 'margin': return (
+            <td key={c.key} style={{ ...td, color: marginColor(detailTotals.margin) }}>
+              {detailTotals.margin === null ? '—' : `$${detailTotals.margin.toFixed(2)}`}
+            </td>
+          )
           default: return <td key={c.key} style={td} />
         }
       })}
