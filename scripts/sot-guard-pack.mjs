@@ -1375,6 +1375,24 @@ const REQUIRED_GUARDS = [
   // `Number(selectedRateCost ?? 0) || 0` and reported the entire shipping charge as
   // profit whenever the carrier cost was unproven.
   'test:ps-505-return-economics',
+  // PS-507 (2026-08-14). The disposable QA harness proves that an authenticated browser
+  // action committed a real PostgreSQL row — the evidence PS-499 Step 12 and PS-488 M3
+  // need, which today a human produces by hand from a runbook.
+  //
+  // Only the GUARD is enrolled, not the harness itself: `npm run test:ps-507` provisions
+  // a database, an API and a Vite server, which is far too heavy for a pack that must
+  // stay hermetic and fast. The guard is pure file reads plus pure imports.
+  //
+  // What it pins is what the harness REFUSES, because that is where all its value sits.
+  // Every real production target from this repo — the Supabase pooler and direct host,
+  // the Render API, the Vercel frontend — must be refused by the loopback gate; a PS-507
+  // spec must never call page.route over the path whose persistence it claims to prove;
+  // the QA playwright config must not borrow the mocked suite's server or port 5177;
+  // tokens must default to ZERO permissions; and seeders must never use spawnSync, which
+  // deadlocks the socket server against its own event loop. If any of those soften, the
+  // suite keeps passing while no longer being evidence of anything — silent by
+  // construction, which is exactly what this pack exists to catch.
+  'test:ps-507-qa-harness',
 ];
 
 const npmCli = process.env.npm_execpath;
