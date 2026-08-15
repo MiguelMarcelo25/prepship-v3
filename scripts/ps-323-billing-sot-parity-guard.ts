@@ -148,10 +148,21 @@ check('invoice routes keep the shared waiver period note owner',
 //        no money; a missing backend total renders 0 instead of a re-derived number ──
 const parity = read('web/src/components/Views/billing-parity.ts');
 const billingSvc = read('src/services/billing.ts');
-check('FE summary/detail math prefers the backend fulfillmentFeeTotal / grandTotal DTO fields',
+// PS-501 re-anchored this check. It used to assert the literal reads `row.grandTotal` and
+// `detail.grandTotal` appeared in billing-parity — which pinned the MECHANISM, not the
+// rule, and the mechanism was itself the defect: those reads were the head of an alias
+// cascade `grandTotal ?? total ?? fulfillmentFeeTotal`, where the last rung is a smaller,
+// different number (fulfillment service fees only). The rule being protected is "the FE
+// consumes the backend's total and never re-derives or substitutes one", so that is what
+// is asserted now: delegation to the single resolver, and the ABSENCE of any cascade.
+// Strictly stronger than the string it replaced.
+const parityCode = parity.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+check('FE consumes the backend fulfillmentFeeTotal and delegates the row total to the canonical resolver',
   /row\.fulfillmentFeeTotal/.test(parity) &&
-  /row\.grandTotal/.test(parity) &&
-  /detail\.fulfillmentFeeTotal/.test(parity));
+  /detail\.fulfillmentFeeTotal/.test(parity) &&
+  /billingRowGrandTotalOrNull\s*\(/.test(parityCode));
+check('PS-501: no grandTotal -> total -> fulfillmentFeeTotal alias cascade survives in billing-parity',
+  !/grandTotal\s*\?\?[^\n]*\b(total|fulfillmentFee)/.test(parityCode));
 check('PS-369: FE fee recompute is GONE (no calculateBillingFulfillmentFee/PickPackFee in billing-parity)',
   !/calculateBillingFulfillmentFee\s*\(|calculateBillingPickPackFee\s*\(/.test(parity.replace(/\/\/[^\n]*/g, '')));
 check('backend billingSummary RETURNS the fulfillmentFeeTotal / pickPackFeeTotal the FE reads (single formula, owned backend)',

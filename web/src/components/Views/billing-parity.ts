@@ -1,3 +1,4 @@
+import { billingRowGrandTotalOrNull } from '../../lib/billing-row-total'
 
 // PS-257: the billing DTOs below are phantom names that were imported from
 // types/api but never actually exported there. They're defined locally (and
@@ -145,7 +146,9 @@ export interface BillingDetailMetrics {
   shipping: number
   storage: number
   fulfillmentFee: number
-  total: number
+  // PS-501: null when the row failed the canonical grandTotal contract. Same discipline as
+  // ourCost below — unknown renders blank, and is never silently coerced to 0.
+  total: number | null
   // PS-505: `number | null`, straight from the backend. Null means the cost was never
   // proven and the cell renders blank — it does NOT mean zero. Coercing it to 0 here is
   // what reported an unknown carrier cost as 100% margin.
@@ -345,7 +348,10 @@ export function buildBillingSummaryTotals(rows: BillingSummaryDto[]): BillingSum
       storage: totals.storage + storage,
       shipping: totals.shipping + shipping,
       fulfillmentFee: totals.fulfillmentFee + fulfillmentFee,
-      grand: totals.grand + Number(row.grandTotal ?? row.total ?? fulfillmentFee),
+      // PS-501: an unresolvable row contributes NOTHING to the grand total rather than
+      // its fulfillment fee. Adding a smaller stand-in would understate the footer while
+      // looking like a complete sum.
+      grand: totals.grand + (billingRowGrandTotalOrNull(row) ?? 0),
     }
   }, {
     orders: 0,
@@ -484,8 +490,11 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   // fee totals; the FE no longer recomputes them (snake key kept as deploy-skew fallback).
   const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? 0) || 0
   const fulfillmentFee = Number(detail.fulfillmentFeeTotal ?? detail.fulfillment_fee_total ?? 0) || 0
-  const totalValue = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? fulfillmentFee)
-  const total = Number.isFinite(totalValue) ? totalValue : fulfillmentFee
+  // PS-501: was `grandTotal ?? grand_total ?? total ?? fulfillmentFee`, with a SECOND
+  // fallback to fulfillmentFee in the isFinite guard below it — two independent chances
+  // to silently show fulfillment fees as the row total. The resolver keeps the snake_case
+  // deploy-skew spelling (PS-369) because that is the same field, and drops the rest.
+  const total = billingRowGrandTotalOrNull(detail)
   const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost
   // PS-505 — margin is backend truth, not a React expression.
   //
@@ -652,7 +661,9 @@ export function classifyBillingDetailPanel(input: {
   hasError: boolean
   rowCount: number
   summaryOrders: number
-  summaryTotal: number
+  // PS-501: null means the row's total could not be resolved under the canonical
+  // contract. That is a mismatch-worthy condition in its own right, not a zero.
+  summaryTotal: number | null
 }): BillingDetailPanelState {
   if (input.loading) return 'loading'
   // An API error must surface even when Summary claims orders — the whole PS-069
@@ -661,6 +672,7 @@ export function classifyBillingDetailPanel(input: {
   if (input.rowCount > 0) return 'rows'
   // rowCount === 0 below: distinguish a real empty range from a stale/racey
   // Summary that still claims this client has billed orders.
+  if (input.summaryTotal === null) return 'mismatch'
   if ((input.summaryOrders ?? 0) > 0 || (input.summaryTotal ?? 0) > 0) return 'mismatch'
   return 'empty'
 }

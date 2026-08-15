@@ -276,7 +276,7 @@ export function BillingDetailTable({
   detailState: { open: boolean; loading: boolean; clientName: string; error: string | null }
   detailPanelState: BillingDetailPanelState
   selectedSummaryOrders: number
-  selectedSummaryTotal: number
+  selectedSummaryTotal: number | null
   sortedDetailRows: BillingDetailDto[]
   detailTotals: {
     pickPack: number
@@ -287,7 +287,9 @@ export function BillingDetailTable({
     fulfillmentFee: number
     returnTotal: number
     /** PS-505: the Row Total column's footer. A different concept from fulfillmentFee. */
-    total: number
+    /** PS-501: null when any row in the set failed the grandTotal contract — a footer
+     * cannot claim to sum rows it could not read. */
+    total: number | null
     margin: number | null
   }
   columnsAnchorEl?: HTMLElement | null
@@ -336,7 +338,11 @@ export function BillingDetailTable({
         <div style={{ fontWeight: 700, color: '#b45309' }}>Summary / line-item mismatch</div>
         <div style={{ marginTop: 4, fontSize: 12 }}>
           Summary shows {selectedSummaryOrders} order{selectedSummaryOrders === 1 ? '' : 's'}
-          {selectedSummaryTotal > 0 ? ` (${formatBillingMoney(selectedSummaryTotal)})` : ''} for{' '}
+          {/* PS-501: null means the summary row's total failed the canonical contract.
+              Say so, rather than printing nothing and letting it read as a $0 client. */}
+          {selectedSummaryTotal === null
+            ? ' (total unavailable — the summary row failed the grandTotal contract)'
+            : selectedSummaryTotal > 0 ? ` (${formatBillingMoney(selectedSummaryTotal)})` : ''} for{' '}
           {detailState.clientName}, but no line items loaded for this date range.
         </div>
         <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>

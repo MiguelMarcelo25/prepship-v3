@@ -87,6 +87,7 @@ import { BillingDetailModalStack } from './BillingDetailModalStack'
 import { BillingBulkImportModal } from './BillingBulkImportModal'
 import type { BulkImportReadyRow } from './billing-bulk-import'
 import { toBillingBulkImportPatch } from './billing-bulk-import-patch'
+import { billingRowGrandTotalOrNull } from '../../lib/billing-row-total'
 import {
   BillingCloseWorkflowPanel,
   type BillingCreditDraft,
@@ -729,7 +730,8 @@ export default function BillingView() {
         case 'shipping':
           return row.shippingTotal
         case 'total':
-          return row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal
+          // PS-501: one resolved value, never an alias cascade.
+          return billingRowGrandTotalOrNull(row)
         default:
           return ''
       }
@@ -746,9 +748,11 @@ export default function BillingView() {
   // with zero detail rows renders a mismatch warning instead of a silent
   // "No line items found".
   const selectedSummaryOrders = Number(selectedDetailSummary?.orderCount ?? 0)
-  const selectedSummaryTotal = Number(
-    selectedDetailSummary?.grandTotal ?? selectedDetailSummary?.total ?? selectedDetailSummary?.fulfillmentFeeTotal ?? 0,
-  )
+  // PS-501: null when the contract cannot be satisfied, so the mismatch warning below
+  // compares against an honest absence rather than a fabricated 0.
+  const selectedSummaryTotal = selectedDetailSummary
+    ? billingRowGrandTotalOrNull(selectedDetailSummary)
+    : null
   const detailPanelState = classifyBillingDetailPanel({
     loading: detailLoading,
     hasError: Boolean(detailError),
@@ -864,7 +868,8 @@ export default function BillingView() {
       shipping: number
       fulfillmentFee: number
       returnTotal: number
-      total: number
+      // PS-501: null when any row failed the grandTotal contract.
+      total: number | null
       margin: number | null
     }>((acc, row) => {
       const metrics = computeBillingDetailMetrics(row)
@@ -881,7 +886,11 @@ export default function BillingView() {
         // one concept while its footer summed another.
         fulfillmentFee: acc.fulfillmentFee + metrics.fulfillmentFee,
         returnTotal: acc.returnTotal + metrics.returnTotal,
-        total: acc.total + metrics.total,
+        // PS-501: one unresolvable row poisons the footer, deliberately. Skipping it (the
+        // margin rule below) is right for a column of independent values, but a Row Total
+        // footer claims to be the sum of the rows above it. Dropping a row would understate
+        // that claim by exactly the amount nobody can see.
+        total: acc.total === null || metrics.total === null ? null : acc.total + metrics.total,
         // PS-505: margin is `number | null`. Adding null coerces to 0 and would report a
         // column of unknown margins as a $0.00 total, so unknown rows are skipped and the
         // footer stays null until at least one row has a proven margin.
@@ -889,7 +898,7 @@ export default function BillingView() {
       }
     }, {
       pickPack: 0, additional: 0, packageCost: 0, shipping: 0,
-      fulfillmentFee: 0, returnTotal: 0, total: 0,
+      fulfillmentFee: 0, returnTotal: 0, total: 0 as number | null,
       margin: null as number | null,
     })
   }, [mergedDetailRows])
@@ -1235,7 +1244,7 @@ export default function BillingView() {
       const detailTarget =
         detailState.open && detailState.clientId
           ? rowsForStatus.find((row) => row.clientId === detailState.clientId)
-          : rowsForStatus.find((row) => (row.orderCount || 0) > 0 || (row.grandTotal || row.total || 0) > 0)
+          : rowsForStatus.find((row) => (row.orderCount || 0) > 0 || (billingRowGrandTotalOrNull(row) ?? 0) > 0)
       if (detailTarget) {
         // ?? '' — the summary DTO's clientName is nullable; the old any[] rows
         // passed null through untyped, and every consumer already handled it

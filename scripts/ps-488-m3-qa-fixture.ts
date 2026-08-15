@@ -69,6 +69,17 @@ const RETURN_2 = { postage: '6.75' } as const
 
 const sql = postgres(process.env.DATABASE_URL ?? '', { max: 1, onnotice: () => {} })
 
+/**
+ * Billing timestamp: YESTERDAY at 12:00 UTC, never `now()`.
+ *
+ * Billing's date presets end at the end of the application's "today" expressed as a UTC
+ * instant, so a row stamped `now()` between UTC midnight and that bound falls OUTSIDE the
+ * window and the UI shows no rows at all — a failure that surfaces far from its cause.
+ * Midday of the previous UTC day is inside every window this fixture is read through,
+ * whichever side of UTC the application timezone sits on.
+ */
+const BILLED_AT = sql`(date_trunc('day', now() at time zone 'UTC') - interval '12 hours') at time zone 'UTC'`
+
 type Preflight = { host: string; port: string; database: string }
 
 function preflight(requireApplyInterlock: boolean): Preflight {
@@ -158,7 +169,7 @@ async function apply(p: Preflight): Promise<void> {
       await tx`insert into billing_line_items
         (client_id, order_id, order_number, shipment_id, ship_date, line_type, description,
          qty, unit_cost, total_cost)
-        values (${clientId}, ${orderId}, ${number}, ${shipmentId}, now(),
+        values (${clientId}, ${orderId}, ${number}, ${shipmentId}, ${BILLED_AT},
                 ${lineType}, ${description}, '1.00', ${amount}, ${amount})`
     }
 
@@ -200,7 +211,7 @@ async function apply(p: Preflight): Promise<void> {
       await tx`insert into billing_line_items
         (client_id, order_id, order_number, ship_date, line_type, description,
          qty, unit_cost, total_cost, return_id)
-        values (${clientId}, ${orderId}, ${number}, now(),
+        values (${clientId}, ${orderId}, ${number}, ${BILLED_AT},
                 ${lineType}, ${description}, '1.00', ${amount}, ${amount}, ${returnId})`
     }
 

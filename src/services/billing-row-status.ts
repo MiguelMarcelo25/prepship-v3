@@ -1,3 +1,5 @@
+import { sql, type SQL } from 'drizzle-orm';
+
 import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
 
 export type BillingLifecycleStatus =
@@ -77,13 +79,41 @@ function normalizedLineTypes(input: BillingRowStatusInput): string[] {
  * Both are accepted rather than one being migrated: historical rows carry the old names
  * and rewriting frozen billing rows is forbidden.
  */
+/**
+ * PS-501: the vocabulary itself, exported so SQL and TypeScript cannot drift.
+ *
+ * The summary's return bucket has to sum exactly the line types this predicate accepts.
+ * Re-listing them in a SQL `case` would create a second owner of the same fact, and the
+ * failure mode is silent — a spelling present here and missing there drops return money
+ * out of the bucket while leaving it in grandTotal, so the row simply stops reconciling.
+ */
+export const BILLING_RETURN_LINE_TYPES = [
+  'return',
+  'return_label',
+  'return_processing',
+  'return_postage',
+  'return_processing_fee',
+] as const;
+
 export function isBillingReturnLineType(lineType: unknown): boolean {
   const value = normalizedText(lineType)?.toLowerCase();
-  return value === 'return'
-    || value === 'return_label'
-    || value === 'return_processing'
-    || value === 'return_postage'
-    || value === 'return_processing_fee';
+  return value != null && (BILLING_RETURN_LINE_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * The same vocabulary as a SQL `in (...)` list, for the return buckets.
+ *
+ * Lives beside the predicate on purpose. Two callers need this list in SQL — the live
+ * billing summary and the cached billing_summary_metrics upsert — and a hand-written
+ * `case` in either would be a second owner of the vocabulary. When those disagree the
+ * failure is silent: the missing spelling's money stays inside grand_total but lands in no
+ * bucket, so the row simply stops reconciling and nothing errors.
+ */
+export function billingReturnLineTypesSql(): SQL {
+  return sql`(${sql.join(
+    BILLING_RETURN_LINE_TYPES.map((lineType) => sql`${lineType}`),
+    sql`, `,
+  )})`;
 }
 
 /**

@@ -3,6 +3,7 @@
 // real BillingSummaryDto, so the index-signature BillingSummaryDto from ./billing-parity covers
 // them. All money totals are parent-computed and read-only here; detailState + handleLoadDetails
 // stay in BillingView.
+import { resolveBillingRowGrandTotal } from '../../lib/billing-row-total'
 import { formatBillingMoney, type BillingSummaryDto } from './billing-parity'
 import { getClientPalette } from './orders-formatting'
 
@@ -26,7 +27,8 @@ export function BillingDetailClientStrip({
       {sortedSummaryRows.map((row) => {
         const active = Number(row.clientId) === Number(detailState.clientId)
         const orderCount = Number(row.orderCount ?? 0)
-        const rowTotal = Number(row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal ?? 0)
+        const rowTotalResult = resolveBillingRowGrandTotal(row)
+        const rowTotal = rowTotalResult.ok ? rowTotalResult.total : null
         // Designated per-store color dot (same hash-based palette as the Awaiting/Orders view).
         const palette = getClientPalette(row.clientName ?? 'Untagged')
         return (

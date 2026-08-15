@@ -67,6 +67,18 @@ test.describe('PS-499 Step 12 — browser leg', () => {
     // The trigger only mounts once a client's details are loaded.
     const importButton = page.locator('[data-billing-bulk-import-trigger]')
     await importButton.waitFor({ state: 'visible', timeout: 20_000 })
+
+    // Wait for the detail ROWS, not just the trigger.
+    //
+    // The trigger mounts on `detailState.clientId != null`, which is set when the client is
+    // selected — BEFORE /billing/details resolves. The bulk-import modal resolves each
+    // pasted line against those rows, so opening it too early yields "Apply 0 rows" and the
+    // spec fails on a disabled button with nothing to say why. This was a real race: it
+    // passed repeatedly, then failed on an unchanged tree.
+    await expect(
+      page.getByText(orderNumber, { exact: false }).first(),
+      'the client detail rows must be loaded before the import modal can resolve against them',
+    ).toBeVisible({ timeout: 20_000 })
     await importButton.scrollIntoViewIfNeeded()
     await importButton.click()
 

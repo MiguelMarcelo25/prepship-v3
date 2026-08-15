@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 import { classifyStockStatus, type StockStatus } from '../lib/inventory-stock-status';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge';
+import { billingReturnLineTypesSql } from './billing-row-status';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 
@@ -88,6 +89,8 @@ export type BillingSummaryMetricRow = {
   shippingTotal: number;
   storageTotal: number;
   adjustmentTotal: number;
+  /** PS-501 AC-4: return money, so the categories can account for grandTotal. */
+  returnTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -136,6 +139,42 @@ async function optionalReportingRead<T>(
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
+}
+
+/**
+ * PS-501 — is the cached summary's return bucket present yet?
+ *
+ * Migrations in this repo are NOT applied by the deploy (0092 needed its own operator
+ * lane), so code and schema can legitimately arrive in either order. This module reads and
+ * writes billing_summary_metrics.return_total, which 0095 adds — and without this probe a
+ * deploy that landed before the migration would throw out of getFreshBillingSummaryMetrics,
+ * through billingSummary, and out of GET /billing/summary as a 500. That is the Billing
+ * dashboard down, for a purely additive change.
+ *
+ * Memoised on the promise so the probe costs one query per process, and reset on failure so
+ * a transient error does not pin the answer for the process lifetime.
+ */
+let returnTotalColumnPromise: Promise<boolean> | null = null;
+
+export function billingMetricsHasReturnTotalColumn(): Promise<boolean> {
+  if (!returnTotalColumnPromise) {
+    returnTotalColumnPromise = db
+      .execute<{ present: boolean }>(sql`
+        select to_regclass('public.billing_summary_metrics') is not null
+           and exists (
+             select 1 from information_schema.columns
+             where table_schema = 'public'
+               and table_name = 'billing_summary_metrics'
+               and column_name = 'return_total'
+           ) as present
+      `)
+      .then((rows) => rows[0]?.present === true)
+      .catch((err) => {
+        returnTotalColumnPromise = null;
+        throw err;
+      });
+  }
+  return returnTotalColumnPromise;
 }
 
 async function ensureTables(): Promise<void> {
@@ -517,6 +556,16 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
 // ages out any rows aggregated under the old inclusive bounds.
 export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promise<number> {
   await ensureReportingMetricsTables();
+  // PS-501: refuse LOUDLY here rather than silently writing a cache row whose categories
+  // cannot account for its own grand_total. Same convention as ensureTables above: name
+  // the migration the operator has to run.
+  if (!(await billingMetricsHasReturnTotalColumn())) {
+    throw new Error(
+      'billing_summary_metrics.return_total is missing. Run ' +
+        'drizzle/0095_ps501_billing_summary_metrics_return_total.sql before refreshing ' +
+        'billing summary metrics.',
+    );
+  }
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
   const billingSummaryAmount = cancelledNoChargeBillingAmountSql({
@@ -525,6 +574,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  const returnLineTypesSql = billingReturnLineTypesSql();
   const effectiveDay = billingLineEffectiveDaySql(
     sql`b.billing_effective_date`,
     sql`b.ship_date`,
@@ -549,6 +599,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         shipping_total,
         storage_total,
         adjustment_total,
+        return_total,
         grand_total,
         updated_at
       )
@@ -563,6 +614,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         coalesce(sum(case when b.line_type = 'shipping' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as shipping_total,
         coalesce(sum(case when b.line_type = 'storage' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as storage_total,
         coalesce(sum(case when b.line_type = 'billing_adjustment' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as adjustment_total,
+        coalesce(sum(case when b.line_type in ${returnLineTypesSql} then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as return_total,
         coalesce(sum(${billingSummaryAmount}), 0)::numeric(14, 2) as grand_total,
         now() as updated_at
       from clients c
@@ -586,6 +638,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         shipping_total = excluded.shipping_total,
         storage_total = excluded.storage_total,
         adjustment_total = excluded.adjustment_total,
+        return_total = excluded.return_total,
         grand_total = excluded.grand_total,
         updated_at = now()
     `);
@@ -983,6 +1036,10 @@ export async function getFreshBillingSummaryMetrics(options: {
   scopeRestricted?: boolean;
   maxAgeMinutes?: number;
 }): Promise<{ clients: BillingSummaryMetricRow[]; grandTotal: number } | null> {
+  // PS-501: no return bucket yet (migration 0095 not applied) means this cache cannot
+  // describe a row's money completely. Treat it as a MISS so billingSummary falls back to
+  // the live query, rather than throwing a 500 out of GET /billing/summary.
+  if (!(await billingMetricsHasReturnTotalColumn())) return null;
   const maxAgeMinutes = options.maxAgeMinutes ?? 45;
   const effectiveDay = billingLineEffectiveDaySql(
     sql`b.billing_effective_date`,
@@ -1019,6 +1076,7 @@ export async function getFreshBillingSummaryMetrics(options: {
       shipping_total: string | number;
       storage_total: string | number;
       adjustment_total: string | number;
+      return_total: string | number;
       order_count: number;
       grand_total: string | number;
       fresh_count: string | number;
@@ -1054,6 +1112,7 @@ export async function getFreshBillingSummaryMetrics(options: {
           m.shipping_total,
           m.storage_total,
           m.adjustment_total,
+          m.return_total,
           m.order_count,
           m.grand_total,
           m.updated_at as updated_at,
@@ -1085,6 +1144,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         fm.shipping_total,
         fm.storage_total,
         fm.adjustment_total,
+        fm.return_total,
         fm.order_count,
         fm.grand_total,
         coverage.fresh_count,
@@ -1106,6 +1166,7 @@ export async function getFreshBillingSummaryMetrics(options: {
       const shippingTotal = num(row.shipping_total);
       const storageTotal = num(row.storage_total);
       const adjustmentTotal = num(row.adjustment_total);
+      const returnTotal = num(row.return_total);
       const grandTotal = num(row.grand_total);
       const orderCount = num(row.order_count);
       const pickPackFeeTotal = pickPackTotal + additionalTotal;
@@ -1123,6 +1184,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         shippingTotal,
         storageTotal,
         adjustmentTotal,
+        returnTotal,
         fulfillmentFeeTotal,
         orderCount,
         grandTotal,
@@ -1135,6 +1197,7 @@ export async function getFreshBillingSummaryMetrics(options: {
           shipping: shippingTotal,
           storage: storageTotal,
           billing_adjustment: adjustmentTotal,
+          return: returnTotal,
         },
       };
     });

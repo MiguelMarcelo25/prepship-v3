@@ -5,6 +5,7 @@
 // in — money totals are parent-computed, so they cannot drift. Thin presentational <Table> wrapper.
 import type { CSSProperties } from 'react'
 type BillingSummaryDto = any // TODO PS-257: restore real type
+import { billingRowGrandTotalOrNull, resolveBillingRowGrandTotal } from '../../lib/billing-row-total'
 import { formatBillingMoney, type BillingSummaryTotals } from './billing-parity'
 import { getClientPalette } from './orders-formatting'
 import { Table } from '../ui/Table'
@@ -106,10 +107,20 @@ export function BillingSummaryTable({
           sortable: true,
           // 2026-05-13: every column toggleable + draggable
           // per operator request (Awaiting-Shipment parity).
-          sortValue: (row) => Number(row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal ?? 0),
-          render: (row) => (
-            <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal ?? row.total ?? row.fulfillmentFeeTotal ?? 0)}</span>
-          ),
+          // PS-501: sort and render read the SAME resolved value. They used to run the
+          // alias cascade independently, so a row could sort by one number and display
+          // another the moment the two disagreed.
+          sortValue: (row) => billingRowGrandTotalOrNull(row) ?? Number.NEGATIVE_INFINITY,
+          render: (row) => {
+            const resolved = resolveBillingRowGrandTotal(row)
+            if (!resolved.ok) {
+              // Deliberately not a number. fulfillmentFeeTotal would render here as a
+              // confident, plausible, SMALLER total (on a $35.65 row it is $8.00), and
+              // nothing on screen would say a substitution had happened.
+              return <span style={{ fontWeight: 700, color: 'var(--red)' }} title={resolved.reason}>—</span>
+            }
+            return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(resolved.total)}</span>
+          },
         },
       ]}
       rowKey={(row) => row.clientId}

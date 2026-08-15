@@ -310,11 +310,25 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   const adjustment = isReturnLine ? 0 : numberValue(
     row.adjustmentTotal ?? (lineType === 'billing_adjustment' ? lineTotal : 0),
   );
-  const explicitTotal = nonEmpty(row.grandTotal)
-    ? numberValue(row.grandTotal)
-    : nonEmpty(row.total)
-      ? numberValue(row.total)
-      : null;
+  // PS-501 AC-3 — the two spellings must AGREE, not take turns.
+  //
+  // This was `nonEmpty(grandTotal) ? grandTotal : nonEmpty(total) ? total : null`, which
+  // let field order decide silently. The production detail query selects neither column,
+  // so the chain was dead there — but every hand-built row (the guard scripts, any future
+  // caller) goes through this same ingest edge, which is precisely where a legacy payload
+  // carrying a stale `total` beside a fresh `grandTotal` would enter and win nothing but
+  // the coin toss. Disagreement is now a contract error rather than a precedence rule.
+  const canonicalTotal = nonEmpty(row.grandTotal) ? numberValue(row.grandTotal) : null;
+  const legacyTotal = nonEmpty(row.total) ? numberValue(row.total) : null;
+  if (canonicalTotal !== null && legacyTotal !== null
+      && Math.abs(canonicalTotal - legacyTotal) > 0.005) {
+    throw new Error(
+      `PS-501: billing row ${String(row.orderNumber ?? row.orderId ?? 'unknown')} disagrees ` +
+        `with itself — grandTotal=${canonicalTotal} but total=${legacyTotal}. These are two ` +
+        'spellings of one value; field order must not pick the winner.',
+    );
+  }
+  const explicitTotal = canonicalTotal ?? legacyTotal;
   // returnTotal is a term here because return money no longer arrives through an
   // outbound bucket. Without it the fallback total for a Return row would be zero.
   const total = explicitTotal ??

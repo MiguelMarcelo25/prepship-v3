@@ -103,7 +103,7 @@ import {
 } from './billing-outbound-sweep';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
-import { isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
+import { billingReturnLineTypesSql, isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
 import {
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,
@@ -2332,6 +2332,8 @@ export type BillingSummaryRow = {
   missingShippingCostCount?: number;
   storageTotal: number;
   adjustmentTotal: number;
+  /** PS-501 AC-4: return money needs a bucket, or the categories cannot account for grandTotal. */
+  returnTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -2451,6 +2453,7 @@ export async function billingSummary(
         missingShippingCostCount: 0,
         storageTotal: 0,
         adjustmentTotal: 0,
+        returnTotal: 0,
         fulfillmentFeeTotal: 0,
         orderCount: 0,
         grandTotal: 0,
@@ -2464,6 +2467,7 @@ export async function billingSummary(
           shipping_missing: 0,
           storage: 0,
           billing_adjustment: 0,
+          return: 0,
         },
       })),
       grandTotal: 0,
@@ -2487,6 +2491,9 @@ export async function billingSummary(
     canonicalStatus: sql`o.canonical_status`,
     totalCost: sql`b.total_cost`,
   });
+  // PS-501: from the canonical vocabulary owner, not written out here, so adding a
+  // spelling reaches this bucket and the cached metrics bucket alike.
+  const returnLineTypesSql = billingReturnLineTypesSql();
   const summaryCancelledNoCharge = cancelledNoChargeBillingLinePredicateSql({
     lineType: sql`b.line_type`,
     orderStatus: sql`o.order_status`,
@@ -2501,6 +2508,7 @@ export async function billingSummary(
     shipping_total: string;
     storage_total: string;
     adjustment_total: string;
+    return_total: string;
     missing_shipping_cost_count: number;
     order_count: number;
     grand_total: string;
@@ -2515,6 +2523,13 @@ export async function billingSummary(
       sum(case when b.line_type = 'shipping_missing' and not ${summaryCancelledNoCharge} then 1 else 0 end)::int as missing_shipping_cost_count,
       coalesce(sum(case when b.line_type = 'storage' then ${summaryAmount} else 0 end), 0)::text as storage_total,
       coalesce(sum(case when b.line_type = 'billing_adjustment' then ${summaryAmount} else 0 end), 0)::text as adjustment_total,
+      -- PS-501 AC-4: return money had no bucket, so the displayed categories summed to
+      -- LESS than grand_total whenever a return line existed and the difference belonged
+      -- to nothing on screen. Latent rather than live today only because
+      -- RETURN_BILLING_ENABLED is off; it would have become a visible hole on the day the
+      -- flag flipped. Spellings come from BILLING_RETURN_LINE_TYPES so this bucket and
+      -- isBillingReturnLineType cannot disagree.
+      coalesce(sum(case when b.line_type in ${returnLineTypesSql} then ${summaryAmount} else 0 end), 0)::text as return_total,
       count(distinct b.order_id)::int as order_count,
       coalesce(sum(${summaryAmount}), 0)::text as grand_total
     from clients c
@@ -2539,6 +2554,7 @@ export async function billingSummary(
     const missingShippingCostCount = Number(r.missing_shipping_cost_count ?? 0);
     const storageTotal = roundMoney(toNum(r.storage_total));
     const adjustmentTotal = roundMoney(toNum(r.adjustment_total));
+    const returnTotal = roundMoney(toNum(r.return_total));
     const grandTotal = roundMoney(toNum(r.grand_total));
     const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
     // PS-505 corrective: fulfillment SERVICE fees only. Shipping and Storage are not
@@ -2555,6 +2571,7 @@ export async function billingSummary(
       missingShippingCostCount,
       storageTotal,
       adjustmentTotal,
+      returnTotal,
       fulfillmentFeeTotal,
       orderCount: Number(r.order_count ?? 0),
       grandTotal,
@@ -2568,6 +2585,7 @@ export async function billingSummary(
         shipping_missing: missingShippingCostCount,
         storage: storageTotal,
         billing_adjustment: adjustmentTotal,
+        return: returnTotal,
       },
     };
   });

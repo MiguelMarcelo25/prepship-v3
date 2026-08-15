@@ -67,6 +67,24 @@ const RUN_ID = argValue('run') ?? new Date().toISOString().replace(/[-:T]/g, '')
 const clientName = (runId: string) => `PS-499 QA disposable ${runId}`;
 const orderNumber = (runId: string, n: number) => `PS499-QA-${runId}-${n}`;
 
+/**
+ * The billing timestamp for every fixture line: YESTERDAY at 12:00 UTC.
+ *
+ * NOT `now()`, and the reason is a real failure rather than a preference. Billing's date
+ * presets end at the end of the application's "today", serialised as a UTC instant — an
+ * observed window was `dateTo=2026-08-14T23:59:59.999Z` while the clock read
+ * 2026-08-15T00:21Z. A row stamped `now()` in that gap sits 21 minutes PAST the upper
+ * bound, so the UI loads zero detail rows and any spec driving the UI fails somewhere far
+ * from the cause — in our case a bulk-import modal reporting "Apply 0 rows".
+ *
+ * Midday of the previous UTC day is inside every window this fixture is read through: it
+ * is comfortably below any end-of-today bound no matter which side of UTC the application
+ * timezone sits on, and comfortably inside the 30-day default lower bound. It also makes
+ * the fixture's visibility independent of what time of day it is run, which is what a
+ * fixture owes its consumers.
+ */
+const BILLED_AT = sql`(date_trunc('day', now() at time zone 'UTC') - interval '12 hours') at time zone 'UTC'`;
+
 const MARKUP = '10.00';
 const BOX_A = 'PS499-QA BOX A 9x6x3';
 const BOX_B = 'PS499-QA BOX B 12x10x3';
@@ -212,7 +230,7 @@ async function apply(p: Preflight): Promise<void> {
         await tx`insert into billing_line_items
           (client_id, order_id, order_number, shipment_id, ship_date, line_type, description,
            qty, unit_cost, total_cost, package_id)
-          values (${clientId}, ${orderId}, ${number}, ${shipmentId}, now(),
+          values (${clientId}, ${orderId}, ${number}, ${shipmentId}, ${BILLED_AT},
                   ${lineType}, ${description}, '1.00', ${amount}, ${amount}, ${boxA})`;
       }
 
@@ -224,7 +242,7 @@ async function apply(p: Preflight): Promise<void> {
         await tx`insert into billing_line_items
           (client_id, order_id, order_number, shipment_id, ship_date, line_type, description,
            qty, unit_cost, total_cost)
-          values (${clientId}, ${orderId}, ${number}, ${shipmentId}, now(),
+          values (${clientId}, ${orderId}, ${number}, ${shipmentId}, ${BILLED_AT},
                   'package_cost_missing', 'No box cost', '1.00', '0.00', '0.00')`;
       }
 
