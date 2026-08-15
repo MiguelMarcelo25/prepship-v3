@@ -32,8 +32,11 @@ export function BillingFilters({
   onToChange: (value: string) => void
   onGenerate: () => void
 }) {
+  // PS layout (2026-08-15): right-aligned, no bottom margin. These controls now sit in the
+  // dashboard header row rather than inside a card, so their wrapped lines align under the
+  // client filter instead of orphaning the Update Billing button mid-row.
   return (
-    <div className="flex items-center gap-2 flex-wrap mb-3">
+    <div className="flex items-center justify-end gap-2 flex-wrap">
       <div className="flex gap-1.5 flex-wrap">
         {BILLING_PRESETS.map(([preset, label]) => (
           <button

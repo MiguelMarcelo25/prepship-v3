@@ -5,7 +5,7 @@ import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type 
 // old code refetched manually — useQueryClient exists for those invalidations
 // and for the local cache patches that replace setConfigs/setSavedPackagePrices.
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ListFilter, Loader2, Pencil, SlidersHorizontal } from 'lucide-react'
+import { ListFilter, Loader2, Pencil } from 'lucide-react'
 import { apiClient } from '../../api/client'
 // PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
 // (that adapter is out of this ticket's scope); call the shared low-level
@@ -1770,48 +1770,57 @@ export default function BillingView() {
 
   return (
     <div id="view-billing" className="view-content !p-5 !overflow-y-auto flex flex-col">
-      <BillingDashboardHeader />
+      {/* Operator request (2026-08-15): title, client scope and date filters on ONE top
+          row, with the "Generate & summary" heading dropped, so the dashboard sits higher.
+          BOTH client controls are KEPT — this one scopes the dashboard (multi-select) and
+          the picker in Package pricing chooses whose prices are being edited (single).
+          They are different jobs, not a duplicate. */}
+      <div className="order-0 mb-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <BillingDashboardHeader />
+
+        <div className="flex min-w-0 flex-1 flex-wrap items-start justify-end gap-x-3 gap-y-2">
+          <div className="min-w-[15rem] flex-initial">
+            <BillingClientFilterPanel
+              clientFilterOpen={clientFilterOpen}
+              selectedBillingClientCount={selectedBillingClientCount}
+              availableBillingClients={availableBillingClients as { clientId: number; clientName: string; inShipStation: boolean }[]}
+              summaryRowsLength={summaryRows.length}
+              billingClientFilterActive={billingClientFilterActive}
+              excludedBillingClientNames={excludedBillingClientNames as string[]}
+              selectedBillingClientIdSet={selectedBillingClientIdSet}
+              missingShipStationClientNames={missingShipStationClientNames}
+              onToggleAdvanced={() => setClientFilterOpen((open) => !open)}
+              onSelectShipStation={handleSelectShipStationBillingClients}
+              onSelectAll={handleSelectAllBillingClients}
+              onToggleClient={handleToggleBillingClient}
+            />
+          </div>
+
+          <div className="flex-initial">
+            <BillingFilters
+              activePreset={activePreset}
+              from={from}
+              to={to}
+              generateLoading={generateLoading}
+              generateStatus={generateStatus}
+              onSelectPreset={(preset) => {
+                setActivePreset(preset)
+              }}
+              onFromChange={(value) => {
+                setActivePreset(null)
+                setFrom(value)
+              }}
+              onToChange={(value) => {
+                setActivePreset(null)
+                setTo(value)
+              }}
+              onGenerate={() => void handleGenerateBilling()}
+            />
+          </div>
+        </div>
+      </div>
 
       <div className="order-2 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
-        <div className="flex items-center gap-2 mb-3">
-          <SlidersHorizontal size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
-          <h3 className="text-[13px] font-semibold text-ink">Generate &amp; summary</h3>
-        </div>
-
-        <BillingFilters
-          activePreset={activePreset}
-          from={from}
-          to={to}
-          generateLoading={generateLoading}
-          generateStatus={generateStatus}
-          onSelectPreset={(preset) => {
-            setActivePreset(preset)
-          }}
-          onFromChange={(value) => {
-            setActivePreset(null)
-            setFrom(value)
-          }}
-          onToChange={(value) => {
-            setActivePreset(null)
-            setTo(value)
-          }}
-          onGenerate={() => void handleGenerateBilling()}
-        />
-
-        <BillingClientFilterPanel
-          clientFilterOpen={clientFilterOpen}
-          selectedBillingClientCount={selectedBillingClientCount}
-          availableBillingClients={availableBillingClients as { clientId: number; clientName: string; inShipStation: boolean }[]}
-          summaryRowsLength={summaryRows.length}
-          billingClientFilterActive={billingClientFilterActive}
-          excludedBillingClientNames={excludedBillingClientNames as string[]}
-          selectedBillingClientIdSet={selectedBillingClientIdSet}
-          missingShipStationClientNames={missingShipStationClientNames}
-          onToggleAdvanced={() => setClientFilterOpen((open) => !open)}
-          onSelectShipStation={handleSelectShipStationBillingClients}
-          onSelectAll={handleSelectAllBillingClients}
-          onToggleClient={handleToggleBillingClient}
-        />
 
         <BillingShippingMarginSummary
           summary={shippingMarginSummary}
