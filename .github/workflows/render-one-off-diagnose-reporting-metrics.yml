@@ -1,0 +1,128 @@
+# Read-only diagnosis: why is billing_summary_metrics empty in production?
+#
+# WHY THIS LANE
+#
+# The PS-501 / 0095 inspect reported `cached rows: 0` against production.
+# billing_summary_metrics is the cached answer behind the Billing dashboard, so zero rows
+# means /billing/summary takes the live query every time. Nothing is visibly broken, which
+# is exactly why it went unnoticed — and why it needs a deliberate look rather than a guess.
+#
+# Both callers of refreshBillingSummaryMetrics swallow failures into a logged
+# `billing.summary_metrics.refresh_failed` without failing the request (billing.ts:2300), so
+# a PERSISTENT failure looks precisely like this: table present, zero rows, no breakage.
+#
+# NO APPLY MODE EXISTS. This lane has one behaviour: report. There is no token, because
+# there is nothing to confirm — the runner has no write path, and it additionally pins the
+# session READ ONLY at the server so it cannot write even if the script were later edited.
+# A diagnostic that could mutate the thing it diagnoses is not a diagnostic.
+#
+# Production execution belongs to the operator lane, not a developer session: the Render job
+# runs inside the environment that already holds the production DATABASE_URL, so no
+# credential is needed, minted, or passed through a workstation.
+#
+# UNTICKETED. This is a finding carried out of PS-501, not a card. Whatever it turns up
+# should get its own ticket, because the fix is unknowable until the cause is known.
+name: Render One-Off Read-Only Diagnosis (reporting metrics)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-one-off-diagnose-reporting-metrics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      # Proves the script that is about to travel contains no write path. Cheap, and it
+      # fails on the archive rather than after it has already run somewhere.
+      - name: Assert the diagnostic is read-only
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const src = readFileSync('scripts/diagnose-reporting-metrics.ts', 'utf8')
+            .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+          const forbidden = /\b(insert\s+into|update\s+\w|delete\s+from|drop\s+(table|column|index)|alter\s+table|truncate)\b/i;
+          if (forbidden.test(src)) {
+            console.error('STOP: the diagnostic contains a write statement.');
+            process.exit(1);
+          }
+          if (!/set session characteristics as transaction read only/.test(src)) {
+            console.error('STOP: the diagnostic does not pin the session read-only.');
+            process.exit(1);
+          }
+          console.log('ok   no write statements; session is pinned read-only');
+          NODE
+
+      - name: Run the diagnosis as a Render one-off job
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo '::error::RENDER_API_KEY and RENDER_SERVICE_ID are required.'
+            exit 1
+          fi
+
+          archive_b64=$(tar -czf - scripts/diagnose-reporting-metrics.ts | base64 -w0)
+          start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && npx tsx scripts/diagnose-reporting-metrics.ts"
+          payload=$(START_COMMAND="$start_command" node -e \
+            'process.stdout.write(JSON.stringify({startCommand: process.env.START_COMMAND}))')
+
+          response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+          http_code=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+          if [ "$http_code" != '201' ]; then
+            echo "::error::Render one-off job creation failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+          job_id=$(BODY="$body" node -e \
+            'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.id||""))')
+          test -n "$job_id" || { echo '::error::Render returned no job id.'; exit 1; }
+          echo "Render diagnosis job created: ${job_id}"
+
+          for attempt in $(seq 1 60); do
+            sleep 10
+            job=$(curl -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs/${job_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H 'Accept: application/json')
+            status=$(BODY="$job" node -e \
+              'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.status||""))')
+            echo "diagnosis status=${status} (poll ${attempt})"
+            case "$status" in
+              succeeded)
+                echo 'Diagnosis complete. READ THE RENDER JOB LOG — the findings are printed there,'
+                echo 'not here. Look for "CAUSE FOUND", the reporting_refresh_runs history, and the'
+                echo 'row counts.'
+                exit 0 ;;
+              failed|canceled)
+                echo "::error::Render diagnosis job ${status}. Read the job log; nothing is assumed."
+                exit 1 ;;
+            esac
+          done
+          echo '::error::Timed out waiting for the Render job.'
+          exit 1
