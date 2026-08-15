@@ -9,6 +9,20 @@ on:
     branches:
       - prepshipv4-stable
 
+# Supersede in-flight PR runs only. A push to prepshipv4-stable must always run to
+# completion: render-auto-deploy.yml does not wait on this workflow, it re-runs its own
+# gate list against the same commit, and a cancelled CI run leaves that commit with no CI
+# verdict at all -- which reads as "never checked", not as "superseded".
+#
+# Deliberately NOT paths-ignore'd. A docs-only push looks free to skip, but the SOT guard
+# pack asserts the CONTENTS of AGENTS.md, CLAUDE.md, .cursorrules, ARCHITECTURE.md,
+# CONTRIBUTING.md, docs/engineering/** and docs/ps-tickets/** -- ~140 of the repo's 303
+# markdown files are read by a guard. Editing one of them genuinely can turn the gate red,
+# so skipping CI on markdown would hide exactly the failure the pack exists to catch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: Typecheck + Frontend build
@@ -59,10 +73,48 @@ jobs:
   #
   # Fully mocked -- page.route intercepts every request and the Supabase key is a
   # dummy. No network, no provider, no postage.
-  hazmat-browser-proof:
-    name: Hazmat disclosure browser proof (PS-465/477/478/479/481/482)
+  #
+  # ---------------------------------------------------------------------------------
+  #
+  # PS-507: the disposable QA stack and its consumers, run as the second step of this
+  # same job.
+  #
+  # This WIDENS the per-spec rule stated for the hazmat proof above, and the reason it
+  # is allowed to is that PS-507 is not part of that flappy suite. It has its own
+  # playwright.ps507.config.js (testMatch /ps-507-.*\.spec\.js/, workers: 1, no webServer,
+  # no globalSetup) and provisions its own stack, so it shares no fixture, port or server
+  # with the legacy e2e run. Measured before wiring: 8 consecutive clean full-suite runs
+  # (5 + 3) at ~8s. The one flake ever observed was root-caused, not retried -- the query
+  # endpoint was calling pg.query() in-process and interleaving with socket-served queries.
+  #
+  # What this suite is worth: before it, the only thing standing behind the harness in CI
+  # was test:ps-507-qa-harness, a STATIC guard that reads the source. A static guard cannot
+  # notice that the stack stopped provisioning, that a migration broke the QA schema, or
+  # that the persistence proof went vacuous -- exactly the failures this suite exists to
+  # catch. If it turns out to flap, root-cause it or remove the step; do not add retries,
+  # because this stack's failure mode lands on whatever request was in flight rather than
+  # on the cause, and a retry converts a visible fault into a silent one.
+  #
+  # This suite alone is NOT a deploy gate. Despite its name, "Render Auto-Deploy (CI-gated)"
+  # does not wait on this workflow's conclusion -- it re-runs its own inline gate list.
+  # That workflow's own comment records why the lists must not diverge: the SOT pack was
+  # copied into it after "a red PS-464 could and did reach production while the general CI
+  # was failing". So the PS-507 suite is registered in BOTH, and the two must be changed
+  # together. The deploy-gate copy lives in render-auto-deploy.yml.
+  #
+  # Needs NO secrets. The database is in-memory PGlite behind a loopback socket, the
+  # bearer is signed with a per-run random secret, and the Supabase URL is a syntactically
+  # valid ref that never resolves. Nothing reaches a carrier, marketplace or mailbox.
+  #
+  # 2026-08-16: was a separate `ps-507-qa-stack-proofs` job. Folded in here purely for
+  # billing -- both jobs paid their own `npm ci` and `playwright install chromium`, and
+  # GitHub bills each job separately with the duration rounded UP to the whole minute.
+  # One shared setup instead of two. Both proofs still run and report independently;
+  # see the `!cancelled()` note on the PS-507 step.
+  browser-proofs:
+    name: Browser proofs (hazmat disclosure + PS-507 QA stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,70 +133,22 @@ jobs:
       - name: Hazmat disclosure browser proof
         run: npm run test:ps-465-hazmat:browser
 
-      - name: Upload failure trace
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: hazmat-browser-proof-failure
-          path: test-results/
-          retention-days: 7
-
-  # PS-507: the disposable QA stack and its consumers.
-  #
-  # This WIDENS the per-spec rule stated on hazmat-browser-proof above, and the reason it
-  # is allowed to is that PS-507 is not part of that flappy suite. It has its own
-  # playwright.ps507.config.js (testMatch /ps-507-.*\.spec\.js/, workers: 1, no webServer,
-  # no globalSetup) and provisions its own stack, so it shares no fixture, port or server
-  # with the legacy e2e run. Measured before wiring: 8 consecutive clean full-suite runs
-  # (5 + 3) at ~8s. The one flake ever observed was root-caused, not retried -- the query
-  # endpoint was calling pg.query() in-process and interleaving with socket-served queries.
-  #
-  # What this job is worth: before it, the only thing standing behind the harness in CI was
-  # test:ps-507-qa-harness, a STATIC guard that reads the source. A static guard cannot
-  # notice that the stack stopped provisioning, that a migration broke the QA schema, or
-  # that the persistence proof went vacuous -- exactly the failures this suite exists to
-  # catch. If it turns out to flap, root-cause it or remove the job; do not add retries,
-  # because this stack's failure mode lands on whatever request was in flight rather than
-  # on the cause, and a retry converts a visible fault into a silent one.
-  #
-  # This job alone is NOT a deploy gate. Despite its name, "Render Auto-Deploy (CI-gated)"
-  # does not wait on this workflow's conclusion -- it re-runs its own inline gate list.
-  # That workflow's own comment records why the lists must not diverge: the SOT pack was
-  # copied into it after "a red PS-464 could and did reach production while the general CI
-  # was failing". So the PS-507 suite is registered in BOTH, and the two must be changed
-  # together. The deploy-gate copy lives in render-auto-deploy.yml under the same name.
-  #
-  # Needs NO secrets. The database is in-memory PGlite behind a loopback socket, the
-  # bearer is signed with a per-run random secret, and the Supabase URL is a syntactically
-  # valid ref that never resolves. Nothing reaches a carrier, marketplace or mailbox.
-  ps-507-qa-stack-proofs:
-    name: PS-507 disposable QA stack proofs (PS-499 Step 12 + PS-488 M3)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install deps
-        run: npm ci
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
       # Seeds BOTH fixtures and runs all 13 specs: the persistence proof, the PS-499
       # Step 12 API and browser legs, and the PS-488 M3 return-identity proofs.
+      #
+      # `!cancelled()` so a red hazmat proof does NOT hide the PS-507 result. When these
+      # were two jobs they reported independently, and losing that would mean learning
+      # about one failure per run -- the opposite of what the notes above ask for. Both
+      # proofs still report; only the setup is shared.
       - name: PS-507 persistence, authorisation and identity proofs
+        if: ${{ !cancelled() }}
         run: npm run test:ps-507
 
       - name: Upload failure trace
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ps-507-qa-stack-failure
+          name: browser-proofs-failure
           path: test-results/
           retention-days: 7
+
