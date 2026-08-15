@@ -1,0 +1,174 @@
+-- PS-502 — the replacement (outbound re-ship) tables.
+--
+-- ADDITIVE ONLY. Three new tables plus one FK that REFERENCES shipments.id. Nothing here
+-- reads, writes, or alters a shipment, an order, a label, inventory or billing, which is
+-- why this migration sits inside the card's "no unlock" list: a foreign key pointing AT
+-- shipments mutates nothing. The commands that touch shipped data — the create command,
+-- shipment insertion, label purchase, the `shipped` transition, inventory deduction — are
+-- NOT in this slice and require `unlock shipped data`.
+--
+-- RENUMBERED from the card. PS-502 REV 4 specifies 0092/0093, but 0092 (PS-488 return
+-- identity), 0093 (RLS), 0094 (search_path) and 0095 (PS-501) all landed after REV 4 was
+-- written. The card anticipated exactly this — "two historical 0091 files exist; do not
+-- create a third. Re-fetch stable immediately before creating files."
+--
+-- Safe to re-run: every object is created IF NOT EXISTS.
+
+create table if not exists replacements (
+  id serial primary key,
+
+  -- INTERNAL primary key of the original order, never the visible number. The operator-
+  -- facing identity is `reference` below.
+  order_id integer not null references orders(id) on delete restrict,
+  client_id integer references clients(id),
+
+  -- The replacement's own outbound shipment, once one exists. SET NULL rather than
+  -- RESTRICT so a shipment row can be removed without orphaning the replacement's history;
+  -- UNIQUE (partial) so two replacements can never claim one shipment.
+  replacement_shipment_id integer references shipments(id) on delete set null,
+
+  -- Operator-visible identity: 1321-REPLACE, 1321-REPLACE-2, ... ALLOCATED, never
+  -- string-built from the order number at use sites.
+  reference text not null unique,
+
+  status text not null default 'requested',
+  reason text not null,
+
+  -- Default FALSE: a replacement bills nothing unless someone decides it does. The
+  -- billability AUTHORITY is DJ decision 7 and is not settled, so this column stores the
+  -- decision without implying who makes it.
+  billable boolean not null default false,
+  liability_owner text not null default 'operator',
+
+  -- Creation is idempotent on this key, which is what makes a retried create safe.
+  request_idempotency_key text not null unique,
+
+  -- Optimistic concurrency: every transition is
+  -- `where id = :id and status = :expected and state_version = :v`, and zero rows updated
+  -- is a 409 rather than a lost update.
+  state_version integer not null default 0,
+
+  review_reason text,
+  review_requested_at timestamptz,
+
+  initiated_by text,
+  approved_by text,
+  admin_override boolean not null default false,
+  admin_override_by text,
+  admin_override_reason text,
+
+  requested_at timestamptz not null default now(),
+  label_created_at timestamptz,
+  shipped_at timestamptz,
+  completed_at timestamptz,
+  rejected_at timestamptz,
+  cancelled_at timestamptz,
+  closed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+
+  constraint replacements_status_check check (status in (
+    'requested', 'review', 'approved', 'label_created', 'label_failed',
+    'shipped', 'completed', 'rejected', 'cancelled'
+  )),
+
+  -- An override is only an override if it says who and why. Without this, "admin_override
+  -- = true" is an unattributable claim.
+  constraint replacements_admin_override_attribution_check check (
+    admin_override = false
+    or (admin_override_by is not null and admin_override_reason is not null)
+  )
+);
+
+-- One shipment cannot belong to two replacements. Partial, because most rows have none yet.
+create unique index if not exists replacements_shipment_unq
+  on replacements(replacement_shipment_id)
+  where replacement_shipment_id is not null;
+
+create index if not exists replacements_order_idx on replacements(order_id);
+create index if not exists replacements_client_status_idx on replacements(client_id, status);
+
+-- DELIBERATELY ABSENT: a "one active replacement per order" unique index.
+--
+-- Multiple concurrent replacements against one order are a required capability (a second
+-- item damaged later is not the same event), so uniqueness here would be wrong. Ordering
+-- and reference allocation are serialised in the create command under an order-scoped
+-- lock instead — a database constraint cannot express "one at a time" without also
+-- forbidding the legitimate case.
+--
+-- DELIBERATELY ABSENT: parent_replacement_id. A replacement of a replacement is another
+-- replacement against the ORIGINAL order. Frozen by the card; adding a parent later is
+-- additive.
+
+create table if not exists replacement_items (
+  id serial primary key,
+  replacement_id integer not null references replacements(id) on delete cascade,
+  order_id integer not null references orders(id) on delete restrict,
+
+  -- NO FOREIGN KEY TO order_items.id, deliberately.
+  --
+  -- order_items rows are regenerated by the sync trigger and `line_index` is computed as
+  -- (item.ordinality - 1) from raw JSON array position, so it is reproducible only while
+  -- the source array keeps that item at the same ordinal. An earlier line being removed,
+  -- the referenced line being removed, or a reorder all move it. A real FK would either
+  -- block the order refresh or follow it, and following it silently retargets a
+  -- replacement at a different product.
+  order_line_index integer not null,
+
+  -- Frozen at creation from every stable fact available. DRIFT DETECTION, not an identity:
+  -- it exists to prove the coordinate still points at what it pointed at, so a mismatch
+  -- becomes an explicit review rather than a silent retarget. If imported item JSON ever
+  -- exposes a durable marketplace line-item id, that becomes the preferred identity — but
+  -- inventing such a column requires its own source-contract audit.
+  source_line_fingerprint text not null,
+
+  -- Frozen snapshots of what was requested. Never rewritten to follow a refreshed order:
+  -- these are historical intent, and a shipped replacement's facts must survive a later
+  -- refresh untouched.
+  sku text not null,
+  name text,
+  original_ordered_quantity integer not null,
+
+  -- integer, matching the inventory ledger's quantity type.
+  quantity integer not null,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+
+  constraint replacement_items_quantity_positive_check check (quantity > 0),
+  constraint replacement_items_line_unq unique (replacement_id, order_line_index)
+);
+
+create index if not exists replacement_items_replacement_idx on replacement_items(replacement_id);
+create index if not exists replacement_items_order_idx on replacement_items(order_id);
+
+-- Append-only. RESTRICT on replacement_id, so history cannot be cascade-deleted out from
+-- under an audit by removing its subject.
+create table if not exists replacement_activity_events (
+  id serial primary key,
+  replacement_id integer not null references replacements(id) on delete restrict,
+  shipment_id integer references shipments(id) on delete set null,
+
+  event_type text not null,
+  from_status text,
+  to_status text,
+  actor_type text not null,
+  actor_email text,
+
+  -- Idempotency is what makes a retried transition safe to replay: the second attempt
+  -- collides here instead of appending a duplicate event.
+  idempotency_key text not null unique,
+
+  event_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists replacement_activity_events_replacement_idx
+  on replacement_activity_events(replacement_id, event_at);
+
+comment on table replacements is
+  'PS-502: outbound re-ship. `reference` is the operator-visible identity; order_id is internal.';
+comment on column replacement_items.order_line_index is
+  'PS-502: (ordinality - 1) source coordinate. Volatile by construction — validate against source_line_fingerprint before acting.';
+comment on column replacement_items.source_line_fingerprint is
+  'PS-502: frozen drift-detection fingerprint. Not a permanent identifier.';

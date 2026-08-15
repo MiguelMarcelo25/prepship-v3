@@ -1378,6 +1378,7 @@ const REQUIRED_GUARDS = [
   'test:ps-501-canonical-billing-total',
   'test:ps-499-order-rate-display-contract',
   // PS-507 (2026-08-14). The disposable QA harness proves that an authenticated browser
+  'test:ps-502-replacement-contract',
   // action committed a real PostgreSQL row — the evidence PS-499 Step 12 and PS-488 M3
   // need, which today a human produces by hand from a runbook.
   //
