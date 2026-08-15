@@ -1,8 +1,8 @@
 name: Render Auto-Deploy (CI-gated)
 
 # Hands-off Render deploy that ONLY runs after the CI gate (SOT guard pack + typecheck +
-# PS-421 + frontend build + shipping-roundtrip-certification) passes on prepshipv4-stable.
-# This replaces the manual
+# PS-421 + frontend build + shipping-roundtrip-certification + the PS-507 disposable QA
+# stack proofs) passes on prepshipv4-stable. This replaces the manual
 # "redeploy Render after a push" step WITHOUT removing the safety gate that Render's native
 # Auto-Deploy would bypass (native auto-deploy ships every push regardless of CI — unsafe for
 # this money/rate/label/insurance backend).
@@ -62,35 +62,45 @@ jobs:
       - name: Shipping roundtrip certification (offline gate)
         run: npm run test:shipping-roundtrip-certification
 
-      # PS-507 deploy-gate re-add pending.
+      # PS-507. Last, because it is the slowest step and everything above fails faster.
       #
-      # The PS-507 suite BELONGS here, for the same reason the SOT guard pack does: this
-      # gate and ci.yml must not keep two different lists, and a schema or persistence
-      # regression is exactly what a typecheck and a frontend build cannot see. It was
-      # added on 495e1eb6 and backed out in the same hour, because it was wired into the
-      # deploy gate before it had ever executed on Linux -- and its first Linux run failed.
-      # That inverted the rule stated on hazmat-browser-proof in ci.yml: earn the gate
-      # first, widen second.
+      # Here for the same reason the SOT guard pack is: this gate and ci.yml must not keep
+      # two different lists. The pack was copied in after a red PS-464 reached production
+      # while general CI was failing, and a schema or persistence regression is exactly what
+      # a typecheck and a frontend build cannot see — which is what this gate's path filter
+      # (src/**, drizzle/**) selects for.
       #
-      # The failure was a harness bug, not a product defect (the query endpoint used
-      # postgres.js's UNNAMED prepared statement, which PGlite shares across socket
-      # connections, so a concurrent API query clobbered the bind). It is fixed, but a
-      # fix that has never been observed green on Linux is not evidence.
+      # RE-ADDED after earning it. This was added on 495e1eb6 and backed out an hour later
+      # on d54efec8, because it had been wired in front of production shipping before it had
+      # ever executed on Linux — and its first Linux run failed. That inverted the rule
+      # ci.yml states on hazmat-browser-proof: earn the gate first, widen second. The
+      # failure was a harness bug (the query endpoint used postgres.js's UNNAMED prepared
+      # statement, which PGlite shares across socket connections, so a concurrent API query
+      # clobbered the bind), and the bar set for its return was three consecutive green
+      # ps-507-qa-stack-proofs runs on Linux. Met by d54efec8, a7d26100 and 9110cea0.
       #
-      # RE-ADD CRITERION: the ps-507-qa-stack-proofs job in ci.yml green on three
-      # consecutive pushes. Then restore the three steps below and delete this comment.
+      # Three, not one, because the original failure was a RACE: the identical suite passed
+      # in this gate and failed in the CI job on the same commit, 495e1eb6.
       #
-      #   - name: Install Chromium (PS-507 browser leg)
-      #     run: npx playwright install --with-deps chromium
-      #   - name: PS-507 disposable QA stack proofs (PS-499 Step 12 + PS-488 M3)
-      #     run: npm run test:ps-507
-      #   - name: Upload PS-507 failure trace
-      #     if: failure()
-      #     uses: actions/upload-artifact@v4
-      #     with:
-      #       name: ps-507-deploy-gate-failure
-      #       path: test-results/
-      #       retention-days: 7
+      # If it goes red here, root-cause it or remove the steps. Do NOT add retries: this
+      # stack's failure mode lands on whatever request was in flight rather than on the
+      # cause, so a retry converts a visible fault into a silent one.
+      #
+      # Needs no secrets: in-memory PGlite on loopback, a per-run random bearer secret, and
+      # a Supabase ref that never resolves.
+      - name: Install Chromium (PS-507 browser leg)
+        run: npx playwright install --with-deps chromium
+
+      - name: PS-507 disposable QA stack proofs (PS-499 Step 12 + PS-488 M3)
+        run: npm run test:ps-507
+
+      - name: Upload PS-507 failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps-507-deploy-gate-failure
+          path: test-results/
+          retention-days: 7
 
   deploy:
     needs: gate
