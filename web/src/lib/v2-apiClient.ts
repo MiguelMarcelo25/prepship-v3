@@ -2688,28 +2688,30 @@ export const apiClient = {
           if (c?.id != null) nameById.set(c.id, c?.name ?? '');
         }
 
-        const entries = Array.isArray(res?.clients) ? res.clients : [];
-        return entries.map((e: any) => {
-          const byType = (e?.byType ?? {}) as Record<string, number | undefined>;
-          const total = e?.total ?? 0;
-          return {
-            clientId: e?.clientId,
-            clientName:
-              (e?.clientId != null ? nameById.get(e.clientId) : undefined) ??
-              e?.clientName ??
-              'Unknown',
-            orderCount: e?.count ?? 0,
-            pickPackTotal: byType.pick_pack ?? 0,
-            additionalTotal: byType.additional_unit ?? 0,
-            packageTotal: byType.package_cost ?? 0,
-            shippingTotal: byType.shipping ?? 0,
-            total,
-            // BillingView's summary table reads row.grandTotal for the final
-            // column; expose the same value under both keys so the UI works
-            // whether the view is updated or not.
-            grandTotal: total,
-          };
-        });
+        // PS-501: the legacy {clients:[{count,total,byType}]} reshape that stood here is
+        // GONE, and its absence is the point.
+        //
+        // It mapped the old envelope and set `grandTotal: total`, which made it a SECOND
+        // owner of what a row's canonical total is — a frontend normalizer competing with
+        // the backend's. PS-501 exists because two spellings of one total let field order
+        // decide money; leaving a third spelling here would have re-opened it.
+        //
+        // It was also unreachable. GET /billing/summary returns
+        // `{ data: summary.clients, clients: ..., grandTotal: ... }` (src/routes/billing.ts)
+        // and billingSummary is typed `Promise<{ clients: BillingSummaryRow[] }>`, so
+        // `res.data` is ALWAYS an array and the `Array.isArray(res?.data)` guard above
+        // returns before reaching this point. Dead code that owns money truth is worse than
+        // ordinary dead code, because it looks like the answer to whoever finds it first.
+        //
+        // Throws rather than returning []: an empty billing summary is indistinguishable
+        // from "this client billed nothing", which is the wrong thing to show an operator
+        // when the real answer is "the response contract changed".
+        void nameById;
+        throw new Error(
+          'PS-501: GET /billing/summary did not return the expected { data: [...] } envelope. ' +
+            'The row total is backend-owned and the frontend will not reconstruct one from a ' +
+            'legacy shape. Received keys: ' + Object.keys((res ?? {}) as Record<string, unknown>).join(', '),
+        );
       })();
   },
 
