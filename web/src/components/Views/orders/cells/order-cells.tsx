@@ -231,7 +231,13 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
   if (awaitingFallback) return awaitingFallback
 
   const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-  if (!hasDisplayableBestRate || bestRateBaseCost == null) {
+  // PS-499: was `bestRateBaseCost == null`. That term was only ever true when the money
+  // tuple was ABSENT — getBackendRowMoney returns null unless markedAmount exists, so the
+  // old four-rung chain could not be null while a tuple existed. Now that the cost getter
+  // is cost-only, the same expression would ALSO be true for a row that has a customer
+  // amount but no cost, quietly hiding it behind the awaiting fallback. Asking about the
+  // tuple directly says what was always meant and is exactly equivalent to the original.
+  if (!hasDisplayableBestRate || getBackendRowMoney(displayOrder) == null) {
     // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
     // PS-286: when the row HAS a saved best rate that no longer satisfies the
     // backend display contract, render the SPECIFIC actionable reason (Rate
@@ -286,10 +292,12 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       selectedRateCost: backendMoney.selectedRateCost,
       baseAmount: backendMoney.baseAmount,
       cShippingRateAmount: backendMoney.cShippingRateAmount,
-      markedAmount: backendMoney.markedAmount,
       insuranceAddOn: backendMoney.insuranceAddOn,
-      fallbackAmount: bestRateBaseCost,
-      customerRateSource: backendMoney.customerRateSource,
+      // PS-499: markedAmount, fallbackAmount (bestRateBaseCost) and the customerRateSource
+      // branch are gone. They existed to feed a precedence chain that substituted a
+      // purchase or base figure when the customer amount was absent; the backend now
+      // states whether one exists and the cell renders that verdict.
+      customerAmountState: backendMoney.customerAmountState,
     })
     : null
   return (
@@ -306,7 +314,14 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
           // rendering the backend-owned HUGRAB coverage badge on Shipp/house rows.
           getBestRateInsuranceCoverage(displayOrder),
         )
-        : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
+        // PS-499 AC-2: no backend money tuple means there is no customer amount for this
+        // row. This previously rendered `(bestRateBaseCost, bestRateBaseCost, …)` — the
+        // carrier's BASE COST passed as the customer amount as well as the base, so the
+        // cell showed a real, plausibly-sized number under a customer-price label whenever
+        // the customer amount was missing. Nulls render "—"; the insurance add-on and the
+        // backend coverage verdict still show, because those are unaffected by the absence
+        // of a customer price.
+        : renderRateAmountWithMarkup(null, null, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
       {recalculatingSpinner}
       </div>
       {/* PS-357: HOUSE remains a backend verdict marker, but sits under the single purchase-cost rate. */}

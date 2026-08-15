@@ -293,13 +293,20 @@ function getCachedSecondBestRate(order: OrderSummaryDto) {
   )
 }
 
+/**
+ * The row's COST — what we paid, or the carrier base underneath it.
+ *
+ * PS-499: the chain used to continue `?? cShippingRateAmount ?? markedAmount`, which are
+ * CUSTOMER amounts. A row with no cost data therefore returned the customer's price under
+ * a cost meaning — the same substitution the Best Rate cell was making, mirrored. Only the
+ * two genuine cost fields remain; absent cost now reads as absent.
+ *
+ * The awaiting/shipped branch is also gone: both arms were byte-identical, so the status
+ * check implied a distinction that did not exist and invited someone to "fix" one arm.
+ */
 export function getBestRateBaseCost(order: OrderSummaryDto) {
   const money = getBackendRowMoney(order)
-  if (getOrderEffectiveStatus(order) === 'awaiting_shipment') {
-    return money?.selectedRateCost ?? money?.baseAmount ?? money?.cShippingRateAmount ?? money?.markedAmount ?? null
-  }
-
-  return money?.selectedRateCost ?? money?.baseAmount ?? money?.cShippingRateAmount ?? money?.markedAmount ?? null
+  return money?.selectedRateCost ?? money?.baseAmount ?? null
 }
 
 export function getBestRateFinalBaseCost(order: OrderSummaryDto) {
@@ -476,6 +483,13 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     shippingMarginAmount: toNumberValue(money.shippingMarginAmount),
     shippingMarginPct: toNumberValue(money.shippingMarginPct),
     customerRateSource: toStringValue(money.customerRateSource),
+    // PS-499: the backend's verdict on whether a customer amount exists. Undefined on an
+    // older backend (deploy skew); consumers treat that as "infer from the amount", which
+    // is the same answer, never as licence to substitute a cost field.
+    customerAmountState:
+      money.customerAmountState === 'available' || money.customerAmountState === 'unavailable'
+        ? (money.customerAmountState as 'available' | 'unavailable')
+        : undefined,
     // PS-220 (slice 4b): 'house_account' => SHIPP house order (marked = the customer_rate DRP bills,
     // base = DRP's SHIPP cost, markup = the house margin). Defaults to 'carrier_markup' on deploy-skew
     // (older backends omit the field), so the badge only ever shows on a confirmed house tuple.
@@ -596,7 +610,17 @@ export function renderRateAmountWithMarkup(
   // Optional + additive: omit it (or pass null) and the cell renders EXACTLY as before.
   coverage?: RowInsuranceCoverage | null,
 ) {
-  const displayAmount = markedAmount ?? baseAmount
+  // PS-499: NO fallback to baseAmount.
+  //
+  // This was `markedAmount ?? baseAmount`, so a row with a known carrier base and no
+  // customer amount rendered the base in the customer-price position — the same
+  // substitution the callers were doing, one layer deeper, where it survived the callers
+  // being cleaned up. The two parameters are different money: `markedAmount` is what the
+  // customer is shown, `baseAmount` is the cost underneath it in the breakdown.
+  //
+  // Callers that legitimately have only one amount already pass it AS markedAmount
+  // (order-cells.tsx:220 passes base null), so nothing that had a customer amount loses it.
+  const displayAmount = markedAmount
   if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'—'}</span>
 
   const markupAmount = baseAmount != null && markedAmount != null ? Math.max(0, markedAmount - baseAmount) : null

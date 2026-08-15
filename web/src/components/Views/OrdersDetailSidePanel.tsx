@@ -306,10 +306,11 @@ export function OrdersDetailSidePanel({
       selectedRateCost: sidePanelBackendMoney.selectedRateCost,
       baseAmount: sidePanelBackendMoney.baseAmount,
       cShippingRateAmount: sidePanelBackendMoney.cShippingRateAmount,
-      markedAmount: sidePanelBackendMoney.markedAmount,
       insuranceAddOn: sidePanelBackendMoney.insuranceAddOn,
-      fallbackAmount: getBestRateBaseCost(panelDisplayOrder),
-      customerRateSource: sidePanelBackendMoney.customerRateSource,
+      // PS-499 AC-1: the detail panel and the Orders table now take the SAME inputs and
+      // therefore cannot disagree. They previously shared a helper but fed it different
+      // fallbackAmount expressions, which is how two surfaces over one contract drift.
+      customerAmountState: sidePanelBackendMoney.customerAmountState,
     })
     : null
   const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
@@ -965,7 +966,13 @@ export function OrdersDetailSidePanel({
                       {/* PS-357: mirror the Best Rate column display policy over the backend money tuple.
                           HOUSE shows purchase cost; C. Shipping owns the customer billing amount. */}
                       <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney(sidePanelBestRatePriceDisplay?.primaryAmount ?? getBestRateBaseCost(panelDisplayOrder))}
+                        {/* PS-499 AC-1/AC-2: no `?? getBestRateBaseCost(...)`. That fallback put the
+                            carrier COST in the customer-price slot whenever the customer amount was
+                            absent — and it would have silently defeated the unavailable state this
+                            ticket introduces, since that state is exactly a null primaryAmount.
+                            formatMoney renders null as an explicit blank, which is the honest answer
+                            and matches what the Orders table now shows for the same order. */}
+                        {formatMoney(sidePanelBestRatePriceDisplay?.primaryAmount ?? null)}
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
                         {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}

@@ -213,6 +213,14 @@ export type OrderRowMoneyDisplay = {
     | 'realized_house_c_shipping_rate'
     | 'true_cost_uplift'
     | 'hugrab_shipping_rate_override';
+  /**
+   * PS-499 — does a customer amount exist for this row?
+   *
+   * `cShippingRateAmount` is the customer amount; this says whether it is real. Consumers
+   * must render an explicit unavailable state when this is not 'available', and must never
+   * substitute selectedRateCost or baseAmount, which are different money.
+   */
+  customerAmountState: 'available' | 'unavailable';
   rateCostSource:
     | 'best_rate_internal_cost'
     | 'selected_rate_internal_cost'
@@ -269,6 +277,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     | 'houseBadgeVisible'
     | 'customerRateSource'
     | 'rateCostSource'
+    | 'customerAmountState'
   > => {
     const rawCShippingRateAmount = positive(input.cShippingRateAmount);
     const selectedRateCost = positive(input.selectedRateCost);
@@ -305,6 +314,26 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
         ? 'hugrab_shipping_rate_override'
         : input.customerRateSource,
       rateCostSource: input.rateCostSource,
+      // PS-499 — whether the customer amount EXISTS, stated by the side that knows.
+      //
+      // The frontend previously answered this by precedence:
+      //   cShippingRateAmount ?? markedAmount ?? purchaseAmount ?? fallbackAmount
+      // The last two rungs are not customer money. `purchaseAmount` is what WE paid and
+      // `fallbackAmount` is the carrier base cost (both call sites pass bestRateBaseCost),
+      // so an absent customer amount was rendered as a real number under a customer-price
+      // label, with nothing on screen marking the substitution.
+      //
+      // Deliberately NOT a new customerAmount field. cShippingRateAmount is already the
+      // canonical customer amount — every branch feeds its own customer value into it and
+      // the HUGRAB override adjusts it here — and adding a fourth name for customer money
+      // is the disease, not the cure. What was missing is only the availability verdict.
+      //
+      // Two states, not three: this function is only reached once a rate exists (the
+      // caller returns null when there is no markup basis), so "no rate yet" is the
+      // ABSENCE of this whole tuple and is already the frontend's null-tuple path. A
+      // 'pending' member here could never be produced, and unreachable vocabulary is how
+      // a contract starts lying.
+      customerAmountState: cShippingRateAmount != null ? 'available' : 'unavailable',
     };
   };
   // PS-220 house order: marked = customer_rate (cheapest eligible non-SHIPP), base = drp_cost (the
