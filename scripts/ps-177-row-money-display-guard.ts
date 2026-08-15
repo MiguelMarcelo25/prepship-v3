@@ -181,7 +181,17 @@ check('FE Best Rate cell prefers the backend tuple',
   /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCells) &&
   // PS-290 appended an optional 4th `coverage` arg (getBestRateInsuranceCoverage) — still the
   // backend tuple's marked/insurance, with the house-account base shown only in House Rate.
-  /resolveAwaitingBestRatePriceDisplay\(\{[\s\S]*selectedRateCost: backendMoney\.selectedRateCost[\s\S]*cShippingRateAmount: backendMoney\.cShippingRateAmount[\s\S]*markedAmount: backendMoney\.markedAmount/.test(orderCells) &&
+  // PS-499 re-anchored: this required `markedAmount: backendMoney.markedAmount` as the last
+  // term. That field was an input to the cell's alias cascade
+  // (cShippingRateAmount ?? markedAmount ?? purchase ?? base), which displayed cost money
+  // under a customer-price label — and rendered $0.00 as a customer price whenever a markup
+  // rule zeroed the amount. PS-499 removed it from the contract's input type entirely, so
+  // the old term now demands a field that cannot be passed.
+  //
+  // The rule here is "the cell PREFERS THE BACKEND TUPLE and recomputes nothing", so the
+  // check asserts the inputs still come from backendMoney — now including the backend's own
+  // availability verdict, which is a stronger statement than the field it replaced.
+  /resolveAwaitingBestRatePriceDisplay\(\{[\s\S]*selectedRateCost: backendMoney\.selectedRateCost[\s\S]*cShippingRateAmount: backendMoney\.cShippingRateAmount[\s\S]*customerAmountState: backendMoney\.customerAmountState/.test(orderCells) &&
   /renderRateAmountWithMarkup\(\s*bestRatePriceDisplay\.baseAmount,\s*bestRatePriceDisplay\.primaryAmount,\s*bestRatePriceDisplay\.insuranceAddOn/.test(orderCells));
 check('FE Margin cell prefers the backend tuple',
   /backendMoney\?\.shippingMarginAmount/.test(orderCells) && /backendMoney\.shippingMarginPct/.test(orderCells));

@@ -297,6 +297,8 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       // branch are gone. They existed to feed a precedence chain that substituted a
       // purchase or base figure when the customer amount was absent; the backend now
       // states whether one exists and the cell renders that verdict.
+      markedAmount: backendMoney.markedAmount,
+      customerRateSource: backendMoney.customerRateSource,
       customerAmountState: backendMoney.customerAmountState,
     })
     : null

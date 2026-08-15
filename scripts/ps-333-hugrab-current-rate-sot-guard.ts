@@ -275,13 +275,20 @@ const bestRateBaseCostBlock = rowDisplaySrc.slice(
 );
 check(
   'Awaiting Best Rate amount reads backend selected/C. Shipping money, not order.bestRate fallback math',
-    // Repointed (guard rot): status reads migrated to the getOrderEffectiveStatus(order) owner
-    // (orders-row-display.tsx:80); same awaiting-branch protection, canonical status form.
-    /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
+    // PS-499 re-anchored. This listed the four rungs of the old chain
+    // (selectedRateCost ?? baseAmount ?? cShippingRateAmount ?? markedAmount) plus an
+    // awaiting-status branch. Two of those tokens are CUSTOMER money inside a COST getter —
+    // which is what made it return a customer price under a cost meaning — and the status
+    // branch had byte-identical arms, so it decided nothing. Requiring them would now
+    // require the defect back.
+    //
+    // The protection in this check's own name is the NEGATIVE clause: this getter reads the
+    // backend money tuple and never re-derives from raw order.bestRate math. That is kept
+    // verbatim, and the positive side now asserts the tuple read directly rather than
+    // through field names that happened to appear in it.
+    /getBackendRowMoney\(order\)/.test(bestRateBaseCostBlock) &&
     /selectedRateCost/.test(bestRateBaseCostBlock) &&
     /baseAmount/.test(bestRateBaseCostBlock) &&
-    /cShippingRateAmount/.test(bestRateBaseCostBlock) &&
-    /markedAmount/.test(bestRateBaseCostBlock) &&
     /\?\? null/.test(bestRateBaseCostBlock) &&
     !/order\.bestRate|shipmentCost|otherCost|customerRateAmount|rateCostAmount/.test(bestRateBaseCostBlock),
 );

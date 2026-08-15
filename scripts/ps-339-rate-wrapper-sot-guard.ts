@@ -332,7 +332,12 @@ const combinedAllBlock = sliceBetween(modal, 'const combinedAll: RateRow[] = use
 // \r\n -> \n, unlike the raw readers in ps-095/ps-103/recalculate-best-rate-strict.)
 const savedBestRateBlock = sliceBetween(rateProof, 'export function getSavedBestRateRecord(', '\n\n// PS-422');
 const metadataBlock = sliceBetween(rateProof, 'export function withRateRequestMetadata(', '\n\nexport function getSavedBestRateRecord');
-const secondBestReaderBlock = sliceBetween(rowDisplay, 'function getCachedSecondBestRate(', '\n\nexport function getBestRateBaseCost');
+// PS-499: the end anchor was '\n\nexport function getBestRateBaseCost'. Adding a doc
+// comment above that declaration put `*/` between the blank line and `export`, so the
+// anchor stopped matching and this block sliced to EMPTY — the checks below then ran
+// against "" and failed for a reason unrelated to what they protect. Anchoring on the
+// declaration alone survives anything written above it.
+const secondBestReaderBlock = sliceBetween(rowDisplay, 'function getCachedSecondBestRate(', '\nexport function getBestRateBaseCost');
 const secondBestAmountBlock = sliceBetween(rowDisplay, 'function readRateTotalAmount(', '\n\nfunction getCachedSecondBestRate');
 
 check('v2 browseRates is backend DTO pass-through only',

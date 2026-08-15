@@ -54,6 +54,7 @@ const read = (path: string) => {
 const strip = (src: string) => src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 const base = (over: Partial<AwaitingBestRatePriceDisplayInput> = {}): AwaitingBestRatePriceDisplayInput => ({
+  markedAmount: 12,
   markupSource: 'carrier_markup',
   selectedRateCost: 10,
   baseAmount: 10,
@@ -124,8 +125,43 @@ console.log('\ndisplay contract (resolveAwaitingBestRatePriceDisplay)');
   // are gone from the input type. Passing them is a type error, so this asserts the shape.
   const src = read('web/src/components/Views/orders/best-rate-price-display.ts');
   const type = /export type AwaitingBestRatePriceDisplayInput = \{[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
-  check('markedAmount is no longer an input to the display contract', !/\bmarkedAmount\b/.test(type));
+  const body = strip(src);
+  // fallbackAmount was pure substitution — the carrier base under a customer-price label —
+  // so it is gone from the contract entirely and cannot be passed.
   check('fallbackAmount is no longer an input to the display contract', !/\bfallbackAmount\b/.test(type));
+  // markedAmount REMAINS, but only for the PS-366 branch below. What must never come back
+  // is its use as a FALLBACK, which is what made it a substitution.
+  check('markedAmount is never a fallback for the customer amount',
+    !/cShippingRateAmount\s*\)?\s*\?\?[^\n]*markedAmount/.test(body) &&
+    !/markedAmount\s*\)?\s*\?\?[^\n]*(purchaseAmount|fallbackAmount|baseAmount)/.test(body));
+  check('selectedRateCost and baseAmount are unreachable as a customer price',
+    !/customerAmount[^\n]*\?\?[^\n]*(purchaseAmount|selectedRateCost|baseAmount)/.test(body));
+}
+
+{
+  // PS-366, restored after this ticket first broke it: on a HUGRAB override row the
+  // customer is BILLED cShippingRateAmount while the Best Rate cell shows the quoted RATE
+  // (markedAmount). Billed money and displayed rate are different facts, and the selection
+  // between them is a backend-stated source, not a null-check.
+  const overrideRow = resolveAwaitingBestRatePriceDisplay(base({
+    cShippingRateAmount: 7.73,
+    markedAmount: 5.88,
+    selectedRateCost: 5.88,
+    baseAmount: 5.88,
+    customerRateSource: 'hugrab_shipping_rate_override',
+  }));
+  check('HUGRAB override row displays the quoted rate, not the overridden billed amount',
+    overrideRow.primaryAmount === 5.88,
+    `primaryAmount=${String(overrideRow.primaryAmount)} (7.73 would be the BILLED amount)`);
+
+  const normalRow = resolveAwaitingBestRatePriceDisplay(base({
+    cShippingRateAmount: 7.73,
+    markedAmount: 5.88,
+    customerRateSource: 'best_rate_marked_amount',
+  }));
+  check('a NON-override row still displays the customer amount, not markedAmount',
+    normalRow.primaryAmount === 7.73,
+    `primaryAmount=${String(normalRow.primaryAmount)}`);
 }
 
 // ── AC-3 — the backend stamps the verdict ────────────────────────────────────

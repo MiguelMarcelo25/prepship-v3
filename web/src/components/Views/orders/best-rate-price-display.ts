@@ -44,6 +44,21 @@ export type AwaitingBestRatePriceDisplayInput = {
   cShippingRateAmount: number | null | undefined
   insuranceAddOn: number | null | undefined
   /**
+   * PS-366: the rate this row was quoted at, which is what the Best Rate CELL shows on a
+   * HUGRAB override row — see customerRateSource below. Not a fallback for
+   * cShippingRateAmount; the two are used in mutually exclusive branches.
+   */
+  markedAmount: number | null | undefined
+  /**
+   * PS-366 — the backend's name for where the customer amount came from.
+   *
+   * Read for ONE decision only: 'hugrab_shipping_rate_override' means the customer is
+   * BILLED an overridden amount (cShippingRateAmount) while the cell shows the RATE
+   * (markedAmount). That is a product rule with its own guard, not a fallback: billed
+   * money and displayed rate are different facts for those rows.
+   */
+  customerRateSource?: string | null | undefined
+  /**
    * The backend's verdict on whether a customer amount exists.
    *
    * Optional ONLY for deploy skew — an older backend omits it. Absent is treated as
@@ -80,7 +95,20 @@ export function resolveAwaitingBestRatePriceDisplay(
   // Still a two-field read, but both are COST fields and the result is only ever shown as
   // a cost — as the house purchase figure, or as the base under a marked breakdown.
   const purchaseAmount = finiteAmount(input.selectedRateCost) ?? finiteAmount(input.baseAmount)
-  const customerAmount = finiteAmount(input.cShippingRateAmount)
+
+  // An explicit BRANCH on a backend-stated source, not a precedence chain.
+  //
+  // PS-366: when the HUGRAB override applies, cShippingRateAmount is what the customer is
+  // BILLED and markedAmount is the rate the row was quoted at — and the Best Rate cell
+  // shows the rate. Those are two different facts about one row, so selecting between them
+  // by a backend-stated source is a rule; reaching for whichever is non-null would be the
+  // substitution this ticket removes. The backend decides WHICH field applies here; it is
+  // not a frontend guess, and only these two customer-side fields are ever candidates —
+  // selectedRateCost and baseAmount remain unreachable as a customer price.
+  const isHugrabOverride = input.customerRateSource === 'hugrab_shipping_rate_override'
+  const customerAmount = isHugrabOverride
+    ? finiteAmount(input.markedAmount)
+    : finiteAmount(input.cShippingRateAmount)
 
   // Deploy skew only: an older backend omits the field, so the presence of the amount is
   // the same verdict the backend would have sent.

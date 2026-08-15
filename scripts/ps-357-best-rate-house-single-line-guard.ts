@@ -32,12 +32,12 @@ function read(path: string): string {
 
 const houseDisplay = resolveAwaitingBestRatePriceDisplay({
   markupSource: 'house_account',
-  rateCostAmount: 6.82,
+  selectedRateCost: 6.82,
   baseAmount: 6.82,
-  customerRateAmount: 9.25,
+  cShippingRateAmount: 9.25,
   markedAmount: 9.25,
   insuranceAddOn: 1.09,
-  fallbackAmount: 6.82,
+  customerAmountState: 'available' as const,
 });
 
 check(
@@ -52,12 +52,12 @@ check(
 
 const markedCarrierDisplay = resolveAwaitingBestRatePriceDisplay({
   markupSource: 'carrier_markup',
-  rateCostAmount: 12.82,
+  selectedRateCost: 12.82,
   baseAmount: 12.82,
-  customerRateAmount: 14.74,
+  cShippingRateAmount: 14.74,
   markedAmount: 14.74,
   insuranceAddOn: null,
-  fallbackAmount: 12.82,
+  customerAmountState: 'available' as const,
 });
 
 check(
@@ -71,12 +71,12 @@ check(
 
 const flatCarrierDisplay = resolveAwaitingBestRatePriceDisplay({
   markupSource: 'carrier_markup',
-  rateCostAmount: 6.82,
+  selectedRateCost: 6.82,
   baseAmount: 6.82,
-  customerRateAmount: 6.82,
+  cShippingRateAmount: 6.82,
   markedAmount: 6.82,
   insuranceAddOn: null,
-  fallbackAmount: 6.82,
+  customerAmountState: 'available' as const,
 });
 
 check(

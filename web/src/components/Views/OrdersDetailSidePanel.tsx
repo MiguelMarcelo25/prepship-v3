@@ -310,6 +310,8 @@ export function OrdersDetailSidePanel({
       // PS-499 AC-1: the detail panel and the Orders table now take the SAME inputs and
       // therefore cannot disagree. They previously shared a helper but fed it different
       // fallbackAmount expressions, which is how two surfaces over one contract drift.
+      markedAmount: sidePanelBackendMoney.markedAmount,
+      customerRateSource: sidePanelBackendMoney.customerRateSource,
       customerAmountState: sidePanelBackendMoney.customerAmountState,
     })
     : null

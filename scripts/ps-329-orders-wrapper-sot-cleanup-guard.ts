@@ -86,8 +86,16 @@ check(
   'Awaiting Best Rate amount renders backend money only, with no shipping.bestRateAmount fallback',
   // Repointed (guard rot): row helpers now read status through the effective-status
   // owner (getOrderEffectiveStatus, PS-387) instead of raw order.orderStatus.
-  /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
-    /money\?\.selectedRateCost \?\? money\?\.baseAmount \?\? money\?\.cShippingRateAmount \?\? money\?\.markedAmount \?\? null/.test(bestRateBaseCostBlock) &&
+  // PS-499 re-anchored. This asserted the four-rung expression verbatim, including
+  // `?? cShippingRateAmount ?? markedAmount` — CUSTOMER money inside a COST getter, which
+  // returned a customer price under a cost meaning. It also required the awaiting-status
+  // branch, whose two arms were byte-identical and therefore decided nothing.
+  //
+  // The rule in this check's name is backend-money-only with no shipping.bestRateAmount
+  // fallback. The negative clause — the actual protection — is unchanged; the positive side
+  // now asserts the backend tuple read and the two COST rungs that legitimately remain.
+  /getBackendRowMoney\(order\)/.test(bestRateBaseCostBlock) &&
+    /money\?\.selectedRateCost \?\? money\?\.baseAmount \?\? null/.test(bestRateBaseCostBlock) &&
     !/getShippingNumber\(order, 'bestRateAmount'\)/.test(bestRateBaseCostBlock),
   bestRateBaseCostBlock,
 );

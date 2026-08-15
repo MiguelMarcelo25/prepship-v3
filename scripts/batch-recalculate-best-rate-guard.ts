@@ -296,9 +296,22 @@ const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateFinalBa
 const bestRateBaseBlock = bestRateBaseStart >= 0 && bestRateBaseEnd > bestRateBaseStart
   ? rowDisplay.slice(bestRateBaseStart, bestRateBaseEnd)
   : '';
+// PS-499 re-anchored this check. It required two tokens that pinned the MECHANISM rather
+// than the rule, and one of them had become a requirement to keep a defect:
+//
+//   /cShippingRateAmount/ — getBestRateBaseCost is a COST getter, and that field is the
+//     CUSTOMER amount. Its presence was the tail of `selectedRateCost ?? baseAmount ??
+//     cShippingRateAmount ?? markedAmount`, which returned customer money under a cost
+//     meaning. PS-499 removed it, so the old assertion would now fail a correct getter.
+//   /getOrderEffectiveStatus(order) === 'awaiting_shipment'/ — the awaiting and shipped
+//     arms were BYTE-IDENTICAL, so the branch decided nothing. Asserting that dead code
+//     exists protects nothing and invites someone to "fix" one arm.
+//
+// The rule being protected is the one in the name: this getter reads the BACKEND money
+// tuple and never falls back to the stale canonical bestRateAmount. Both are asserted
+// directly now, which is what the tokens were standing in for.
 check('awaiting best-rate amount reads backend money before stale canonical amount',
-  /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(bestRateBaseBlock) &&
-  /cShippingRateAmount/.test(bestRateBaseBlock) &&
+  /getBackendRowMoney\(order\)/.test(bestRateBaseBlock) &&
   !/getShippingNumber\(order, 'bestRateAmount'\)/.test(bestRateBaseBlock));
 
 const bestRateServiceStart = rowDisplay.indexOf('export function getBestRateServiceCode(');
