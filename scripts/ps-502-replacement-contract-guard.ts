@@ -59,6 +59,8 @@ const read = (path: string) => {
 
 const replacementsSql = read('drizzle/0096_ps502_replacements.sql');
 const billingSql = read('drizzle/0097_ps502_replacement_billing.sql');
+// Hermes ruling C: replacement financial attribution became RESTRICT in a forward migration.
+const restrictSql = read('drizzle/0098_ps502_replacement_financial_restrict.sql');
 
 // ── AC-2 — transitions enforced, illegal ones coded 409 ──────────────────────
 console.log('\nlifecycle (executed, not grepped)');
@@ -552,14 +554,27 @@ console.log('\ndrizzle schema mirrors the migration');
     return found;
   };
 
-  /** Column names in one `create table` body in the migration. */
+  /**
+   * Column names for one table across EVERY migration that touches it — the `create table`
+   * body plus any later `add column`. Reading only the create would report a column added by
+   * a follow-up migration as "declared in Drizzle but absent from the database", which is the
+   * exact false alarm that teaches people to weaken this check.
+   */
   const migrationColumns = (table: string): Set<string> => {
-    const start = replacementsSql.indexOf(`create table if not exists ${table} (`);
-    if (start === -1) return new Set();
-    const body = replacementsSql.slice(start, replacementsSql.indexOf('\n);', start));
     const found = new Set<string>();
-    for (const m of body.matchAll(/^\s{2}(\w+)\s+(serial|integer|text|boolean|timestamptz)\b/gm)) {
-      if (m[1] !== 'constraint') found.add(m[1]!);
+    const start = replacementsSql.indexOf(`create table if not exists ${table} (`);
+    if (start !== -1) {
+      const body = replacementsSql.slice(start, replacementsSql.indexOf('\n);', start));
+      for (const m of body.matchAll(/^\s{2}(\w+)\s+(serial|integer|text|boolean|timestamptz)\b/gm)) {
+        if (m[1] !== 'constraint') found.add(m[1]!);
+      }
+    }
+    for (const sql of [replacementsSql, billingSql, restrictSql]) {
+      const pattern = new RegExp(
+        `alter table ${table}\\s+add column(?: if not exists)? (\\w+)`,
+        'gi',
+      );
+      for (const m of sql.matchAll(pattern)) found.add(m[1]!);
     }
     return found;
   };
@@ -591,9 +606,21 @@ console.log('\ndrizzle schema mirrors the migration');
   check('billing_credit_notes.replacement_id is mapped',
     (billingSchema.match(/replacementId: integer\('replacement_id'\)/g) || []).length === 2,
     'correction C needs it on credit notes too, not only on line items');
-  check('both mirror 0097\'s ON DELETE SET NULL',
-    (billingSchema.match(/replacementId: integer\('replacement_id'\)\.references\(\(\) => replacements\.id, \{\s*onDelete: 'set null',\s*\}\)/g) || []).length === 2,
-    'the schema must match the deployed migration, whatever the ruling on SET NULL vs RESTRICT');
+  // Hermes ruling C. A billing line and a credit note are financial history: deleting the
+  // subject must not silently null its attribution, because SET NULL turns durable evidence
+  // into "not yet attributed" — factually wrong, since the row WAS attributed.
+  check('both replacement financial FKs are ON DELETE RESTRICT',
+    (billingSchema.match(/replacementId: integer\('replacement_id'\)\.references\(\(\) => replacements\.id, \{\s*onDelete: 'restrict',\s*\}\)/g) || []).length === 2,
+    'ruling C reversed 0097; the schema must match 0098');
+
+  check('0098 makes both FKs RESTRICT in the database, not just in Drizzle',
+    /billing_line_items[\s\S]{0,200}references replacements\(id\) on delete restrict/.test(restrictSql)
+    && /billing_credit_notes[\s\S]{0,200}references replacements\(id\) on delete restrict/.test(restrictSql),
+    'editing Drizzle ahead of the database is the failure 0097 already caused once');
+
+  check('0098 gives activity events somewhere to keep a written reason',
+    /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
+    'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
 // ── The create command — the ORDER of its steps is the contract ──────────────
@@ -635,8 +662,12 @@ console.log('\ncreate command (locked path)');
     idempotentReadAt !== -1 && lockAt < idempotentReadAt && idempotentReadAt < insertAt,
     'outside it, a retry inserts and only the UNIQUE index stops it — a safe retry becomes a 500');
 
-  check('a repeated key returns the EXISTING replacement rather than erroring',
-    /if \(existing\) return \{ replacement: existing, created: false \}/.test(code));
+  // Anchored on the PROPERTY, not on the expression shape. The first version pinned
+  // `if (existing) return {...}` as one line and broke the moment idempotency became
+  // payload-bound — a guard that trips on a legitimate refactor teaches people to delete it.
+  check('a matching repeated key returns the EXISTING replacement rather than erroring',
+    /return \{ replacement: existing, created: false \}/.test(code)
+    && at('return { replacement: existing, created: false }') < at('.insert(replacements)'));
 
   check('the allowance is evaluated BEFORE the insert',
     allowanceAt !== -1 && allowanceAt < insertAt);
@@ -662,6 +693,41 @@ console.log('\ncreate command (locked path)');
     check(`create writes NO ${forbidden} row`,
       !new RegExp(`\\.insert\\(${forbidden}\\)|update\\(${forbidden}\\)`).test(code));
   }
+  // ── Hermes correctness findings 1, 2, 3, 5, 6 ──────────────────────────────
+  check('a fractional or non-positive quantity is a coded 400, not a database CHECK error',
+    /Number\.isInteger\(item\.quantity\) \|\| item\.quantity <= 0/.test(code)
+    && at('REPLACEMENT_ITEM_INVALID') < at('db.transaction('),
+    'truncating turned 1.9 into 1 — one unit ships and it reads as a picking error');
+
+  check('duplicate line coordinates are rejected before the transaction',
+    /seenIndexes\.has\(item\.orderLineIndex\)/.test(code)
+    && at('seenIndexes') < at('db.transaction('),
+    'two entries for one line were each allowed, then collided on the unique index');
+
+  check('the frozen reason vocabulary is enforced server-side',
+    /REPLACEMENT_REASONS = \['damaged', 'wrong_item', 'lost_in_transit', 'other'\]/.test(createSource)
+    // The PREDICATE, not merely the constant and the error code. Asserting that the
+    // vocabulary is declared says nothing about whether anything consults it — the first
+    // version of this check passed against `if (false)`.
+    && /!REPLACEMENT_REASONS\.includes\(input\.reason/.test(code)
+    && at('REPLACEMENT_REASON_INVALID') < at('db.transaction('),
+    'a UI is not the only caller');
+
+  check('idempotency is PAYLOAD-BOUND, not key-only',
+    /existing\.orderId !== input\.orderId/.test(code)
+    && /canonicalItemSignature\(existingItems\) !== canonicalItemSignature\(input\.items\)/.test(code),
+    'a key reused against a different order would hand back the WRONG replacement as success');
+
+  check('a reordered item array is the SAME request, not a conflict',
+    /\.sort\(\(a, b\) => a\[0\] - b\[0\]/.test(createSource));
+
+  check('the billability reason is RECORDED, not just validated',
+    /eventType: 'replacement_billability_set'/.test(code) && /detail: input\.billabilityReason/.test(code),
+    'decision 7 requires a reason and an event; recording that money was charged and not why is worse');
+
+  check('an audited override records its reason on the event',
+    /detail: usedOverride \? \(input\.override\?\.reason \?\? null\) : null/.test(code));
+
   check('create purchases no label',
     !/createLabelV2|purchaseLabel|buyLabel/.test(code),
     'the card requires a replacement-specific command over lower-level primitives');
@@ -694,6 +760,20 @@ console.log('\nshipment insertion (locked path)');
   check('no shipment is inserted on the drift path',
     at('.insert(shipments)') > at('if (outcome.drifted)'),
     'the card requires no label/inventory/package/billing effect on a mismatch');
+
+  // Hermes ruling A, the two details required before label purchase stacks on this.
+  check('the drift review is guarded by expected STATUS as well as version',
+    /eq\(replacements\.status, replacement\.status\),\s*\n\s*eq\(replacements\.stateVersion, replacement\.stateVersion\),/.test(code),
+    'version alone lets a concurrent transition slip past the predicate');
+
+  check('a lost drift race appends NO event',
+    /if \(reviewed\.length === 0\)/.test(code)
+    && at('if (reviewed.length === 0)') < at("eventType: 'replacement_source_line_drift'"),
+    'a false entry in an append-only audit log is worse than a missing one, because it is trusted');
+
+  check('the already-attached fast path is documented as skipping re-resolution',
+    /THIS PATH SKIPS DRIFT RE-RESOLUTION/.test(shipSource),
+    'the label command must re-resolve itself rather than assume this one did');
 
   check('the link is guarded by status AND state_version',
     /eq\(replacements\.status, before\.status\)/.test(code)

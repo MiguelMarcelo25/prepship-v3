@@ -75,14 +75,12 @@ export const billingLineItems = pgTable(
     // PS-502 (migration 0097). Relational replacement attribution, following the same
     // reasoning as returnId: NULL means "not yet attributed", NOT "not a replacement line".
     //
-    // ⚠ ON DELETE SET NULL, which is what 0097 and the frozen card specify — and which is
-    // the behaviour PS-488 recovery deliberately moved AWAY from for returnId two lines
-    // above. Mirrored here because the migration is deployed and a Drizzle definition that
-    // disagrees with the database is worse than either choice. The inconsistency is real and
-    // is raised on the card rather than silently "corrected" here: changing it needs a new
-    // migration and a ruling, not a schema edit.
+    // ON DELETE RESTRICT as of migration 0098 (Hermes ruling C). 0097 shipped SET NULL per
+    // the frozen card; the ruling reversed it to match returnId two lines above, for the same
+    // reason — SET NULL turns durable evidence into "not yet attributed", which is factually
+    // wrong: the row WAS attributed and the attribution was destroyed.
     replacementId: integer('replacement_id').references(() => replacements.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
     shipDate: timestamp({ withTimezone: true }),
     // PS-434: shipDate remains the actual activity calendar day. This nullable
@@ -228,7 +226,7 @@ export const billingCreditNotes = pgTable(
     // idempotency key is not a substitute — parsing identity out of `reason` is the mistake
     // PS-488 rejected.
     replacementId: integer('replacement_id').references(() => replacements.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
     postingVersion: text('posting_version').default('legacy_credit_v1').notNull(),
     effectiveDate: timestamp('effective_date', { withTimezone: true }),

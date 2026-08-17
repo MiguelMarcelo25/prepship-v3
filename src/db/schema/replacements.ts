@@ -161,6 +161,11 @@ export const replacementActivityEvents = pgTable(
     // collides here instead of appending a duplicate event.
     idempotencyKey: text('idempotency_key').notNull(),
 
+    // Migration 0098. Decision 7 requires a WRITTEN REASON for a billability change and an
+    // activity event; without somewhere to keep it the command validated the reason and then
+    // discarded it, which is worse than not asking for one. Follows return_activity_events.
+    detail: text(),
+
     eventAt: timestamp('event_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

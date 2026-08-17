@@ -53,11 +53,18 @@ const REPLACEMENT_ORDER_LOCK_CLASS = 36423;
 /** The only order status a replacement may be created against. */
 const REPLACEABLE_ORDER_STATUS = 'shipped';
 
+/** The frozen vocabulary. Enforced here, not left to a UI that may not be the only caller. */
+export const REPLACEMENT_REASONS = ['damaged', 'wrong_item', 'lost_in_transit', 'other'] as const;
+export type ReplacementReason = (typeof REPLACEMENT_REASONS)[number];
+
 export type ReplacementCreateErrorCode =
   | 'REPLACEMENT_ORDER_NOT_FOUND'
   | 'REPLACEMENT_ORDER_NOT_SHIPPED'
   | 'REPLACEMENT_ORDER_CANCELLED'
   | 'REPLACEMENT_NO_ITEMS'
+  | 'REPLACEMENT_REASON_INVALID'
+  | 'REPLACEMENT_ITEM_INVALID'
+  | 'REPLACEMENT_IDEMPOTENCY_MISMATCH'
   | 'REPLACEMENT_ALLOWANCE_EXCEEDED'
   | 'REPLACEMENT_SOURCE_LINE_CHANGED'
   | 'REPLACEMENT_BILLABLE_FORBIDDEN_FOR_OPERATOR_LIABILITY'
@@ -111,15 +118,80 @@ export type CreateReplacementResult = {
   created: boolean;
 };
 
+/**
+ * Order-independent signature of a requested item set.
+ *
+ * Sorted, so the same request expressed in a different order compares equal — a retry that
+ * reorders its array is the same request and must not read as a conflict.
+ */
+function canonicalItemSignature(
+  items: readonly { orderLineIndex: number; quantity: number }[],
+): string {
+  return JSON.stringify(
+    items
+      .map((item) => [item.orderLineIndex, item.quantity] as const)
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]),
+  );
+}
+
 export async function createReplacement(
   input: CreateReplacementInput,
 ): Promise<CreateReplacementResult> {
+  // ── Validation, BEFORE the transaction ────────────────────────────────────
+  //
+  // Each of these previously fell through to a database CHECK or a unique-constraint
+  // violation, which reaches the caller as a 500 carrying a Postgres message. A rejected
+  // request should be a coded 400 that names what was wrong.
   if (!input.items || input.items.length === 0) {
     throw new ReplacementCreateError(
       'REPLACEMENT_NO_ITEMS',
       'a replacement must name at least one line of the original order',
       400,
     );
+  }
+
+  if (!REPLACEMENT_REASONS.includes(input.reason as ReplacementReason)) {
+    // The frozen vocabulary, enforced server-side rather than trusted to a future UI.
+    throw new ReplacementCreateError(
+      'REPLACEMENT_REASON_INVALID',
+      `reason must be one of ${REPLACEMENT_REASONS.join(', ')}; received ${JSON.stringify(input.reason)}`,
+      400,
+    );
+  }
+
+  for (const item of input.items) {
+    if (!Number.isInteger(item.orderLineIndex) || item.orderLineIndex < 0) {
+      throw new ReplacementCreateError(
+        'REPLACEMENT_ITEM_INVALID',
+        `orderLineIndex must be a non-negative integer; received ${JSON.stringify(item.orderLineIndex)}`,
+        400,
+      );
+    }
+    // Truncating silently turned 1.9 into 1 — the operator asks for two units and one ships,
+    // which looks like a picking error rather than a rejected request.
+    if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
+      throw new ReplacementCreateError(
+        'REPLACEMENT_ITEM_INVALID',
+        `quantity must be a positive integer; received ${JSON.stringify(item.quantity)} ` +
+          `for line ${item.orderLineIndex}`,
+        400,
+      );
+    }
+  }
+
+  const seenIndexes = new Set<number>();
+  for (const item of input.items) {
+    if (seenIndexes.has(item.orderLineIndex)) {
+      // Two entries for one coordinate were each evaluated against the allowance separately
+      // and then collided on replacement_items_line_unq. Combining them silently would also
+      // be wrong — the caller may have meant two different lines.
+      throw new ReplacementCreateError(
+        'REPLACEMENT_ITEM_INVALID',
+        `line ${item.orderLineIndex} appears more than once; combine the quantities instead`,
+        400,
+      );
+    }
+    seenIndexes.add(item.orderLineIndex);
   }
 
   return db.transaction(async (tx) => {
@@ -136,7 +208,38 @@ export async function createReplacement(
       .from(replacements)
       .where(eq(replacements.requestIdempotencyKey, input.requestIdempotencyKey))
       .limit(1);
-    if (existing) return { replacement: existing, created: false };
+    if (existing) {
+      // PAYLOAD-BOUND. Returning any replacement that merely shares the key would hand back
+      // the WRONG replacement when a caller reuses a key against a different order or item
+      // set — and the caller would believe its request had succeeded. A key identifies one
+      // request, not one string.
+      if (existing.orderId !== input.orderId) {
+        throw new ReplacementCreateError(
+          'REPLACEMENT_IDEMPOTENCY_MISMATCH',
+          `idempotency key already belongs to replacement ${existing.reference} on order ` +
+            `${existing.orderId}, not order ${input.orderId}`,
+          409,
+          { existingReplacementId: existing.id },
+        );
+      }
+      const existingItems = await tx
+        .select({
+          orderLineIndex: replacementItems.orderLineIndex,
+          quantity: replacementItems.quantity,
+        })
+        .from(replacementItems)
+        .where(eq(replacementItems.replacementId, existing.id));
+      if (canonicalItemSignature(existingItems) !== canonicalItemSignature(input.items)) {
+        throw new ReplacementCreateError(
+          'REPLACEMENT_IDEMPOTENCY_MISMATCH',
+          `idempotency key already belongs to replacement ${existing.reference}, whose items ` +
+            'differ from this request',
+          409,
+          { existingReplacementId: existing.id },
+        );
+      }
+      return { replacement: existing, created: false };
+    }
 
     const [order] = await tx
       .select({
@@ -330,8 +433,27 @@ export async function createReplacement(
       toStatus: 'requested',
       actorType: input.actor.type,
       actorEmail: input.actor.email,
+      // The override reason belongs on the record, not only in the refusal it bypassed.
+      detail: usedOverride ? (input.override?.reason ?? null) : null,
       idempotencyKey: `replacement:create:${input.requestIdempotencyKey}`,
     });
+
+    // Decision 7 requires a written reason AND an activity event whenever billability is
+    // set. Validating the reason and then discarding it — which is what happened before
+    // migration 0098 gave this table a `detail` column — is worse than not asking for one:
+    // the audit trail records that money was charged and not why.
+    if (billability.billable) {
+      await tx.insert(replacementActivityEvents).values({
+        replacementId: created.id,
+        eventType: 'replacement_billability_set',
+        fromStatus: 'requested',
+        toStatus: 'requested',
+        actorType: input.actor.type,
+        actorEmail: input.actor.email,
+        detail: input.billabilityReason ?? null,
+        idempotencyKey: `replacement:billability:${input.requestIdempotencyKey}`,
+      });
+    }
 
     return { replacement: created, created: true };
   });

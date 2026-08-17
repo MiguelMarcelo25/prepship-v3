@@ -133,6 +133,11 @@ async function resolveDriftAndMaybeReview(
     }
 
     // Already attached: idempotent, and nothing below should re-run.
+    //
+    // ⚠ THIS PATH SKIPS DRIFT RE-RESOLUTION. That is correct here — the shipment already
+    // exists and nothing further is written — but it means the LABEL PURCHASE command must
+    // re-resolve drift itself immediately before buying, and must not assume this command
+    // checked. A line can move between attaching a shipment and purchasing against it.
     if (replacement.replacementShipmentId != null) {
       return { drifted: false, replacement, existingShipmentId: replacement.replacementShipmentId };
     }
@@ -178,7 +183,13 @@ async function resolveDriftAndMaybeReview(
       if (verdict.matches) continue;
 
       // Persisted, then reported. Never silently retargeted.
-      await tx
+      //
+      // The predicate carries the EXPECTED STATUS as well as the version, and the result is
+      // checked. Without both, a concurrent transition could move the replacement while this
+      // update matched nothing, and the drift event below would then be appended describing a
+      // transition that never happened — a false entry in an append-only audit log is worse
+      // than a missing one, because it is trusted.
+      const reviewed = await tx
         .update(replacements)
         .set({
           status: 'review',
@@ -189,8 +200,20 @@ async function resolveDriftAndMaybeReview(
         })
         .where(and(
           eq(replacements.id, replacement.id),
+          eq(replacements.status, replacement.status),
           eq(replacements.stateVersion, replacement.stateVersion),
-        ));
+        ))
+        .returning();
+
+      if (reviewed.length === 0) {
+        throw new ReplacementShipmentError(
+          'REPLACEMENT_STATE_CONFLICT',
+          `replacement ${replacement.reference} moved while drift was being recorded; ` +
+            'no review was written and no event was appended.',
+          409,
+          { expectedStatus: replacement.status, expectedStateVersion: replacement.stateVersion },
+        );
+      }
 
       await tx.insert(replacementActivityEvents).values({
         replacementId: replacement.id,
