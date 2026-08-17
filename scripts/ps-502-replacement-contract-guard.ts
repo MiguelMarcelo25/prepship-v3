@@ -25,6 +25,23 @@ import {
   replacementTransitionsFrom,
   type ReplacementStatus,
 } from '../src/services/replacement-state-machine';
+import {
+  buildReplacementSourceLineFingerprint,
+  currentSourceLineFingerprint,
+  findFrozenSkuElsewhere,
+  REPLACEMENT_FINGERPRINT_VERSION,
+} from '../src/services/replacement-source-line-fingerprint';
+import {
+  formatReplacementReference,
+  nextReplacementReference,
+  parseReplacementReference,
+} from '../src/services/replacement-reference';
+import {
+  calculateReplacementAllowance,
+  evaluateReplacementAllowance,
+  type AllowanceRow,
+} from '../src/services/replacement-allowance';
+import { evaluateBillabilityChange } from '../src/services/replacement-billability';
 
 let failures = 0;
 function check(name: string, condition: boolean, detail?: string): void {
@@ -203,6 +220,321 @@ console.log('\nlockdown scope');
     !/\b(insert\s+into|update|delete\s+from)\s+shipments\b/i.test(migrations));
   check('the migrations never write order or billing ROWS either (schema only)',
     !/\b(insert\s+into|update|delete\s+from)\s+(orders|billing_line_items|billing_credit_notes)\b/i.test(migrations));
+}
+
+// ── AC-15 — the line-drift matrix, executed ──────────────────────────────────
+//
+// Every case runs through the REAL builder and the REAL comparator. The card enumerates
+// five, and requires each to "either resolve correctly or move to review with
+// REPLACEMENT_SOURCE_LINE_CHANGED, and never silently retarget".
+//
+// Lines are modelled as order_items rows AFTER the sync trigger, which is what makes case 3
+// meaningful: the trigger recomputes `line_index` as (ordinality - 1) over the raw array, so
+// removing an EARLIER element renumbers everything after it.
+console.log('\nline-drift matrix (AC-15)');
+
+type Line = { orderId: number; lineIndex: number; sku: string; name?: string | null; quantity: number | string };
+const ORDER = 4321;
+const original: Line[] = [
+  { orderId: ORDER, lineIndex: 0, sku: 'SKU-A', name: 'Widget A', quantity: 1 },
+  { orderId: ORDER, lineIndex: 1, sku: 'SKU-B', name: 'Widget B', quantity: 2 },
+  { orderId: ORDER, lineIndex: 2, sku: 'SKU-C', name: 'Widget C', quantity: 3 },
+];
+// Frozen at creation against the middle line.
+const frozenCoord = { orderId: ORDER, orderLineIndex: 1 };
+const frozen = buildReplacementSourceLineFingerprint({
+  orderId: ORDER, orderLineIndex: 1, sku: 'SKU-B', name: 'Widget B', originalOrderedQuantity: 2,
+});
+
+const drifted = (lines: Line[]) =>
+  evaluateReplacementSourceLineDrift({
+    frozenFingerprint: frozen,
+    currentFingerprint: currentSourceLineFingerprint(lines, frozenCoord),
+  });
+
+check('unchanged order resolves', drifted(original).matches === true);
+
+check('a LATER line removed still resolves (the card calls this safe)',
+  drifted(original.slice(0, 2)).matches === true);
+
+{
+  // The trigger renumbers, so dropping index 0 moves SKU-B to 0 and SKU-C to 1.
+  const earlierRemoved: Line[] = [
+    { orderId: ORDER, lineIndex: 0, sku: 'SKU-B', name: 'Widget B', quantity: 2 },
+    { orderId: ORDER, lineIndex: 1, sku: 'SKU-C', name: 'Widget C', quantity: 3 },
+  ];
+  const verdict = drifted(earlierRemoved);
+  check('an EARLIER line removed is DRIFT, not a silent retarget onto SKU-C',
+    verdict.matches === false && verdict.code === REPLACEMENT_ERROR_CODES.SOURCE_LINE_CHANGED);
+}
+
+{
+  const referencedRemoved: Line[] = [
+    { orderId: ORDER, lineIndex: 0, sku: 'SKU-A', name: 'Widget A', quantity: 1 },
+    { orderId: ORDER, lineIndex: 1, sku: 'SKU-C', name: 'Widget C', quantity: 3 },
+  ];
+  check('the REFERENCED line removed is DRIFT', drifted(referencedRemoved).matches === false);
+}
+
+{
+  const reordered: Line[] = [
+    { orderId: ORDER, lineIndex: 0, sku: 'SKU-C', name: 'Widget C', quantity: 3 },
+    { orderId: ORDER, lineIndex: 1, sku: 'SKU-A', name: 'Widget A', quantity: 1 },
+    { orderId: ORDER, lineIndex: 2, sku: 'SKU-B', name: 'Widget B', quantity: 2 },
+  ];
+  check('a REORDER is DRIFT', drifted(reordered).matches === false);
+}
+
+{
+  // 🔴 The card's worst case: duplicate-SKU lines reordered, where "a SKU check falsely
+  // passes on the wrong line". Same SKU, same name, DIFFERENT quantities, positions swapped.
+  const dupFrozen = buildReplacementSourceLineFingerprint({
+    orderId: ORDER, orderLineIndex: 1, sku: 'SKU-A', name: 'Widget A', originalOrderedQuantity: 5,
+  });
+  const swapped: Line[] = [
+    { orderId: ORDER, lineIndex: 0, sku: 'SKU-A', name: 'Widget A', quantity: 5 },
+    { orderId: ORDER, lineIndex: 1, sku: 'SKU-A', name: 'Widget A', quantity: 1 },
+  ];
+  const current = currentSourceLineFingerprint(swapped, frozenCoord);
+  check('DUPLICATE-SKU REORDER is caught (the card\'s worst case)',
+    evaluateReplacementSourceLineDrift({ frozenFingerprint: dupFrozen, currentFingerprint: current }).matches === false);
+  // And the reason it is caught: a SKU-only comparison would have passed here.
+  check('a SKU-only check WOULD have passed — which is why quantity is in the tuple',
+    swapped[1]!.sku === 'SKU-A');
+}
+
+check('a shipped replacement\'s frozen fingerprint is a pure function of frozen facts',
+  buildReplacementSourceLineFingerprint({
+    orderId: ORDER, orderLineIndex: 1, sku: 'SKU-B', name: 'Widget B', originalOrderedQuantity: 2,
+  }) === frozen);
+
+// ── Fingerprint properties ───────────────────────────────────────────────────
+console.log('\nfingerprint');
+
+{
+  const base = { orderId: 1, orderLineIndex: 0, name: 'n', originalOrderedQuantity: 1 };
+  check('SKU case and surrounding space are not drift',
+    buildReplacementSourceLineFingerprint({ ...base, sku: ' sku-a ' })
+    === buildReplacementSourceLineFingerprint({ ...base, sku: 'SKU-A' }));
+
+  check('numeric quantity representations are one value ("2" = 2 = "2.000")',
+    buildReplacementSourceLineFingerprint({ ...base, sku: 's', originalOrderedQuantity: '2.000' })
+    === buildReplacementSourceLineFingerprint({ ...base, sku: 's', originalOrderedQuantity: 2 })
+    && buildReplacementSourceLineFingerprint({ ...base, sku: 's', originalOrderedQuantity: '2.0' })
+    === buildReplacementSourceLineFingerprint({ ...base, sku: 's', originalOrderedQuantity: 2 }));
+
+  check('a renamed line IS drift (names are editable; review is the intended cost)',
+    buildReplacementSourceLineFingerprint({ ...base, sku: 's', name: 'before' })
+    !== buildReplacementSourceLineFingerprint({ ...base, sku: 's', name: 'after' }));
+
+  // Two genuinely different lines that a delimiter-joined format would render identically:
+  // ['a','b|c','d'] and ['a','b','c|d'] both join to "a|b|c|d". A collision in a drift check
+  // reads as "unchanged", which is the silent-retarget outcome. JSON escaping separates them.
+  check('a separator inside a field cannot forge another line\'s fingerprint',
+    buildReplacementSourceLineFingerprint({ ...base, sku: 'a', sourceItemId: 'b|c', name: 'd' })
+    !== buildReplacementSourceLineFingerprint({ ...base, sku: 'a', sourceItemId: 'b', name: 'c|d' }));
+
+  check('a durable source item id participates when present',
+    buildReplacementSourceLineFingerprint({ ...base, sku: 's', sourceItemId: 'li_1' })
+    !== buildReplacementSourceLineFingerprint({ ...base, sku: 's', sourceItemId: 'li_2' }));
+
+  check('the format is versioned, so a layout change is deliberate not silent',
+    buildReplacementSourceLineFingerprint({ ...base, sku: 's' }).includes(REPLACEMENT_FINGERPRINT_VERSION));
+}
+
+{
+  // The card requires review to show "whether the frozen SKU appears elsewhere".
+  const lines = [
+    { lineIndex: 0, sku: 'SKU-A' }, { lineIndex: 1, sku: 'SKU-B' }, { lineIndex: 2, sku: 'sku-a' },
+  ];
+  check('review can tell "this line moved" from "this product is gone"',
+    findFrozenSkuElsewhere(lines, { orderLineIndex: 1, sku: 'SKU-A' }).join(',') === '0,2');
+  check('a frozen SKU with no other home reports nothing',
+    findFrozenSkuElsewhere(lines, { orderLineIndex: 1, sku: 'SKU-Z' }).length === 0);
+}
+
+// ── AC-12 — reference allocation ─────────────────────────────────────────────
+console.log('\nreference allocation (AC-12)');
+
+check('the first replacement is the BARE form, never -1',
+  formatReplacementReference('1321', 1) === '1321-REPLACE');
+check('the second is -2', formatReplacementReference('1321', 2) === '1321-REPLACE-2');
+
+check('references round-trip', (() => {
+  const parsed = parseReplacementReference('1321-REPLACE-2');
+  return parsed?.orderNumber === '1321' && parsed.sequence === 2;
+})());
+
+check('the bare form parses as sequence 1',
+  parseReplacementReference('1321-REPLACE')?.sequence === 1);
+
+check('order numbers containing hyphens survive the round trip', (() => {
+  const parsed = parseReplacementReference('1321-A-REPLACE-3');
+  return parsed?.orderNumber === '1321-A' && parsed.sequence === 3;
+})());
+
+{
+  // Non-canonical spellings this module would never emit. Accepting one lets two rows claim
+  // the same sequence while the UNIQUE index sees two distinct strings.
+  for (const bad of ['1321-REPLACE-1', '1321-REPLACE-0', '1321-REPLACE-02', '-REPLACE', '1321', '1321-RETURN']) {
+    check(`"${bad}" is rejected as a reference`, parseReplacementReference(bad) === null);
+  }
+}
+
+check('allocation starts at the bare form', nextReplacementReference('1321', []) === '1321-REPLACE');
+check('allocation increments', nextReplacementReference('1321', ['1321-REPLACE']) === '1321-REPLACE-2');
+check('allocation increments past -2',
+  nextReplacementReference('1321', ['1321-REPLACE', '1321-REPLACE-2']) === '1321-REPLACE-3');
+
+check('a GAP is never reused (a cancelled replacement keeps its reference)',
+  nextReplacementReference('1321', ['1321-REPLACE', '1321-REPLACE-3']) === '1321-REPLACE-4');
+
+check('another order\'s references do not advance this order',
+  nextReplacementReference('1321', ['9999-REPLACE', '9999-REPLACE-7']) === '1321-REPLACE');
+
+{
+  let threw = false;
+  try { formatReplacementReference('1321', 0); } catch { threw = true; }
+  check('a non-positive sequence is refused rather than emitted', threw);
+  let blankThrew = false;
+  try { nextReplacementReference('   ', []); } catch { blankThrew = true; }
+  check('a blank order number is refused', blankThrew);
+}
+
+// ── Decision 5 — the cumulative cap counts SHIPPED UNITS only ────────────────
+//
+// Frozen by DJ's pinned comment, which supersedes the card description. The rule that
+// matters: a cancelled or never-shipped replacement must not permanently reduce what a
+// customer can be re-sent, because nothing left the warehouse.
+console.log('\ncumulative cap (decision 5)');
+
+const FP = 'frozen-line-1';
+const row = (status: AllowanceRow['status'], quantity: number, shippedAt: Date | null = null): AllowanceRow =>
+  ({ sourceLineFingerprint: FP, quantity, status, shippedAt });
+const remainingOf = (rows: AllowanceRow[], original = 3) =>
+  calculateReplacementAllowance({ originalOrderedQuantity: original, sourceLineFingerprint: FP, rows }).remaining;
+
+check('DJ\'s new AC: ship 1 of 3, then 2 remain', remainingOf([row('shipped', 1)]) === 2);
+check('completed consumes too', remainingOf([row('completed', 1)]) === 2);
+
+{
+  // Every status the decision explicitly excludes.
+  for (const status of ['requested', 'approved', 'label_created', 'label_failed', 'cancelled', 'rejected'] as const) {
+    check(`${status} does NOT consume allowance`, remainingOf([row(status, 3)]) === 3);
+  }
+}
+
+check('DJ\'s new AC: cancelling a replacement leaves the allowance unchanged',
+  remainingOf([row('shipped', 1), row('cancelled', 2)]) === 2);
+
+check('a PRE-ship review consumes nothing', remainingOf([row('review', 3)]) === 3);
+check('a POST-ship review DOES consume (it shipped, then drifted)',
+  remainingOf([row('review', 1, new Date())]) === 2);
+
+check('the cap aggregates on the FROZEN coordinate, not on whatever sits there now',
+  calculateReplacementAllowance({
+    originalOrderedQuantity: 3,
+    sourceLineFingerprint: FP,
+    rows: [row('shipped', 1), { sourceLineFingerprint: 'a-different-line', quantity: 3, status: 'shipped', shippedAt: new Date() }],
+  }).remaining === 2);
+
+check('allowance never goes negative (an override that already over-shipped leaves 0)',
+  remainingOf([row('shipped', 9)]) === 0);
+
+{
+  const verdict = evaluateReplacementAllowance({
+    originalOrderedQuantity: 3, sourceLineFingerprint: FP, rows: [row('shipped', 3)], requestedQuantity: 1,
+  });
+  check('exceeding the cap is refused with a code',
+    verdict.allowed === false && verdict.code === 'REPLACEMENT_ALLOWANCE_EXCEEDED');
+}
+
+{
+  const base = { originalOrderedQuantity: 3, sourceLineFingerprint: FP, rows: [row('shipped', 3)], requestedQuantity: 1 };
+  check('an override requires a reason, not just the permission',
+    evaluateReplacementAllowance({ ...base, override: { hasOverridePermission: true, reason: '  ' } }).allowed === false);
+  check('an override requires the permission, not just a reason',
+    evaluateReplacementAllowance({ ...base, override: { hasOverridePermission: false, reason: 'lost in transit' } }).allowed === false);
+  const ok = evaluateReplacementAllowance({ ...base, override: { hasOverridePermission: true, reason: 'replacement_of_failed_replacement' } });
+  check('permission AND reason together allow the override, flagged as one',
+    ok.allowed === true && ok.viaOverride === true);
+}
+
+// ── Decision 7 — billability authority ───────────────────────────────────────
+console.log('\nbillability authority (decision 7)');
+
+const FINANCE = { permissions: ['replacements:billing', 'financials:write'] };
+const OPERATOR = { permissions: ['replacements:create'] };
+
+{
+  const v = evaluateBillabilityChange({
+    liabilityOwner: 'operator', status: 'approved', requestedBillable: true, actor: FINANCE, reason: 'client asked',
+  });
+  check('operator liability FORCES non-billable, even for finance',
+    v.allowed === false && v.code === 'REPLACEMENT_BILLABLE_FORBIDDEN_FOR_OPERATOR_LIABILITY');
+}
+
+check('operator liability + billable=false is a no-op, not a privileged action',
+  evaluateBillabilityChange({
+    liabilityOwner: 'operator', status: 'approved', requestedBillable: false, actor: OPERATOR,
+  }).allowed === true);
+
+{
+  const v = evaluateBillabilityChange({
+    liabilityOwner: 'client', status: 'approved', requestedBillable: true, actor: FINANCE, reason: 'client damaged it',
+  });
+  check('client liability + both permissions + a reason is allowed',
+    v.allowed === true && v.allowed === true && v.billable === true);
+}
+
+check('an operator cannot make a replacement billable',
+  evaluateBillabilityChange({
+    liabilityOwner: 'client', status: 'approved', requestedBillable: true, actor: OPERATOR, reason: 'because',
+  }).allowed === false);
+
+check('replacements:billing alone is not enough — financials:write is also required',
+  evaluateBillabilityChange({
+    liabilityOwner: 'client', status: 'approved', requestedBillable: true,
+    actor: { permissions: ['replacements:billing'] }, reason: 'because',
+  }).allowed === false);
+
+{
+  const v = evaluateBillabilityChange({
+    liabilityOwner: 'client', status: 'approved', requestedBillable: true, actor: FINANCE, reason: '   ',
+  });
+  check('a written reason is required',
+    v.allowed === false && v.code === 'REPLACEMENT_BILLABLE_REASON_REQUIRED');
+}
+
+{
+  // Postage is committed at label_created, so the charge basis cannot move after it.
+  const v = evaluateBillabilityChange({
+    liabilityOwner: 'client', status: 'label_created', requestedBillable: true, actor: FINANCE, reason: 'late change',
+  });
+  check('billability is FROZEN from label_created onward',
+    v.allowed === false && v.code === 'REPLACEMENT_BILLABLE_FROZEN');
+  check('it is still editable at requested and review',
+    evaluateBillabilityChange({ liabilityOwner: 'client', status: 'requested', requestedBillable: true, actor: FINANCE, reason: 'r' }).allowed === true
+    && evaluateBillabilityChange({ liabilityOwner: 'client', status: 'review', requestedBillable: true, actor: FINANCE, reason: 'r' }).allowed === true);
+}
+
+{
+  const v = evaluateBillabilityChange({
+    liabilityOwner: 'client', status: 'approved', requestedBillable: true, actor: FINANCE, reason: 'r', finalized: true,
+  });
+  check('after finalization it is never rewritten — it becomes an adjustment',
+    v.allowed === false && v.code === 'REPLACEMENT_BILLABLE_FINALIZED');
+}
+
+{
+  const sources = [
+    'src/services/replacement-source-line-fingerprint.ts',
+    'src/services/replacement-reference.ts',
+    'src/services/replacement-allowance.ts',
+    'src/services/replacement-billability.ts',
+  ].map(read).join('\n');
+  check('every new module is pure (no db, no network)',
+    !/from '\.\.\/db|drizzle-orm|node-fetch|axios/.test(sources));
 }
 
 console.log(`\n${failures === 0 ? 'PS-502 replacement contract guard passed.' : `PS-502 replacement contract guard FAILED with ${failures} failure(s).`}`);

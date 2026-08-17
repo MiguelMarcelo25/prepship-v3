@@ -876,6 +876,7 @@
     "test:ps-501-canonical-billing-total": "tsx scripts/ps-501-canonical-billing-total-guard.ts",
     "test:ps-499-order-rate-display-contract": "tsx scripts/ps-499-order-rate-display-contract-guard.ts",
     "test:ps-502-replacement-contract": "tsx scripts/ps-502-replacement-contract-guard.ts",
+    "test:ps-502-mutation-matrix": "tsx scripts/ps-502-mutation-matrix.ts",
     "test:ps-507-persistence": "node scripts/ps-507-qa-stack.mjs -- npx playwright test -c playwright.ps507.config.js",
     "qa:ps-507-stack": "node scripts/ps-507-qa-stack.mjs",
     "status:sync": "tsx scripts/status-sync.ts",
