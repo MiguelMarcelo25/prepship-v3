@@ -17,6 +17,7 @@ import { orders } from './orders.js';
 import { shipments } from './shipments.js';
 import { packages } from './packages.js';
 import { returns } from './returns.js';
+import { replacements } from './replacements.js';
 
 // Source-of-truth note: billing_config owns mutable billing rules. Generated
 // billing_line_items should be treated as frozen billable records.
@@ -71,6 +72,18 @@ export const billingLineItems = pgTable(
     // instead. A billing line is still financial history; the way to protect it is
     // to prevent the delete, not to quietly null the evidence.
     returnId: integer('return_id').references(() => returns.id, { onDelete: 'restrict' }),
+    // PS-502 (migration 0097). Relational replacement attribution, following the same
+    // reasoning as returnId: NULL means "not yet attributed", NOT "not a replacement line".
+    //
+    // ⚠ ON DELETE SET NULL, which is what 0097 and the frozen card specify — and which is
+    // the behaviour PS-488 recovery deliberately moved AWAY from for returnId two lines
+    // above. Mirrored here because the migration is deployed and a Drizzle definition that
+    // disagrees with the database is worse than either choice. The inconsistency is real and
+    // is raised on the card rather than silently "corrected" here: changing it needs a new
+    // migration and a ruling, not a schema edit.
+    replacementId: integer('replacement_id').references(() => replacements.id, {
+      onDelete: 'set null',
+    }),
     shipDate: timestamp({ withTimezone: true }),
     // PS-434: shipDate remains the actual activity calendar day. This nullable
     // field is the invoice/range bucket; NULL preserves all legacy rows through
@@ -208,6 +221,15 @@ export const billingCreditNotes = pgTable(
     adjustmentKind: text('adjustment_kind').default('credit').notNull(),
     adjustmentSource: text('adjustment_source').default('manual').notNull(),
     sourceOrderId: integer('source_order_id').references(() => orders.id, { onDelete: 'restrict' }),
+    // PS-502 correction C (migration 0097). Without this, cancelling ONE of two replacements
+    // on an order cannot be attributed: the finalized reconciler is order-grained
+    // ({ orderId, currentTotal }), so original + replacement A + replacement B collapse into
+    // one order-level number and the credit for A alone has nowhere to point. A deterministic
+    // idempotency key is not a substitute — parsing identity out of `reason` is the mistake
+    // PS-488 rejected.
+    replacementId: integer('replacement_id').references(() => replacements.id, {
+      onDelete: 'set null',
+    }),
     postingVersion: text('posting_version').default('legacy_credit_v1').notNull(),
     effectiveDate: timestamp('effective_date', { withTimezone: true }),
     billingPolicyVersion: text('billing_policy_version'),

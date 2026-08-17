@@ -19,6 +19,8 @@ const REFERENCE = 'src/services/replacement-reference.ts';
 const STATE_MACHINE = 'src/services/replacement-state-machine.ts';
 const ALLOWANCE = 'src/services/replacement-allowance.ts';
 const BILLABILITY = 'src/services/replacement-billability.ts';
+const SCHEMA = 'src/db/schema/replacements.ts';
+const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 
 const MUTATIONS: Mutation[] = [
   {
@@ -164,6 +166,32 @@ const MUTATIONS: Mutation[] = [
     find: '    || !hasPermission(change.actor, FINANCIALS_WRITE_PERMISSION)',
     replace: '',
     expect: 'replacements:billing alone is not enough — financials:write is also required',
+  },
+  {
+    id: 'M19',
+    defect: 'a migration column is dropped from Drizzle, making it invisible to every typed query',
+    file: SCHEMA,
+    find: "    sourceLineFingerprint: text('source_line_fingerprint').notNull(),",
+    replace: '',
+    expect: 'replacement_items: every migration column is declared in Drizzle',
+  },
+  {
+    id: 'M20',
+    defect: 'Drizzle declares a column the database lacks — a bare select() then 500s the route',
+    file: SCHEMA,
+    find: '    quantity: integer().notNull(),',
+    replace: "    quantity: integer().notNull(),\n    phantomColumn: text('phantom_column'),",
+    expect: 'replacement_items: Drizzle declares NO column the migration lacks',
+  },
+  {
+    id: 'M21',
+    defect: 'the schema stops mirroring 0097\'s ON DELETE, disagreeing with the deployed database',
+    file: BILLING_SCHEMA,
+    // Regex, not a literal: billing.ts is tracked with CRLF (core.autocrlf=true), so a
+    // literal "\n" here matches nothing and the mutation silently goes stale.
+    find: /replacementId: integer\('replacement_id'\)\.references\(\(\) => replacements\.id, \{\r?\n(\s*)onDelete: 'set null',/,
+    replace: "replacementId: integer('replacement_id').references(() => replacements.id, {\n$1onDelete: 'restrict',",
+    expect: 'both mirror 0097\'s ON DELETE SET NULL',
   },
 ];
 

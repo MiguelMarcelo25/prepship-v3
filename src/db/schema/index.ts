@@ -11,6 +11,8 @@ export * from './rates.js';
 export * from './settings.js';
 export * from './inventory.js';
 export * from './locations.js';
+// PS-502: declared before billing, which references replacements.id on two money columns.
+export * from './replacements.js';
 export * from './billing.js';
 export * from './print-queue.js';
 export * from './parent-skus.js';

@@ -526,6 +526,76 @@ check('replacements:billing alone is not enough — financials:write is also req
     v.allowed === false && v.code === 'REPLACEMENT_BILLABLE_FINALIZED');
 }
 
+// ── The Drizzle schema must MIRROR the migration, in both directions ─────────
+//
+// returns.ts records the failure this prevents: "a Drizzle column that does not exist in the
+// database makes even a bare select() emit it and 500 the route". The reverse gap is quieter
+// and worse — a column the migration created but the schema omits is simply invisible to
+// every typed query, so `source_line_fingerprint` could sit populated in the database while
+// the drift check reads undefined.
+console.log('\ndrizzle schema mirrors the migration');
+
+{
+  const schemaSource = read('src/db/schema/replacements.ts');
+
+  const snake = (camel: string) => camel.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+  /** Column names declared in one pgTable body, whether named explicitly or inferred. */
+  const schemaColumns = (table: string): Set<string> => {
+    const start = schemaSource.indexOf(`pgTable(\n  '${table}'`);
+    if (start === -1) return new Set();
+    const body = schemaSource.slice(start, schemaSource.indexOf('\n  (t) => [', start));
+    const found = new Set<string>();
+    for (const m of body.matchAll(/^\s{4}(\w+):\s*(?:serial|integer|text|boolean|timestamp)\(\s*(?:'([^']+)')?/gm)) {
+      found.add(m[2] ?? snake(m[1]!));
+    }
+    return found;
+  };
+
+  /** Column names in one `create table` body in the migration. */
+  const migrationColumns = (table: string): Set<string> => {
+    const start = replacementsSql.indexOf(`create table if not exists ${table} (`);
+    if (start === -1) return new Set();
+    const body = replacementsSql.slice(start, replacementsSql.indexOf('\n);', start));
+    const found = new Set<string>();
+    for (const m of body.matchAll(/^\s{2}(\w+)\s+(serial|integer|text|boolean|timestamptz)\b/gm)) {
+      if (m[1] !== 'constraint') found.add(m[1]!);
+    }
+    return found;
+  };
+
+  for (const table of ['replacements', 'replacement_items', 'replacement_activity_events']) {
+    const inSchema = schemaColumns(table);
+    const inMigration = migrationColumns(table);
+    check(`${table}: the migration has columns to compare`, inMigration.size > 0);
+
+    const missingFromSchema = [...inMigration].filter((c) => !inSchema.has(c));
+    check(`${table}: every migration column is declared in Drizzle`,
+      missingFromSchema.length === 0,
+      `invisible to every typed query: ${missingFromSchema.join(', ')}`);
+
+    const missingFromMigration = [...inSchema].filter((c) => !inMigration.has(c));
+    check(`${table}: Drizzle declares NO column the migration lacks`,
+      missingFromMigration.length === 0,
+      `these would 500 a bare select(): ${missingFromMigration.join(', ')}`);
+  }
+
+  check('the schema declares no CHECK constraint (those are migration-owned)',
+    !/\bcheck\(/.test(schemaSource),
+    'a constraint declared in two places is one that can disagree with itself');
+
+  // 0097's columns land on billing tables, so they are asserted against billing.ts.
+  const billingSchema = read('src/db/schema/billing.ts');
+  check('billing_line_items.replacement_id is mapped',
+    /replacementId: integer\('replacement_id'\)/.test(billingSchema));
+  check('billing_credit_notes.replacement_id is mapped',
+    (billingSchema.match(/replacementId: integer\('replacement_id'\)/g) || []).length === 2,
+    'correction C needs it on credit notes too, not only on line items');
+  check('both mirror 0097\'s ON DELETE SET NULL',
+    (billingSchema.match(/replacementId: integer\('replacement_id'\)\.references\(\(\) => replacements\.id, \{\s*onDelete: 'set null',\s*\}\)/g) || []).length === 2,
+    'the schema must match the deployed migration, whatever the ruling on SET NULL vs RESTRICT');
+}
+
 {
   const sources = [
     'src/services/replacement-source-line-fingerprint.ts',
