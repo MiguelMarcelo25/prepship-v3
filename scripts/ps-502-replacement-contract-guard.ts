@@ -667,6 +667,65 @@ console.log('\ncreate command (locked path)');
     'the card requires a replacement-specific command over lower-level primitives');
 }
 
+// ── Shipment insertion — the first command that writes shipped data ──────────
+console.log('\nshipment insertion (locked path)');
+
+{
+  const shipSource = read('src/services/replacement-shipment-command.ts');
+  const code = shipSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const at = (needle: string) => code.indexOf(needle);
+
+  check('it inserts a shipment and links it to the replacement',
+    /\.insert\(shipments\)/.test(code) && /replacementShipmentId: shipment\.id/.test(code));
+
+  check('drift is re-resolved BEFORE the shipment is inserted',
+    at('evaluateReplacementSourceLineDrift(') !== -1
+    && at('evaluateReplacementSourceLineDrift(') < at('.insert(shipments)'),
+    'the card requires re-resolution before label purchase, and this is the last cheap place');
+
+  check('a drift review is COMMITTED, then reported',
+    // The update to review must not sit in the transaction that the throw aborts, or the
+    // operator gets a 409 while the replacement stays approved and drifts again forever.
+    /status: 'review'/.test(code)
+    && /return \{ drifted: true/.test(code)
+    && at("return { drifted: true") < at('throw new ReplacementShipmentError(\n      REPLACEMENT_ERROR_CODES.SOURCE_LINE_CHANGED'),
+    'the review has to commit while the operation fails');
+
+  check('no shipment is inserted on the drift path',
+    at('.insert(shipments)') > at('if (outcome.drifted)'),
+    'the card requires no label/inventory/package/billing effect on a mismatch');
+
+  check('the link is guarded by status AND state_version',
+    /eq\(replacements\.status, before\.status\)/.test(code)
+    && /eq\(replacements\.stateVersion, before\.stateVersion\)/.test(code),
+    'the two transactions leave a gap; optimistic concurrency is what closes it');
+
+  check('a lost link rolls the orphan shipment back',
+    /if \(linked\.length === 0\)/.test(code) && /throw new ReplacementShipmentError/.test(code));
+
+  check('an already-attached replacement returns its existing shipment',
+    /existingShipmentId != null/.test(code) && /created: false/.test(code),
+    'a retry must not mint a second shipment for one replacement');
+
+  check('the shipment carries the REPLACEMENT reference, not the original order number',
+    /orderNumber: before\.reference/.test(code),
+    'two rows both claiming "1321" read as a duplicate label on the original');
+
+  check('a replacement is outbound — isReturn is never set',
+    !/isReturn:\s*true/.test(code),
+    'conflating the two inverts its direction in every report');
+
+  check('it never reuses createLabelV2 or buys a label',
+    !/createLabelV2|purchaseLabel|buyLabel/.test(code),
+    'shipping-safety blocks a second label on a shipped order, which is fatal here');
+
+  check('it never mutates the original order or its status',
+    !/\.update\(orders\)/.test(code) && !/orderStatus:/.test(code));
+
+  check('it writes no inventory, package or billing row',
+    !/\.insert\(billingLineItems\)|\.insert\(inventory|\.insert\(packageLedger/.test(code));
+}
+
 {
   const sources = [
     'src/services/replacement-source-line-fingerprint.ts',

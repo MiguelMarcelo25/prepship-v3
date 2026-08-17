@@ -20,6 +20,7 @@ const STATE_MACHINE = 'src/services/replacement-state-machine.ts';
 const ALLOWANCE = 'src/services/replacement-allowance.ts';
 const BILLABILITY = 'src/services/replacement-billability.ts';
 const CREATE = 'src/services/replacement-create-command.ts';
+const SHIPMENT = 'src/services/replacement-shipment-command.ts';
 const SCHEMA = 'src/db/schema/replacements.ts';
 const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 
@@ -249,6 +250,54 @@ const MUTATIONS: Mutation[] = [
     find: '    await tx.insert(replacementItems).values(',
     replace: '    await tx.insert(shipments).values({} as any);\n    await tx.insert(replacementItems).values(',
     expect: 'create writes NO shipments row',
+  },
+  {
+    id: 'M29',
+    defect: 'drift is no longer re-resolved before a shipment exists',
+    file: SHIPMENT,
+    find: '      const verdict = evaluateReplacementSourceLineDrift({',
+    replace: '      const verdict = { matches: true } as any; const skippedD = ({',
+    expect: 'drift is re-resolved BEFORE the shipment is inserted',
+  },
+  {
+    id: 'M30',
+    defect: 'the drift review throws instead of committing — the operator sees 409 forever and nothing is recorded',
+    file: SHIPMENT,
+    find: '      return { drifted: true, orderLineIndex: item.orderLineIndex, reference: replacement.reference };',
+    replace: "      throw new ReplacementShipmentError(REPLACEMENT_ERROR_CODES.SOURCE_LINE_CHANGED, 'drift', 409);",
+    expect: 'a drift review is COMMITTED, then reported',
+  },
+  {
+    id: 'M31',
+    defect: 'the state_version guard is dropped, so the two-transaction gap goes unchecked',
+    file: SHIPMENT,
+    find: '        eq(replacements.stateVersion, before.stateVersion),',
+    replace: '',
+    expect: 'the link is guarded by status AND state_version',
+  },
+  {
+    id: 'M32',
+    defect: 'a retry mints a SECOND shipment for one replacement',
+    file: SHIPMENT,
+    find: '  if (outcome.existingShipmentId != null) {',
+    replace: '  if (false) {',
+    expect: 'an already-attached replacement returns its existing shipment',
+  },
+  {
+    id: 'M33',
+    defect: 'the replacement shipment claims the original order number — reads as a duplicate label',
+    file: SHIPMENT,
+    find: '        orderNumber: before.reference,',
+    replace: '        orderNumber: String(before.orderId),',
+    expect: 'the shipment carries the REPLACEMENT reference, not the original order number',
+  },
+  {
+    id: 'M34',
+    defect: 'the outbound re-ship is flagged as a return, inverting its direction in every report',
+    file: SHIPMENT,
+    find: "        source: 'replacement',",
+    replace: "        source: 'replacement',\n        isReturn: true,",
+    expect: 'a replacement is outbound — isReturn is never set',
   },
 ];
 
