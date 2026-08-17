@@ -19,6 +19,7 @@ const REFERENCE = 'src/services/replacement-reference.ts';
 const STATE_MACHINE = 'src/services/replacement-state-machine.ts';
 const ALLOWANCE = 'src/services/replacement-allowance.ts';
 const BILLABILITY = 'src/services/replacement-billability.ts';
+const CREATE = 'src/services/replacement-create-command.ts';
 const SCHEMA = 'src/db/schema/replacements.ts';
 const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 
@@ -192,6 +193,62 @@ const MUTATIONS: Mutation[] = [
     find: /replacementId: integer\('replacement_id'\)\.references\(\(\) => replacements\.id, \{\r?\n(\s*)onDelete: 'set null',/,
     replace: "replacementId: integer('replacement_id').references(() => replacements.id, {\n$1onDelete: 'restrict',",
     expect: 'both mirror 0097\'s ON DELETE SET NULL',
+  },
+  {
+    id: 'M22',
+    defect: 'the order-scoped lock is dropped — two concurrent creates both read the same allowance',
+    file: CREATE,
+    find: /await tx\.execute\(sql`select pg_advisory_xact_lock[^`]*`\);/,
+    replace: '',
+    expect: 'an order-scoped advisory lock is taken FIRST',
+  },
+  {
+    id: 'M23',
+    defect: 'the lock class collides with billing\'s client lock',
+    file: CREATE,
+    find: 'const REPLACEMENT_ORDER_LOCK_CLASS = 36423;',
+    replace: 'const REPLACEMENT_ORDER_LOCK_CLASS = 36421;',
+    expect: 'the lock class is distinct from billing\'s',
+  },
+  {
+    id: 'M24',
+    defect: 'a retried create errors instead of returning the replacement it already made',
+    file: CREATE,
+    find: 'if (existing) return { replacement: existing, created: false };',
+    replace: "if (existing) throw new ReplacementCreateError('REPLACEMENT_NO_ITEMS', 'duplicate', 409);",
+    expect: 'a repeated key returns the EXISTING replacement rather than erroring',
+  },
+  {
+    id: 'M25',
+    defect: 'the cumulative cap is no longer consulted before creating',
+    file: CREATE,
+    find: '      const verdict = evaluateReplacementAllowance({',
+    replace: '      const verdict = { allowed: true, viaOverride: false } as any; const skipped = ({',
+    expect: 'the allowance is evaluated BEFORE the insert',
+  },
+  {
+    id: 'M26',
+    defect: 'billability authority is no longer consulted, so an operator can set it',
+    file: CREATE,
+    find: '    const billability = evaluateBillabilityChange({',
+    replace: '    const billability = { allowed: true, billable: false } as any; const skippedB = ({',
+    expect: 'billability is evaluated BEFORE the insert',
+  },
+  {
+    id: 'M27',
+    defect: 'the reference is string-built, filing the SECOND replacement under the first\'s identity',
+    file: CREATE,
+    find: '    const reference = nextReplacementReference(',
+    replace: '    const reference = `${order.orderNumber}-REPLACE`; const unusedRef = (',
+    expect: 'the reference is ALLOCATED, never string-built',
+  },
+  {
+    id: 'M28',
+    defect: 'create starts writing a shipment row, so a rejected request has already moved goods',
+    file: CREATE,
+    find: '    await tx.insert(replacementItems).values(',
+    replace: '    await tx.insert(shipments).values({} as any);\n    await tx.insert(replacementItems).values(',
+    expect: 'create writes NO shipments row',
   },
 ];
 

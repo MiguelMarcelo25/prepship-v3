@@ -596,6 +596,77 @@ console.log('\ndrizzle schema mirrors the migration');
     'the schema must match the deployed migration, whatever the ruling on SET NULL vs RESTRICT');
 }
 
+// ── The create command — the ORDER of its steps is the contract ──────────────
+//
+// Source-level, because the command needs a database and this guard is offline. What is
+// pinned is ordering and absence, which is where this command can silently break: every step
+// below individually "works" in the wrong order, and the failure only appears under
+// concurrency or on a retry.
+console.log('\ncreate command (locked path)');
+
+{
+  const createSource = read('src/services/replacement-create-command.ts');
+  const code = createSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  const at = (needle: string | RegExp) =>
+    typeof needle === 'string' ? code.indexOf(needle) : (needle.exec(code)?.index ?? -1);
+
+  const lockAt = at('pg_advisory_xact_lock');
+  const idempotentReadAt = at('replacements.requestIdempotencyKey');
+  const orderReadAt = at('.from(orders)');
+  const allowanceAt = at('evaluateReplacementAllowance(');
+  const billabilityAt = at('evaluateBillabilityChange(');
+  const referenceAt = at('nextReplacementReference(');
+  const insertAt = at('.insert(replacements)');
+
+  check('the command exists and is transactional',
+    createSource.length > 0 && /db\.transaction\(/.test(code));
+
+  check('an order-scoped advisory lock is taken FIRST',
+    lockAt !== -1 && lockAt < idempotentReadAt && lockAt < orderReadAt,
+    'outside the lock, two concurrent creates both read the same allowance and both succeed');
+
+  check('the lock class is distinct from billing\'s',
+    /REPLACEMENT_ORDER_LOCK_CLASS = 36423/.test(createSource)
+    && !/36421|36422/.test(code),
+    'sharing a lock id with an unrelated resource serialises for no reason and deadlocks for subtle ones');
+
+  check('idempotency is checked INSIDE the lock, before anything is created',
+    idempotentReadAt !== -1 && lockAt < idempotentReadAt && idempotentReadAt < insertAt,
+    'outside it, a retry inserts and only the UNIQUE index stops it — a safe retry becomes a 500');
+
+  check('a repeated key returns the EXISTING replacement rather than erroring',
+    /if \(existing\) return \{ replacement: existing, created: false \}/.test(code));
+
+  check('the allowance is evaluated BEFORE the insert',
+    allowanceAt !== -1 && allowanceAt < insertAt);
+
+  check('billability is evaluated BEFORE the insert',
+    billabilityAt !== -1 && billabilityAt < insertAt);
+
+  check('the reference is ALLOCATED, never string-built',
+    referenceAt !== -1 && referenceAt < insertAt
+    && !/-REPLACE/.test(code),
+    'the card bans string-building ${orderNumber}-REPLACE at use sites');
+
+  check('the fingerprint is frozen by the shared builder',
+    /buildReplacementSourceLineFingerprint\(/.test(code));
+
+  check('only a SHIPPED original is replaceable, and a cancelled one has its own path',
+    /REPLACEABLE_ORDER_STATUS = 'shipped'/.test(createSource)
+    && /REPLACEMENT_ORDER_CANCELLED/.test(code));
+
+  // The create command commits nothing physical. If it ever does, the whole "an operator may
+  // create one and a reviewer may reject it" property is gone.
+  for (const forbidden of ['shipments', 'billingLineItems', 'billingCreditNotes', 'inventory']) {
+    check(`create writes NO ${forbidden} row`,
+      !new RegExp(`\\.insert\\(${forbidden}\\)|update\\(${forbidden}\\)`).test(code));
+  }
+  check('create purchases no label',
+    !/createLabelV2|purchaseLabel|buyLabel/.test(code),
+    'the card requires a replacement-specific command over lower-level primitives');
+}
+
 {
   const sources = [
     'src/services/replacement-source-line-fingerprint.ts',
