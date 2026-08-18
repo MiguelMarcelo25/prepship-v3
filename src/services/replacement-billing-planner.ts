@@ -1,3 +1,5 @@
+import type { ReplacementCustomerPostage } from './replacement-customer-money.js';
+
 /**
  * PS-502 — plan a replacement's billing lines.
  *
@@ -40,11 +42,20 @@ export type ReplacementBillingFacts = {
   reference: string;
   replacementShipmentId: number;
   billable: boolean;
-  /** Frozen at label purchase. Both halves required; see below. */
-  money: {
-    shipmentCost: number | null | undefined;
-    otherCost: number | null | undefined;
-  };
+  /**
+   * PS-502 AC-10 — the customer postage, and ONLY as minted by the fence.
+   *
+   * This was `money: { shipmentCost, otherCost }` and the plan billed their sum. Those are
+   * the CARRIER's numbers, written verbatim from the provider receipt, so the client was
+   * charged raw postage cost as though it were a customer rate — no markup, no policy
+   * version. The docblock above already claimed money came from the frozen customer tuple;
+   * only the type disagreed, and the type is what callers obey.
+   *
+   * An object, not a number, because a `number` field accepts `shipments.cost` just as
+   * happily as a customer rate and nothing could tell them apart. Only
+   * `resolveReplacementCustomerPostage` can produce one.
+   */
+  customerPostage: ReplacementCustomerPostage | null | undefined;
   /** The authoritative client pick/pack charge, resolved by its existing owner. */
   pickPackCharge: number | null | undefined;
   /** Canonical clocks and version, supplied by the billing owner rather than invented here. */
@@ -121,9 +132,11 @@ export function planReplacementBillingLines(
   // Not billable: NO line. Not a zero line.
   if (!facts.billable) return [];
 
-  const shipmentCost = money(facts.money?.shipmentCost);
-  const otherCost = money(facts.money?.otherCost);
-  if (shipmentCost === null || otherCost === null) {
+  // The fence has already refused anything that did not come from a reconciling,
+  // policy-versioned customer tuple. Absence here means it refused, and a refusal is not a
+  // $0.00 charge.
+  const customerPostage = facts.customerPostage;
+  if (!customerPostage || !Number.isFinite(customerPostage.amount)) {
     throw new ReplacementBillingPlanError(
       'REPLACEMENT_BILLING_MONEY_UNAVAILABLE',
       `replacement ${facts.reference} has no frozen customer-money tuple, so its postage cannot ` +
@@ -143,7 +156,9 @@ export function planReplacementBillingLines(
     );
   }
 
-  const postage = shipmentCost + otherCost;
+  // Customer money, with the markup and flooring its owner applied — never the carrier cost
+  // the two former fields carried.
+  const postage = customerPostage.amount;
   const common = {
     clientId: facts.clientId,
     // The ORIGINAL order relationally, the REPLACEMENT reference visibly.

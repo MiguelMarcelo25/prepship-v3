@@ -91,6 +91,15 @@ export type BillingSummaryMetricRow = {
   adjustmentTotal: number;
   /** PS-501 AC-4: return money, so the categories can account for grandTotal. */
   returnTotal: number;
+  /**
+   * PS-502 AC-18: re-ship money, same reason. Two buckets rather than one because postage
+   * and handling are two line types, and folding them together here would lose a split the
+   * cache is the only surviving record of.
+   */
+  replacePostageTotal: number;
+  replacePickPackTotal: number;
+  /** Distinct replacements, NOT orders — a replacement line carries the original order's id. */
+  replacementCount: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -175,6 +184,47 @@ export function billingMetricsHasReturnTotalColumn(): Promise<boolean> {
       });
   }
   return returnTotalColumnPromise;
+}
+
+/**
+ * PS-502 — is the cached summary's replacement split present yet?
+ *
+ * Exactly the reasoning of the return probe above, for the three columns 0102 adds. It is a
+ * SEPARATE probe rather than a widened one because 0095 and 0102 are separate migrations and
+ * a deploy can legitimately sit between them: one combined answer would either refuse a
+ * return bucket that is actually there, or read replacement columns that are not.
+ *
+ * All three columns are asserted together because 0102 adds them together — a partial answer
+ * here would let the upsert write two of three and leave the third to fail mid-transaction,
+ * which is the 500 this probe exists to prevent.
+ *
+ * Memoised on the promise and reset on failure on the same terms as the probe above.
+ */
+let replacementColumnsPromise: Promise<boolean> | null = null;
+
+export function billingMetricsHasReplacementColumns(): Promise<boolean> {
+  if (!replacementColumnsPromise) {
+    replacementColumnsPromise = db
+      .execute<{ present: boolean }>(sql`
+        select to_regclass('public.billing_summary_metrics') is not null
+           and (
+             select count(*) from information_schema.columns
+             where table_schema = 'public'
+               and table_name = 'billing_summary_metrics'
+               and column_name in (
+                 'replace_postage_total',
+                 'replace_pick_pack_total',
+                 'replacement_count'
+               )
+           ) = 3 as present
+      `)
+      .then((rows) => rows[0]?.present === true)
+      .catch((err) => {
+        replacementColumnsPromise = null;
+        throw err;
+      });
+  }
+  return replacementColumnsPromise;
 }
 
 async function ensureTables(): Promise<void> {
@@ -566,6 +616,16 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         'billing summary metrics.',
     );
   }
+  // PS-502 AC-18: and the replacement split, for the identical reason. Refused separately
+  // from the return check above so the error names the ONE migration that is actually
+  // missing — a combined message would send an operator to a migration they already ran.
+  if (!(await billingMetricsHasReplacementColumns())) {
+    throw new Error(
+      'billing_summary_metrics replacement columns are missing. Run ' +
+        'drizzle/0102_billing_summary_metrics_replacement_totals.sql before refreshing ' +
+        'billing summary metrics.',
+    );
+  }
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
   const billingSummaryAmount = cancelledNoChargeBillingAmountSql({
@@ -600,6 +660,9 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         storage_total,
         adjustment_total,
         return_total,
+        replace_postage_total,
+        replace_pick_pack_total,
+        replacement_count,
         grand_total,
         updated_at
       )
@@ -615,6 +678,17 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         coalesce(sum(case when b.line_type = 'storage' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as storage_total,
         coalesce(sum(case when b.line_type = 'billing_adjustment' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as adjustment_total,
         coalesce(sum(case when b.line_type in ${returnLineTypesSql} then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as return_total,
+        -- PS-502 AC-18: the same buckets the live summary emits, computed from the same
+        -- amount expression. These two exist so replacement money lands somewhere other
+        -- than the gap between the categories and grand_total; they are per-type arms, so
+        -- they name their line type directly the way the category sums above do.
+        coalesce(sum(case when b.line_type = 'replace_postage' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as replace_postage_total,
+        coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as replace_pick_pack_total,
+        -- Counted on replacement_id, never order_id: a replacement line carries the
+        -- ORIGINAL order's id, so order_count above cannot distinguish two re-ships of one
+        -- order from one. Kept identical to the live summary's count or the cache would
+        -- disagree with the query it is caching.
+        count(distinct b.replacement_id)::int as replacement_count,
         coalesce(sum(${billingSummaryAmount}), 0)::numeric(14, 2) as grand_total,
         now() as updated_at
       from clients c
@@ -639,6 +713,9 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         storage_total = excluded.storage_total,
         adjustment_total = excluded.adjustment_total,
         return_total = excluded.return_total,
+        replace_postage_total = excluded.replace_postage_total,
+        replace_pick_pack_total = excluded.replace_pick_pack_total,
+        replacement_count = excluded.replacement_count,
         grand_total = excluded.grand_total,
         updated_at = now()
     `);
@@ -1040,6 +1117,10 @@ export async function getFreshBillingSummaryMetrics(options: {
   // describe a row's money completely. Treat it as a MISS so billingSummary falls back to
   // the live query, rather than throwing a 500 out of GET /billing/summary.
   if (!(await billingMetricsHasReturnTotalColumn())) return null;
+  // PS-502 AC-18: likewise for the replacement split (migration 0102). A cache that cannot
+  // say what a re-ship cost is not a complete answer, and BillingSummaryRow requires the
+  // fields — so miss to the live query rather than return a row with invented zeros.
+  if (!(await billingMetricsHasReplacementColumns())) return null;
   const maxAgeMinutes = options.maxAgeMinutes ?? 45;
   const effectiveDay = billingLineEffectiveDaySql(
     sql`b.billing_effective_date`,
@@ -1077,6 +1158,9 @@ export async function getFreshBillingSummaryMetrics(options: {
       storage_total: string | number;
       adjustment_total: string | number;
       return_total: string | number;
+      replace_postage_total: string | number;
+      replace_pick_pack_total: string | number;
+      replacement_count: number;
       order_count: number;
       grand_total: string | number;
       fresh_count: string | number;
@@ -1113,6 +1197,9 @@ export async function getFreshBillingSummaryMetrics(options: {
           m.storage_total,
           m.adjustment_total,
           m.return_total,
+          m.replace_postage_total,
+          m.replace_pick_pack_total,
+          m.replacement_count,
           m.order_count,
           m.grand_total,
           m.updated_at as updated_at,
@@ -1145,6 +1232,9 @@ export async function getFreshBillingSummaryMetrics(options: {
         fm.storage_total,
         fm.adjustment_total,
         fm.return_total,
+        fm.replace_postage_total,
+        fm.replace_pick_pack_total,
+        fm.replacement_count,
         fm.order_count,
         fm.grand_total,
         coverage.fresh_count,
@@ -1167,8 +1257,13 @@ export async function getFreshBillingSummaryMetrics(options: {
       const storageTotal = num(row.storage_total);
       const adjustmentTotal = num(row.adjustment_total);
       const returnTotal = num(row.return_total);
+      const replacePostageTotal = num(row.replace_postage_total);
+      const replacePickPackTotal = num(row.replace_pick_pack_total);
       const grandTotal = num(row.grand_total);
       const orderCount = num(row.order_count);
+      // Its own count, not orderCount: replacement lines hang off the ORIGINAL order, so
+      // orderCount is blind to them and reusing it would understate every re-ship.
+      const replacementCount = num(row.replacement_count);
       const pickPackFeeTotal = pickPackTotal + additionalTotal;
       // PS-505 corrective: fulfillment SERVICE fees only — Pick & Pack + Additional
       // Units + Box Cost. Kept in lockstep with the billing summary and invoice owners
@@ -1185,6 +1280,9 @@ export async function getFreshBillingSummaryMetrics(options: {
         storageTotal,
         adjustmentTotal,
         returnTotal,
+        replacePostageTotal,
+        replacePickPackTotal,
+        replacementCount,
         fulfillmentFeeTotal,
         orderCount,
         grandTotal,
@@ -1198,6 +1296,11 @@ export async function getFreshBillingSummaryMetrics(options: {
           storage: storageTotal,
           billing_adjustment: adjustmentTotal,
           return: returnTotal,
+          // camelCase, unlike its neighbours, because these two keys mirror what the live
+          // summary in billing.ts emits — the cached and live paths feed the SAME dashboard
+          // and a key that differs by path would read as a missing category on cache hits.
+          replacePostage: replacePostageTotal,
+          replacePickPack: replacePickPackTotal,
         },
       };
     });

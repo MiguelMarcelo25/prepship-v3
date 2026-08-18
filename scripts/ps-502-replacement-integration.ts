@@ -52,6 +52,22 @@ async function applyMigrations(client: PGlite): Promise<void> {
   }
 }
 
+/**
+ * A frozen customer-money tuple that reconciles: carrier 8.25, customer 9.75, margin 1.50.
+ *
+ * The billed postage is the same 9.75 the old carrier-sum produced, which is the point — the
+ * NUMBER did not have to change for the SOURCE to become correct, and that is exactly why the
+ * old shape survived review.
+ */
+const FROZEN_CUSTOMER_MONEY = {
+  selectedRateCost: 8.25,
+  cShippingRateAmount: 9.75,
+  shippingMarginAmount: 1.5,
+  shippingMarginPct: 18.18,
+  customerRateSource: 'realized_customer_shipping_rate',
+  rateCostSource: 'label_final_cost',
+  customerShippingMoneyPolicyVersion: 'ps-437-v1',
+};
 async function main(): Promise<void> {
   process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
   process.env.SUPABASE_URL = 'https://example.test';
@@ -76,6 +92,8 @@ async function main(): Promise<void> {
     await import('../src/services/replacement-billing-writer.js');
   const { deleteOutboundBillingLinesForRebuild } =
     await import('../src/services/billing-outbound-sweep.js');
+  const { resolveReplacementCustomerPostage } =
+    await import('../src/services/replacement-customer-money.js');
   const { cancelReplacementBillingInTransaction } =
     await import('../src/services/replacement-billing-writer.js');
   const { regenerateReplacementBillingInTransaction } =
@@ -1117,7 +1135,7 @@ async function main(): Promise<void> {
   const PLAN_FACTS = {
     replacementId: 1, orderId: 1321, clientId: 1,
     reference: '1321-REPLACE', replacementShipmentId: 5, billable: true,
-    money: { shipmentCost: 8.25, otherCost: 1.5 },
+    customerPostage: resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: FROZEN_CUSTOMER_MONEY }),
     pickPackCharge: 2.5,
     shipDate: new Date('2026-08-18T00:00:00Z'),
     billingEffectiveDate: new Date('2026-08-18T00:00:00Z'),
@@ -1134,7 +1152,8 @@ async function main(): Promise<void> {
     assert.equal(lines.length, 2);
     assert.deepEqual(lines.map((l) => l.lineType).sort(), ['replace_pick_pack', 'replace_postage']);
     const postage = lines.find((l) => l.lineType === 'replace_postage');
-    assert.equal(postage!.totalCost, '9.75', 'postage is shipmentCost + otherCost, frozen');
+    assert.equal(postage!.totalCost, '9.75',
+      'the fenced CUSTOMER amount — cShippingRateAmount, not the carrier cost');
     assert.equal(postage!.orderNumber, '1321-REPLACE', 'the ALLOCATED reference, not the order number');
     assert.equal(postage!.orderId, 1321, 'the ORIGINAL order relationally');
   });
@@ -1142,7 +1161,7 @@ async function main(): Promise<void> {
   await check('a missing frozen money tuple FAILS CLOSED', () => {
     let err: unknown = null;
     try {
-      planReplacementBillingLines({ ...PLAN_FACTS, money: { shipmentCost: null, otherCost: 1.5 } });
+      planReplacementBillingLines({ ...PLAN_FACTS, customerPostage: null });
     } catch (e) { err = e; }
     assert.ok(err instanceof ReplacementBillingPlanError
       && err.code === 'REPLACEMENT_BILLING_MONEY_UNAVAILABLE',
@@ -1173,7 +1192,7 @@ async function main(): Promise<void> {
       reference: input.replacement.reference,
       replacementShipmentId: input.shipmentId,
       billable: input.replacement.billable,
-      money: { shipmentCost: 8.25, otherCost: 1.5 },
+      customerPostage: resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: FROZEN_CUSTOMER_MONEY }),
       pickPackCharge: 2.5,
       shipDate: new Date(),
       billingEffectiveDate: new Date(),
@@ -1368,7 +1387,7 @@ async function main(): Promise<void> {
       replacementId, orderId: r!.orderId, clientId: r!.clientId ?? 1,
       reference: r!.reference, replacementShipmentId: r!.replacementShipmentId!,
       billable: true,
-      money: { shipmentCost: 8.25, otherCost: 1.5 },
+      customerPostage: resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: FROZEN_CUSTOMER_MONEY }),
       pickPackCharge: 2.5,
       shipDate: new Date(), billingEffectiveDate: new Date(),
       billingPolicyVersion: 'v1',
@@ -1746,6 +1765,91 @@ async function main(): Promise<void> {
     assert.equal(hold.resolution, 'no_action_required');
   });
 
+  console.log('\nAC-10 — replace_postage is customer money, structurally');
+
+  await check('the fence returns CUSTOMER money, not the carrier cost', () => {
+    const fenced = resolveReplacementCustomerPostage({
+      frozenCustomerShippingMoney: FROZEN_CUSTOMER_MONEY,
+    });
+    assert.ok(fenced, 'a reconciling tuple is accepted');
+    assert.equal(fenced!.amount, 9.75, 'cShippingRateAmount — what the client pays');
+    assert.notEqual(fenced!.amount, FROZEN_CUSTOMER_MONEY.selectedRateCost,
+      'never selectedRateCost, which is what the carrier charged us');
+    assert.equal(fenced!.source, 'frozen_customer_shipping_money');
+  });
+
+  await check('provider cost handed in alongside is IGNORED — there is nowhere to put it', () => {
+    // The sneaky fixture, after the PS-487 return guard. Every one of these is a carrier
+    // number a caller might reach for; none of them is a field the fence accepts.
+    const sneaky = {
+      frozenCustomerShippingMoney: null,
+      labelCost: 8.25,
+      providerCost: 8.25,
+      externalLabelCost: 8.25,
+      shipmentCost: 8.25,
+      otherCost: 1.5,
+      cost: 9.75,
+    } as unknown as { frozenCustomerShippingMoney: unknown };
+    assert.equal(resolveReplacementCustomerPostage(sneaky), null,
+      'a caller holding only carrier cost cannot express it, so nothing is billed');
+  });
+
+  await check('a tuple whose customer amount EQUALS the cost is refused', () => {
+    const zeroMargin = {
+      ...FROZEN_CUSTOMER_MONEY,
+      cShippingRateAmount: 8.25,
+      shippingMarginAmount: 0,
+    };
+    assert.equal(
+      resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: zeroMargin }), null,
+      'customer == cost is the signature of provider cost leaking through as customer money');
+  });
+
+  await check('an out-of-policy or partial tuple is refused', () => {
+    const stale = { ...FROZEN_CUSTOMER_MONEY, customerShippingMoneyPolicyVersion: 'ps-000-v0' };
+    assert.equal(resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: stale }), null,
+      'a tuple frozen under a policy we no longer run is not evidence of anything');
+
+    const { cShippingRateAmount, ...partial } = FROZEN_CUSTOMER_MONEY;
+    void cShippingRateAmount;
+    assert.equal(resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: partial }), null,
+      'the reader never manufactures customer money from selected cost');
+  });
+
+  await check('a replacement with no fenced money REFUSES rather than billing zero', async () => {
+    const target = await readyToShip('ac10-refuse');
+    // A writer identical to the harness's except that the fence returned nothing — which is
+    // what a shipment carrying no reconciling tuple actually produces.
+    const unfencedWriter = async (tx: unknown, input: {
+      replacement: { id: number; orderId: number; clientId: number | null; reference: string; billable: boolean };
+      shipmentId: number;
+    }) => writeReplacementBillingInTransaction(tx, {
+      replacementId: input.replacement.id,
+      orderId: input.replacement.orderId,
+      clientId: input.replacement.clientId ?? 1,
+      reference: input.replacement.reference,
+      replacementShipmentId: input.shipmentId,
+      billable: input.replacement.billable,
+      customerPostage: null,
+      pickPackCharge: 2.5,
+      shipDate: new Date(),
+      billingEffectiveDate: new Date(),
+      billingPolicyVersion: 'v1',
+    } as never);
+
+    await assert.rejects(
+      () => shipReplacement({
+        replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+        consumePackage: packageConsumer, writeBilling: unfencedWriter as never,
+      }, conn),
+      /REPLACEMENT_BILLING_MONEY_UNAVAILABLE|no frozen customer-money tuple/,
+      'shipping unbilled is a decision nobody made');
+
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, target.replacementId));
+    assert.notEqual(after!.status, 'shipped', 'the refusal rolled the whole dispatch back');
+  });
   await client.close();
   console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }

@@ -36,6 +36,9 @@ const POLICY = 'src/services/billing-finalization-policy.ts';
 const FOLD = 'src/services/billing-replacement-finalized-fold.ts';
 const GENERATOR = 'src/services/billing.ts';
 const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
+const FENCE = 'src/services/replacement-customer-money.ts';
+const PLANNER = 'src/services/replacement-billing-planner.ts';
+const INVOICE_TOTALS = 'src/services/billing-invoice-totals.ts';
 const HOLD = 'src/services/replacement-original-order-hold.ts';
 const ORDER_LIFECYCLE = 'src/services/order-lifecycle-command.ts';
 const UPSTREAM = 'src/services/fulfillment/upstream-reconcile.ts';
@@ -591,7 +594,7 @@ const MUTATIONS: Mutation[] = [
     id: 'M68',
     defect: 'a missing frozen money tuple is treated as zero rather than refused',
     file: BILL_PLAN,
-    find: '  if (shipmentCost === null || otherCost === null) {',
+    find: '  if (!customerPostage || !Number.isFinite(customerPostage.amount)) {',
     replace: '  if (false) {',
     expect: 'a missing frozen money tuple FAILS CLOSED',
   },
@@ -758,6 +761,29 @@ const MUTATIONS: Mutation[] = [
     find: /enterReplacementReview\(tx, before, \{/g,
     replace: "tx.update(replacements).set({ status: 'review' })\n      .where(eq(replacements.id, before.id)); await inlinedReview({",
     expect: 'there is ONE shared review writer, and AC-16 uses it',
+  },  {
+    id: 'M89',
+    defect: 'the fence returns the carrier cost, billing raw postage as customer money',
+    file: FENCE,
+    find: '    amount: frozen.cShippingRateAmount,',
+    replace: '    amount: frozen.selectedRateCost,',
+    expect: 'the fence returns the CUSTOMER amount, never the carrier cost',
+  },
+  {
+    id: 'M90',
+    defect: 'the equality tripwire goes, so cost leaking through as customer money is billed',
+    file: FENCE,
+    find: '  if (frozen.cShippingRateAmount === frozen.selectedRateCost) return null;',
+    replace: '',
+    expect: 'a customer amount equal to the cost is refused',
+  },
+  {
+    id: 'M91',
+    defect: 'the invoice owner loses a replacement bucket, so that money belongs to nothing',
+    file: INVOICE_TOTALS,
+    find: /^.*line_type = 'replace_pick_pack'.*$\r?\n/m,
+    replace: '',
+    expect: 'both replacement line types have a bucket in EVERY summary owner',
   },
 ];
 

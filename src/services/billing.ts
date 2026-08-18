@@ -104,7 +104,7 @@ import {
 } from './billing-outbound-sweep';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
-import { billingReturnLineTypesSql, isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
+import { billingLineItemsHasReplacementIdColumn, billingReturnLineTypesSql, isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
 import {
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,
@@ -2344,6 +2344,18 @@ export type BillingSummaryRow = {
   adjustmentTotal: number;
   /** PS-501 AC-4: return money needs a bucket, or the categories cannot account for grandTotal. */
   returnTotal: number;
+  /**
+   * PS-502 AC-18. A re-ship's postage and handling, each its own bucket.
+   *
+   * Never folded into `shippingTotal` or `pickPackTotal`: those name the ordinary
+   * fulfilment of the original order, and a re-ship is a separate event the client can be
+   * asked about. Folding them in would make two columns mean different things depending on
+   * whether a replacement happened.
+   */
+  replacePostageTotal: number;
+  replacePickPackTotal: number;
+  /** Distinct replacements billed in the window. NOT orders — see the count SQL. */
+  replacementCount: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
@@ -2464,6 +2476,9 @@ export async function billingSummary(
         storageTotal: 0,
         adjustmentTotal: 0,
         returnTotal: 0,
+        replacePostageTotal: 0,
+        replacePickPackTotal: 0,
+        replacementCount: 0,
         fulfillmentFeeTotal: 0,
         orderCount: 0,
         grandTotal: 0,
@@ -2504,6 +2519,9 @@ export async function billingSummary(
   // PS-501: from the canonical vocabulary owner, not written out here, so adding a
   // spelling reaches this bucket and the cached metrics bucket alike.
   const returnLineTypesSql = billingReturnLineTypesSql();
+  const replacementIdColumnSql = (await billingLineItemsHasReplacementIdColumn())
+    ? sql`count(distinct b.replacement_id)::int`
+    : sql`0::int`;
   const summaryCancelledNoCharge = cancelledNoChargeBillingLinePredicateSql({
     lineType: sql`b.line_type`,
     orderStatus: sql`o.order_status`,
@@ -2519,6 +2537,9 @@ export async function billingSummary(
     storage_total: string;
     adjustment_total: string;
     return_total: string;
+    replace_postage_total: string;
+    replace_pick_pack_total: string;
+    replacement_count: number;
     missing_shipping_cost_count: number;
     order_count: number;
     grand_total: string;
@@ -2540,7 +2561,23 @@ export async function billingSummary(
       -- flag flipped. Spellings come from BILLING_RETURN_LINE_TYPES so this bucket and
       -- isBillingReturnLineType cannot disagree.
       coalesce(sum(case when b.line_type in ${returnLineTypesSql} then ${summaryAmount} else 0 end), 0)::text as return_total,
+      -- PS-502 AC-18: the identical hole PS-501 AC-4 closed for returns, one vocabulary over.
+      -- Replacement money enters grand_total the moment a re-ship is billed, and without
+      -- these two buckets it belongs to nothing on screen. Unlike the return case this is not
+      -- latent behind a flag: replacement lines are written by the shipped command directly.
+      -- Spellings come from REPLACEMENT_LINE_TYPES via the shared SQL owner, so this bucket
+      -- and the cached upsert cannot disagree.
+      coalesce(sum(case when b.line_type = 'replace_postage' then ${summaryAmount} else 0 end), 0)::text as replace_postage_total,
+      coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${summaryAmount} else 0 end), 0)::text as replace_pick_pack_total,
       count(distinct b.order_id)::int as order_count,
+      -- A replacement line carries the ORIGINAL order id, so order_count cannot see it: two
+      -- replacements on one order are one order and two replacements.
+      --
+      -- Guarded on column PRESENCE because migrations are not applied by deploy in this repo
+      -- and 0097 has not reached production. The live summary is a hot path for every client,
+      -- and an unguarded reference would 500 all of it — over replacement money that cannot
+      -- exist on a database without the column. Same reasoning as the cached path's probes.
+      ${replacementIdColumnSql} as replacement_count,
       coalesce(sum(${summaryAmount}), 0)::text as grand_total
     from clients c
     left join billing_line_items b
@@ -2565,6 +2602,8 @@ export async function billingSummary(
     const storageTotal = roundMoney(toNum(r.storage_total));
     const adjustmentTotal = roundMoney(toNum(r.adjustment_total));
     const returnTotal = roundMoney(toNum(r.return_total));
+    const replacePostageTotal = roundMoney(toNum(r.replace_postage_total));
+    const replacePickPackTotal = roundMoney(toNum(r.replace_pick_pack_total));
     const grandTotal = roundMoney(toNum(r.grand_total));
     const pickPackFeeTotal = roundMoney(pickPackTotal + additionalTotal);
     // PS-505 corrective: fulfillment SERVICE fees only. Shipping and Storage are not
@@ -2582,6 +2621,9 @@ export async function billingSummary(
       storageTotal,
       adjustmentTotal,
       returnTotal,
+      replacePostageTotal,
+      replacePickPackTotal,
+      replacementCount: r.replacement_count ?? 0,
       fulfillmentFeeTotal,
       orderCount: Number(r.order_count ?? 0),
       grandTotal,
@@ -2596,6 +2638,8 @@ export async function billingSummary(
         storage: storageTotal,
         billing_adjustment: adjustmentTotal,
         return: returnTotal,
+        replacePostage: replacePostageTotal,
+        replacePickPack: replacePickPackTotal,
       },
     };
   });

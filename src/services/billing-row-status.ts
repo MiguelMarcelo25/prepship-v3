@@ -1,4 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { db } from '../db/client.js';
+import { REPLACEMENT_LINE_TYPES } from './replacement-billing-planner.js';
 
 import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
 
@@ -112,6 +114,28 @@ export function isBillingReturnLineType(lineType: unknown): boolean {
 export function billingReturnLineTypesSql(): SQL {
   return sql`(${sql.join(
     BILLING_RETURN_LINE_TYPES.map((lineType) => sql`${lineType}`),
+    sql`, `,
+  )})`;
+}
+
+/**
+ * PS-502 AC-18 — the replacement line types, in SQL, from the ONE place that names them.
+ *
+ * Same reasoning as the return owner directly above, and the same failure if it is copied:
+ * two callers need this list in SQL (the live billing summary and the cached
+ * billing_summary_metrics upsert), and a hand-written `case` in either becomes a second
+ * owner of the vocabulary. When they disagree nothing errors — the missing spelling's money
+ * simply stays inside grand_total and lands in no bucket.
+ *
+ * Sourced from REPLACEMENT_LINE_TYPES rather than re-spelling it, because that const is
+ * already what the planner, the writer and the outbound sweep agree on. A replacement
+ * vocabulary is kept SEPARATE from the return vocabulary: a replacement is an outbound
+ * re-ship and a return is inbound, so a shared list would make every reader asking "is this
+ * a return?" answer yes.
+ */
+export function billingReplacementLineTypesSql(): SQL {
+  return sql`(${sql.join(
+    REPLACEMENT_LINE_TYPES.map((lineType) => sql`${lineType}`),
     sql`, `,
   )})`;
 }
@@ -243,4 +267,36 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
   }
 
   return result('fulfilled', 'Fulfilled', 'neutral', null, null, input);
+}
+
+/**
+ * PS-502 — does `billing_line_items.replacement_id` exist on THIS database?
+ *
+ * Migrations are not applied by deploy in this repo, so code can reach production ahead of
+ * its schema. 0097 adds this column and the PS-502 migration set is still gated behind the
+ * designated-operator flow, which means a summary that referenced it unguarded would 500
+ * for every client — over replacement money that cannot exist on a database lacking the
+ * column in the first place.
+ *
+ * Memoised: the answer cannot change without a deploy-time migration, and the billing
+ * summary is a hot path that must not pay for an information_schema round trip per call.
+ */
+let replacementIdColumnPresent: Promise<boolean> | null = null;
+export function billingLineItemsHasReplacementIdColumn(): Promise<boolean> {
+  replacementIdColumnPresent ??= db
+    .execute(sql`
+      select 1 from information_schema.columns
+       where table_name = 'billing_line_items' and column_name = 'replacement_id'
+       limit 1
+    `)
+    .then((result) => {
+      const rows = Array.isArray(result)
+        ? result
+        : (result as { rows?: unknown[] })?.rows ?? [];
+      return rows.length > 0;
+    })
+    // A probe that throws must not be cached as "absent" — that would hide the column
+    // permanently after one transient error.
+    .catch((error) => { replacementIdColumnPresent = null; throw error; });
+  return replacementIdColumnPresent;
 }

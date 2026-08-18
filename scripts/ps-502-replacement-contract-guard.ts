@@ -91,7 +91,12 @@ function functionBodyOf(source: string, name: string): string {
 }
 
 function functionBody(source: string, name: string): string {
-  const start = source.indexOf(`export async function ${name}(`);
+  // Both forms: a pure fence is synchronous, and a checker that silently could not find it
+  // would pass on empty text — the failure this helper exists to prevent.
+  const start = [`export async function ${name}(`, `export function ${name}(`]
+    .map((needle) => source.indexOf(needle))
+    .filter((n) => n !== -1)
+    .reduce((best, n) => (best === -1 ? n : Math.min(best, n)), -1);
   if (start === -1) {
     throw new Error(`functionBody: ${name} not found — the check would silently pass on empty text`);
   }
@@ -681,6 +686,79 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── AC-10/AC-18: customer money, and money that has a bucket ─────────────────
+console.log('\nAC-10/AC-18 — where replacement money comes from and where it shows up');
+
+{
+  const fence = read('src/services/replacement-customer-money.ts');
+  const planner = read('src/services/replacement-billing-planner.ts');
+  const live = read('src/services/billing.ts');
+  const cached = read('src/services/reporting-metrics.ts');
+  const invoice = read('src/services/billing-invoice-totals.ts');
+  const contract = read('src/services/billing-row-total-contract.ts');
+  const fenceFn = functionBody(fence, 'resolveReplacementCustomerPostage');
+  const plannerCode = planner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // The signature only — sliced, not regexed, because a regex literal carrying braces and a
+  // semicolon is a parser hazard and the thing under test is simply "how many fields".
+  const fenceObjStart = fence.indexOf('resolveReplacementCustomerPostage(input: {');
+  const fenceSignature = fence.slice(
+    fenceObjStart + 'resolveReplacementCustomerPostage(input: {'.length,
+    fence.indexOf('}): ReplacementCustomerPostage | null', fenceObjStart),
+  );
+  check('the fence accepts the frozen tuple and NOTHING else',
+    fenceSignature.includes('frozenCustomerShippingMoney: unknown;')
+    && (fenceSignature.match(/\w+: /g) ?? []).length === 1,
+    'a caller holding only carrier cost must have nowhere to put it — that is the protection, not a list that refuses strings');
+
+  check('the fence returns the CUSTOMER amount, never the carrier cost',
+    /amount: frozen\.cShippingRateAmount/.test(fenceFn)
+    && !/amount: frozen\.selectedRateCost/.test(fenceFn),
+    'selectedRateCost is what the carrier charged us; billing it as customer money is the defect this fence exists to close');
+
+  check('a customer amount equal to the cost is refused',
+    /frozen\.cShippingRateAmount === frozen\.selectedRateCost\) return null/.test(fenceFn),
+    'equality is the signature of provider cost leaking through as customer money');
+
+  // Reads planCode, not planner: the docblock explaining WHY the carrier fields were removed
+  // names them, and a negative assertion over prose forces the next engineer to delete the
+  // reasoning to get green. Same trap the postage check below already documents.
+  check('the planner can no longer HOLD a carrier amount',
+    !/shipmentCost/.test(plannerCode) && !/otherCost/.test(plannerCode),
+    'the old docblock already claimed money came from the frozen tuple; only the type disagreed, and the type is what callers obey');
+
+  check('postage is the fenced amount',
+    /const postage = customerPostage\.amount;/.test(planner),
+    'never a sum of carrier fields');
+
+  // The SQL ARM specifically. A bare `includes` was satisfied by the row type, the local and
+  // the returned field, so deleting the arm that actually sums the money left the check
+  // green — the same presence-versus-substance trap this file has hit before.
+  const hasBucketArm = (src: string, lineType: string) =>
+    new RegExp(`line_type = '${lineType}'`).test(src);
+  check('both replacement line types have a bucket in EVERY summary owner',
+    ['replace_postage', 'replace_pick_pack'].every((t) =>
+      hasBucketArm(live, t) && hasBucketArm(cached, t) && hasBucketArm(invoice, t)),
+    'three owners each compute grand_total as an unfiltered sum, so a type missing from any one of them is money on screen that belongs to nothing');
+
+  check('the category reconciler knows both buckets',
+    /'replacePostageTotal', 'replacePickPackTotal',/.test(contract),
+    'this is the AC written down — it is what reports the delta when money has no bucket');
+
+  check('no residual bucket silences that reconciler',
+    !/otherTotal/.test(invoice) && !/otherTotal/.test(live),
+    'an \'other\' category would make the identity hold by absorbing whatever is unaccounted for, which is the alarm itself');
+
+  check('replacementCount counts REPLACEMENTS, not orders',
+    /count\(distinct b\.replacement_id\)/.test(live)
+    && /count\(distinct b\.replacement_id\)/.test(cached),
+    'a replacement line carries the ORIGINAL order id, so order_count structurally cannot see it');
+
+  check('the live summary guards on replacement_id column PRESENCE',
+    /billingLineItemsHasReplacementIdColumn/.test(live),
+    'migrations are not applied by deploy here, and an unguarded reference would 500 the billing summary for every client over money that cannot exist yet');
+}
+
 // ── AC-16: the original order went away ──────────────────────────────────────
 console.log('\nAC-16 — the original order went away');
 
@@ -928,9 +1006,11 @@ console.log('\nreplacement billing');
     /if \(!facts\.billable\) return \[\];/.test(planCode),
     'absence and $0.00 are different claims about whether the work was charged');
 
+  // Re-anchored for AC-10: the two carrier fields are gone and the refusal now hangs off the
+  // fenced amount. Same intent — absence must refuse, not bill zero.
   check('a missing frozen money tuple FAILS CLOSED',
     /REPLACEMENT_BILLING_MONEY_UNAVAILABLE/.test(planCode)
-    && /shipmentCost === null \|\| otherCost === null/.test(planCode),
+    && /!customerPostage \|\| !Number\.isFinite\(customerPostage\.amount\)/.test(planCode),
     'a live quote is not a substitute for what was actually paid');
 
   check('a missing pick/pack authority FAILS CLOSED',
@@ -941,7 +1021,10 @@ console.log('\nreplacement billing');
     // The first negative here was over-broad and matched this module's OWN error message,
     // which says a live quote is not a substitute. A guard that trips on its own explanation
     // forces the next engineer to delete the reasoning to get green. Narrowed to imports.
-    /const postage = shipmentCost \+ otherCost;/.test(planCode)
+    //
+    // Re-anchored for AC-10: postage was the SUM of two carrier fields, which is what made
+    // "the frozen tuple" a claim rather than a fact. It is now the single fenced amount.
+    /const postage = customerPostage\.amount;/.test(planCode)
     && !/from '\.\/rate|rate-browser|shipping-rate|normalizeShippingRateMoney/.test(planner),
     'a charge that changes after the goods shipped is not a record of what happened');
 

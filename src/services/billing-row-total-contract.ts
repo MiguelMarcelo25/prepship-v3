@@ -120,6 +120,14 @@ export function reconcileCategoryTotals(
     storageTotal?: unknown;
     adjustmentTotal?: unknown;
     returnTotal?: unknown;
+    /**
+     * PS-502 AC-18. Optional like the rest: a caller that has not been taught the bucket
+     * yet contributes 0 and is CAUGHT by the delta, which is the point. Making these
+     * required would turn a silent reconciliation failure into a compile error at the few
+     * call sites that already pass everything, and leave the ones that do not untouched.
+     */
+    replacePostageTotal?: unknown;
+    replacePickPackTotal?: unknown;
   },
   grandTotal: number,
   rowRef: string,
@@ -127,6 +135,7 @@ export function reconcileCategoryTotals(
   const categories = [
     'pickPackTotal', 'additionalTotal', 'packageTotal',
     'shippingTotal', 'storageTotal', 'adjustmentTotal', 'returnTotal',
+    'replacePostageTotal', 'replacePickPackTotal',
   ] as const;
 
   let sum = 0;
