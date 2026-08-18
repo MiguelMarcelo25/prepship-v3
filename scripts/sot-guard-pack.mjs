@@ -1379,6 +1379,10 @@ const REQUIRED_GUARDS = [
   'test:ps-499-order-rate-display-contract',
   // PS-507 (2026-08-14). The disposable QA harness proves that an authenticated browser
   'test:ps-502-replacement-contract',
+  // PS-502 runtime proof. In-memory PGlite, so it stays inside the pack's offline contract:
+  // it applies 0096/0097/0098 VERBATIM and executes the real create and shipment commands.
+  // Unlike the mutation matrices it writes no source files, so it is a safe pack member.
+  'test:ps-502-integration',
   // action committed a real PostgreSQL row — the evidence PS-499 Step 12 and PS-488 M3
   // need, which today a human produces by hand from a runbook.
   //

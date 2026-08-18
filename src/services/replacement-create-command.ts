@@ -136,6 +136,8 @@ function canonicalItemSignature(
 
 export async function createReplacement(
   input: CreateReplacementInput,
+  /** Injected so the command is testable against an embedded Postgres; defaults to the real pool. */
+  conn: Pick<typeof db, 'transaction'> = db,
 ): Promise<CreateReplacementResult> {
   // ── Validation, BEFORE the transaction ────────────────────────────────────
   //
@@ -194,7 +196,7 @@ export async function createReplacement(
     seenIndexes.add(item.orderLineIndex);
   }
 
-  return db.transaction(async (tx) => {
+  return conn.transaction(async (tx) => {
     // Everything below is a read-modify-write against this order: the allowance, the
     // reference sequence and the idempotency check all decide based on rows a concurrent
     // create could be writing.

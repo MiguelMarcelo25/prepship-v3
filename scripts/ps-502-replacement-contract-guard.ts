@@ -647,7 +647,11 @@ console.log('\ncreate command (locked path)');
   const insertAt = at('.insert(replacements)');
 
   check('the command exists and is transactional',
-    createSource.length > 0 && /db\.transaction\(/.test(code));
+    // `conn.transaction`, not `db.transaction`: the command takes an injected connection so
+    // it can be executed against an embedded Postgres. Defaulting to the real pool keeps
+    // production callers unchanged.
+    createSource.length > 0 && /conn\.transaction\(/.test(code)
+    && /conn: Pick<typeof db, 'transaction'> = db/.test(createSource));
 
   check('an order-scoped advisory lock is taken FIRST',
     lockAt !== -1 && lockAt < idempotentReadAt && lockAt < orderReadAt,
@@ -696,12 +700,12 @@ console.log('\ncreate command (locked path)');
   // ── Hermes correctness findings 1, 2, 3, 5, 6 ──────────────────────────────
   check('a fractional or non-positive quantity is a coded 400, not a database CHECK error',
     /Number\.isInteger\(item\.quantity\) \|\| item\.quantity <= 0/.test(code)
-    && at('REPLACEMENT_ITEM_INVALID') < at('db.transaction('),
+    && at('REPLACEMENT_ITEM_INVALID') < at('conn.transaction('),
     'truncating turned 1.9 into 1 — one unit ships and it reads as a picking error');
 
   check('duplicate line coordinates are rejected before the transaction',
     /seenIndexes\.has\(item\.orderLineIndex\)/.test(code)
-    && at('seenIndexes') < at('db.transaction('),
+    && at('seenIndexes') < at('conn.transaction('),
     'two entries for one line were each allowed, then collided on the unique index');
 
   check('the frozen reason vocabulary is enforced server-side',
@@ -710,7 +714,7 @@ console.log('\ncreate command (locked path)');
     // vocabulary is declared says nothing about whether anything consults it — the first
     // version of this check passed against `if (false)`.
     && /!REPLACEMENT_REASONS\.includes\(input\.reason/.test(code)
-    && at('REPLACEMENT_REASON_INVALID') < at('db.transaction('),
+    && at('REPLACEMENT_REASON_INVALID') < at('conn.transaction('),
     'a UI is not the only caller');
 
   check('idempotency is PAYLOAD-BOUND, not key-only',

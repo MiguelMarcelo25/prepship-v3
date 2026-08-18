@@ -113,8 +113,10 @@ type DriftOutcome =
  */
 async function resolveDriftAndMaybeReview(
   input: InsertReplacementShipmentInput,
+  /** Injected so the command is testable against an embedded Postgres; defaults to the real pool. */
+  conn: Pick<typeof db, 'transaction'> = db,
 ): Promise<DriftOutcome> {
-  return db.transaction(async (tx) => {
+  return conn.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, (
       select order_id from replacements where id = ${input.replacementId}
     ))`);
@@ -235,8 +237,10 @@ async function resolveDriftAndMaybeReview(
 
 export async function insertReplacementShipment(
   input: InsertReplacementShipmentInput,
+  /** Injected so the command is testable against an embedded Postgres; defaults to the real pool. */
+  conn: Pick<typeof db, 'transaction'> = db,
 ): Promise<InsertReplacementShipmentResult> {
-  const outcome = await resolveDriftAndMaybeReview(input);
+  const outcome = await resolveDriftAndMaybeReview(input, conn);
   if (outcome.drifted) {
     throw new ReplacementShipmentError(
       REPLACEMENT_ERROR_CODES.SOURCE_LINE_CHANGED,
@@ -252,7 +256,7 @@ export async function insertReplacementShipment(
   }
 
   const before = outcome.replacement;
-  return db.transaction(async (tx) => {
+  return conn.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, ${before.orderId})`);
 
     const [shipment] = await tx
