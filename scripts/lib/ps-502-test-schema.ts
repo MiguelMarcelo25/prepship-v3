@@ -74,38 +74,70 @@ export const PS_502_PREREQUISITE_DDL = `
   -- The shipped command deducts through applyInventoryMovementInTransaction, so the
   -- ledger and its idempotency index are part of the schema under test: the whole point
   -- is that a replacement-scoped key does NOT collide with the order-scoped one.
+  -- Mirrors src/db/schema/inventory.ts. NOTE: there is no quantity column — stock is
+  -- DERIVED from inventory_ledger, so a test asserting a balance must sum the ledger.
   CREATE TABLE inventory (
     id serial PRIMARY KEY,
+    client_id integer REFERENCES clients(id),
     sku text NOT NULL,
     name text,
-    qty_on_hand integer NOT NULL DEFAULT 0,
-    client_id integer,
+    image_url text,
+    reorder_level integer NOT NULL DEFAULT 0,
+    weight_oz real DEFAULT 0,
+    length real, width real, height real,
+    parent_sku_id integer,
+    base_unit_qty integer NOT NULL DEFAULT 1,
+    units_per_pack integer NOT NULL DEFAULT 1,
+    cu_ft_override real,
+    package_id integer,
+    active boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );
   CREATE TABLE inventory_ledger (
     id serial PRIMARY KEY,
-    inventory_id integer NOT NULL REFERENCES inventory(id),
+    inventory_id integer NOT NULL REFERENCES inventory(id) ON DELETE CASCADE,
     type text NOT NULL,
     qty integer NOT NULL,
-    order_id integer,
+    order_id integer REFERENCES orders(id),
+    client_id integer REFERENCES clients(id),
+    sku text,
+    source_entity text,
+    source_id text,
     note text,
     created_by text,
     effective_at timestamptz,
     idempotency_key text,
-    source_entity text,
-    source_id text,
     created_at timestamptz NOT NULL DEFAULT now()
   );
+  -- The identity that makes a replacement-scoped key provably distinct from the
+  -- order-scoped one: two different keys must both be insertable.
   CREATE UNIQUE INDEX inventory_ledger_idempotency_key_unq
     ON inventory_ledger (idempotency_key) WHERE idempotency_key IS NOT NULL;
+  -- Mirrors src/db/schema/billing.ts billingLineItems IN FULL. Drizzle emits every declared
+  -- column on an insert, so a table missing one fails exactly as production would — which is
+  -- how the missing return_id surfaced here rather than in a deploy.
   CREATE TABLE billing_line_items (
     id serial PRIMARY KEY,
+    client_id integer NOT NULL,
     order_id integer,
+    order_number text,
     shipment_id integer,
+    return_id integer,
+    replacement_id integer,
+    ship_date timestamptz,
+    billing_effective_date timestamptz,
+    billing_policy_version text,
     line_type text NOT NULL,
-    description text,
-    replacement_id integer
+    description text NOT NULL,
+    qty numeric(10,2) NOT NULL DEFAULT 1,
+    unit_cost numeric(10,2) NOT NULL,
+    total_cost numeric(10,2) NOT NULL,
+    package_id integer,
+    source_finalization_id text,
+    billing_adjustment_id text,
+    invoiced boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now()
   );
   CREATE TABLE billing_credit_notes (
     id text PRIMARY KEY,
@@ -133,7 +165,7 @@ export const PS_502_MIGRATIONS = [
 
 /** A shipped original: 3 x SKU-A at line 0, 2 x SKU-B at line 1. */
 export const PS_502_SEED_ITEMS_JSON =
-  '[{"sku":"SKU-A","name":"Widget A","quantity":3},{"sku":"SKU-B","name":"Widget B","quantity":2}]';
+  '[{"sku":"SKU-A","name":"Widget A","quantity":3},{"sku":"SKU-B","name":"Widget B","quantity":2},{"sku":"SKU-C","name":"Widget C","quantity":99}]';
 
 /**
  * Seeded THROUGH orders.items so the sync trigger produces order_items, exactly as production

@@ -29,6 +29,8 @@ const PURCHASE_REQ = 'src/services/replacement-purchase-request.ts';
 const LABEL_BUY = 'src/services/replacement-label-purchase-command.ts';
 const LABEL_VOID = 'src/services/replacement-label-void-command.ts';
 const SHIPPED = 'src/services/replacement-shipped-command.ts';
+const BILL_PLAN = 'src/services/replacement-billing-planner.ts';
+const BILL_WRITE = 'src/services/replacement-billing-writer.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -557,6 +559,45 @@ const MUTATIONS: Mutation[] = [
     find: "      to: 'approved',",
     replace: "      to: 'shipped' as never,",
     expect: 'the lifecycle command never writes `shipped`',
+  },  {
+    id: 'M67',
+    defect: 'a non-billable replacement writes a $0.00 line instead of none',
+    file: BILL_PLAN,
+    find: '  if (!facts.billable) return [];',
+    replace: '  if (false) return [];',
+    expect: 'billable=false produces NO line, not a zero line',
+  },
+  {
+    id: 'M68',
+    defect: 'a missing frozen money tuple is treated as zero rather than refused',
+    file: BILL_PLAN,
+    find: '  if (shipmentCost === null || otherCost === null) {',
+    replace: '  if (false) {',
+    expect: 'a missing frozen money tuple FAILS CLOSED',
+  },
+  {
+    id: 'M69',
+    defect: 'the writer stops counting the RETURNED rows, so a partial insert reads as complete',
+    file: BILL_WRITE,
+    find: '  if (inserted.length !== planned.length) {',
+    replace: '  if (false) {',
+    expect: 'the writer inserts with RETURNING and counts the RETURNED rows',
+  },
+  {
+    id: 'M70',
+    defect: 'onConflictDoNothing is added to a money path',
+    file: BILL_WRITE,
+    find: '  ).returning({ id: billingLineItems.id, lineType: billingLineItems.lineType });',
+    replace: '  ).onConflictDoNothing().returning({ id: billingLineItems.id, lineType: billingLineItems.lineType });',
+    expect: 'there is NO onConflictDoNothing on a money path',
+  },
+  {
+    id: 'M71',
+    defect: 'the cross-table invariant stops being asserted before the insert',
+    file: BILL_WRITE,
+    find: '    assertReplacementLineInvariants(line, {',
+    replace: '    void ({',
+    expect: 'cross-table invariants are asserted in the service',
   },
 ];
 

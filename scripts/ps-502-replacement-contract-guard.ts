@@ -649,6 +649,67 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── Replacement billing: zero or complete, never partial ─────────────────────
+console.log('\nreplacement billing');
+
+{
+  const planner = read('src/services/replacement-billing-planner.ts');
+  const writer = read('src/services/replacement-billing-writer.ts');
+  const planCode = planner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const writeCode = writer.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  check('the planner is PURE — no database, no clock, no policy lookup',
+    !/from '\.\.\/db|drizzle-orm|Date\.now\(\)|new Date\(\)/.test(planCode),
+    'a planner that reads its own clock cannot be replayed');
+
+  check('billable=false produces NO line, not a zero line',
+    /if \(!facts\.billable\) return \[\];/.test(planCode),
+    'absence and $0.00 are different claims about whether the work was charged');
+
+  check('a missing frozen money tuple FAILS CLOSED',
+    /REPLACEMENT_BILLING_MONEY_UNAVAILABLE/.test(planCode)
+    && /shipmentCost === null \|\| otherCost === null/.test(planCode),
+    'a live quote is not a substitute for what was actually paid');
+
+  check('a missing pick/pack authority FAILS CLOSED',
+    /REPLACEMENT_BILLING_PICK_PACK_UNAVAILABLE/.test(planCode),
+    'route input and portal arithmetic are not authorities');
+
+  check('postage is the frozen tuple, never a re-read rate',
+    // The first negative here was over-broad and matched this module's OWN error message,
+    // which says a live quote is not a substitute. A guard that trips on its own explanation
+    // forces the next engineer to delete the reasoning to get green. Narrowed to imports.
+    /const postage = shipmentCost \+ otherCost;/.test(planCode)
+    && !/from '\.\/rate|rate-browser|shipping-rate|normalizeShippingRateMoney/.test(planner),
+    'a charge that changes after the goods shipped is not a record of what happened');
+
+  check('lines carry the ORIGINAL order and the ALLOCATED reference',
+    /orderId: facts\.orderId/.test(planCode)
+    && /orderNumber: facts\.reference/.test(planCode)
+    && !/-REPLACE/.test(planCode),
+    'never string-build the reference at a use site');
+
+  check('cross-table invariants are asserted in the service',
+    /export function assertReplacementLineInvariants/.test(planner)
+    && /line\.shipmentId !== replacement\.replacementShipmentId/.test(planCode)
+    && /assertReplacementLineInvariants\(/.test(writeCode),
+    'no CHECK can require that the shipment is THIS replacement\'s');
+
+  check('the writer inserts with RETURNING and counts the RETURNED rows',
+    /\.returning\(\{ id: billingLineItems\.id/.test(writeCode)
+    && /inserted\.length !== planned\.length/.test(writeCode),
+    'plan length and persisted length are the same number only when the insert did what was asked');
+
+  check('there is NO onConflictDoNothing on a money path',
+    !/onConflictDoNothing/.test(writeCode),
+    'a conflict means a line exists this plan did not know about; swallowing it reports success');
+
+  check('billing commits inside the caller\'s transaction, not beside it',
+    /export async function writeReplacementBillingInTransaction/.test(writer)
+    && !/conn\.transaction|db\.transaction/.test(writeCode),
+    'a billing failure must roll back the stock movement that would otherwise go unbilled');
+}
+
 // ── `shipped` is atomic, and exactly one function writes it ──────────────────
 console.log('\nthe atomic shipped command');
 

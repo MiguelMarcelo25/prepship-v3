@@ -26,7 +26,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
 // Shared with the PG17 lane: a behaviour proven against one schema says nothing about the
 // other, and the divergence would be invisible until a case passed here and failed there.
@@ -70,6 +70,12 @@ async function main(): Promise<void> {
   const {
     voidReplacementLabel, reconcileReplacementPurchaseIntent, ReplacementVoidError,
   } = await import('../src/services/replacement-label-void-command.js');
+  const { shipReplacement, ReplacementShippedError } =
+    await import('../src/services/replacement-shipped-command.js');
+  const { writeReplacementBillingInTransaction } =
+    await import('../src/services/replacement-billing-writer.js');
+  const { planReplacementBillingLines, ReplacementBillingPlanError } =
+    await import('../src/services/replacement-billing-planner.js');
   const {
     approveReplacement, rejectReplacement, cancelReplacement, resolveReplacementReview,
     remapReplacementItem, setReplacementBillability, completeReplacement,
@@ -304,7 +310,7 @@ async function main(): Promise<void> {
     const regenerated = await client.query<{ c: number }>(
       'select count(*)::int as c from order_items where order_id = 1321',
     );
-    assert.equal(regenerated.rows[0]!.c, 2, 'the trigger reinserted both lines');
+    assert.equal(regenerated.rows[0]!.c, 3, 'the trigger reinserted every line');
 
     const [frozenAfter] = await db.select().from(schema.replacementItems)
       .where(eq(schema.replacementItems.replacementId, firstId));
@@ -443,8 +449,8 @@ async function main(): Promise<void> {
   await check('a billing LINE alone blocks deleting its replacement', async () => {
     const isolated = await bareReplacement('line');
     await client.exec(
-      `INSERT INTO billing_line_items (order_id, shipment_id, line_type, description, replacement_id)
-       VALUES (1321, 1, 'replace_postage', 'Isolated postage', ${isolated});`,
+      `INSERT INTO billing_line_items (client_id, order_id, shipment_id, line_type, description, unit_cost, total_cost, replacement_id)
+       VALUES (1, 1321, 1, 'replace_postage', 'Isolated postage', 1, 1, ${isolated});`,
     );
     await assert.rejects(
       () => client.exec(`DELETE FROM replacements WHERE id = ${isolated};`),
@@ -470,14 +476,14 @@ async function main(): Promise<void> {
   });
 
   await client.exec(
-    `INSERT INTO billing_line_items (order_id, shipment_id, line_type, description, replacement_id)
-     VALUES (1321, 1, 'replace_postage', 'Replacement postage', ${firstId});`,
+    `INSERT INTO billing_line_items (client_id, order_id, shipment_id, line_type, description, unit_cost, total_cost, replacement_id)
+     VALUES (1, 1321, 1, 'replace_postage', 'Replacement postage', 1, 1, ${firstId});`,
   );
   await check('a description reword cannot mint a second replacement charge', async () => {
     await assert.rejects(
       () => client.exec(
-        `INSERT INTO billing_line_items (order_id, shipment_id, line_type, description, replacement_id)
-         VALUES (1321, 1, 'replace_postage', 'Replacement postage (revised wording)', ${firstId});`,
+        `INSERT INTO billing_line_items (client_id, order_id, shipment_id, line_type, description, unit_cost, total_cost, replacement_id)
+         VALUES (1, 1321, 1, 'replace_postage', 'Replacement postage (revised wording)', 1, 1, ${firstId});`,
       ),
       /duplicate key value|unique constraint/i,
     );
@@ -486,8 +492,8 @@ async function main(): Promise<void> {
   await check('a replacement billing line without its shipment is rejected', async () => {
     await assert.rejects(
       () => client.exec(
-        `INSERT INTO billing_line_items (order_id, shipment_id, line_type, description, replacement_id)
-         VALUES (1321, NULL, 'replace_pick_pack', 'Pick/pack', ${firstId});`,
+        `INSERT INTO billing_line_items (client_id, order_id, shipment_id, line_type, description, unit_cost, total_cost, replacement_id)
+         VALUES (1, 1321, NULL, 'replace_pick_pack', 'Pick/pack', 1, 1, ${firstId});`,
       ),
       /check constraint/i,
     );
@@ -715,8 +721,8 @@ async function main(): Promise<void> {
   };
 
   /** A replacement with an attached shipment, ready to buy. */
-  const readyToBuy = async (key: string) => {
-    const r = await makeReplacement(key);
+  const readyToBuy = async (key: string, lineIndex = 1) => {
+    const r = await makeReplacement(key, lineIndex);
     await db.update(schema.replacements)
       .set({ status: 'approved' }).where(eq(schema.replacements.id, r.id));
     await insertReplacementShipment({
@@ -888,8 +894,8 @@ async function main(): Promise<void> {
   };
 
   /** A replacement with a purchased label. */
-  const withPurchasedLabel = async (key: string) => {
-    const r = await readyToBuy(key);
+  const withPurchasedLabel = async (key: string, lineIndex = 1) => {
+    const r = await readyToBuy(key, lineIndex);
     await purchaseReplacementLabel({
       replacementId: r.id, actor: { email: actor.email, type: 'operator' },
       purchaseInputs: PURCHASE_INPUTS,
@@ -1098,6 +1104,212 @@ async function main(): Promise<void> {
     const [after] = await db.select().from(schema.replacementLabelPurchaseIntents)
       .where(eq(schema.replacementLabelPurchaseIntents.id, orphan!.id));
     assert.equal(after!.state, 'reconcile_required');
+  });
+
+  console.log('\nreplacement billing');
+
+  const PLAN_FACTS = {
+    replacementId: 1, orderId: 1321, clientId: 1,
+    reference: '1321-REPLACE', replacementShipmentId: 5, billable: true,
+    money: { shipmentCost: 8.25, otherCost: 1.5 },
+    pickPackCharge: 2.5,
+    shipDate: new Date('2026-08-18T00:00:00Z'),
+    billingEffectiveDate: new Date('2026-08-18T00:00:00Z'),
+    billingPolicyVersion: 'v1',
+  };
+
+  await check('a NON-billable replacement plans NO line, not a zero line', () => {
+    const lines = planReplacementBillingLines({ ...PLAN_FACTS, billable: false });
+    assert.equal(lines.length, 0, 'absence and $0.00 are different claims');
+  });
+
+  await check('a billable replacement plans the COMPLETE set', () => {
+    const lines = planReplacementBillingLines(PLAN_FACTS);
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lines.map((l) => l.lineType).sort(), ['replace_pick_pack', 'replace_postage']);
+    const postage = lines.find((l) => l.lineType === 'replace_postage');
+    assert.equal(postage!.totalCost, '9.75', 'postage is shipmentCost + otherCost, frozen');
+    assert.equal(postage!.orderNumber, '1321-REPLACE', 'the ALLOCATED reference, not the order number');
+    assert.equal(postage!.orderId, 1321, 'the ORIGINAL order relationally');
+  });
+
+  await check('a missing frozen money tuple FAILS CLOSED', () => {
+    let err: unknown = null;
+    try {
+      planReplacementBillingLines({ ...PLAN_FACTS, money: { shipmentCost: null, otherCost: 1.5 } });
+    } catch (e) { err = e; }
+    assert.ok(err instanceof ReplacementBillingPlanError
+      && err.code === 'REPLACEMENT_BILLING_MONEY_UNAVAILABLE',
+      'a live quote is not a substitute for what was actually paid');
+  });
+
+  await check('a missing pick/pack authority FAILS CLOSED', () => {
+    let err: unknown = null;
+    try {
+      planReplacementBillingLines({ ...PLAN_FACTS, pickPackCharge: null });
+    } catch (e) { err = e; }
+    assert.ok(err instanceof ReplacementBillingPlanError
+      && err.code === 'REPLACEMENT_BILLING_PICK_PACK_UNAVAILABLE');
+  });
+
+  // ── The atomic shipped command, executed end to end ──────────────────────
+  await client.exec(`
+    INSERT INTO inventory (id, sku, name, client_id) VALUES
+      (900, 'SKU-C', 'Widget C', 1);
+  `);
+
+  const packageConsumer = async () => ({ consumed: true });
+  const billingWriter = async (tx: unknown, input: { replacement: { id: number; orderId: number; clientId: number | null; reference: string; replacementShipmentId: number | null; billable: boolean } ; shipmentId: number }) =>
+    writeReplacementBillingInTransaction(tx, {
+      replacementId: input.replacement.id,
+      orderId: input.replacement.orderId,
+      clientId: input.replacement.clientId ?? 1,
+      reference: input.replacement.reference,
+      replacementShipmentId: input.shipmentId,
+      billable: input.replacement.billable,
+      money: { shipmentCost: 8.25, otherCost: 1.5 },
+      pickPackCharge: 2.5,
+      shipDate: new Date(),
+      billingEffectiveDate: new Date(),
+      billingPolicyVersion: 'v1',
+    });
+
+  /** A billable replacement with a purchased label, ready to ship. */
+  const readyToShip = async (key: string) => {
+    // Line 2 has headroom; lines 0 and 1 are where the allowance cases deliberately
+    // exhaust the cap, and reusing them here would make these fixtures fight those.
+    const r = await withPurchasedLabel(key, 2);
+    await db.update(schema.replacements)
+      .set({ billable: true, liabilityOwner: 'client' })
+      .where(eq(schema.replacements.id, r.id));
+    const [items] = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.replacementId, r.id));
+    return { replacementId: r.id, itemId: items!.id };
+  };
+
+  await check('AC-4: two replacements on one order persist FOUR lines with exact attribution', async () => {
+    const a = await readyToShip('bill-a');
+    const b = await readyToShip('bill-b');
+
+    for (const target of [a, b]) {
+      const result = await shipReplacement({
+        replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+        consumePackage: packageConsumer,
+        writeBilling: billingWriter as never,
+      }, conn);
+      assert.equal(result.shipped, true, 'the replacement shipped');
+      assert.equal(result.billingLinesWritten, 2, 'both lines, or none');
+    }
+
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(inArray(schema.billingLineItems.replacementId, [a.replacementId, b.replacementId]));
+    assert.equal(lines.length, 4, 'exactly four persisted rows, not four calls that returned');
+
+    for (const target of [a, b]) {
+      const mine = lines.filter((l) => l.replacementId === target.replacementId);
+      assert.equal(mine.length, 2, 'each replacement owns exactly two');
+      const total = mine.reduce((sum, l) => sum + Number(l.totalCost), 0);
+      assert.equal(total.toFixed(2), '12.25', '9.75 postage + 2.50 pick/pack');
+      for (const line of mine) {
+        assert.equal(line.orderId, 1321, 'the ORIGINAL order relationally');
+        assert.ok(String(line.orderNumber).startsWith('1321-REPLACE'),
+          'the allocated reference visibly');
+      }
+    }
+  });
+
+  await check('the cross-table invariant holds: line.shipment_id = replacement shipment', async () => {
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.lineType, 'replace_postage'));
+    for (const line of lines) {
+      const [r] = await db.select().from(schema.replacements)
+        .where(eq(schema.replacements.id, line.replacementId!));
+      // The ruling-C cases insert bare fixture rows by hand against replacements that have
+      // no shipment. Those are testing the FK, not the writer, so they are not in scope here.
+      if (r!.replacementShipmentId == null) continue;
+      assert.equal(line.shipmentId, r!.replacementShipmentId);
+      assert.equal(line.orderId, r!.orderId);
+    }
+  });
+
+  await check('a description reword cannot mint a SECOND replacement charge', async () => {
+    const [existing] = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.lineType, 'replace_postage'));
+    await assert.rejects(
+      () => client.exec(
+        `INSERT INTO billing_line_items (client_id, order_id, order_number, shipment_id,
+           line_type, description, unit_cost, total_cost, replacement_id)
+         VALUES (1, 1321, '1321-REPLACE', ${existing!.shipmentId},
+           'replace_postage', 'Replacement postage (reworded)', 9.75, 9.75, ${existing!.replacementId});`,
+      ),
+      /duplicate key value|unique constraint/i,
+      'identity lives in replacement_id + line_type, not in the description');
+  });
+
+  await check('a NON-billable replacement ships with NO billing row', async () => {
+    const t = await readyToShip('bill-none');
+    await db.update(schema.replacements).set({ billable: false })
+      .where(eq(schema.replacements.id, t.replacementId));
+    const result = await shipReplacement({
+      replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer,
+      writeBilling: billingWriter as never,
+    }, conn);
+    assert.equal(result.shipped, true);
+    assert.equal(result.billingLinesWritten, 0);
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, t.replacementId));
+    assert.equal(lines.length, 0, 'assert ABSENCE, not a zero row');
+  });
+
+  await check('stock is deducted once per replacement item, and a retry adds nothing', async () => {
+    const t = await readyToShip('bill-stock');
+    const before = await client.query<{ q: number }>(
+      'select coalesce(sum(qty),0)::int as q from inventory_ledger where inventory_id = 900');
+    const first = await shipReplacement({
+      replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+    assert.equal(first.inventoryApplied, 1);
+    const afterFirst = await client.query<{ q: number }>(
+      'select coalesce(sum(qty),0)::int as q from inventory_ledger where inventory_id = 900');
+    assert.equal(afterFirst.rows[0]!.q, before.rows[0]!.q - 1);
+
+    const again = await shipReplacement({
+      replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+    assert.equal(again.shipped, false, 'a retry is a no-op');
+    const afterRetry = await client.query<{ q: number }>(
+      'select coalesce(sum(qty),0)::int as q from inventory_ledger where inventory_id = 900');
+    assert.equal(afterRetry.rows[0]!.q, afterFirst.rows[0]!.q,
+      'no double deduction');
+  });
+
+  await check('INVENTORY_AUTO_DEDUCT off blocks shipping and writes NOTHING', async () => {
+    const t = await readyToShip('bill-killswitch');
+    (env as { INVENTORY_AUTO_DEDUCT: boolean }).INVENTORY_AUTO_DEDUCT = false;
+    await assert.rejects(
+      () => shipReplacement({
+        replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
+        inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+        consumePackage: packageConsumer, writeBilling: billingWriter as never,
+      }, conn),
+      (e: unknown) => e instanceof ReplacementShippedError
+        && e.code === 'REPLACEMENT_INVENTORY_DISABLED',
+    );
+    (env as { INVENTORY_AUTO_DEDUCT: boolean }).INVENTORY_AUTO_DEDUCT = true;
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, t.replacementId));
+    assert.equal(after!.status, 'label_created', 'it stays put');
+    assert.equal(after!.shippedAt, null);
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, t.replacementId));
+    assert.equal(lines.length, 0, 'no billing row');
   });
 
   await client.close();
