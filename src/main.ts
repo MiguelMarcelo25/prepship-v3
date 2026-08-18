@@ -228,7 +228,12 @@ app.route('/client-portal', clientPortalIntegrationsRoute);
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
 app.onError((err, c) => {
-  const status = (err as { status?: number }).status ?? 500;
+  // Two spellings, because the codebase has two. Hazmat and the older services name the
+  // field `status`; every PS-502 error class names it `httpStatus`. Reading only one meant a
+  // deliberate 403 or 409 that escaped a route's own mapper arrived as a 500 — the refusal
+  // was correct, the response was not, and the log said "unhandled".
+  const coded = err as { status?: number; httpStatus?: number };
+  const status = coded.httpStatus ?? coded.status ?? 500;
   const url = new URL(c.req.url);
   reportError('api.request.failed', err, {
     requestId: c.get('requestId'),

@@ -37,6 +37,7 @@ const FOLD = 'src/services/billing-replacement-finalized-fold.ts';
 const GENERATOR = 'src/services/billing.ts';
 const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
 const ROUTE = 'src/routes/replacements.ts';
+const DIAGNOSTICS = 'src/services/replacement-diagnostics.ts';
 const MAIN = 'src/main.ts';
 const FENCE = 'src/services/replacement-customer-money.ts';
 const PLANNER = 'src/services/replacement-billing-planner.ts';
@@ -796,11 +797,11 @@ const MUTATIONS: Mutation[] = [
   },
   {
     id: 'M93',
-    defect: 'the feature gate answers 403, confirming the surface exists',
+    defect: 'the disabled surface stops naming itself, so it reads as a plain permission denial',
     file: ROUTE,
-    find: "  if (!env.REPLACEMENTS_ENABLED) return c.json({ error: 'Not found' }, 404);",
-    replace: "  if (!env.REPLACEMENTS_ENABLED) return c.json({ error: 'Forbidden' }, 403);",
-    expect: 'the WHOLE router is gated, and off means 404',
+    find: "      { error: 'The replacements surface is not enabled', code: 'REPLACEMENTS_DISABLED' },",
+    replace: "      { error: 'The replacements surface is not enabled' },",
+    expect: 'the WHOLE router is gated, with a code distinct from not-found',
   },
   {
     id: 'M94',
@@ -817,6 +818,29 @@ const MUTATIONS: Mutation[] = [
     find: "  if (typeof e?.httpStatus !== 'number' || typeof e?.code !== 'string') throw error;",
     replace: "  if (false) throw error;",
     expect: 'the route never decides the status code',
+  },  {
+    id: 'M96',
+    defect: 'zero-count classes are reported, burying the real ones in a list of noise',
+    file: DIAGNOSTICS,
+    find: '    if (count === 0) continue;',
+    replace: '',
+    expect: 'classes with nothing wrong are OMITTED, and healthy is explicit',
+  },
+  {
+    id: 'M97',
+    defect: 'the unbilled sweep stops checking billable, so correct behaviour is reported as an anomaly',
+    file: DIAGNOSTICS,
+    find: '      where r.billable = true',
+    replace: '      where true',
+    expect: 'the unbilled-shipment query is scoped to BILLABLE replacements',
+  },
+  {
+    id: 'M98',
+    defect: 'an anomaly loses the guidance that makes it actionable',
+    file: DIAGNOSTICS,
+    find: /\n    action:\n      'Do NOT hand-write a billing line[\s\S]*?fix that path\.',/,
+    replace: "\n    action: '',",
+    expect: 'every anomaly carries what it means and what to do',
   },
 ];
 

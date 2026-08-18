@@ -1850,6 +1850,73 @@ async function main(): Promise<void> {
       .where(eq(schema.replacements.id, target.replacementId));
     assert.notEqual(after!.status, 'shipped', 'the refusal rolled the whole dispatch back');
   });
+  console.log('\nitem 14 — what an operator can see');
+
+  const { collectReplacementDiagnostics } =
+    await import('../src/services/replacement-diagnostics.js');
+
+  const anomaly = async (kind: string) => {
+    const report = await collectReplacementDiagnostics(db as never);
+    return report.anomalies.find((a) => a.kind === kind) ?? null;
+  };
+
+  await check('a shipped billable replacement with NO billing line is reported', async () => {
+    const before = await anomaly('shipped_without_billing');
+
+    const target = await readyToShip('diag-unbilled');
+    await shipReplacement({
+      replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+    // The state the anomaly exists for: goods gone, money absent. Reached here by deleting
+    // the lines, because the commands correctly refuse to produce it.
+    await db.delete(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, target.replacementId));
+
+    const after = await anomaly('shipped_without_billing');
+    assert.ok(after, 'the anomaly is reported at all');
+    assert.equal(after!.count, (before?.count ?? 0) + 1);
+    assert.ok(after!.sampleReplacementIds.includes(target.replacementId),
+      'the sample names the replacement, so an operator can go and look');
+    assert.equal(after!.severity, 'money');
+    assert.ok(after!.meaning.length > 0 && after!.action.length > 0,
+      'a count without an explanation is not diagnostics');
+  });
+
+  await check('a correctly billed shipped replacement is NOT reported', async () => {
+    const before = await anomaly('shipped_without_billing');
+    const target = await readyToShip('diag-billed');
+    await shipReplacement({
+      replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+
+    const after = await anomaly('shipped_without_billing');
+    assert.equal(after?.count ?? 0, before?.count ?? 0,
+      'the ordinary path must not appear in a list of things that are wrong');
+  });
+
+  await check('an unresolved original-order hold is reported as blocked', async () => {
+    const found = await anomaly('open_original_order_hold');
+    assert.ok(found, 'the AC-16 holds raised earlier are still open and still listed');
+    assert.equal(found!.severity, 'blocked');
+
+    const [{ n }] = (await db.execute(sql`
+      select count(*)::int as n from replacement_original_order_holds where resolved_at is null
+    `) as unknown as { rows: { n: number }[] }).rows;
+    assert.equal(found!.count, n, "the count is the truth, not an approximation");
+  });
+
+  await check('classes with nothing wrong are omitted, not reported as zero', async () => {
+    const report = await collectReplacementDiagnostics(db as never);
+    assert.ok(report.anomalies.every((a) => a.count > 0),
+      'a list of zeroes is a list nobody finishes reading');
+    assert.equal(report.healthy, report.anomalies.length === 0,
+      'healthy states it explicitly, so an empty list cannot be mistaken for a failed run');
+  });
+
   await client.close();
   console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }

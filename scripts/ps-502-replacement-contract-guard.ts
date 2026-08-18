@@ -686,6 +686,56 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── item 14: what an operator can see ────────────────────────────────────────
+console.log('\nitem 14 — operator diagnostics');
+
+{
+  const diag = read('src/services/replacement-diagnostics.ts');
+  const diagCode = diag.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  check('diagnostics is READ ONLY',
+    !/\.insert\(|\.update\(|\.delete\(|\binsert into\b|\bupdate \b|\bdelete from\b/i.test(diagCode),
+    'a tool that could also fix things would be a second way to change state, without the locks, guards and events the commands carry');
+
+  check('it reports, and never resolves',
+    !/replacement-lifecycle-command|replacement-label|replacement-shipped|original-order-hold/.test(diagCode),
+    'an operator acts through the ordinary commands so the audit trail stays true');
+
+  check('the money-losing states are all covered',
+    ['shipped_without_billing', 'unresolved_label_purchase_intent', 'void_reconcile_required']
+      .every((kind) => diagCode.includes(kind)),
+    'these are the three ways real money moves with nothing downstream noticing');
+
+  check('the unbilled-shipment query is scoped to BILLABLE replacements',
+    /r\.billable = true[\s\S]{0,200}not exists \([\s\S]{0,120}billing_line_items/.test(diagCode),
+    'a non-billable replacement writing no line is correct behaviour, not an anomaly — reporting it would train operators to ignore the list');
+
+  // Counted inside the CATALOGUE only: meaning/action also appear where each entry is
+  // copied onto the result, which made the totals differ by one for a correct file.
+  const catalogue = diagCode.slice(diagCode.indexOf('const CATALOGUE'),
+    diagCode.indexOf('export async function collectReplacementDiagnostics'));
+  check('every anomaly carries what it means and what to do',
+    (catalogue.match(/meaning:/g) ?? []).length === (catalogue.match(/action:/g) ?? []).length
+    && (catalogue.match(/kind: '/g) ?? []).length === (catalogue.match(/severity: '/g) ?? []).length
+    && (catalogue.match(/kind: '/g) ?? []).length >= 6
+    && (catalogue.match(/meaning:/g) ?? []).length
+       === (catalogue.match(/kind: '/g) ?? []).length + 1
+    // Counting the FIELDS is not enough: an empty string is still a field, and M98 emptied
+    // one while every count stayed correct. Substance, not presence.
+    && !/(meaning|action):\s*'',/.test(catalogue)
+    && !/(meaning|action):\s*\n?\s*''/.test(catalogue),
+    'a count named void_reconcile_required tells the person reading it at 2am nothing');
+
+  check('classes with nothing wrong are OMITTED, and healthy is explicit',
+    /if \(count === 0\) continue;/.test(diagCode)
+    && /healthy: anomalies\.length === 0/.test(diagCode),
+    'a list of zeroes stops being read, and an empty list must not be mistakable for a run that failed');
+
+  check('the sample is a signal, not an export',
+    /\[1:10\]/.test(diagCode),
+    'enough ids to go and look, never the whole set');
+}
+
 // ── item 13: the HTTP surface ────────────────────────────────────────────────
 console.log('\nthe HTTP surface');
 
@@ -695,15 +745,20 @@ console.log('\nthe HTTP surface');
   const main = read('src/main.ts');
   const auth = read('src/middleware/auth.ts');
 
+  check('a PS-502 error keeps its status when it reaches the global handler',
+    /coded\.httpStatus \?\? coded\.status \?\? 500/.test(main),
+    'every PS-502 class names the field httpStatus; reading only `status` turned a deliberate 403 into a 500 that logged as unhandled');
+
   check('the router is in protectedPrefixes, not merely mounted',
     /^\s*'\/replacements',$/m.test(main.slice(main.indexOf('const protectedPrefixes'),
       main.indexOf(']', main.indexOf('const protectedPrefixes'))))
     && /app\.route\('\/replacements', replacementsRoute\)/.test(main),
     'app.route does NOT attach requireAuth; two features have shipped unauthenticated by missing the allowlist entry');
 
-  check('the WHOLE router is gated, and off means 404',
-    /app\.use\('\*', async \(c, next\) => \{[\s\S]{0,200}REPLACEMENTS_ENABLED[\s\S]{0,80}404/.test(routeCode),
-    'a per-handler gate is one revert away from protecting five routes of six, and 403 would confirm the feature exists');
+  check('the WHOLE router is gated, with a code distinct from not-found',
+    /app\.use\('\*', async \(c, next\) => \{[\s\S]{0,300}REPLACEMENTS_ENABLED/.test(routeCode)
+    && /REPLACEMENTS_DISABLED[\s\S]{0,40}403/.test(routeCode),
+    'a per-handler gate is one revert away from protecting five routes of six; and a bare 404 could not be told apart from a missing replacement');
 
   check('every route denies portal roles outright',
     /requireInternalPermission\(/.test(routeCode)
@@ -722,9 +777,12 @@ console.log('\nthe HTTP surface');
     && /orderScopePredicate\(/.test(routeCode),
     'that owner exists because /rates/browse could read any tenant\'s order; a second copy is a second thing to get wrong');
 
+  // Scoped to the LOAD path: the feature gate legitimately answers 403 now, so a file-wide
+  // "no 403 anywhere" assertion would be asserting the wrong thing.
   check('an out-of-scope replacement 404s rather than 403s',
-    !/'Forbidden'|403\)/.test(routeCode),
-    'a 403 confirms the row exists, which is the fact being withheld');
+    (routeCode.match(/return c\.json\(\{ error: 'Not found' \}, 404\)/g) ?? []).length >= 4
+    && !/isOrderRowInScope[\s\S]{0,200}403/.test(routeCode),
+    'a 403 on a scope miss confirms the row exists, which is the fact being withheld');
 
   check('the route never decides the status code',
     /if \(typeof e\?\.httpStatus !== 'number' \|\| typeof e\?\.code !== 'string'\) throw error;/.test(routeCode)

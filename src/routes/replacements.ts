@@ -22,18 +22,24 @@ import {
 import {
   raiseReplacementOriginalOrderHoldsInTransaction,
 } from '../services/replacement-original-order-hold';
+import { collectReplacementDiagnostics } from '../services/replacement-diagnostics';
 
 /**
  * PS-502 item 13 — the operator HTTP surface for replacements.
  *
  * ── DEFAULT OFF, AS A WHOLE ROUTER ──────────────────────────────────────────────────────
  *
- * Every path here 404s unless REPLACEMENTS_ENABLED is on, and 404 is deliberate rather than
- * 403. A 403 confirms the feature exists and that the caller merely lacks rights, which is a
- * different fact from "this is not deployed for you". The billing routes already answer a
- * scope miss with "Client not found" for the same reason.
+ * Every path here answers 403 REPLACEMENTS_DISABLED unless REPLACEMENTS_ENABLED is on.
  *
- * The gate is a router-level middleware, not a per-handler check. A per-handler check is one
+ * NOT 404: this router already uses 404 for "no such replacement", and an operator debugging
+ * a request must be able to tell a disabled surface from a missing row. The flag is
+ * operational configuration, not a secret worth hiding behind an ambiguous status.
+ * NOT 503 either — that is reserved for readiness here, and Render restarts on it.
+ *
+ * A distinct CODE rather than a bare 403 for the same reason: "you lack a permission" and
+ * "this is switched off" send an operator to two different places.
+ *
+ * The gate is still a router-level middleware, not a per-handler check. A per-handler check is one
  * `git revert` away from protecting five of six routes, and the sixth is the one that buys
  * postage.
  *
@@ -63,7 +69,12 @@ const app = new Hono<{ Variables: AuthVars }>();
 
 /** The feature gate. Router-wide, before anything else runs. */
 app.use('*', async (c, next) => {
-  if (!env.REPLACEMENTS_ENABLED) return c.json({ error: 'Not found' }, 404);
+  if (!env.REPLACEMENTS_ENABLED) {
+    return c.json(
+      { error: 'The replacements surface is not enabled', code: 'REPLACEMENTS_DISABLED' },
+      403,
+    );
+  }
   await next();
 });
 
@@ -168,6 +179,17 @@ app.get('/holds/open', requireInternalPermission('replacements:read'), async (c)
     .orderBy(desc(replacementOriginalOrderHolds.createdAt))
     .limit(200);
   return c.json({ holds: rows.map((r) => r.hold) });
+});
+
+/**
+ * Item 14 — the states nothing downstream will notice on its own.
+ *
+ * Read only, and deliberately NOT client-scoped: it reports counts and sample ids across the
+ * whole installation because it exists for the operator diagnosing the SYSTEM, and it is
+ * already behind requireInternalPermission, which refuses every portal session outright.
+ */
+app.get('/diagnostics', requireInternalPermission('replacements:read'), async (c) => {
+  return c.json(await collectReplacementDiagnostics());
 });
 
 // ── Create ──────────────────────────────────────────────────────────────────────────────
