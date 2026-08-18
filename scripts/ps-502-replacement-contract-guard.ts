@@ -42,6 +42,12 @@ import {
   type AllowanceRow,
 } from '../src/services/replacement-allowance';
 import { evaluateBillabilityChange } from '../src/services/replacement-billability';
+import {
+  FROZEN_DECISIONS,
+  fingerprintPurchaseRequest,
+  resolveReplacementPurchaseRequest,
+  ReplacementPurchaseRequestError,
+} from '../src/services/replacement-purchase-request';
 
 let failures = 0;
 function check(name: string, condition: boolean, detail?: string): void {
@@ -627,6 +633,131 @@ console.log('\ndrizzle schema mirrors the migration');
   check('0098 gives activity events somewhere to keep a written reason',
     /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
+}
+
+// ── Purchase inputs are resolved, never invented ─────────────────────────────
+//
+// Executed, not grepped. DJ decisions 1-3 are unfrozen, and the failure mode this guards is
+// silent: a default chosen here would ship, operators would rely on it, and the eventual
+// ruling would be ratifying whatever this file happened to do.
+//
+// NOTE ON SHAPE. `check` in this file takes (name, BOOLEAN). The first version of this
+// section passed an arrow function instead — which is truthy — so all seventeen checks
+// passed unconditionally. The mutation matrix caught it: five mutations survived at once,
+// which is what a vacuous block looks like from the outside.
+console.log('\npurchase input resolution');
+
+{
+  const ADDRESS = {
+    name: 'Jane Roe', line1: '1 Test Way', city: 'Springfield', state: 'IL',
+    postalCode: '62704', country: 'us',
+  };
+  const CARRIER = { carrierCode: 'ups', serviceCode: 'ups_ground', providerAccountId: 7 };
+  const PACKAGE = { packageId: 'box-a', weightOz: 32, dimsL: 10, dimsW: 8, dimsH: 6 };
+  const override = (value: unknown) => ({
+    value, source: 'operator_override' as const,
+    chosenBy: 'lead@example.test', reason: 'customer confirmed',
+  });
+  const base = {
+    replacementId: 1, replacementShipmentId: 2, replacementReference: '1321-REPLACE',
+    address: override(ADDRESS), carrier: override(CARRIER), package: override(PACKAGE),
+  } as never;
+
+  /** True when the call refuses with exactly this code. */
+  const refuses = (build: () => unknown, code: string): boolean => {
+    try { build(); return false; } catch (e) {
+      return e instanceof ReplacementPurchaseRequestError && e.code === code;
+    }
+  };
+  const resolved = resolveReplacementPurchaseRequest(base);
+
+  check('a fully attributed request resolves',
+    resolved.carrier.serviceCode === 'ups_ground'
+    && resolved.address.country === 'US'
+    && resolved.provenance.address.source === 'operator_override'
+    && resolved.provenance.address.chosenBy === 'lead@example.test',
+    'country must be canonicalised and provenance recorded');
+
+  check('every DJ decision governing a default is still UNFROZEN',
+    FROZEN_DECISIONS.address === false
+    && FROZEN_DECISIONS.carrierService === false
+    && FROZEN_DECISIONS.package === false,
+    'freezing a decision in code rather than on the card is the inversion this prevents');
+
+  for (const field of ['address', 'carrier', 'package'] as const) {
+    check(`a POLICY DEFAULT for ${field} is refused while its decision is unfrozen`,
+      refuses(
+        () => resolveReplacementPurchaseRequest({
+          ...(base as never as Record<string, unknown>), [field]: { value: (base as never as Record<string, { value: unknown }>)[field].value, source: 'policy_default' },
+        } as never),
+        'REPLACEMENT_PURCHASE_DECISION_UNFROZEN'),
+      'a default accepted now becomes policy by default');
+
+    check(`a MISSING ${field} is reported as missing, not as an unfrozen decision`,
+      refuses(
+        () => resolveReplacementPurchaseRequest({
+          ...(base as never as Record<string, unknown>), [field]: undefined,
+        } as never),
+        'REPLACEMENT_PURCHASE_INPUT_MISSING'),
+      'the two send an operator to completely different places');
+
+    check(`an override of ${field} without an ACTOR is refused`,
+      refuses(
+        () => resolveReplacementPurchaseRequest({
+          ...(base as never as Record<string, unknown>),
+          [field]: { ...override((base as never as Record<string, { value: unknown }>)[field].value), chosenBy: null },
+        } as never),
+        'REPLACEMENT_PURCHASE_OVERRIDE_UNATTRIBUTED'),
+      'an unattributed override is indistinguishable from an invented default');
+
+    check(`an override of ${field} without a REASON is refused`,
+      refuses(
+        () => resolveReplacementPurchaseRequest({
+          ...(base as never as Record<string, unknown>),
+          [field]: { ...override((base as never as Record<string, { value: unknown }>)[field].value), reason: null },
+        } as never),
+        'REPLACEMENT_PURCHASE_OVERRIDE_UNATTRIBUTED'));
+  }
+
+  check('a zero weight is refused rather than treated as a default',
+    refuses(
+      () => resolveReplacementPurchaseRequest({
+        ...(base as never as Record<string, unknown>),
+        package: override({ ...PACKAGE, weightOz: 0 }),
+      } as never),
+      'REPLACEMENT_PURCHASE_INPUT_INVALID'),
+    'a zero weight is not a default, it is an unpriceable parcel');
+
+  check('internal cost data cannot travel in a provider request',
+    refuses(
+      () => resolveReplacementPurchaseRequest({
+        ...(base as never as Record<string, unknown>),
+        package: override({ ...PACKAGE, labelCost: 9.99 }),
+      } as never),
+      'REPLACEMENT_PURCHASE_INTERNAL_COST_LEAK'),
+    'the resolved request is persisted and sent outward; cost must not ride along');
+
+  check('the fingerprint covers the values a purchase depends on',
+    [
+      { ...(base as never as Record<string, unknown>), carrier: override({ ...CARRIER, serviceCode: 'ups_2day' }) },
+      { ...(base as never as Record<string, unknown>), package: override({ ...PACKAGE, weightOz: 33 }) },
+      { ...(base as never as Record<string, unknown>), address: override({ ...ADDRESS, postalCode: '90210' }) },
+    ].every((variant) =>
+      resolveReplacementPurchaseRequest(variant as never).fingerprint !== resolved.fingerprint),
+    'a retry must not be able to buy a different parcel under the same frozen request');
+
+  check('provenance is NOT part of the fingerprint',
+    resolveReplacementPurchaseRequest({
+      ...(base as never as Record<string, unknown>),
+      address: { ...override(ADDRESS), chosenBy: 'someone.else@example.test', reason: 'retry' },
+    } as never).fingerprint === resolved.fingerprint,
+    'a retry by a different operator is the same purchase');
+
+  check('the fingerprint helper agrees with the resolver',
+    fingerprintPurchaseRequest(resolved) === resolved.fingerprint);
+
+  check('the resolver is pure — no db, no provider, no network',
+    !/from '\.\.\/db|drizzle-orm|node-fetch|axios/.test(read('src/services/replacement-purchase-request.ts')));
 }
 
 // ── The lifecycle command is the ONE transition owner ────────────────────────

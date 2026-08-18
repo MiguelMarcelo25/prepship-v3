@@ -25,6 +25,7 @@ const SCHEMA = 'src/db/schema/replacements.ts';
 const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 const APPLIER = 'scripts/apply-ps-502-replacement-schema.ts';
 const LIFECYCLE = 'src/services/replacement-lifecycle-command.ts';
+const PURCHASE_REQ = 'src/services/replacement-purchase-request.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
 const MUTATIONS: Mutation[] = [
@@ -420,6 +421,45 @@ const MUTATIONS: Mutation[] = [
     find: '    const verdict = evaluateReplacementAllowance({',
     replace: '    const verdict = { allowed: true } as any; const skipped = ({',
     expect: 'a remap re-runs the allowance against the NEW coordinate',
+  },  {
+    id: 'M50',
+    defect: 'a policy default is accepted while its DJ decision is still unfrozen',
+    file: PURCHASE_REQ,
+    find: '    if (!FROZEN_DECISIONS[decision.key]) {',
+    replace: '    if (false) {',
+    expect: 'a POLICY DEFAULT for address is refused while its decision is unfrozen',
+  },
+  {
+    id: 'M51',
+    defect: 'a decision is frozen in code rather than by DJ on the card',
+    file: PURCHASE_REQ,
+    find: '  address: false,',
+    replace: '  address: true,',
+    expect: 'every DJ decision governing a default is still UNFROZEN',
+  },
+  {
+    id: 'M52',
+    defect: 'an override no longer needs an actor and a reason',
+    file: PURCHASE_REQ,
+    find: '  if (!chosenBy || !reason) {',
+    replace: '  if (false) {',
+    expect: 'an override of address without an ACTOR is refused',
+  },
+  {
+    id: 'M53',
+    defect: 'internal cost data is allowed to travel in a provider request',
+    file: PURCHASE_REQ,
+    find: '    if (FORBIDDEN_COST_KEYS.includes(key)) {',
+    replace: '    if (false) {',
+    expect: 'internal cost data cannot travel in a provider request',
+  },
+  {
+    id: 'M54',
+    defect: 'the package fingerprint stops covering weight, so a retry can buy a different parcel',
+    file: PURCHASE_REQ,
+    find: '      request.package.packageId, request.package.weightOz,',
+    replace: '      request.package.packageId,',
+    expect: 'the fingerprint covers the values a purchase depends on',
   },
 ];
 
