@@ -9,6 +9,7 @@
 
 import { sql as pg, db } from '../../db/client.js';
 import { raiseReplacementOriginalOrderHoldsInTransaction } from '../replacement-original-order-hold.js';
+import { replacementSchemaPresent } from '../replacement-schema-readiness.js';
 import type { NormalizedWebhookEvent } from './webhook-providers.js';
 import { applyOrderLifecycleCommand } from '../order-lifecycle-command.js';
 
@@ -69,7 +70,9 @@ export async function reconcileOrderFromUpstreamEvent(
   //
   // Only holds are raised. Every decision they imply belongs to a human.
   let replacementHoldsRaised = 0;
-  if (event.canonicalStatus === 'cancelled') {
+  // Same reason as the cancel branch: this query names `replacements`, and this reconciler
+  // runs for every inbound webhook whether or not the feature has been migrated.
+  if (event.canonicalStatus === 'cancelled' && await replacementSchemaPresent()) {
     const shippedWithReplacements = await pg<{ id: number }[]>`
       SELECT o.id FROM orders o
       WHERE o.order_status = 'shipped'

@@ -39,6 +39,8 @@ const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
 const ROUTE = 'src/routes/replacements.ts';
 const DIAGNOSTICS = 'src/services/replacement-diagnostics.ts';
 const MAIN = 'src/main.ts';
+const SCHEMA_PROBE = 'src/services/replacement-schema-readiness.ts';
+const MIGRATION_WORKFLOW = '.github/workflows/render-one-off-migration-ps502.yml';
 const FENCE = 'src/services/replacement-customer-money.ts';
 const PLANNER = 'src/services/replacement-billing-planner.ts';
 const INVOICE_TOTALS = 'src/services/billing-invoice-totals.ts';
@@ -841,6 +843,37 @@ const MUTATIONS: Mutation[] = [
     find: /\n    action:\n      'Do NOT hand-write a billing line[\s\S]*?fix that path\.',/,
     replace: "\n    action: '',",
     expect: 'every anomaly carries what it means and what to do',
+  },  {
+    id: 'M99',
+    defect: 'the cancel fan-out loses its schema probe, so cancelling an order needs a table production lacks',
+    file: ORDER_LIFECYCLE,
+    find: '    if (await replacementSchemaPresent(tx)) {',
+    replace: '    if (true) {',
+    expect: 'every PRE-EXISTING path that names a replacement relation is probe-guarded',
+  },
+  {
+    id: 'M100',
+    defect: 'a migration drops out of the ARCHIVE while its digest stays in the verification prose',
+    file: MIGRATION_WORKFLOW,
+    find: /\n            drizzle\/0101_ps502_replacement_original_order_holds\.sql/,
+    replace: '',
+    expect: 'the workflow SHIPS and pins 0101_ps502_replacement_original_order_holds.sql',
+  },
+  {
+    id: 'M101',
+    defect: 'a digest argument is dropped, so the runner never verifies that migration',
+    file: MIGRATION_WORKFLOW,
+    find: ' --digest101=${d101}',
+    replace: '',
+    expect: 'the workflow SHIPS and pins 0101_ps502_replacement_original_order_holds.sql',
+  },
+  {
+    id: 'M102',
+    defect: 'the probe serves an explicit connection from the memo, letting a test answer for production',
+    file: SCHEMA_PROBE,
+    find: '  if (conn) return probe(conn);',
+    replace: '',
+    expect: 'an explicit connection is never served from the memo',
   },
 ];
 

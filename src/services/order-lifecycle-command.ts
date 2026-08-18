@@ -30,6 +30,7 @@ import {
 } from './shipment-aggregate.js';
 import { enqueueInventoryClaimDeduction } from './fulfillment/inventory-deduction-outbox.js';
 import { raiseReplacementOriginalOrderHoldsInTransaction } from './replacement-original-order-hold';
+import { replacementSchemaPresent } from './replacement-schema-readiness';
 import { resolveOrderLifecycleStatus } from './order-lifecycle-status.js';
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -524,15 +525,21 @@ export async function applyOrderLifecycleCommandInTransaction(
     // is currently reachable is a rule that breaks the day the reachability changes. The
     // producer that actually fires today is the upstream-cancellation sweep, which raises
     // holds WITHOUT cancelling the order row.
-    await raiseReplacementOriginalOrderHoldsInTransaction(tx, {
-      orderId: input.orderId,
-      triggerKind: 'order_cancelled',
-      evidence: { kind: 'order_lifecycle_event', orderLifecycleEventId: event.id },
-      reason: `original order cancelled via ${source}`,
+    // Skipped entirely when the replacement schema is absent. Cancelling an order must not
+    // require a feature's tables to exist: this is a pre-existing path and 0096-0101 are
+    // gated behind the operator lane, so code reaches production first BY DESIGN. A database
+    // with no replacements table has no replacements to hold.
+    if (await replacementSchemaPresent(tx)) {
+      await raiseReplacementOriginalOrderHoldsInTransaction(tx, {
+        orderId: input.orderId,
+        triggerKind: 'order_cancelled',
+        evidence: { kind: 'order_lifecycle_event', orderLifecycleEventId: event.id },
+        reason: `original order cancelled via ${source}`,
       // A system actor: this fan-out is a consequence of the cancellation, not an operator
       // action, and it performs nothing that needs a permission an operator would hold.
-      actor: { type: 'system', email: null, permissions: [] },
-    });
+        actor: { type: 'system', email: null, permissions: [] },
+      });
+    }
   } else if (transition === 'external_classified') {
     await tx
       .update(orders)

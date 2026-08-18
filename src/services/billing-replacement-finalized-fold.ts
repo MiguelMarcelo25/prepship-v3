@@ -2,6 +2,7 @@ import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems } from '../db/schema/billing.js';
 import { roundMoney } from '../lib/money.js';
+import { replacementSchemaPresent } from './replacement-schema-readiness.js';
 
 /**
  * PS-502 AC-6 at the FINALIZATION layer — the same defect item 9 fixed one layer down.
@@ -31,6 +32,9 @@ export async function foldFinalizedReplacementTotalsIntoCandidates(
   candidatesByClient: Map<number, Map<number, number>>,
   conn: Pick<typeof db, 'select'> = db,
 ): Promise<{ ordersFolded: number; amountFolded: number }> {
+  // Billing regeneration is a pre-existing path that runs on every database, migrated or
+  // not. `billing_line_items.replacement_id` arrives with 0097.
+  if (!(await replacementSchemaPresent(conn as never))) return { ordersFolded: 0, amountFolded: 0 };
   const orderIds = [...finalizedOrderIds];
   if (orderIds.length === 0) return { ordersFolded: 0, amountFolded: 0 };
 

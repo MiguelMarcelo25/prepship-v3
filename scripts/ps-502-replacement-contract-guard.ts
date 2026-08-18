@@ -686,6 +686,38 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── code can reach production before its schema ──────────────────────────────
+console.log('\nschema-absent safety');
+
+{
+  const probe = read('src/services/replacement-schema-readiness.ts');
+  // Comment-stripped for the negative assertion below: the docblock NAMES the flag while
+  // explaining why it is not used, and a guard that trips on its own reasoning forces the
+  // next engineer to delete the reasoning to get green.
+  const probeCode = probe.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const upstreamSrc = read('src/services/fulfillment/upstream-reconcile.ts');
+  const foldSrc = read('src/services/billing-replacement-finalized-fold.ts');
+  const lifecycleSrc = read('src/services/order-lifecycle-command.ts');
+
+  check('every PRE-EXISTING path that names a replacement relation is probe-guarded',
+    /replacementSchemaPresent\(/.test(lifecycleSrc)
+    && /replacementSchemaPresent\(/.test(upstreamSrc)
+    && /replacementSchemaPresent\(/.test(foldSrc),
+    'order cancellation, webhook reconciliation and billing regeneration all ran on databases without 0096-0101, and all three now query replacements');
+
+  check('the probe answers SCHEMA presence, never the feature flag',
+    !/REPLACEMENTS_ENABLED/.test(probeCode),
+    'a migrated database with the surface switched off must still raise holds, and an unmigrated one must skip regardless of the flag');
+
+  check('an explicit connection is never served from the memo',
+    /if \(conn\) return probe\(conn\);/.test(probe),
+    'the singleton points at production while the harness runs embedded; one shared memo lets a test answer for the real database');
+
+  check('a failed probe is not cached as absent',
+    /present = null; throw error;/.test(probe),
+    'one transient error would otherwise disable every replacement path until restart');
+}
+
 // ── item 14: what an operator can see ────────────────────────────────────────
 console.log('\nitem 14 — operator diagnostics');
 
@@ -918,7 +950,9 @@ console.log('\nAC-16 — the original order went away');
   // this check by wrapping it in `if (false)` — the text was still there, still in the right
   // order, and still doing nothing. Presence and position are both satisfied by dead code.
   check('the local cancel branch fans out IN THE SAME TRANSACTION',
-    /^ {4}await raiseReplacementOriginalOrderHoldsInTransaction\(tx, \{$/m.test(lifecycleOwner)
+    /^ {4}if \(await replacementSchemaPresent\(tx\)\) \{$/m.test(lifecycleOwner)
+    && /^ {6}await raiseReplacementOriginalOrderHoldsInTransaction\(tx, \{$/m.test(lifecycleOwner)
+    && !/REPLACEMENTS_ENABLED/.test(lifecycleOwner)
     && occursBefore(lifecycleOwner, "orderStatus: 'cancelled',",
       'raiseReplacementOriginalOrderHoldsInTransaction(tx, {'),
     'a cancellation that left its replacements untouched would be undetectable');
@@ -1664,6 +1698,15 @@ console.log('\nproduction migration lane');
 {
   const applier = read('scripts/apply-ps-502-replacement-schema.ts');
   const workflow = read('.github/workflows/render-one-off-migration-ps502.yml');
+  // The two places that DECIDE what ships, isolated from the verification prose that names
+  // every migration regardless. Searching the whole file let the archive sit at 0096/0097
+  // for four migrations while this guard stayed green — the defect Hermes found twice.
+  const archiveStart = workflow.indexOf('files=(');
+  const workflowArchive = workflow.slice(archiveStart, workflow.indexOf(')', archiveStart));
+  const workflowRunArgs = workflow.slice(
+    workflow.indexOf('run_args="'),
+    workflow.indexOf('\n', workflow.indexOf('run_args="')),
+  );
   const ps502Migrations = readdirSync('drizzle')
     .filter((name) => /ps502.*\.sql$/.test(name))
     .sort();
@@ -1674,8 +1717,14 @@ console.log('\nproduction migration lane');
   for (const migration of ps502Migrations) {
     check(`the runner applies ${migration}`, applier.includes(migration),
       'the official deploy path must apply every migration the code depends on');
-    check(`the workflow pins a digest for ${migration}`, workflow.includes(migration),
-      'an unpinned migration can be swapped between review and deploy');
+    // Anchored on the two things that DECIDE what ships: the archive array and the argument
+    // string. The previous form searched the whole file, and every migration also appears in
+    // the digest-verification step — which hashes the GitHub runner's own checkout, not the
+    // tarball that travels. So the check passed for four migrations that were never shipped.
+    const digestArg = `--digest${Number(migration.slice(0, 4))}=`;
+    check(`the workflow SHIPS and pins ${migration}`,
+      workflowArchive.includes(migration) && workflowRunArgs.includes(digestArg),
+      'a migration named only in the digest step is verified on the runner and then left behind; the archive and the arguments are what reach the server');
   }
 
   check('every pinned digest is LF-normalised',
