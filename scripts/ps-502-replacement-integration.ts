@@ -62,6 +62,11 @@ async function main(): Promise<void> {
 
   const { createReplacement, ReplacementCreateError } =
     await import('../src/services/replacement-create-command.js');
+  const {
+    approveReplacement, rejectReplacement, cancelReplacement, resolveReplacementReview,
+    remapReplacementItem, setReplacementBillability, completeReplacement,
+    ReplacementLifecycleError,
+  } = await import('../src/services/replacement-lifecycle-command.js');
   const { insertReplacementShipment, ReplacementShipmentError } =
     await import('../src/services/replacement-shipment-command.js');
 
@@ -478,6 +483,185 @@ async function main(): Promise<void> {
       ),
       /check constraint/i,
     );
+  });
+
+  console.log('\nlifecycle command');
+
+  const OVERRIDE_ACTOR = {
+    email: 'lead@example.test', type: 'admin',
+    permissions: ['replacements:create', 'replacements:override'],
+  };
+
+  const makeReplacement = async (key: string, lineIndex = 1, quantity = 1) => {
+    const r = await createReplacement({
+      orderId: 1321, reason: 'damaged', liabilityOwner: 'operator',
+      items: [{ orderLineIndex: lineIndex, quantity }],
+      requestIdempotencyKey: key, actor,
+    }, conn);
+    return r.replacement;
+  };
+
+  await check('approval moves requested -> approved and appends ONE event', async () => {
+    const r = await makeReplacement('lc-approve');
+    const approved = await approveReplacement({ replacementId: r.id, actor, reason: 'ok' }, conn);
+    assert.equal(approved.status, 'approved');
+    assert.equal(approved.stateVersion, r.stateVersion + 1, 'the version must advance');
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, r.id));
+    assert.equal(events.filter((e) => e.eventType === 'replacement_approved').length, 1,
+      'exactly one event per successful transition');
+  });
+
+  await check('a transition the diagram forbids is refused before any write', async () => {
+    const r = await makeReplacement('lc-illegal');
+    const versionBefore = r.stateVersion;
+    await assert.rejects(
+      () => completeReplacement({
+        replacementId: r.id, actor, basis: 'audited_override', reason: 'jump the queue',
+      }, conn),
+      (e: unknown) => e instanceof Error,
+    );
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, r.id));
+    assert.equal(after!.status, 'requested', 'the status must not move');
+    assert.equal(after!.stateVersion, versionBefore, 'nor the version');
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, r.id));
+    assert.ok(!events.some((e) => e.eventType.startsWith('replacement_completed')),
+      'a refused transition appends no event');
+  });
+
+  await check('rejection and cancellation require a written reason', async () => {
+    const a = await makeReplacement('lc-reject');
+    await assert.rejects(
+      () => rejectReplacement({ replacementId: a.id, actor, reason: '   ' }, conn),
+      (e: unknown) => e instanceof ReplacementLifecycleError
+        && e.code === 'REPLACEMENT_REASON_REQUIRED',
+    );
+    const b = await makeReplacement('lc-cancel');
+    await assert.rejects(
+      () => cancelReplacement({ replacementId: b.id, actor, reason: '' }, conn),
+      (e: unknown) => e instanceof ReplacementLifecycleError
+        && e.code === 'REPLACEMENT_REASON_REQUIRED',
+    );
+  });
+
+  await check('approval re-resolves drift: review COMMITS and the command returns 409', async () => {
+    const r = await makeReplacement('lc-drift');
+    await client.exec(`UPDATE order_items SET quantity = 7 WHERE order_id = 1321 AND line_index = 1;`);
+    await assert.rejects(
+      () => approveReplacement({ replacementId: r.id, actor, reason: 'ok' }, conn),
+      (e: unknown) => e instanceof ReplacementLifecycleError
+        && e.code === 'REPLACEMENT_SOURCE_LINE_CHANGED',
+    );
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, r.id));
+    assert.equal(after!.status, 'review', 'the review must survive the failed approval');
+    assert.equal(after!.reviewReason, 'original_order_line_drift');
+    await client.exec(`UPDATE order_items SET quantity = 2 WHERE order_id = 1321 AND line_index = 1;`);
+  });
+
+  await check('review is left to an explicit pre-ship state and clears its reason', async () => {
+    const r = await makeReplacement('lc-review');
+    await db.update(schema.replacements)
+      .set({ status: 'review', reviewReason: 'original_order_line_drift' })
+      .where(eq(schema.replacements.id, r.id));
+    const resolved = await resolveReplacementReview({
+      replacementId: r.id, to: 'approved', actor, reason: 'line confirmed',
+    }, conn);
+    assert.equal(resolved.status, 'approved');
+    assert.equal(resolved.reviewReason, null);
+  });
+
+  await check('a remap requires the override capability', async () => {
+    const r = await makeReplacement('lc-remap-perm');
+    const [item] = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.replacementId, r.id));
+    await assert.rejects(
+      () => remapReplacementItem({
+        replacementId: r.id, replacementItemId: item!.id, toOrderLineIndex: 0,
+        actor, reason: 'retarget',
+      }, conn),
+      (e: unknown) => e instanceof ReplacementLifecycleError
+        && e.code === 'REPLACEMENT_REMAP_FORBIDDEN',
+    );
+  });
+
+  await check('a remap appends evidence and NEVER rewrites the requested snapshot', async () => {
+    const r = await makeReplacement('lc-remap');
+    const [item] = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.replacementId, r.id));
+    const frozenBefore = item!.sourceLineFingerprint;
+
+    const result = await remapReplacementItem({
+      replacementId: r.id, replacementItemId: item!.id, toOrderLineIndex: 0,
+      actor: OVERRIDE_ACTOR, reason: 'operator confirmed the wrong line was requested',
+    }, conn);
+    assert.equal(result.remapVersion, 1);
+
+    const [after] = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.id, item!.id));
+    assert.equal(after!.sourceLineFingerprint, frozenBefore,
+      'the REQUESTED snapshot must survive the remap');
+    assert.equal(after!.orderLineIndex, item!.orderLineIndex);
+
+    const remaps = await db.select().from(schema.replacementItemRemaps)
+      .where(eq(schema.replacementItemRemaps.replacementItemId, item!.id));
+    assert.equal(remaps.length, 1, 'the resolution is separately attributable');
+    assert.equal(remaps[0]!.previousSourceLineFingerprint, frozenBefore);
+    assert.equal(remaps[0]!.resolution, 'remapped');
+    assert.match(String(remaps[0]!.reason), /wrong line/);
+  });
+
+  await check('a remap onto an exhausted line is refused', async () => {
+    // Line 0 already has 1 shipped unit from an earlier case, so 2 exhausts it.
+    const shipped = await makeReplacement('lc-remap-cap-src', 0, 2);
+    await db.update(schema.replacements)
+      .set({ status: 'shipped', shippedAt: new Date() })
+      .where(eq(schema.replacements.id, shipped.id));
+
+    const r = await makeReplacement('lc-remap-cap');
+    const [item] = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.replacementId, r.id));
+    await assert.rejects(
+      () => remapReplacementItem({
+        replacementId: r.id, replacementItemId: item!.id, toOrderLineIndex: 0,
+        actor: OVERRIDE_ACTOR, reason: 'retarget onto a full line',
+      }, conn),
+      (e: unknown) => e instanceof ReplacementLifecycleError
+        && e.code === 'REPLACEMENT_ALLOWANCE_EXCEEDED',
+    );
+  });
+
+  await check('billability is frozen from label_created onward', async () => {
+    const r = await makeReplacement('lc-bill');
+    await db.update(schema.replacements)
+      .set({ liabilityOwner: 'client', status: 'label_created' })
+      .where(eq(schema.replacements.id, r.id));
+    await assert.rejects(
+      () => setReplacementBillability({
+        replacementId: r.id, requestedBillable: true, actor: FINANCE_ACTOR,
+        reason: 'late change',
+      }, conn),
+      (e: unknown) => e instanceof ReplacementLifecycleError
+        && e.code === 'REPLACEMENT_BILLABLE_FROZEN',
+    );
+  });
+
+  await check('completion records its basis and stamps completed_at', async () => {
+    const r = await makeReplacement('lc-complete');
+    await db.update(schema.replacements)
+      .set({ status: 'shipped', shippedAt: new Date() })
+      .where(eq(schema.replacements.id, r.id));
+    const done = await completeReplacement({
+      replacementId: r.id, actor, basis: 'tracking_evidence', reason: 'delivered',
+    }, conn);
+    assert.equal(done.status, 'completed');
+    assert.ok(done.completedAt);
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, r.id));
+    assert.ok(events.some((e) => e.eventType === 'replacement_completed_tracking_evidence'),
+      'the basis for completion is part of the record');
   });
 
   await client.close();

@@ -24,6 +24,7 @@ const SHIPMENT = 'src/services/replacement-shipment-command.ts';
 const SCHEMA = 'src/db/schema/replacements.ts';
 const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 const APPLIER = 'scripts/apply-ps-502-replacement-schema.ts';
+const LIFECYCLE = 'src/services/replacement-lifecycle-command.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
 const MUTATIONS: Mutation[] = [
@@ -257,8 +258,8 @@ const MUTATIONS: Mutation[] = [
     id: 'M29',
     defect: 'drift is no longer re-resolved before a shipment exists',
     file: SHIPMENT,
-    find: '      const verdict = evaluateReplacementSourceLineDrift({',
-    replace: '      const verdict = { matches: true } as any; const skippedD = ({',
+    find: '    const finding = await findFrozenLineDrift(tx, replacement);',
+    replace: '    const finding = null as unknown as null;',
     expect: 'drift is re-resolved BEFORE the shipment is inserted',
   },
   {
@@ -388,6 +389,37 @@ const MUTATIONS: Mutation[] = [
     find: 'max: 8, prepare: false',
     replace: 'max: 1, prepare: false',
     expect: 'the pool opens MULTIPLE backends',
+  },  {
+    id: 'M46',
+    defect: 'a transition stops checking its row count and records a move that never happened',
+    file: LIFECYCLE,
+    find: '  if (moved.length === 0) {',
+    replace: '  if (false) {',
+    expect: 'a zero-row transition is a coded 409 and appends NO event',
+  },
+  {
+    id: 'M47',
+    defect: 'the expected-status predicate is dropped from every transition',
+    file: LIFECYCLE,
+    find: '      eq(replacements.status, before.status),',
+    replace: '',
+    expect: 'EVERY update to replacements is guarded on status AND state_version',
+  },
+  {
+    id: 'M48',
+    defect: 'a remap no longer needs the override capability',
+    file: LIFECYCLE,
+    find: '  if (!input.actor.permissions.includes(REPLACEMENT_OVERRIDE_PERMISSION)) {',
+    replace: '  if (false) {',
+    expect: 'a remap requires the dedicated override capability and a reason',
+  },
+  {
+    id: 'M49',
+    defect: 'a remap stops re-running the allowance against its new coordinate',
+    file: LIFECYCLE,
+    find: '    const verdict = evaluateReplacementAllowance({',
+    replace: '    const verdict = { allowed: true } as any; const skipped = ({',
+    expect: 'a remap re-runs the allowance against the NEW coordinate',
   },
 ];
 

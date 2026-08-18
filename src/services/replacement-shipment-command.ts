@@ -34,9 +34,7 @@ import {
   replacements,
   type ReplacementRow,
 } from '../db/schema/replacements';
-import {
-  currentSourceLineFingerprint,
-} from './replacement-source-line-fingerprint';
+import { findFrozenLineDrift } from './replacement-drift-resolution';
 import {
   evaluateReplacementSourceLineDrift,
   isReplacementStatus,
@@ -155,34 +153,12 @@ async function resolveDriftAndMaybeReview(
       );
     }
 
-    const frozenItems = await tx
-      .select({
-        orderLineIndex: replacementItems.orderLineIndex,
-        sourceLineFingerprint: replacementItems.sourceLineFingerprint,
-      })
-      .from(replacementItems)
-      .where(eq(replacementItems.replacementId, replacement.id));
-
-    const currentLines = await tx
-      .select({
-        orderId: orderItems.orderId,
-        lineIndex: orderItems.lineIndex,
-        sku: orderItems.sku,
-        name: orderItems.name,
-        quantity: orderItems.quantity,
-      })
-      .from(orderItems)
-      .where(eq(orderItems.orderId, replacement.orderId));
-
-    for (const item of frozenItems) {
-      const verdict = evaluateReplacementSourceLineDrift({
-        frozenFingerprint: item.sourceLineFingerprint,
-        currentFingerprint: currentSourceLineFingerprint(currentLines, {
-          orderId: replacement.orderId,
-          orderLineIndex: item.orderLineIndex,
-        }),
-      });
-      if (verdict.matches) continue;
+    // ONE owner. The lifecycle command re-resolves before approval and this one before a
+    // shipment exists; two copies of the comparison would eventually disagree about what
+    // counts as drift, and one boundary would let through what the other blocks.
+    const finding = await findFrozenLineDrift(tx, replacement);
+    if (finding) {
+      const item = { orderLineIndex: finding.effectiveOrderLineIndex };
 
       // Persisted, then reported. Never silently retargeted.
       //
@@ -195,7 +171,7 @@ async function resolveDriftAndMaybeReview(
         .update(replacements)
         .set({
           status: 'review',
-          reviewReason: verdict.reviewReason,
+          reviewReason: 'original_order_line_drift',
           reviewRequestedAt: new Date(),
           stateVersion: replacement.stateVersion + 1,
           updatedAt: new Date(),

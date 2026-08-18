@@ -629,6 +629,86 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── The lifecycle command is the ONE transition owner ────────────────────────
+console.log('\nlifecycle command (locked path)');
+
+{
+  const life = read('src/services/replacement-lifecycle-command.ts');
+  const code = life.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const ship = read('src/services/replacement-shipment-command.ts');
+  const drift = read('src/services/replacement-drift-resolution.ts');
+
+  check('there is ONE transition primitive, not a transition per command',
+    /async function applyTransition\(/.test(code)
+    && (code.match(/\.update\(replacements\)/g) || []).length <= 4,
+    'three rules repeated per command drift apart immediately');
+
+  check('EVERY update to replacements is guarded on status AND state_version',
+    (() => {
+      // Presence is not enough: the predicate appears once per writing command, so
+      // deleting one leaves the others and a `.test()` stays green while that command
+      // silently loses its guard. Each update site is checked on its own.
+      const sites = [...code.matchAll(/\.update\(replacements\)/g)].map((m) => m.index ?? 0);
+      if (sites.length === 0) return false;
+      return sites.every((at) => {
+        const window = code.slice(at, at + 700);
+        return /eq\(replacements\.status, before\.status\)/.test(window)
+          && /eq\(replacements\.stateVersion, before\.stateVersion\)/.test(window)
+          && /\.returning\(\)/.test(window);
+      });
+    })(),
+    'one unguarded update is a lost update, and it is the one nobody looks at');
+
+  check('a zero-row transition is a coded 409 and appends NO event',
+    /if \(moved\.length === 0\)/.test(code)
+    && code.indexOf('if (moved.length === 0)') < code.indexOf('.insert(replacementActivityEvents)'),
+    'an append-only log is trusted precisely because it cannot record a move that never happened');
+
+  check('the diagram is asserted before the row is touched',
+    /assertReplacementTransition\(from, input\.to\)/.test(code)
+    && code.indexOf('assertReplacementTransition') < code.indexOf('.update(replacements)'),
+    'a transition the lifecycle never allowed must not depend on a predicate happening to miss');
+
+  check('approval re-resolves drift and COMMITS the review before reporting',
+    /findFrozenLineDrift\(tx, before\)/.test(code)
+    && code.includes('if (drift) {')
+    && code.indexOf('return { reference: before.reference, finding }') < code.indexOf('if (drift) {'),
+    'throwing inside the transaction would roll the review back and it would drift forever');
+
+  check('a remap requires the dedicated override capability and a reason',
+    // The PREDICATE, not the constant: the constant is also named in the refusal message,
+    // so asserting its presence passed cleanly against `if (false)`.
+    /!input\.actor\.permissions\.includes\(REPLACEMENT_OVERRIDE_PERMISSION\)/.test(code)
+    && /REPLACEMENT_REMAP_REASON_REQUIRED/.test(code),
+    'retargeting a replacement is not an ordinary approval');
+
+  check('a remap APPENDS and never rewrites the requested snapshot',
+    /\.insert\(replacementItemRemaps\)/.test(code)
+    && !/\.update\(replacementItems\)/.test(code),
+    'replacement_items is what was REQUESTED; an audit after the fact needs it');
+
+  check('a remap re-runs the allowance against the NEW coordinate',
+    /evaluateReplacementAllowance\(/.test(code),
+    'remapping is how a line could be over-replaced without any single request exceeding its cap');
+
+  check('the lifecycle command never writes `shipped`',
+    !/to: \x27shipped\x27/.test(code),
+    'shipped belongs to the atomic command that also owns inventory, packaging and billing');
+
+  check('it writes no shipment, label, inventory or billing row',
+    !/\.insert\(shipments\)|createLabelV2|\.insert\(billingLineItems\)|\.insert\(inventory/.test(code));
+
+  check('drift resolution has ONE owner, shared with the shipment command',
+    drift.length > 0
+    && /findFrozenLineDrift/.test(ship)
+    && /findFrozenLineDrift/.test(code),
+    'two copies of the comparison would disagree about what counts as drift');
+
+  check('the shared drift reader is READ ONLY',
+    !/\.update\(|\.insert\(|\.delete\(/.test(drift),
+    'callers persist the review; this only answers the question');
+}
+
 // ── The genuine-concurrency lane must stay genuine ───────────────────────────
 //
 // AC-12 says CONCURRENT. The PGlite lane cannot satisfy it — a single backend means two
@@ -866,8 +946,8 @@ console.log('\nshipment insertion (locked path)');
     /\.insert\(shipments\)/.test(code) && /replacementShipmentId: shipment\.id/.test(code));
 
   check('drift is re-resolved BEFORE the shipment is inserted',
-    at('evaluateReplacementSourceLineDrift(') !== -1
-    && at('evaluateReplacementSourceLineDrift(') < at('.insert(shipments)'),
+    at('findFrozenLineDrift(') !== -1
+    && at('findFrozenLineDrift(') < at('.insert(shipments)'),
     'the card requires re-resolution before label purchase, and this is the last cheap place');
 
   check('a drift review is COMMITTED, then reported',
