@@ -33,6 +33,9 @@ const BILL_PLAN = 'src/services/replacement-billing-planner.ts';
 const BILL_WRITE = 'src/services/replacement-billing-writer.ts';
 const SWEEP = 'src/services/billing-outbound-sweep.ts';
 const POLICY = 'src/services/billing-finalization-policy.ts';
+const FOLD = 'src/services/billing-replacement-finalized-fold.ts';
+const GENERATOR = 'src/services/billing.ts';
+const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -619,8 +622,8 @@ const MUTATIONS: Mutation[] = [
     id: 'M74',
     defect: 'the credit stops carrying replacement_id, so one of two cannot be attributed',
     file: POLICY,
-    find: '        replacementId: input.replacementId,',
-    replace: '        replacementId: null,',
+    find: /(adjustmentKind: 'credit',\s*\n)        replacementId: input\.replacementId,/,
+    replace: '$1        replacementId: null,',
     expect: 'the credit CARRIES replacement_id through the projection',
   },
   {
@@ -638,6 +641,37 @@ const MUTATIONS: Mutation[] = [
     find: /(cancelReplacementBillingInTransaction[\s\S]*?)      eq\(billingLineItems\.invoiced, false\),\r?\n/,
     replace: '$1',
     expect: 'cancellation removes ONLY editable replacement-scoped lines',
+  },  {
+    id: 'M77',
+    defect: 'frozen discovery goes back to a column constraint 0074 forbids, so it matches nothing',
+    file: POLICY,
+    find: '      where line.client_id = ${input.clientId}',
+    replace: '      where line.client_id = ${input.clientId} and line.source_finalization_id is not null',
+    expect: 'discovery never asks for source_finalization_id',
+  },
+  {
+    id: 'M78',
+    defect: 'the fold stops scoping to frozen money and folds open-period charges too',
+    file: FOLD,
+    find: '      eq(billingLineItems.invoiced, true),',
+    replace: '',
+    expect: 'the finalized fold counts ONLY frozen replacement money',
+  },
+  {
+    id: 'M79',
+    defect: 'the generator stops folding, so regeneration credits the replacement away again',
+    file: GENERATOR,
+    find: '  await foldFinalizedReplacementTotalsIntoCandidates(',
+    replace: '  await Promise.resolve(); void foldFinalizedReplacementTotalsIntoCandidates; if (false) await foldFinalizedReplacementTotalsIntoCandidatesUnused(',
+    expect: 'the generator folds replacement money BEFORE reconciling',
+  },
+  {
+    id: 'M80',
+    defect: 'the SQL twin drops the replacement types while the TypeScript set keeps them',
+    file: NO_CHARGE,
+    find: /\n      'replace_postage', 'replace_pick_pack'/,
+    replace: '',
+    expect: 'a cancelled original does not zero replacement money — both twins',
   },
 ];
 

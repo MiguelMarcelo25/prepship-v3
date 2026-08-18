@@ -139,6 +139,22 @@ export const PS_502_PREREQUISITE_DDL = `
     invoiced boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
   );
+  -- A closed period. Mirrors src/db/schema/billing.ts billingFinalizations for the columns
+  -- the frozen-line join reads. Present because the reconciler identifies a finalized line
+  -- by JOINING here on the effective date, not by a column on the line — the distinction
+  -- that made the original predicate unmatchable and undetectable by source text.
+  CREATE TABLE billing_finalizations (
+    id text PRIMARY KEY,
+    client_id integer NOT NULL REFERENCES clients(id),
+    period_start timestamptz NOT NULL,
+    period_end timestamptz NOT NULL,
+    line_count integer NOT NULL DEFAULT 0,
+    order_count integer NOT NULL DEFAULT 0,
+    subtotal numeric(12,2) NOT NULL DEFAULT 0,
+    finalized_by text NOT NULL DEFAULT 'test',
+    finalized_by_email text,
+    finalized_at timestamptz NOT NULL DEFAULT now()
+  );
   CREATE TABLE billing_credit_notes (
     id text PRIMARY KEY,
     finalization_id text,

@@ -669,6 +669,47 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── Three ways replacement money silently disappears ─────────────────────────
+console.log('\nmoney that silently disappears');
+
+{
+  const policy = read('src/services/billing-finalization-policy.ts');
+  const fold = read('src/services/billing-replacement-finalized-fold.ts');
+  const generator = read('src/services/billing.ts');
+  const noCharge = read('src/services/billing-cancelled-no-charge.ts');
+  const discovery = functionBody(policy, 'findFrozenReplacementLineTotals');
+
+  check('a finalized replacement line is found by JOINING the closed period',
+    /join billing_finalizations closed/.test(discovery)
+    && /coalesce\(line\.billing_effective_date, line\.ship_date\) >= closed\.period_start/.test(discovery)
+    && /line\.invoiced = true/.test(discovery),
+    'that join is what this repo means by frozen');
+
+  check('discovery never asks for source_finalization_id',
+    !/source_finalization_id/.test(discovery)
+    && !/sourceFinalizationId/.test(discovery),
+    'constraint 0074 forbids that column on a replace_* line, so the predicate matched nothing and the reconciler credited nothing — indistinguishable from a correct empty run');
+
+  check('the reconciler delegates discovery to that one owner',
+    /const frozenRows = await findFrozenReplacementLineTotals\(tx, \{/.test(policy),
+    'a second copy of the predicate is a second chance to get it wrong');
+
+  check('the finalized fold counts ONLY frozen replacement money',
+    /isNotNull\(billingLineItems\.replacementId\)/.test(fold)
+    && /eq\(billingLineItems\.invoiced, true\)/.test(fold),
+    'it must add back exactly what the frozen total counted, so the delta is zero');
+
+  check('the generator folds replacement money BEFORE reconciling',
+    occursBefore(generator, 'foldFinalizedReplacementTotalsIntoCandidates(',
+      'reconcileFinalizedBillingOrderAdjustments({'),
+    'folding after the comparison would be the same bug with extra steps');
+
+  check('a cancelled original does not zero replacement money — both twins',
+    /REPLACEMENT_LINE_TYPES\.has\(normalized\)/.test(noCharge)
+    && /'replace_postage', 'replace_pick_pack'/.test(noCharge),
+    'the TypeScript set and the SQL predicate are read by different callers; one without the other is a disagreement, not a fix');
+}
+
 // ── AC-13: cancelling ONE replacement, credited relationally ─────────────────
 console.log('\ncancellation and finalized credits (AC-13)');
 
@@ -686,17 +727,26 @@ console.log('\ncancellation and finalized credits (AC-13)');
     /adjustmentSource: 'regeneration',[\s\S]{0,400}replacementId: null,/.test(policy),
     'a replacement-attributed adjustment comes from the sibling, never from there');
 
+  // Re-anchored when discovery moved into findFrozenReplacementLineTotals: the predicate is
+  // now raw SQL against the joined line alias rather than a Drizzle column template. Same
+  // intent — identity is a column, never a string parsed out of `reason`.
   check('invoiced lines are found RELATIONALLY by replacement_id',
-    /billingLineItems\.replacementId\} = \$\{input\.replacementId\}/.test(policy),
+    /line\.replacement_id = \$\{input\.replacementId\}/.test(policy)
+    && !/\breason\b[^\n]{0,60}\.(match|split|indexOf|includes)\(/.test(policy),
     'parsing identity out of a reason string is the mistake PS-488 rejected');
 
   check('prior adjustments are matched by replacement_id too',
     /billingCreditNotes\.replacementId\} = \$\{input\.replacementId\}/.test(policy));
 
+  // Scoped to the reconciler body: `replacementId: input.replacementId,` also appears in the
+  // call to findFrozenReplacementLineTotals, and a file-wide check let that copy answer for
+  // this one the moment discovery was extracted. Third time on this ticket that a green
+  // check quietly stopped defending anything because NEW code elsewhere satisfied it.
+  const replacementReconciler = functionBody(policy, 'reconcileFinalizedBillingReplacementAdjustment');
   check('the credit CARRIES replacement_id through the projection',
     /^ {6}replacement_id,$/m.test(policy)
     && /^ {6}\$\{input\.replacementId\},$/m.test(policy)
-    && /replacementId: input\.replacementId,/.test(policy),
+    && /adjustmentKind: 'credit',[\s\S]{0,120}replacementId: input\.replacementId,/.test(replacementReconciler),
     'a deterministic key is not a substitute for a queryable column');
 
   check('it credits the DELTA, not the frozen total',

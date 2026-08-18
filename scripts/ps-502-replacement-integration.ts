@@ -1463,6 +1463,142 @@ async function main(): Promise<void> {
     assert.equal(remaining[0]!.invoiced, true);
   });
 
+  console.log('\nreplacement money that was disappearing (D1/D2/D3)');
+
+  const { findFrozenReplacementLineTotals } =
+    await import('../src/services/billing-finalization-policy.js');
+  const { foldFinalizedReplacementTotalsIntoCandidates } =
+    await import('../src/services/billing-replacement-finalized-fold.js');
+  const { isCancelledNoChargeExcludedLineType, cancelledNoChargeBillingLinePredicateSql } =
+    await import('../src/services/billing-cancelled-no-charge.js');
+
+  /** Ship a replacement, close a period over its lines, and freeze them as billing does. */
+  const finalizeReplacement = async (slug: string, finalizationId: string) => {
+    const target = await readyToShip(slug);
+    await shipReplacement({
+      replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, target.replacementId));
+    assert.equal(lines.length, 2, 'the replacement wrote its two lines');
+
+    await db.execute(sql`
+      insert into billing_finalizations (id, client_id, period_start, period_end)
+      values (${finalizationId}, 1, now() - interval '30 days', now() + interval '30 days')
+    `);
+    // finalizeBillingPeriod freezes a line by setting invoiced = true and NOTHING else.
+    await db.update(schema.billingLineItems).set({ invoiced: true })
+      .where(eq(schema.billingLineItems.replacementId, target.replacementId));
+    return target;
+  };
+
+  await check('frozen replacement money is discoverable at all', async () => {
+    const target = await finalizeReplacement('frozen-a', 'fin-a');
+
+    const found = await findFrozenReplacementLineTotals(db as never, {
+      clientId: 1, replacementId: target.replacementId,
+    });
+    assert.equal(found.length, 1, 'one closed period froze this replacement');
+    assert.equal(found[0]!.finalizationId, 'fin-a');
+    assert.equal(Number(found[0]!.frozenTotal).toFixed(2), '12.25');
+
+    // The predicate this replaced. A replacement charge can never carry
+    // source_finalization_id — constraint billing_line_items_adjustment_reference_chk
+    // forbids it on any line whose type is not billing_adjustment — so the original
+    // query matched nothing and the reconciler credited nothing, silently.
+    const viaOldPredicate = await db.execute(sql`
+      select count(*)::int as n from billing_line_items
+      where replacement_id = ${target.replacementId}
+        and invoiced = true and source_finalization_id is not null
+    `);
+    const n = (viaOldPredicate as unknown as { rows: { n: number }[] }).rows[0]!.n;
+    assert.equal(n, 0, 'the predicate this replaced could never have matched a row');
+  });
+
+  await check('frozen money is scoped to ONE replacement', async () => {
+    const a = await finalizeReplacement('frozen-scope-a', 'fin-scope');
+    const b = await readyToShip('frozen-scope-b');
+    await shipReplacement({
+      replacementId: b.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: b.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+    await db.update(schema.billingLineItems).set({ invoiced: true })
+      .where(eq(schema.billingLineItems.replacementId, b.replacementId));
+
+    const found = await findFrozenReplacementLineTotals(db as never, {
+      clientId: 1, replacementId: a.replacementId,
+    });
+    assert.equal(Number(found[0]!.frozenTotal).toFixed(2), '12.25',
+      'B\'s identical frozen money is not counted as A\'s');
+  });
+
+  /** Independent of the fold's own query, so the proof is not the code restating itself. */
+  const invoicedReplacementMoneyOnOrder = async (orderId: number) => {
+    const rows = await db.execute(sql`
+      select coalesce(sum(total_cost), 0)::text as total from billing_line_items
+      where order_id = ${orderId} and replacement_id is not null and invoiced = true
+    `);
+    return Number((rows as unknown as { rows: { total: string }[] }).rows[0]!.total);
+  };
+
+  await check('the finalized candidate total gains the frozen replacement money', async () => {
+    await finalizeReplacement('fold-a', 'fin-fold');
+    const frozenOnOrder = await invoicedReplacementMoneyOnOrder(1321);
+    assert.ok(frozenOnOrder >= 12.25, 'this replacement\'s frozen money is part of the order\'s');
+
+    // What the outbound plan produced: the original order only. Without the fold this is what
+    // the reconciler compares against a frozen total that DOES include the replacement — a
+    // negative delta, and a credit that erases a real charge.
+    const candidates = new Map<number, Map<number, number>>([[1, new Map([[1321, 20]])]]);
+    const folded = await foldFinalizedReplacementTotalsIntoCandidates(
+      [1321], candidates, db as never,
+    );
+
+    assert.equal(folded.ordersFolded, 1);
+    assert.equal(folded.amountFolded.toFixed(2), frozenOnOrder.toFixed(2));
+    assert.equal(candidates.get(1)!.get(1321)!.toFixed(2), (20 + frozenOnOrder).toFixed(2),
+      'current now counts what frozen counts, so replacement money contributes zero delta');
+  });
+
+  await check('an UNINVOICED replacement line is not folded', async () => {
+    const before = await foldFinalizedReplacementTotalsIntoCandidates(
+      [1321], new Map(), db as never,
+    );
+
+    const open = await readyToShip('fold-open');
+    await shipReplacement({
+      replacementId: open.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: open.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+
+    const after = await foldFinalizedReplacementTotalsIntoCandidates(
+      [1321], new Map(), db as never,
+    );
+    assert.equal(after.amountFolded.toFixed(2), before.amountFolded.toFixed(2),
+      'open-period money is not frozen money — it belongs to the period ordinary billing owns');
+  });
+  await check('a cancelled original does not zero a delivered replacement', () => {
+    assert.equal(isCancelledNoChargeExcludedLineType('replace_postage'), true);
+    assert.equal(isCancelledNoChargeExcludedLineType('replace_pick_pack'), true);
+    assert.equal(isCancelledNoChargeExcludedLineType('return_postage'), true,
+      'the return exclusion is unchanged');
+    assert.equal(isCancelledNoChargeExcludedLineType('postage'), false,
+      'an ordinary outbound line is still zeroed — the predicate still does its job');
+
+    // The SQL twin must agree with the TypeScript one; they are read by different callers.
+    const predicate = cancelledNoChargeBillingLinePredicateSql({
+      lineType: sql`line_type`, orderStatus: sql`order_status`, canonicalStatus: sql`canonical_status`,
+    });
+    const text = JSON.stringify(predicate);
+    assert.ok(text.includes('replace_postage') && text.includes('replace_pick_pack'),
+      'the SQL predicate excludes replacement types too');
+  });
+
   await client.close();
   console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }

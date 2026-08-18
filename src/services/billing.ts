@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { foldFinalizedReplacementTotalsIntoCandidates } from './billing-replacement-finalized-fold.js';
 import { alias } from 'drizzle-orm/pg-core';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 // Audit B-4 (2026-07-13): xact advisory lock serializes concurrent storage-line writers.
@@ -1976,6 +1977,15 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
+  // PS-502 AC-6 at the FINALIZATION layer. The reconciler's frozen total counts replacement
+  // lines (they carry the original order id); the candidate total above does not, because
+  // the outbound plan never emits them. Without this fold the delta is negative by exactly
+  // the replacement charge and regeneration credits it away. See the owner for the full
+  // account — it is a separate module so the arithmetic can be proven against a database.
+  await foldFinalizedReplacementTotalsIntoCandidates(
+    finalizedOrderIds,
+    finalizedCandidateTotalsByClient,
+  );
   let finalizedAdjustmentCount = 0;
   let finalizedAdjustmentCreditCount = 0;
   let finalizedAdjustmentDebitCount = 0;

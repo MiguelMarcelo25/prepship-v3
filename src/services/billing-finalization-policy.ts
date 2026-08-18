@@ -84,6 +84,8 @@ export class BillingFinalizedLockError extends Error {
 
 type BillingPolicyExecutor = Pick<typeof db, 'execute'>;
 type BillingPolicyDatabase = Pick<typeof db, 'transaction'>;
+/** The transaction handle the callback receives — it carries `execute`, the database type does not. */
+type BillingPolicyTx = Parameters<Parameters<BillingPolicyDatabase['transaction']>[0]>[0];
 
 export type BillingFinalizationDto = {
   id: string;
@@ -906,6 +908,45 @@ export function resolveBillingRegenerationAdjustment(input: {
  * Lock order is unchanged: the same client lock the order reconciler takes, then the
  * idempotency-key lock inside the low-level owner.
  */
+/**
+ * Which finalizations froze money for THIS replacement, and how much.
+ *
+ * Extracted and named because the obvious predicate is wrong in a way nothing catches. The
+ * first version of this asked for `source_finalization_id is not null`, which reads as "the
+ * finalization that froze the line" — but constraint `billing_line_items_adjustment_reference_chk`
+ * (drizzle/0074) makes that column NULL-mandatory on any line whose type is not
+ * 'billing_adjustment'. `replace_postage` and `replace_pick_pack` can never carry it, and
+ * `finalizeBillingPeriod` only sets `invoiced = true` anyway. The predicate matched no row
+ * that has ever existed, so the reconciler returned zeros for every input and a cancelled
+ * replacement was credited nothing at all — silently, because zero adjustments is also what a
+ * correct run returns when there is genuinely nothing frozen.
+ *
+ * A finalized line is identified the way the ORDER reconciler identifies one: joined to
+ * `billing_finalizations` on the client and on the effective date falling inside the closed
+ * period. That is the repo's actual definition of frozen, and it is a JOIN rather than a
+ * column, which is why a source-text guard could not tell the two apart.
+ */
+export async function findFrozenReplacementLineTotals(
+  tx: BillingPolicyTx,
+  input: { clientId: number; replacementId: number },
+): Promise<{ finalizationId: string; frozenTotal: string }[]> {
+  return resultRows<{ finalizationId: string; frozenTotal: string }>(
+    await tx.execute(sql`
+      select closed.id as "finalizationId",
+             coalesce(sum(line.total_cost), 0)::text as "frozenTotal"
+      from billing_line_items line
+      join billing_finalizations closed
+        on closed.client_id = line.client_id
+        and coalesce(line.billing_effective_date, line.ship_date) >= closed.period_start
+        and coalesce(line.billing_effective_date, line.ship_date) < closed.period_end
+      where line.client_id = ${input.clientId}
+        and line.replacement_id = ${input.replacementId}
+        and line.invoiced = true
+      group by closed.id
+    `),
+  );
+}
+
 export async function reconcileFinalizedBillingReplacementAdjustment(input: {
   clientId: number;
   replacementId: number;
@@ -925,18 +966,10 @@ export async function reconcileFinalizedBillingReplacementAdjustment(input: {
   return conn.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(36421, ${input.clientId})`);
 
-    // Invoiced lines for THIS replacement, grouped by the finalization that froze them.
-    const frozenRows = resultRows<{ finalizationId: string; frozenTotal: string }>(
-      await tx.execute(sql`
-        select ${billingLineItems.sourceFinalizationId} as "finalizationId",
-               coalesce(sum(${billingLineItems.totalCost}), 0)::text as "frozenTotal"
-        from ${billingLineItems}
-        where ${billingLineItems.replacementId} = ${input.replacementId}
-          and ${billingLineItems.invoiced} = true
-          and ${billingLineItems.sourceFinalizationId} is not null
-        group by ${billingLineItems.sourceFinalizationId}
-      `),
-    );
+    const frozenRows = await findFrozenReplacementLineTotals(tx, {
+      clientId: input.clientId,
+      replacementId: input.replacementId,
+    });
     if (frozenRows.length === 0) {
       return { finalizationCount: 0, adjustedCount: 0, creditedAmount: '0.00' };
     }
