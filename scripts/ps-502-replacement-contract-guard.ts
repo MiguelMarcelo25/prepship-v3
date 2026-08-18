@@ -649,6 +649,57 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── AC-6: one regeneration owner, and the sweep cannot erase replacement money ─
+console.log('\nregeneration ownership (AC-6)');
+
+{
+  const sweep = read('src/services/billing-outbound-sweep.ts');
+  const writer = read('src/services/replacement-billing-writer.ts');
+  const writeCode = writer.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  check('the outbound sweep PRESERVES replacement line types',
+    /OUTBOUND_SWEEP_PRESERVED_LINE_TYPES = \[[\s\S]{0,200}REPLACEMENT_LINE_TYPES/.test(sweep),
+    'replacement lines carry order_id = originalOrder.id, so an ordinary rebuild of that ' +
+    'order would delete charges for a re-ship that already consumed stock');
+
+  check('the return and replacement vocabularies stay SEPARATE',
+    /\.\.\.ALL_GOVERNED_RETURN_LINE_TYPES/.test(sweep)
+    && /\.\.\.REPLACEMENT_LINE_TYPES/.test(sweep)
+    && !/replace_postage/.test(read('src/services/billing-return-event-contract.ts')),
+    'a replacement is outbound; folding it into the return contract would make every reader ' +
+    'that asks "is this a return?" answer yes');
+
+  {
+    // ONE owner. No other PS-502 module may delete billing lines.
+    const others = [
+      'src/services/replacement-shipped-command.ts',
+      'src/services/replacement-lifecycle-command.ts',
+      'src/services/replacement-label-purchase-command.ts',
+      'src/services/replacement-label-void-command.ts',
+    ];
+    const deleters = others.filter((file) => /\.delete\(billingLineItems\)/.test(read(file)));
+    check('no other replacement command deletes billing lines',
+      deleters.length === 0, `also deletes: ${deleters.join(", ")}`);
+  }
+
+  check('the regeneration delete carries ALL FOUR scoping terms',
+    /eq\(billingLineItems\.replacementId, facts\.replacementId\)/.test(writeCode)
+    && /inArray\(billingLineItems\.lineType/.test(writeCode)
+    && /eq\(billingLineItems\.invoiced, false\)/.test(writeCode)
+    && /sourceFinalizationId\} is null/.test(writeCode)
+    && /billingAdjustmentId\} is null/.test(writeCode),
+    'dropping any one term turns a regeneration into a deletion of something it does not own');
+
+  check('delete and rebuild share ONE transaction',
+    /export async function regenerateReplacementBillingInTransaction/.test(writer)
+    && !/conn\.transaction|db\.transaction/.test(writeCode),
+    'a failed insert must roll the delete back, never leave charges removed with nothing back');
+
+  check('finalized rows are never deleted',
+    /eq\(billingLineItems\.invoiced, false\)/.test(writeCode),
+    'an invoiced line is history; a difference becomes an append-only adjustment');
+}
+
 // ── Replacement billing: zero or complete, never partial ─────────────────────
 console.log('\nreplacement billing');
 

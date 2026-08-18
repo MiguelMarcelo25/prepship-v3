@@ -30,15 +30,38 @@
 import { and, sql, type SQL } from 'drizzle-orm';
 import { billingLineItems } from '../db/schema/billing';
 import { ALL_GOVERNED_RETURN_LINE_TYPES } from './billing-return-event-contract';
+import { REPLACEMENT_LINE_TYPES } from './replacement-billing-planner';
 
-/** The line types the outbound sweep must never delete. */
-export const OUTBOUND_SWEEP_PRESERVED_LINE_TYPES = ALL_GOVERNED_RETURN_LINE_TYPES;
+/**
+ * The line types the outbound sweep must never delete.
+ *
+ * PS-502 (AC-6) adds the replacement types, and they are here for EXACTLY the reason the
+ * return types are. A replacement billing line carries `order_id = originalOrder.id`,
+ * because the charge belongs to that customer order — so a routine regeneration of order
+ * 1321 would sweep away the postage and pick/pack for a re-ship that already consumed
+ * stock, and nothing would put them back. Outbound rebuild does not emit replacement
+ * lines: they are written once, by the atomic shipped command.
+ *
+ * Nothing would have errored. The client would simply have stopped being billed.
+ *
+ * The two vocabularies stay SEPARATE and are unioned here. A replacement is an outbound
+ * re-ship and a return is inbound; folding replacement types into the return contract
+ * would make every reader that asks "is this a return?" answer yes.
+ */
+export const OUTBOUND_SWEEP_PRESERVED_LINE_TYPES = [
+  ...ALL_GOVERNED_RETURN_LINE_TYPES,
+  ...REPLACEMENT_LINE_TYPES,
+] as const;
 
 /**
  * `line_type not in (...)` over the full governed return vocabulary.
  *
  * Exported separately so a reader can see the predicate in isolation, and so a guard
  * can assert the generator composes it rather than hand-rolling an equivalent.
+ */
+/**
+ * Kept under its historical name so PS-488's guards and proofs still bind to it, and
+ * aliased below for readers who arrive through PS-502.
  */
 export function outboundSweepReturnExclusion(): SQL {
   return sql`${billingLineItems.lineType} not in (${sql.join(
@@ -67,3 +90,9 @@ export async function deleteOutboundBillingLinesForRebuild(
 ): Promise<void> {
   await executor.delete(billingLineItems).where(and(scope, outboundSweepReturnExclusion()));
 }
+
+/**
+ * The same predicate, named for what it now does: preserve every line type the outbound
+ * rebuild does not own — returns AND replacements.
+ */
+export const outboundSweepPreservedExclusion = outboundSweepReturnExclusion;

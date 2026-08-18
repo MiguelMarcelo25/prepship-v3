@@ -74,6 +74,10 @@ async function main(): Promise<void> {
     await import('../src/services/replacement-shipped-command.js');
   const { writeReplacementBillingInTransaction } =
     await import('../src/services/replacement-billing-writer.js');
+  const { deleteOutboundBillingLinesForRebuild } =
+    await import('../src/services/billing-outbound-sweep.js');
+  const { regenerateReplacementBillingInTransaction } =
+    await import('../src/services/replacement-billing-writer.js');
   const { planReplacementBillingLines, ReplacementBillingPlanError } =
     await import('../src/services/replacement-billing-planner.js');
   const {
@@ -1310,6 +1314,75 @@ async function main(): Promise<void> {
     const lines = await db.select().from(schema.billingLineItems)
       .where(eq(schema.billingLineItems.replacementId, t.replacementId));
     assert.equal(lines.length, 0, 'no billing row');
+  });
+
+  console.log('\nAC-6 — regeneration preserves replacement lines');
+
+  await check('the PRODUCTION outbound sweep does not delete replacement lines', async () => {
+    const before = await db.select().from(schema.billingLineItems)
+      .where(inArray(schema.billingLineItems.lineType, ['replace_postage', 'replace_pick_pack']));
+    assert.ok(before.length >= 4, 'there are replacement lines to endanger');
+    const totalBefore = before.reduce((sum, l) => sum + Number(l.totalCost), 0);
+
+    // Seed an ordinary outbound line on the SAME order, so the sweep has something it does
+    // own and the test proves selectivity rather than a no-op.
+    await client.exec(
+      `INSERT INTO billing_line_items (client_id, order_id, order_number, shipment_id,
+         line_type, description, unit_cost, total_cost)
+       VALUES (1, 1321, '1321', 1, 'postage', 'Original postage', 5, 5);`,
+    );
+
+    // The ACTUAL production owner, with an order-scoped window exactly as regeneration uses.
+    await deleteOutboundBillingLinesForRebuild(
+      db as never,
+      sql`${schema.billingLineItems.orderId} = 1321`,
+    );
+
+    const after = await db.select().from(schema.billingLineItems)
+      .where(inArray(schema.billingLineItems.lineType, ['replace_postage', 'replace_pick_pack']));
+    const totalAfter = after.reduce((sum, l) => sum + Number(l.totalCost), 0);
+
+    assert.equal(after.length, before.length, 'every replacement line survives');
+    assert.equal(totalAfter.toFixed(2), totalBefore.toFixed(2), 'and their totals are unchanged');
+
+    const ordinary = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.lineType, 'postage'));
+    assert.equal(ordinary.length, 0,
+      'the sweep still deletes what it DOES own — otherwise this proves nothing');
+  });
+
+  await check('the replacement regeneration owner deletes only its own editable rows', async () => {
+    const [line] = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.lineType, 'replace_postage'));
+    const replacementId = line!.replacementId!;
+    const [r] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, replacementId));
+
+    // Mark ONE of its lines invoiced. Finalized money is history and must survive.
+    await db.update(schema.billingLineItems).set({ invoiced: true })
+      .where(eq(schema.billingLineItems.id, line!.id));
+
+    const facts = {
+      replacementId, orderId: r!.orderId, clientId: r!.clientId ?? 1,
+      reference: r!.reference, replacementShipmentId: r!.replacementShipmentId!,
+      billable: true,
+      money: { shipmentCost: 8.25, otherCost: 1.5 },
+      pickPackCharge: 2.5,
+      shipDate: new Date(), billingEffectiveDate: new Date(),
+      billingPolicyVersion: 'v1',
+    };
+
+    // The postage row is invoiced, so regeneration must fail rather than duplicate it:
+    // the partial unique index refuses a second replace_postage for this replacement.
+    await assert.rejects(
+      () => (conn as { transaction: (f: never) => unknown }).transaction((async (tx: never) =>
+        regenerateReplacementBillingInTransaction(tx, facts)) as never),
+      'a finalized row is never deleted, so rebuilding beside it must fail loudly');
+
+    const still = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.id, line!.id));
+    assert.equal(still.length, 1, 'the invoiced row survives the rolled-back attempt');
+    assert.equal(still[0]!.invoiced, true);
   });
 
   await client.close();

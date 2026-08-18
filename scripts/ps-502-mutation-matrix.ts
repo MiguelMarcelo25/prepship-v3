@@ -31,6 +31,7 @@ const LABEL_VOID = 'src/services/replacement-label-void-command.ts';
 const SHIPPED = 'src/services/replacement-shipped-command.ts';
 const BILL_PLAN = 'src/services/replacement-billing-planner.ts';
 const BILL_WRITE = 'src/services/replacement-billing-writer.ts';
+const SWEEP = 'src/services/billing-outbound-sweep.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -598,6 +599,21 @@ const MUTATIONS: Mutation[] = [
     find: '    assertReplacementLineInvariants(line, {',
     replace: '    void ({',
     expect: 'cross-table invariants are asserted in the service',
+  },  {
+    id: 'M72',
+    defect: 'the sweep stops preserving replacement lines, so a routine rebuild erases them',
+    file: SWEEP,
+    find: '  ...REPLACEMENT_LINE_TYPES,',
+    replace: '',
+    expect: 'the outbound sweep PRESERVES replacement line types',
+  },
+  {
+    id: 'M73',
+    defect: 'regeneration stops excluding invoiced rows and deletes finalized money',
+    file: BILL_WRITE,
+    find: '      eq(billingLineItems.invoiced, false),',
+    replace: '',
+    expect: 'the regeneration delete carries ALL FOUR scoping terms',
   },
 ];
 

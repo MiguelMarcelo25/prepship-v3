@@ -15,10 +15,11 @@
  * are the same number only when the insert actually did what was asked, and the whole point
  * of counting is to notice when it did not.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { billingLineItems } from '../db/schema/billing';
 import { replacements } from '../db/schema/replacements';
 import {
+  REPLACEMENT_LINE_TYPES,
   assertReplacementLineInvariants,
   planReplacementBillingLines,
   ReplacementBillingPlanError,
@@ -94,4 +95,39 @@ export async function writeReplacementBillingInTransaction(
     linesWritten: inserted.length,
     lineTypes: (inserted as Array<{ lineType: string }>).map((row) => row.lineType),
   };
+}
+
+/**
+ * PS-502 AC-6 — the ONE owner permitted to delete and rebuild a replacement's billing.
+ *
+ * The ordinary outbound sweep preserves replacement line types (see
+ * billing-outbound-sweep.ts), so it can never remove them. When a replacement's own lines
+ * genuinely need regenerating, it happens HERE and only here.
+ *
+ * DELETE-THEN-REBUILD IN ONE TRANSACTION. The delete is scoped by replacement_id AND the
+ * governed replacement line types AND invoiced = false AND no finalization or adjustment
+ * ownership — four terms, because dropping any one of them turns a regeneration into a
+ * deletion of something it does not own. A failed insert rolls the delete back, so a
+ * replacement is never left with its charges removed and nothing put back.
+ *
+ * FINALIZED ROWS ARE NEVER TOUCHED. An invoiced line is history; a difference against it
+ * becomes an append-only adjustment through the sibling reconciler, not an edit here.
+ */
+export async function regenerateReplacementBillingInTransaction(
+  tx: any,
+  facts: ReplacementBillingFacts,
+): Promise<WriteReplacementBillingResult & { deleted: number }> {
+  const removed = await tx
+    .delete(billingLineItems)
+    .where(and(
+      eq(billingLineItems.replacementId, facts.replacementId),
+      inArray(billingLineItems.lineType, [...REPLACEMENT_LINE_TYPES]),
+      eq(billingLineItems.invoiced, false),
+      sql`${billingLineItems.sourceFinalizationId} is null`,
+      sql`${billingLineItems.billingAdjustmentId} is null`,
+    ))
+    .returning({ id: billingLineItems.id });
+
+  const written = await writeReplacementBillingInTransaction(tx, facts);
+  return { ...written, deleted: removed.length };
 }
