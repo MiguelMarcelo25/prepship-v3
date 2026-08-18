@@ -282,21 +282,32 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
  * summary is a hot path that must not pay for an information_schema round trip per call.
  */
 let replacementIdColumnPresent: Promise<boolean> | null = null;
-export function billingLineItemsHasReplacementIdColumn(): Promise<boolean> {
-  replacementIdColumnPresent ??= db
-    .execute(sql`
-      select 1 from information_schema.columns
-       where table_name = 'billing_line_items' and column_name = 'replacement_id'
-       limit 1
-    `)
-    .then((result) => {
-      const rows = Array.isArray(result)
-        ? result
-        : (result as { rows?: unknown[] })?.rows ?? [];
-      return rows.length > 0;
+
+async function probeReplacementIdColumn(conn: Pick<typeof db, 'execute'>): Promise<boolean> {
+  const result = await conn.execute(sql`
+    select 1 from information_schema.columns
+     where table_schema = current_schema()
+       and table_name = 'billing_line_items'
+       and column_name = 'replacement_id'
+     limit 1
+  `);
+  const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+  return rows.length > 0;
+}
+/**
+ * Takes the CALLER'S connection, and remembers only a true answer — same two corrections as
+ * replacementSchemaPresent. Reading the singleton meant an invoice-totals caller running
+ * against a pre-0097 fixture probed the wrong database entirely.
+ */
+export function billingLineItemsHasReplacementIdColumn(
+  conn?: Pick<typeof db, 'execute'>,
+): Promise<boolean> {
+  if (conn) return probeReplacementIdColumn(conn);
+  replacementIdColumnPresent ??= probeReplacementIdColumn(db)
+    .then((found) => {
+      if (!found) replacementIdColumnPresent = null;
+      return found;
     })
-    // A probe that throws must not be cached as "absent" — that would hide the column
-    // permanently after one transient error.
     .catch((error) => { replacementIdColumnPresent = null; throw error; });
   return replacementIdColumnPresent;
 }

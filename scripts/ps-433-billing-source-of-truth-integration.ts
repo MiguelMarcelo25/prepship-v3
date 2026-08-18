@@ -70,6 +70,12 @@ async function main(): Promise<void> {
   const first = await query();
   assert.deepEqual(first, {
     orderCount: 2,
+    // PS-502 on a PRE-0097 schema: the column does not exist, so the count is not attempted
+    // and the categories are empty. This fixture is the regression test for that — the owner
+    // crashed here for every client, with replacement flags off, until it probed first.
+    replacementCount: 0,
+    replacePostageTotal: 0,
+    replacePickPackTotal: 0,
     pickPackTotal: 2,
     additionalTotal: 1,
     pickPackFeeTotal: 3,

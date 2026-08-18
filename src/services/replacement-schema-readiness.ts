@@ -37,33 +37,70 @@ import { db } from '../db/client';
  * forever and every path resumes. It must NOT be used to skip work on a migrated database.
  */
 
+/**
+ * Only a TRUE answer is remembered.
+ *
+ * The first version cached both. A process that booted before the migration lane ran cached
+ * `false` and kept returning it after the migration landed — so upstream cancellation
+ * reconciliation and the finalized billing fold stayed silently disabled on a fully migrated
+ * database until someone restarted the app. The comment above it worried about caching a
+ * THROWN error as absent and missed the ordinary false.
+ *
+ * Presence is permanent — migrations here are forward-only, and nothing drops these tables —
+ * so remembering `true` is safe. Absence is a transient state that a migration ends, so it is
+ * re-checked every time. The cost of that is one indexed catalogue lookup on a database where
+ * the feature does not exist yet.
+ */
 let present: Promise<boolean> | null = null;
 
 type SchemaProbeConn = Pick<typeof db, 'execute'>;
 
+/**
+ * Every relation the guarded callers actually touch, not just the headline table.
+ *
+ * `replacements` alone did not prove `billing_line_items.replacement_id` (0097) or
+ * `replacement_original_order_holds` (0101), and the fold and the sweep need those. The
+ * official runner applies 0096-0101 in ONE transaction, so requiring all three cannot
+ * strand a partially-migrated database that the supported lane could produce.
+ *
+ * to_regclass and current_schema() respect the active search_path — an unqualified
+ * information_schema lookup would happily find a same-named table in another schema.
+ */
 async function probe(conn: SchemaProbeConn): Promise<boolean> {
   const result = await conn.execute(sql`
-    select 1 from information_schema.tables where table_name = 'replacements' limit 1
+    select
+      to_regclass('replacements') is not null as has_replacements,
+      to_regclass('replacement_original_order_holds') is not null as has_holds,
+      exists (
+        select 1 from information_schema.columns
+         where table_schema = current_schema()
+           and table_name = 'billing_line_items'
+           and column_name = 'replacement_id'
+      ) as has_replacement_id
   `);
-  const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
-  return rows.length > 0;
+  const rows = (Array.isArray(result)
+    ? result
+    : ((result as { rows?: unknown[] }).rows ?? [])) as {
+      has_replacements: boolean; has_holds: boolean; has_replacement_id: boolean;
+    }[];
+  const row = rows[0];
+  return Boolean(row?.has_replacements && row?.has_holds && row?.has_replacement_id);
 }
 
 /**
- * The memo covers the DEFAULT connection only.
- *
- * An explicit connection is queried every time and never cached, because the harness runs
- * against an embedded database while the singleton points at production: one shared memo
- * would let a test answer for the real thing, or the reverse. Caching per connection would
- * be a map keyed on an object nobody can be sure is stable, so it is not worth it — the
- * probe is one indexed lookup and the explicit-connection callers are already inside a
- * transaction doing more work than this.
+ * An explicit connection is queried every time and never cached: the singleton points at
+ * production while the harness runs embedded, and one shared memo would let a test answer
+ * for the real database.
  */
 export function replacementSchemaPresent(conn?: SchemaProbeConn): Promise<boolean> {
   if (conn) return probe(conn);
   present ??= probe(db)
-    // A probe that throws must not be cached as "absent" — one transient error would
-    // disable every replacement path until the process restarted.
+    .then((found) => {
+      // Forget a NEGATIVE immediately, so the next call re-checks. Remembering it is what
+      // kept a migrated database looking unmigrated for the life of the process.
+      if (!found) present = null;
+      return found;
+    })
     .catch((error) => { present = null; throw error; });
   return present;
 }

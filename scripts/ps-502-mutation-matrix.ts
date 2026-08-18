@@ -40,6 +40,7 @@ const ROUTE = 'src/routes/replacements.ts';
 const DIAGNOSTICS = 'src/services/replacement-diagnostics.ts';
 const MAIN = 'src/main.ts';
 const SCHEMA_PROBE = 'src/services/replacement-schema-readiness.ts';
+const INVOICE_TOTALS_OWNER = 'src/services/billing-invoice-totals.ts';
 const MIGRATION_WORKFLOW = '.github/workflows/render-one-off-migration-ps502.yml';
 const FENCE = 'src/services/replacement-customer-money.ts';
 const PLANNER = 'src/services/replacement-billing-planner.ts';
@@ -912,6 +913,21 @@ const MUTATIONS: Mutation[] = [
     find: '      select distinct',
     replace: '      select',
     expect: 'one line is counted once even if two closed periods overlap',
+  },  {
+    id: 'M108',
+    defect: 'the probe remembers a NEGATIVE, so a migrated database looks unmigrated until restart',
+    file: SCHEMA_PROBE,
+    find: '      if (!found) present = null;',
+    replace: '',
+    expect: 'a NEGATIVE answer is never remembered',
+  },
+  {
+    id: 'M109',
+    defect: 'the canonical invoice totals assume replacement_id exists again',
+    file: INVOICE_TOTALS_OWNER,
+    find: '  const replacementCountSql = (await billingLineItemsHasReplacementIdColumn(conn))',
+    replace: '  const replacementCountSql = (true)',
+    expect: 'the canonical invoice totals probe on the CALLER\'s connection',
   },
 ];
 

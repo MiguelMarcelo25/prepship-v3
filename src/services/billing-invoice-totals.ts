@@ -3,6 +3,7 @@ import { db } from '../db/client.js';
 import { roundMoney } from '../lib/money.js';
 import { intArraySql } from '../lib/scope-sql.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
+import { billingLineItemsHasReplacementIdColumn } from './billing-row-status.js';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
 import {
   nonBillableDuplicateOrderIds,
@@ -71,6 +72,15 @@ export async function billingInvoiceHeaderTotals(
     ? sql`and (b.order_id is null or b.order_id <> all(${intArraySql(suppressedOrderIds)}))`
     : sql``;
 
+  // Probed on the CALLER'S connection, not the singleton. This owner is reached by ordinary
+  // invoice generation on every database, and 0097 is gated behind the operator lane — an
+  // unguarded reference crashed the canonical totals for every client with
+  // `column b.replacement_id does not exist`, with every replacement flag off. The live
+  // summary was already guarded this way; this one was missed.
+  const replacementCountSql = (await billingLineItemsHasReplacementIdColumn(conn))
+    ? sql`count(distinct b.replacement_id)::int`
+    : sql`0::int`;
+
   const invoiceAmount = cancelledNoChargeBillingAmountSql({
     lineType: sql`b.line_type`,
     orderStatus: sql`o.order_status`,
@@ -104,7 +114,7 @@ export async function billingInvoiceHeaderTotals(
       coalesce(sum(case when b.line_type = 'replace_postage' then ${invoiceAmount} else 0 end), 0)::text as replace_postage_total,
       coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${invoiceAmount} else 0 end), 0)::text as replace_pick_pack_total,
       count(distinct b.order_id)::int as order_count,
-      count(distinct b.replacement_id)::int as replacement_count,
+      ${replacementCountSql} as replacement_count,
       coalesce(sum(${invoiceAmount}), 0)::text as grand_total
     from billing_line_items b
     left join orders o on o.id = b.order_id

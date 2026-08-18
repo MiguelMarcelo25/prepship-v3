@@ -746,6 +746,22 @@ console.log('\nschema-absent safety');
     /if \(conn\) return probe\(conn\);/.test(probe),
     'the singleton points at production while the harness runs embedded; one shared memo lets a test answer for the real database');
 
+  check('a NEGATIVE answer is never remembered',
+    /if \(!found\) present = null;/.test(probeCode),
+    'a process that booted before the migration lane cached false and kept returning it afterwards, so a migrated database looked unmigrated until restart');
+
+  check('the probe is schema-qualified and covers what its callers touch',
+    /to_regclass\('replacements'\)/.test(probeCode)
+    && /to_regclass\('replacement_original_order_holds'\)/.test(probeCode)
+    && /column_name = 'replacement_id'/.test(probeCode)
+    && /table_schema = current_schema\(\)/.test(probeCode),
+    'a bare table_name lookup finds a same-named table in another schema, and `replacements` alone does not prove 0097\'s column or 0101\'s holds table');
+
+  check('the canonical invoice totals probe on the CALLER\'s connection',
+    /billingLineItemsHasReplacementIdColumn\(conn\)/.test(
+      read('src/services/billing-invoice-totals.ts')),
+    'this owner runs for every client on every database; an unguarded replacement_id crashed the canonical totals with the feature switched off');
+
   check('a failed probe is not cached as absent',
     /present = null; throw error;/.test(probe),
     'one transient error would otherwise disable every replacement path until restart');
