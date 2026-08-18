@@ -16,8 +16,10 @@ const REQUIRED_RELATIONS = [
   'direct_carrier_rate_cache',
   'external_operations',
   'label_purchase_intents',
-  'replacement_item_remaps',
-  'replacement_label_purchase_intents',
+  // PS-502 tables are deliberately ABSENT until the operator migration lane has actually
+  // applied 0096-0100 in production. assertRuntimeSchemaReady() THROWS on a missing relation,
+  // so listing them before they are deployed makes readiness fail for every caller — and no
+  // production path uses them yet. They join this list as part of the deployment step.
   'label_purchase_locks',
   'order_competitive_rate',
   'order_lifecycle_events',
@@ -190,8 +192,6 @@ const REQUIRED_INDEXES = [
   'inventory_ledger_idempotency_key_unq',
   'inventory_ledger_source_identity_unq',
   'label_purchase_intents_unresolved_idx',
-  'replacement_item_remaps_item_version_unq',
-  'replacement_label_purchase_intents_active_unq',
   'label_purchase_locks_expires_at_idx',
   'order_competitive_rate_house_idx',
   'order_competitive_rate_order_idx',
