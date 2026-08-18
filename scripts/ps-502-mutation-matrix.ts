@@ -326,11 +326,11 @@ const MUTATIONS: Mutation[] = [
   },
   {
     id: 'M38',
-    defect: 'idempotency stops being payload-bound — a reused key returns the WRONG replacement',
+    defect: 'the whole-request signature stops being compared — a reused key returns the WRONG replacement',
     file: CREATE,
-    find: '      if (existing.orderId !== input.orderId) {',
+    find: '      if (existing.requestSignature !== requestSignature) {',
     replace: '      if (false) {',
-    expect: 'idempotency is PAYLOAD-BOUND, not key-only',
+    expect: 'idempotency binds the WHOLE request, not just its items',
   },
   {
     id: 'M39',
@@ -355,6 +355,22 @@ const MUTATIONS: Mutation[] = [
     find: '      if (reviewed.length === 0) {',
     replace: '      if (false) {',
     expect: 'a lost drift race appends NO event',
+  },
+  {
+    id: 'M42',
+    defect: 'an authorized client-liability FALSE loses its reason again',
+    file: CREATE,
+    find: "    if (input.liabilityOwner === 'client') {",
+    replace: '    if (billability.billable) {',
+    expect: 'an authorized client-liability decision is recorded whether TRUE or FALSE',
+  },
+  {
+    id: 'M43',
+    defect: 'a behaviourally significant field drops out of the request signature',
+    file: CREATE,
+    find: '    billabilityReason: normalizeReason(input.billabilityReason),',
+    replace: '',
+    expect: 'the signature covers every behaviourally significant field',
   },
 ];
 

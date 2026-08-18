@@ -118,20 +118,48 @@ export type CreateReplacementResult = {
   created: boolean;
 };
 
+function normalizeReason(value: string | null | undefined): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed === '' ? null : trimmed;
+}
+
 /**
- * Order-independent signature of a requested item set.
+ * Canonical signature of the WHOLE request.
  *
- * Sorted, so the same request expressed in a different order compares equal — a retry that
- * reorders its array is the same request and must not read as a conflict.
+ * Every field that changes what the replacement MEANS belongs here. Comparing only the items
+ * — which the first version did — let one key be retried with the same lines but different
+ * money or liability intent and silently return the earlier replacement, so the caller
+ * believed its new intent had been recorded when nothing had changed.
+ *
+ * Items are sorted, so a retry that reorders its array is still the same request.
+ *
+ * Actor email and type are deliberately EXCLUDED: who submitted a request is not part of what
+ * the request asks for, and including them would turn an ordinary retry by a second operator
+ * into a spurious conflict. The override PERMISSION is excluded for the same reason — it is an
+ * authorization fact resolved per call, not request intent — while the override REASON is
+ * included, because it changes the audited justification for exceeding the cap.
  */
-function canonicalItemSignature(
-  items: readonly { orderLineIndex: number; quantity: number }[],
-): string {
-  return JSON.stringify(
-    items
+function canonicalRequestSignature(input: {
+  orderId: number;
+  reason: string;
+  liabilityOwner: ReplacementLiabilityOwner;
+  requestedBillable?: boolean;
+  billabilityReason?: string | null;
+  override?: { reason: string | null };
+  items: readonly { orderLineIndex: number; quantity: number }[];
+}): string {
+  return JSON.stringify({
+    v: 'rrs1',
+    orderId: input.orderId,
+    reason: normalizeReason(input.reason),
+    liabilityOwner: input.liabilityOwner,
+    requestedBillable: input.requestedBillable === true,
+    billabilityReason: normalizeReason(input.billabilityReason),
+    overrideReason: normalizeReason(input.override?.reason),
+    items: input.items
       .map((item) => [item.orderLineIndex, item.quantity] as const)
       .sort((a, b) => a[0] - b[0] || a[1] - b[1]),
-  );
+  });
 }
 
 export async function createReplacement(
@@ -196,6 +224,8 @@ export async function createReplacement(
     seenIndexes.add(item.orderLineIndex);
   }
 
+  const requestSignature = canonicalRequestSignature(input);
+
   return conn.transaction(async (tx) => {
     // Everything below is a read-modify-write against this order: the allowance, the
     // reference sequence and the idempotency check all decide based on rows a concurrent
@@ -224,18 +254,14 @@ export async function createReplacement(
           { existingReplacementId: existing.id },
         );
       }
-      const existingItems = await tx
-        .select({
-          orderLineIndex: replacementItems.orderLineIndex,
-          quantity: replacementItems.quantity,
-        })
-        .from(replacementItems)
-        .where(eq(replacementItems.replacementId, existing.id));
-      if (canonicalItemSignature(existingItems) !== canonicalItemSignature(input.items)) {
+      // The WHOLE request must match, not merely its items. A NULL stored signature is a
+      // pre-0099 row whose equivalence cannot be proven, so it conflicts rather than
+      // silently passing — the safe direction for a money-bearing command.
+      if (existing.requestSignature !== requestSignature) {
         throw new ReplacementCreateError(
           'REPLACEMENT_IDEMPOTENCY_MISMATCH',
-          `idempotency key already belongs to replacement ${existing.reference}, whose items ` +
-            'differ from this request',
+          `idempotency key already belongs to replacement ${existing.reference}, whose request ` +
+            'differs from this one',
           409,
           { existingReplacementId: existing.id },
         );
@@ -395,6 +421,7 @@ export async function createReplacement(
         billable: billability.billable,
         liabilityOwner: input.liabilityOwner,
         requestIdempotencyKey: input.requestIdempotencyKey,
+        requestSignature,
         initiatedBy: input.actor.email,
         adminOverride: usedOverride,
         adminOverrideBy: usedOverride ? input.actor.email : null,
@@ -444,7 +471,12 @@ export async function createReplacement(
     // set. Validating the reason and then discarding it — which is what happened before
     // migration 0098 gave this table a `detail` column — is worse than not asking for one:
     // the audit trail records that money was charged and not why.
-    if (billability.billable) {
+    // Recorded for EVERY authorized client-liability decision, including an explicit
+    // `false`. Reaching here with client liability means permissions and a written reason
+    // were required and supplied, so discarding the reason on a `false` loses exactly the
+    // justification an auditor would look for. Operator-liability forced-false is a policy
+    // RESULT rather than a decision, and needs no privileged event.
+    if (input.liabilityOwner === 'client') {
       await tx.insert(replacementActivityEvents).values({
         replacementId: created.id,
         eventType: 'replacement_billability_set',

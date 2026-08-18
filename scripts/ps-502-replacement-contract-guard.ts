@@ -61,6 +61,8 @@ const replacementsSql = read('drizzle/0096_ps502_replacements.sql');
 const billingSql = read('drizzle/0097_ps502_replacement_billing.sql');
 // Hermes ruling C: replacement financial attribution became RESTRICT in a forward migration.
 const restrictSql = read('drizzle/0098_ps502_replacement_financial_restrict.sql');
+// Hermes re-audit correction 1: idempotency binds to the whole request, stored by 0099.
+const signatureSql = read('drizzle/0099_ps502_replacement_request_signature.sql');
 
 // ── AC-2 — transitions enforced, illegal ones coded 409 ──────────────────────
 console.log('\nlifecycle (executed, not grepped)');
@@ -569,7 +571,7 @@ console.log('\ndrizzle schema mirrors the migration');
         if (m[1] !== 'constraint') found.add(m[1]!);
       }
     }
-    for (const sql of [replacementsSql, billingSql, restrictSql]) {
+    for (const sql of [replacementsSql, billingSql, restrictSql, signatureSql]) {
       const pattern = new RegExp(
         `alter table ${table}\\s+add column(?: if not exists)? (\\w+)`,
         'gi',
@@ -617,6 +619,10 @@ console.log('\ndrizzle schema mirrors the migration');
     /billing_line_items[\s\S]{0,200}references replacements\(id\) on delete restrict/.test(restrictSql)
     && /billing_credit_notes[\s\S]{0,200}references replacements\(id\) on delete restrict/.test(restrictSql),
     'editing Drizzle ahead of the database is the failure 0097 already caused once');
+
+  check('0099 stores the whole-request signature a retry compares against',
+    /alter table replacements\s+add column if not exists request_signature text/i.test(signatureSql),
+    'reconstructing it from the row would reassemble the request from its effects');
 
   check('0098 gives activity events somewhere to keep a written reason',
     /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
@@ -717,10 +723,23 @@ console.log('\ncreate command (locked path)');
     && at('REPLACEMENT_REASON_INVALID') < at('conn.transaction('),
     'a UI is not the only caller');
 
-  check('idempotency is PAYLOAD-BOUND, not key-only',
-    /existing\.orderId !== input\.orderId/.test(code)
-    && /canonicalItemSignature\(existingItems\) !== canonicalItemSignature\(input\.items\)/.test(code),
-    'a key reused against a different order would hand back the WRONG replacement as success');
+  check('idempotency binds the WHOLE request, not just its items',
+    // Comparing only order id and items let one key be retried with the same lines but a
+    // different reason, liability owner or billability and silently return the earlier
+    // replacement, so the caller believed its new intent had been recorded.
+    /const requestSignature = canonicalRequestSignature\(input\)/.test(code)
+    && /existing\.requestSignature !== requestSignature/.test(code)
+    && /requestSignature,/.test(code),
+    'the caller would believe its new intent had been recorded when nothing changed');
+
+  check('the signature covers every behaviourally significant field',
+    ['orderId', 'reason', 'liabilityOwner', 'requestedBillable', 'billabilityReason', 'overrideReason']
+      .every((field) => new RegExp(`${field}:`).test(createSource)),
+    'a field left out is a field a retry may silently change');
+
+  check('a row with no stored signature cannot pass as equivalent',
+    /pre-0099 row/.test(createSource),
+    'unprovable equivalence must conflict — the safe direction for a money-bearing command');
 
   check('a reordered item array is the SAME request, not a conflict',
     /\.sort\(\(a, b\) => a\[0\] - b\[0\]/.test(createSource));
@@ -728,6 +747,13 @@ console.log('\ncreate command (locked path)');
   check('the billability reason is RECORDED, not just validated',
     /eventType: 'replacement_billability_set'/.test(code) && /detail: input\.billabilityReason/.test(code),
     'decision 7 requires a reason and an event; recording that money was charged and not why is worse');
+
+  check('an authorized client-liability decision is recorded whether TRUE or FALSE',
+    // Gating on `billability.billable` discarded the reason behind an authorized `false` —
+    // exactly the justification an auditor would look for. Operator-liability forced-false
+    // is a policy RESULT rather than a decision, and needs no privileged event.
+    /if \(input\.liabilityOwner === 'client'\) \{/.test(code)
+    && !/if \(billability\.billable\) \{/.test(code));
 
   check('an audited override records its reason on the event',
     /detail: usedOverride \? \(input\.override\?\.reason \?\? null\) : null/.test(code));

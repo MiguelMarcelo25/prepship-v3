@@ -38,12 +38,17 @@ async function check(name: string, fn: () => Promise<void> | void): Promise<void
 
 /** The prerequisite tables 0096 references. Minimal — only what the commands touch. */
 const PREREQUISITE_DDL = `
+  -- Only so 0025_order_items_sync_trigger.sql can be applied VERBATIM: it indexes this
+  -- table. Installing the real trigger is what makes the AC-14 check mean anything.
+  CREATE TABLE analytics_cache (id serial PRIMARY KEY, expires_at timestamptz);
   CREATE TABLE clients (id serial PRIMARY KEY, name text);
   CREATE TABLE orders (
     id serial PRIMARY KEY,
     client_id integer REFERENCES clients(id),
     order_number text NOT NULL,
     order_status text NOT NULL DEFAULT 'awaiting_shipment',
+    store_id integer,
+    order_date timestamptz,
     items jsonb NOT NULL DEFAULT '[]'::jsonb,
     updated_at timestamptz NOT NULL DEFAULT now()
   );
@@ -54,7 +59,13 @@ const PREREQUISITE_DDL = `
     sku text NOT NULL,
     name text,
     quantity numeric(12,3) NOT NULL DEFAULT '0',
+    unit_price numeric(12,2) NOT NULL DEFAULT '0',
+    line_total numeric(12,2) NOT NULL DEFAULT '0',
+    image_url text,
+    client_id integer,
+    store_id integer,
     order_status text NOT NULL DEFAULT 'shipped',
+    order_date timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );
@@ -104,9 +115,13 @@ const PREREQUISITE_DDL = `
 `;
 
 const MIGRATIONS = [
+  // The REAL order_items sync trigger. Without it the AC-14 check never performs the
+  // dangerous DELETE-and-reinsert it claims to survive, and passes for the wrong reason.
+  'drizzle/0025_order_items_sync_trigger.sql',
   'drizzle/0096_ps502_replacements.sql',
   'drizzle/0097_ps502_replacement_billing.sql',
   'drizzle/0098_ps502_replacement_financial_restrict.sql',
+  'drizzle/0099_ps502_replacement_request_signature.sql',
 ];
 
 async function applyMigrations(client: PGlite): Promise<void> {
@@ -147,15 +162,19 @@ async function main(): Promise<void> {
   const conn = db as unknown as Parameters<typeof createReplacement>[1];
 
   // A shipped original: 3 x SKU-A at line 0, 2 x SKU-B at line 1.
+  // Seeded THROUGH orders.items so the sync trigger produces order_items, exactly as
+  // production does. Inserting order_items by hand would test a table the trigger owns.
   await client.exec(`
     INSERT INTO clients (id, name) VALUES (1, 'Acme');
-    INSERT INTO orders (id, client_id, order_number, order_status)
-      VALUES (1321, 1, '1321', 'shipped');
-    INSERT INTO order_items (order_id, line_index, sku, name, quantity) VALUES
-      (1321, 0, 'SKU-A', 'Widget A', 3),
-      (1321, 1, 'SKU-B', 'Widget B', 2);
+    INSERT INTO orders (id, client_id, order_number, order_status, items)
+      VALUES (1321, 1, '1321', 'shipped', '[{"sku":"SKU-A","name":"Widget A","quantity":3},{"sku":"SKU-B","name":"Widget B","quantity":2}]'::jsonb);
   `);
   const actor = { email: 'op@example.test', type: 'operator', permissions: ['replacements:create'] };
+  const FINANCE_ACTOR = {
+    email: 'finance@example.test',
+    type: 'admin',
+    permissions: ['replacements:create', 'replacements:billing', 'financials:write'],
+  };
 
   console.log('\ncreate command');
 
@@ -214,6 +233,65 @@ async function main(): Promise<void> {
       (e: unknown) => e instanceof ReplacementCreateError
         && e.code === 'REPLACEMENT_IDEMPOTENCY_MISMATCH',
     );
+  });
+
+  // Hermes re-audit correction 1: the signature must cover the WHOLE request. Same key,
+  // same items, different money or liability INTENT must not silently return the earlier
+  // replacement — the caller would believe its new intent had been recorded.
+  const sameKeySameItems = {
+    orderId: 1321,
+    items: [{ orderLineIndex: 0, quantity: 1 }],
+    requestIdempotencyKey: 'req-1',
+    actor,
+  } as const;
+
+  for (const [label, patch] of [
+    ['a different reason', { reason: 'lost_in_transit', liabilityOwner: 'operator' }],
+    ['a different liability owner', { reason: 'damaged', liabilityOwner: 'client' }],
+  ] as const) {
+    await check(`the same key with ${label} is a coded conflict`, async () => {
+      await assert.rejects(
+        () => createReplacement({
+          ...sameKeySameItems,
+          ...patch,
+          actor: FINANCE_ACTOR,
+          billabilityReason: 'client accepted liability',
+        }, conn),
+        (e: unknown) => e instanceof ReplacementCreateError
+          && e.code === 'REPLACEMENT_IDEMPOTENCY_MISMATCH',
+      );
+    });
+  }
+
+  // Hermes re-audit correction 2: an authorized client-liability decision of FALSE still
+  // required a reason, and that reason was being validated and then discarded — losing
+  // exactly the justification an auditor would look for.
+  await check('an authorized client-liability FALSE records its reason', async () => {
+    const result = await createReplacement({
+      orderId: 1321, reason: 'other', liabilityOwner: 'client',
+      items: [{ orderLineIndex: 1, quantity: 1 }],
+      requestedBillable: false,
+      billabilityReason: 'goodwill gesture, not charged',
+      requestIdempotencyKey: 'req-nonbillable', actor: FINANCE_ACTOR,
+    }, conn);
+    assert.equal(result.replacement.billable, false);
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, result.replacement.id));
+    const billability = events.find((e) => e.eventType === 'replacement_billability_set');
+    assert.ok(billability, 'an authorized FALSE is still a decision and needs its event');
+    assert.equal(billability!.detail, 'goodwill gesture, not charged');
+  });
+
+  await check('operator-liability forced-false needs NO privileged billability event', async () => {
+    const result = await createReplacement({
+      orderId: 1321, reason: 'other', liabilityOwner: 'operator',
+      items: [{ orderLineIndex: 1, quantity: 1 }],
+      requestIdempotencyKey: 'req-forced', actor,
+    }, conn);
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, result.replacement.id));
+    assert.ok(!events.some((e) => e.eventType === 'replacement_billability_set'),
+      'a policy RESULT is not a decision');
   });
 
   console.log('\ncumulative cap against the database');
@@ -278,11 +356,25 @@ async function main(): Promise<void> {
 
   console.log('\nthe original order survives its replacements');
 
-  await check('updating the original order still succeeds after replacement items exist', async () => {
-    await client.exec(`UPDATE orders SET updated_at = now() WHERE id = 1321;`);
-    const items = await db.select().from(schema.replacementItems)
+  await check('the real sync trigger regenerates order_items without touching frozen facts', async () => {
+    const [frozenBefore] = await db.select().from(schema.replacementItems)
       .where(eq(schema.replacementItems.replacementId, firstId));
-    assert.equal(items.length, 1, 'no FK to order_items means the refresh cannot cascade');
+
+    // The dangerous sequence: 0025 DELETEs every order_items row for this order and
+    // reinserts them with line_index recomputed as (ordinality - 1).
+    await client.exec(`UPDATE orders SET items = items WHERE id = 1321;`);
+
+    const regenerated = await client.query<{ c: number }>(
+      'select count(*)::int as c from order_items where order_id = 1321',
+    );
+    assert.equal(regenerated.rows[0]!.c, 2, 'the trigger reinserted both lines');
+
+    const [frozenAfter] = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.replacementId, firstId));
+    assert.ok(frozenAfter, 'replacement items survive the delete/reinsert — there is no FK to order_items');
+    assert.equal(frozenAfter!.sourceLineFingerprint, frozenBefore!.sourceLineFingerprint,
+      'a shipped replacement\'s frozen facts must survive a later refresh untouched');
+    assert.equal(frozenAfter!.originalOrderedQuantity, frozenBefore!.originalOrderedQuantity);
   });
 
   console.log('\nshipment insertion');
@@ -388,28 +480,62 @@ async function main(): Promise<void> {
 
   console.log('\nfinancial attribution is protected (ruling C)');
 
-  await check('a replacement with billing attribution CANNOT be deleted', async () => {
+  // ISOLATED rows, created directly rather than through the command. A replacement made by
+  // createReplacement already has a replacement_activity_events row whose FK is RESTRICT, so
+  // deleting it fails BEFORE either financial FK is consulted — the test would pass for the
+  // wrong constraint.
+  const bareReplacement = async (key: string): Promise<number> => {
+    const rows = await client.query<{ id: number }>(
+      `insert into replacements (order_id, client_id, reference, reason, request_idempotency_key)
+       values (1321, 1, '1321-ISO-${key}', 'other', 'iso-${key}') returning id`,
+    );
+    return rows.rows[0]!.id;
+  };
+
+  await check('the catalog confirms both financial FKs are RESTRICT, not SET NULL', async () => {
+    const rows = await client.query<{ table_name: string; confdeltype: string }>(`
+      select cl.relname as table_name, c.confdeltype
+      from pg_constraint c join pg_class cl on cl.oid = c.conrelid
+      where c.contype = 'f' and c.confrelid = 'replacements'::regclass
+        and cl.relname in ('billing_line_items','billing_credit_notes')
+    `);
+    assert.equal(rows.rows.length, 2, 'both financial FKs should exist');
+    for (const row of rows.rows) assert.equal(row.confdeltype, 'r', `${row.table_name} must be RESTRICT`);
+  });
+
+  await check('a billing LINE alone blocks deleting its replacement', async () => {
+    const isolated = await bareReplacement('line');
     await client.exec(
       `INSERT INTO billing_line_items (order_id, shipment_id, line_type, description, replacement_id)
-       VALUES (1321, 1, 'replace_postage', 'Replacement postage', ${firstId});`,
+       VALUES (1321, 1, 'replace_postage', 'Isolated postage', ${isolated});`,
     );
     await assert.rejects(
-      () => client.exec(`DELETE FROM replacements WHERE id = ${firstId};`),
+      () => client.exec(`DELETE FROM replacements WHERE id = ${isolated};`),
       /foreign key constraint/i,
     );
   });
 
-  await check('a credit note attribution is protected the same way', async () => {
+  await check('a CREDIT NOTE alone blocks deleting its replacement', async () => {
+    const isolated = await bareReplacement('credit');
     await client.exec(
       `INSERT INTO billing_credit_notes (id, reason, replacement_id)
-       VALUES ('cn-1', 'cancelled replacement', ${firstId});`,
+       VALUES ('cn-iso', 'cancelled replacement', ${isolated});`,
     );
     await assert.rejects(
-      () => client.exec(`DELETE FROM replacements WHERE id = ${firstId};`),
+      () => client.exec(`DELETE FROM replacements WHERE id = ${isolated};`),
       /foreign key constraint/i,
     );
   });
 
+  await check('a replacement with NO attribution deletes cleanly (the control)', async () => {
+    const isolated = await bareReplacement('control');
+    await client.exec(`DELETE FROM replacements WHERE id = ${isolated};`);
+  });
+
+  await client.exec(
+    `INSERT INTO billing_line_items (order_id, shipment_id, line_type, description, replacement_id)
+     VALUES (1321, 1, 'replace_postage', 'Replacement postage', ${firstId});`,
+  );
   await check('a description reword cannot mint a second replacement charge', async () => {
     await assert.rejects(
       () => client.exec(
@@ -431,7 +557,7 @@ async function main(): Promise<void> {
   });
 
   await client.close();
-  console.log(`\nPS-502 integration passed — ${passed} checks against a real PostgreSQL engine.`);
+  console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }
 
 main().catch((error) => {

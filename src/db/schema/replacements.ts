@@ -60,6 +60,12 @@ export const replacements = pgTable(
     // Creation is idempotent on this key, which is what makes a retried create safe.
     requestIdempotencyKey: text('request_idempotency_key').notNull(),
 
+    // Migration 0099. The canonical signature of the WHOLE creating request. A retry must
+    // match it exactly; matching only the items let a key be reused with different money or
+    // liability intent and silently return the earlier replacement. NULL on pre-0099 rows,
+    // which the command treats as "cannot prove equivalence" rather than as a match.
+    requestSignature: text('request_signature'),
+
     // Optimistic concurrency. Every transition is
     // `where id = :id and status = :expected and state_version = :v`, and zero rows updated
     // is a 409 rather than a lost update.
