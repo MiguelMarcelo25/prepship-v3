@@ -983,6 +983,13 @@ const MUTATIONS: Mutation[] = [
     find: '      eq(shipments.isReturn, false),',
     replace: '',
     expect: 'a replacement has its OWN freeze, not the return one relaxed',
+  },  {
+    id: 'M117',
+    defect: 'the canonical credit-note writer assumes replacement_id exists, breaking every credit on a pre-0097 database',
+    file: POLICY,
+    find: '  const withReplacementId = await billingCreditNotesHasReplacementIdColumn(conn);',
+    replace: '  const withReplacementId = true;',
+    expect: 'the credit CARRIES replacement_id through the projection',
   },
 ];
 

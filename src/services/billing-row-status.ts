@@ -283,16 +283,47 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
  */
 let replacementIdColumnPresent: Promise<boolean> | null = null;
 
-async function probeReplacementIdColumn(conn: Pick<typeof db, 'execute'>): Promise<boolean> {
+async function probeColumn(
+  conn: Pick<typeof db, 'execute'>,
+  table: string,
+  column: string,
+): Promise<boolean> {
   const result = await conn.execute(sql`
     select 1 from information_schema.columns
      where table_schema = current_schema()
-       and table_name = 'billing_line_items'
-       and column_name = 'replacement_id'
+       and table_name = ${table}
+       and column_name = ${column}
      limit 1
   `);
   const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
   return rows.length > 0;
+}
+
+/**
+ * PS-502 — does `billing_credit_notes.replacement_id` exist here?
+ *
+ * appendBillingAdjustmentProjection is the canonical credit-note writer, used by the ORDER
+ * reconciler for ordinary billing. Item 10 added `replacement_id` to its INSERT, and 0097 is
+ * gated behind the operator lane — so on a production database every credit note would have
+ * failed with "column replacement_id does not exist", with replacement flags off. Exactly the
+ * defect already fixed for billing_line_items, in a second place nobody checked.
+ */
+let creditNoteReplacementIdColumnPresent: Promise<boolean> | null = null;
+export function billingCreditNotesHasReplacementIdColumn(
+  conn?: Pick<typeof db, 'execute'>,
+): Promise<boolean> {
+  if (conn) return probeColumn(conn, 'billing_credit_notes', 'replacement_id');
+  creditNoteReplacementIdColumnPresent ??= probeColumn(db, 'billing_credit_notes', 'replacement_id')
+    .then((found) => {
+      if (!found) creditNoteReplacementIdColumnPresent = null;
+      return found;
+    })
+    .catch((error) => { creditNoteReplacementIdColumnPresent = null; throw error; });
+  return creditNoteReplacementIdColumnPresent;
+}
+
+async function probeReplacementIdColumn(conn: Pick<typeof db, 'execute'>): Promise<boolean> {
+  return probeColumn(conn, 'billing_line_items', 'replacement_id');
 }
 /**
  * Takes the CALLER'S connection, and remembers only a true answer — same two corrections as

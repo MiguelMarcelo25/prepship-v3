@@ -7,6 +7,7 @@
  * backstop for scripts, cascades, races, and destructive maintenance paths.
  */
 import { randomUUID } from 'node:crypto';
+import { billingCreditNotesHasReplacementIdColumn } from './billing-row-status.js';
 import { and, eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
@@ -531,6 +532,13 @@ async function appendBillingAdjustmentProjection(
   conn: BillingPolicyExecutor,
 ): Promise<void> {
   const signedAmount = input.adjustmentKind === 'credit' ? `-${input.amount}` : input.amount;
+  // PS-502: this is the CANONICAL credit-note writer — the order reconciler uses it for
+  // ordinary billing on every database. `replacement_id` arrives with 0097, which is gated
+  // behind the operator lane, so referencing it unconditionally failed every credit note in
+  // production over a column replacement money would not have used anyway.
+  const withReplacementId = await billingCreditNotesHasReplacementIdColumn(conn);
+  const replacementIdColumn = withReplacementId ? sql`replacement_id,` : sql``;
+  const replacementIdValue = withReplacementId ? sql`${input.replacementId},` : sql``;
   await conn.execute(sql`
     insert into ${billingCreditNotes} (
       id,
@@ -540,7 +548,7 @@ async function appendBillingAdjustmentProjection(
       adjustment_kind,
       adjustment_source,
       source_order_id,
-      replacement_id,
+      ${replacementIdColumn}
       posting_version,
       effective_date,
       billing_policy_version,
@@ -556,7 +564,7 @@ async function appendBillingAdjustmentProjection(
       ${input.adjustmentKind},
       ${input.adjustmentSource},
       ${input.sourceOrderId},
-      ${input.replacementId},
+      ${replacementIdValue}
       ${'current_period_v2'},
       ${input.effectiveDate.toISOString()}::timestamptz,
       ${input.billingPolicyVersion},

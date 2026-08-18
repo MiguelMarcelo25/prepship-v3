@@ -1234,9 +1234,15 @@ console.log('\ncancellation and finalized credits (AC-13)');
   // this one the moment discovery was extracted. Third time on this ticket that a green
   // check quietly stopped defending anything because NEW code elsewhere satisfied it.
   const replacementReconciler = functionBody(policy, 'reconcileFinalizedBillingReplacementAdjustment');
+  // Re-anchored: the column and value are now CONDITIONAL. appendBillingAdjustmentProjection
+  // is the canonical credit-note writer used by the ORDER reconciler for ordinary billing, and
+  // 0097 is gated behind the operator lane — referencing replacement_id unconditionally broke
+  // every credit note on a production database. The intent is unchanged: when the column
+  // exists, the credit carries it.
   check('the credit CARRIES replacement_id through the projection',
-    /^ {6}replacement_id,$/m.test(policy)
-    && /^ {6}\$\{input\.replacementId\},$/m.test(policy)
+    /const withReplacementId = await billingCreditNotesHasReplacementIdColumn\(conn\);/.test(policy)
+    && /replacementIdColumn = withReplacementId \? sql`replacement_id,`/.test(policy)
+    && /replacementIdValue = withReplacementId \? sql`\$\{input\.replacementId\},`/.test(policy)
     && /adjustmentKind: 'credit',[\s\S]{0,120}replacementId: input\.replacementId,/.test(replacementReconciler),
     'a deterministic key is not a substitute for a queryable column');
 
