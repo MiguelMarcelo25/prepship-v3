@@ -44,6 +44,7 @@ const SCHEMA_PROBE = 'src/services/replacement-schema-readiness.ts';
 const INVOICE_TOTALS_OWNER = 'src/services/billing-invoice-totals.ts';
 const MIGRATION_WORKFLOW = '.github/workflows/render-one-off-migration-ps502.yml';
 const FENCE = 'src/services/replacement-customer-money.ts';
+const MONEY_OWNER = 'src/services/customer-shipping-money.ts';
 const PLANNER = 'src/services/replacement-billing-planner.ts';
 const INVOICE_TOTALS = 'src/services/billing-invoice-totals.ts';
 const HOLD = 'src/services/replacement-original-order-hold.ts';
@@ -524,8 +525,8 @@ const MUTATIONS: Mutation[] = [
     id: 'M58',
     defect: 'drift after dispatch discards the purchased label instead of reviewing',
     file: LABEL_BUY,
-    find: "        eventType: 'replacement_label_purchased_into_review',",
-    replace: "        eventType: 'replacement_label_discarded',",
+    find: /(reviewReason: 'original_order_line_drift',\s*\n\s*)eventType: 'replacement_label_purchased_into_review',/,
+    replace: "$1eventType: 'replacement_label_discarded',",
     expect: 'post-dispatch drift PRESERVES the label and reviews',
   },  {
     id: 'M59',
@@ -778,11 +779,11 @@ const MUTATIONS: Mutation[] = [
   },
   {
     id: 'M90',
-    defect: 'the equality tripwire goes, so cost leaking through as customer money is billed',
+    defect: 'the fence stops reading the frozen tuple and accepts whatever it was handed',
     file: FENCE,
-    find: '  if (frozen.cShippingRateAmount === frozen.selectedRateCost) return null;',
-    replace: '',
-    expect: 'a customer amount equal to the cost is refused',
+    find: '  if (!frozen) return null;',
+    replace: '  if (!frozen) return { amount: 0, policyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION, source: \'frozen_customer_shipping_money\' };',
+    expect: 'the fence accepts only a tuple with customer-money PROVENANCE',
   },
   {
     id: 'M91',
@@ -967,6 +968,21 @@ const MUTATIONS: Mutation[] = [
     find: '  if (removal.invoicedRetained === 0) {',
     replace: '  if (removal.invoicedRetained >= 0) {',
     expect: 'it removes editable lines, then settles invoiced ones AFTER the commit',
+  },  {
+    id: 'M115',
+    defect: 'the purchase stops freezing customer money, so the fence has nothing to accept again',
+    file: LABEL_BUY,
+    find: '        freezeReplacementCustomerShippingMoney(input.shipmentId, sp));',
+    replace: '        Promise.resolve(null as never));',
+    expect: 'the purchase freezes customer money in the same commit as the label',
+  },
+  {
+    id: 'M116',
+    defect: 'the replacement freeze admits return shipments, relaxing a return-only fence',
+    file: MONEY_OWNER,
+    find: '      eq(shipments.isReturn, false),',
+    replace: '',
+    expect: 'a replacement has its OWN freeze, not the return one relaxed',
   },
 ];
 

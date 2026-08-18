@@ -170,8 +170,12 @@ export function resolveCustomerShippingMoney(
   };
 }
 
-async function loadCustomerShippingMoneyRow(shipmentId: number): Promise<CustomerShippingMoneyRow | null> {
-  const rows = await db.execute<CustomerShippingMoneyRow>(sql`
+async function loadCustomerShippingMoneyRow(
+  shipmentId: number,
+  /** PS-502: so a freeze can read the row inside the transaction that is about to write it. */
+  exec: Pick<typeof db, 'execute'> = db,
+): Promise<CustomerShippingMoneyRow | null> {
+  const rows = await exec.execute<CustomerShippingMoneyRow>(sql`
     select
       s.id as "shipmentId",
       s.order_id as "orderId",
@@ -213,7 +217,14 @@ async function loadCustomerShippingMoneyRow(shipmentId: number): Promise<Custome
     where s.id = ${shipmentId}
     limit 1
   `);
-  return rows[0] ?? null;
+  // Shape-tolerant on purpose. drizzle over postgres-js hands back a bare array; over an
+  // embedded PGlite connection it hands back `{ rows }`. Indexing [0] blindly made this loader
+  // return null for EVERY row when handed a harness transaction — and a null row is
+  // indistinguishable from "no such shipment", so the replacement freeze reported the shipment
+  // missing rather than the reader being wrong about the envelope.
+  const list = (Array.isArray(rows) ? rows : ((rows as { rows?: unknown[] })?.rows ?? [])) as
+    CustomerShippingMoneyRow[];
+  return list[0] ?? null;
 }
 
 export async function getShipmentCustomerShippingMoneyTarget(
@@ -351,6 +362,93 @@ export async function previewReturnCustomerShippingMoney(
  * one explicitly requested return shipment, never status/history/postage, and
  * never rewrites a snapshot once the full policy-versioned tuple exists.
  */
+/**
+ * PS-502 AC-10 — freeze the CUSTOMER money for a replacement shipment.
+ *
+ * ── WHY THE RETURN FREEZE COULD NOT BE REUSED ───────────────────────────────────────────
+ *
+ * freezeReturnCustomerShippingMoney is double-gated on `isReturn = true`, in the guard and in
+ * the UPDATE predicate. A replacement ships OUTBOUND, so it fails both. Reusing it would have
+ * meant relaxing a return-only fence to admit something that is not a return — which is how a
+ * reader asking "is this a return?" starts getting the wrong answer.
+ *
+ * ── WHY NOT requireExplicitReturnPolicy ─────────────────────────────────────────────────
+ *
+ * That option exists because a RETURN rate must be configured deliberately; a return has no
+ * ordinary outbound markup to fall back on. A replacement does — it is an outbound shipment,
+ * and the client's ordinary shipping markup is exactly the right policy for it. Demanding a
+ * separately configured rate would make every replacement unbillable until someone set a
+ * second number that means the same thing.
+ *
+ * ── WHAT THIS CLOSES ────────────────────────────────────────────────────────────────────
+ *
+ * Until now nothing produced the tuple the AC-10 fence accepts. The purchase path wrote the
+ * provider receipt into shipments.cost / other_cost / selected_rate_cost and a comment called
+ * it "the frozen CUSTOMER money tuple" — it was carrier cost. So a billable replacement could
+ * not be billed at all: the planner refused, correctly, forever.
+ *
+ * The tuple is written into selected_rate_json under the same one-shot jsonb guard the return
+ * freeze uses, so a retry returns the existing snapshot rather than re-deciding. Money frozen
+ * once must not move because a markup changed afterwards.
+ */
+export async function freezeReplacementCustomerShippingMoney(
+  shipmentId: number,
+  /**
+   * The transaction that just wrote the carrier receipt. Passing it matters: the tuple must
+   * become true in the same commit as the label, or a crash between them leaves a shipment
+   * whose cost says one thing and whose customer money says nothing.
+   */
+  exec: Pick<typeof db, 'execute' | 'update' | 'select'> = db,
+): Promise<FrozenCustomerShippingMoney> {
+  const row = await loadCustomerShippingMoneyRow(shipmentId, exec);
+  if (!row || row.isReturn || row.voided) {
+    throw new Error('Active outbound replacement shipment not found');
+  }
+  const existing = readFrozenCustomerShippingMoney(row.selectedRateJson);
+  if (existing) return existing;
+
+  const decision = await decideCustomerShippingMoneyForRow(row);
+  const original = recordOrNull(row.selectedRateJson) ?? {};
+  const frozen: FrozenCustomerShippingMoney = {
+    selectedRateCost: decision.selectedRateCost,
+    cShippingRateAmount: decision.cShippingRateAmount,
+    shippingMarginAmount: decision.shippingMarginAmount,
+    shippingMarginPct: decision.shippingMarginPct,
+    customerRateSource: decision.customerRateSource,
+    rateCostSource: decision.rateCostSource,
+    customerShippingMoneyPolicyVersion: decision.customerShippingMoneyPolicyVersion,
+  };
+
+  const [updated] = await exec
+    .update(shipments)
+    .set({
+      selectedRateCost: frozen.selectedRateCost.toFixed(2),
+      selectedRateJson: { ...original, ...frozen },
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(shipments.id, shipmentId),
+      eq(shipments.isReturn, false),
+      eq(shipments.voided, false),
+      sql`not (coalesce(${shipments.selectedRateJson}, '{}'::jsonb) ? 'customerShippingMoneyPolicyVersion')`,
+    ))
+    .returning({ selectedRateJson: shipments.selectedRateJson });
+  const winner = readFrozenCustomerShippingMoney(updated?.selectedRateJson);
+  if (winner) return winner;
+
+  // Lost the one-shot race: somebody else froze it first, and their snapshot is the truth.
+  const [concurrent] = await exec
+    .select({ selectedRateJson: shipments.selectedRateJson })
+    .from(shipments)
+    .where(eq(shipments.id, shipmentId))
+    .limit(1);
+  const concurrentSnapshot = readFrozenCustomerShippingMoney(concurrent?.selectedRateJson);
+  if (!concurrentSnapshot) {
+    throw new Error('Replacement customer shipping money snapshot could not be frozen');
+  }
+  return concurrentSnapshot;
+}
+
 export async function freezeReturnCustomerShippingMoney(
   shipmentId: number,
 ): Promise<FrozenCustomerShippingMoney> {

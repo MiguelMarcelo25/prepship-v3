@@ -727,6 +727,41 @@ console.log('\ncancelling a replacement charge');
     'the branch above sends anything carrying invoiced money to review, so deriving this from invoicedRetained read as careful and could never be true');
 }
 
+// ── the customer-money freeze site ───────────────────────────────────────────
+console.log('\nAC-10 freeze site');
+
+{
+  const money = read('src/services/customer-shipping-money.ts');
+  const freeze = functionBody(money, 'freezeReplacementCustomerShippingMoney');
+  const buy = read('src/services/replacement-label-purchase-command.ts');
+  const buyCode = buy.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  check('a replacement has its OWN freeze, not the return one relaxed',
+    /export async function freezeReplacementCustomerShippingMoney/.test(money)
+    && /eq\(shipments\.isReturn, false\)/.test(freeze),
+    'the return freeze is double-gated on isReturn; admitting an outbound shipment to it would make every reader asking \'is this a return?\' start answering wrongly');
+
+  check('it does NOT demand return-only policy',
+    !/requireExplicitReturnPolicy/.test(freeze),
+    'a replacement is an outbound shipment and the client\'s ordinary markup is the right policy; demanding a separate return rate would leave every replacement unbillable');
+
+  check('the money is frozen ONCE and never re-decided',
+    /customerShippingMoneyPolicyVersion'\)`/.test(freeze)
+    && /readFrozenCustomerShippingMoney\(row\.selectedRateJson\)/.test(freeze),
+    'a markup edited next week must not change what a shipped label cost the client');
+
+  check('the purchase freezes customer money in the same commit as the label',
+    /freezeReplacementCustomerShippingMoney\(input\.shipmentId, sp\)/.test(buyCode)
+    && occursBefore(buyCode, 'update(shipments)',
+      'freezeReplacementCustomerShippingMoney(input.shipmentId, sp)'),
+    'the carrier receipt and what the client pays must become true together');
+
+  check('it is attempted in a SAVEPOINT, and a failure keeps the label',
+    /tx\.transaction\(async \(sp: never\) =>/.test(buyCode)
+    && /reviewReason: 'replacement_customer_money_unavailable'/.test(buyCode),
+    'a failed statement aborts the whole PostgreSQL transaction, so a plain catch left every later write failing; and the label is real and already paid for');
+}
+
 // ── a purchased label becomes recorded state ─────────────────────────────────
 console.log('\npaid-label recovery');
 
@@ -987,9 +1022,14 @@ console.log('\nAC-10/AC-18 — where replacement money comes from and where it s
     && !/amount: frozen\.selectedRateCost/.test(fenceFn),
     'selectedRateCost is what the carrier charged us; billing it as customer money is the defect this fence exists to close');
 
-  check('a customer amount equal to the cost is refused',
-    /frozen\.cShippingRateAmount === frozen\.selectedRateCost\) return null/.test(fenceFn),
-    'equality is the signature of provider cost leaking through as customer money');
+  // REPLACED, not deleted. The property that matters was never "the amounts differ" — a
+  // zero-markup client legitimately has equal amounts — it is that the tuple came from the
+  // policy owner. Asserting equality blocked those clients from shipping at all.
+  check('the fence accepts only a tuple with customer-money PROVENANCE',
+    /readFrozenCustomerShippingMoney\(input\.frozenCustomerShippingMoney\)/.test(fenceFn)
+    && /if \(!frozen\) return null;/.test(fenceFn)
+    && !/frozen\.cShippingRateAmount === frozen\.selectedRateCost/.test(fenceFn),
+    'customerRateSource, rateCostSource and the policy version are what a number copied out of shipments.cost cannot forge, at any markup');
 
   // Reads planCode, not planner: the docblock explaining WHY the carrier fields were removed
   // names them, and a negative assertion over prose forces the next engineer to delete the
@@ -1518,7 +1558,7 @@ console.log('\nlabel purchase (locked path)');
     'a line can move while the network call is in flight');
 
   check('post-dispatch drift PRESERVES the label and reviews',
-    /replacement_label_purchased_into_review/.test(code)
+    /reviewReason: 'original_order_line_drift',\s*\n\s*eventType: 'replacement_label_purchased_into_review'/.test(code)
     && at('replacement_label_purchased_into_review') > at('provider.purchase('),
     'the label is real and paid for; never discard it and never repurchase');
 

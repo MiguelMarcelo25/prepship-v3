@@ -41,6 +41,7 @@ import {
 } from '../db/schema/replacements';
 import { findFrozenLineDrift } from './replacement-drift-resolution';
 import { enterReplacementReview } from './replacement-lifecycle-command';
+import { freezeReplacementCustomerShippingMoney } from './customer-shipping-money';
 import {
   resolveReplacementPurchaseRequest,
   type ReplacementPurchaseInputs,
@@ -439,6 +440,51 @@ export async function recordPurchasedReplacementLabelInTransaction(
         selectedRateCost: String(receipt.shipmentCost + receipt.otherCost),
       })
       .where(eq(shipments.id, input.shipmentId));
+
+    // ── AC-10. The CUSTOMER money, frozen in the same commit as the label. ──────────────
+    //
+    // Above is the CARRIER receipt. It is not what the client pays, and until now nothing
+    // turned it into what the client pays — so the billing fence refused every replacement,
+    // permanently and correctly.
+    //
+    // Frozen here rather than at billing time because a charge that moves after the goods
+    // shipped is not a record of what happened: a markup edited next week must not change
+    // what this label cost the client.
+    //
+    // A FAILURE HERE MUST NOT DISCARD THE RECEIPT. The label is real and already paid for.
+    // Throwing would roll back the whole recording, and the same policy failure would repeat
+    // on every reconciliation attempt — a paid label stuck forever. So it takes the same
+    // treatment drift gets: keep the label, park the replacement for a human, name the reason.
+    // Inside a SAVEPOINT, which is the only way this can be attempted-and-recovered. A failed
+    // statement marks the whole PostgreSQL transaction aborted, so a plain try/catch here left
+    // every subsequent write failing with "current transaction is aborted" — the recovery path
+    // was itself unusable. tx.transaction() issues a savepoint, so a failure rolls back the
+    // freeze alone and the receipt written above survives.
+    let customerMoneyFrozen = true;
+    try {
+      await tx.transaction(async (sp: never) =>
+        freezeReplacementCustomerShippingMoney(input.shipmentId, sp));
+    } catch {
+      customerMoneyFrozen = false;
+    }
+
+    if (!customerMoneyFrozen) {
+      await enterReplacementReview(tx, replacement!, {
+        reviewReason: 'replacement_customer_money_unavailable',
+        eventType: 'replacement_label_purchased_into_review',
+        actor: input.actor,
+        reason: 'the label was purchased but the client\'s customer-shipping policy could not price it; the label is retained',
+        idempotencySuffix: `label-money:${input.intentId}`,
+        shipmentId: input.shipmentId,
+        extra: { labelCreatedAt: new Date() },
+        onConflict: () => new ReplacementLabelError(
+          'REPLACEMENT_STATE_CONFLICT',
+          `replacement ${replacement!.reference} moved while an unpriceable label was being `
+            + 'recorded into review. The receipt is persisted; reconcile rather than repurchasing.',
+        ),
+      });
+      return 'review';
+    }
 
     // Drift may have appeared WHILE the network call was in flight. The label is real and
     // paid for, so it is preserved: review, never discard, never repurchase.

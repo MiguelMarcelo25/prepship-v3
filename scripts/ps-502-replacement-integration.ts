@@ -1842,15 +1842,32 @@ async function main(): Promise<void> {
       'a caller holding only carrier cost cannot express it, so nothing is billed');
   });
 
-  await check('a tuple whose customer amount EQUALS the cost is refused', () => {
+  await check('a ZERO-MARGIN tuple is accepted — equality is not the discriminator', () => {
+    // REVERSED from the first version, which refused this. A client configured with no
+    // shipping markup legitimately pays cost, and refusing them did not merely skip a charge:
+    // the planner treats missing customer money as fatal, so their replacements could not ship
+    // at all. What separates customer money from carrier cost is provenance, not arithmetic.
     const zeroMargin = {
       ...FROZEN_CUSTOMER_MONEY,
       cShippingRateAmount: 8.25,
       shippingMarginAmount: 0,
+      shippingMarginPct: 0,
     };
-    assert.equal(
-      resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: zeroMargin }), null,
-      'customer == cost is the signature of provider cost leaking through as customer money');
+    const fenced = resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: zeroMargin });
+    assert.ok(fenced, 'a reconciling zero-margin tuple is customer money too');
+    assert.equal(fenced!.amount, 8.25);
+  });
+
+  await check('a tuple with the WRONG provenance is still refused', () => {
+    // The protection the equality check was standing in for, stated directly.
+    for (const broken of [
+      { ...FROZEN_CUSTOMER_MONEY, customerRateSource: 'selected_rate_cost' },
+      { ...FROZEN_CUSTOMER_MONEY, rateCostSource: 'quote' },
+    ]) {
+      assert.equal(
+        resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: broken }), null,
+        'a number copied out of shipments.cost cannot forge a customer-money source');
+    }
   });
 
   await check('an out-of-policy or partial tuple is refused', () => {
@@ -2139,6 +2156,54 @@ async function main(): Promise<void> {
     // and cancelReplacement — and neither cancels billing today. That wire is still missing.
     assert.equal(result.finalizedCreditPending.length, 0,
       'the sweep structurally cannot owe a credit; the operator path is where it will');
+  });
+
+  console.log('\nAC-10 end to end — the client is charged CUSTOMER money');
+
+  await check('purchasing a label freezes a customer tuple the fence accepts', async () => {
+    const target = await readyToShip('ac10-e2e');
+
+    const [replacementRow] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, target.replacementId));
+    const [shipment] = await db.select().from(schema.shipments)
+      .where(eq(schema.shipments.id, replacementRow!.replacementShipmentId!));
+
+    const frozen = shipment!.selectedRateJson as Record<string, unknown> | null;
+    assert.ok(frozen, 'the purchase froze something onto the shipment');
+    assert.equal(frozen!.customerShippingMoneyPolicyVersion, 'ps-437-v1',
+      'and it is policy-versioned, which raw carrier cost never is');
+
+    const fenced = resolveReplacementCustomerPostage({ frozenCustomerShippingMoney: frozen });
+    assert.ok(fenced, 'the AC-10 fence accepts what the purchase froze — the wire is joined');
+
+    // The whole point: what the client pays is NOT what the carrier charged. The harness
+    // client carries an 18% markup, so a fence that returned selectedRateCost would be
+    // visibly wrong here rather than passing by coincidence.
+    assert.ok(fenced!.amount > Number(frozen!.selectedRateCost),
+      'the customer amount exceeds the carrier cost by the configured markup');
+    assert.equal(
+      Number(frozen!.cShippingRateAmount).toFixed(2), fenced!.amount.toFixed(2),
+      'and it is exactly cShippingRateAmount, never selectedRateCost');
+  });
+
+  await check('the freeze is one-shot — a second call cannot move frozen money', async () => {
+    const { freezeReplacementCustomerShippingMoney } =
+      await import('../src/services/customer-shipping-money.js');
+    const target = await readyToShip('ac10-oneshot');
+    const [row] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, target.replacementId));
+    const shipmentId = row!.replacementShipmentId!;
+
+    const first = await freezeReplacementCustomerShippingMoney(shipmentId, db as never);
+
+    // Move the markup AFTER the freeze. A charge that changes because policy changed later is
+    // not a record of what happened.
+    await db.execute(sql`update billing_config set shipping_markup_pct = 99 where client_id = 1`);
+    const second = await freezeReplacementCustomerShippingMoney(shipmentId, db as never);
+    await db.execute(sql`update billing_config set shipping_markup_pct = 18 where client_id = 1`);
+
+    assert.equal(second.cShippingRateAmount, first.cShippingRateAmount,
+      'the snapshot is returned, not re-decided');
   });
 
   await client.close();

@@ -68,11 +68,20 @@ export function resolveReplacementCustomerPostage(input: {
   const frozen = readFrozenCustomerShippingMoney(input.frozenCustomerShippingMoney);
   if (!frozen) return null;
 
-  // The equality tripwire, mirroring the return policy owner. A customer amount identical to
-  // the carrier cost is the signature of provider cost having leaked through as customer money
-  // — the exact failure this fence exists for. Refuse rather than bill it: a genuine zero-margin
-  // rate is a policy decision that must be made where policy lives, not inferred here.
-  if (frozen.cShippingRateAmount === frozen.selectedRateCost) return null;
+  // NO equality tripwire, deliberately — and this is a REVERSAL of the first version.
+  //
+  // It refused any tuple whose customer amount equalled the carrier cost, on the theory that
+  // equality is the signature of cost leaking through. It is not. Equality is also what a
+  // client configured with zero shipping markup legitimately looks like, and for them the
+  // refusal did not merely skip a charge: the planner treats missing customer money as a hard
+  // failure, so their replacements could not SHIP at all. A guard against a wrong charge that
+  // blocks the warehouse is a worse defect than the one it prevents.
+  //
+  // What actually distinguishes customer money from carrier cost is PROVENANCE, and
+  // readFrozenCustomerShippingMoney has already enforced it above: customerRateSource must be
+  // a realized customer rate or a hugrab override, rateCostSource must be `label_final_cost`,
+  // the policy version must match, and the margin must reconcile against the two amounts. A
+  // number copied out of shipments.cost cannot satisfy any of that, at any markup.
 
   if (!Number.isFinite(frozen.cShippingRateAmount) || frozen.cShippingRateAmount <= 0) return null;
 

@@ -16,7 +16,8 @@
 export const PS_502_PREREQUISITE_DDL = `
   -- Only so 0025_order_items_sync_trigger.sql can be applied VERBATIM: it indexes this table.
   CREATE TABLE analytics_cache (id serial PRIMARY KEY, expires_at timestamptz);
-  CREATE TABLE clients (id serial PRIMARY KEY, name text);
+  CREATE TABLE clients (id serial PRIMARY KEY, name text    ,store_ids integer[]
+  );
   CREATE TABLE orders (
     id serial PRIMARY KEY,
     client_id integer REFERENCES clients(id),
@@ -161,6 +162,26 @@ export const PS_502_PREREQUISITE_DDL = `
     status text NOT NULL DEFAULT 'processed',
     created_at timestamptz NOT NULL DEFAULT now()
   );
+  -- The customer-money policy. The AC-10 freeze reads markup and hugrab override from here to
+  -- turn a carrier receipt into what the client is actually charged; without it the freeze
+  -- cannot decide anything and the fence has nothing to accept.
+  -- Reference rates for the customer-money floor. Absent, the whole policy read fails and
+  -- every replacement label would be recorded as unpriceable.
+  CREATE TABLE order_overrides (
+    order_id integer PRIMARY KEY REFERENCES orders(id),
+    ref_usps_rate numeric(10,2),
+    ref_ups_rate numeric(10,2)
+  );
+  CREATE TABLE billing_config (
+    client_id integer PRIMARY KEY REFERENCES clients(id),
+    active boolean NOT NULL DEFAULT true,
+    billing_mode text NOT NULL DEFAULT 'markup',
+    shipping_markup_pct numeric(10,2) NOT NULL DEFAULT 0,
+    shipping_markup_flat numeric(10,2) NOT NULL DEFAULT 0,
+    hugrab_shipping_rate_override_enabled boolean NOT NULL DEFAULT false,
+    hugrab_shipping_rate_override_threshold numeric(10,2),
+    hugrab_shipping_rate_override_amount numeric(10,2)
+  );
   CREATE TABLE billing_finalizations (
     id text PRIMARY KEY,
     client_id integer NOT NULL REFERENCES clients(id),
@@ -208,6 +229,10 @@ export const PS_502_SEED_ITEMS_JSON =
  */
 export const PS_502_SEED_SQL = `
   INSERT INTO clients (id, name) VALUES (1, 'Acme');
+  -- 18% markup, so the frozen CUSTOMER amount is provably different from the carrier cost
+  -- the provider receipt carries. A zero-markup fixture would let a fence that returned
+  -- selectedRateCost pass by coincidence.
+  INSERT INTO billing_config (client_id, shipping_markup_pct) VALUES (1, 18.00);
   INSERT INTO orders (id, client_id, order_number, order_status, items)
     VALUES (1321, 1, '1321', 'shipped', '${PS_502_SEED_ITEMS_JSON}'::jsonb);
 `;
