@@ -59,6 +59,20 @@ function check(name: string, condition: boolean, detail?: string): void {
   console.log(`ok   ${name}`);
 }
 
+/**
+ * "`a` appears, `b` appears, and `a` comes first."
+ *
+ * indexOf returns -1 when text is absent and -1 < anything is TRUE, so a bare
+ * `at(a) < at(b)` PASSES when `a` has been deleted — which is exactly the mutation such a
+ * check exists to catch. This has slipped through three times in this guard; ordering
+ * assertions go through here now.
+ */
+function occursBefore(haystack: string, a: string, b: string): boolean {
+  const ia = haystack.indexOf(a);
+  const ib = haystack.indexOf(b);
+  return ia !== -1 && ib !== -1 && ia < ib;
+}
+
 const read = (path: string) => {
   try { return readFileSync(path, 'utf8'); } catch { return ''; }
 };
@@ -633,6 +647,86 @@ console.log('\ndrizzle schema mirrors the migration');
   check('0098 gives activity events somewhere to keep a written reason',
     /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
+}
+
+// ── `shipped` is atomic, and exactly one function writes it ──────────────────
+console.log('\nthe atomic shipped command');
+
+{
+  const shipCmd = read('src/services/replacement-shipped-command.ts');
+  const code = shipCmd.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const at = (needle: string) => code.indexOf(needle);
+
+  check('the shipped command exists and is a single transaction',
+    shipCmd.length > 0
+    && (code.match(/conn\.transaction\(/g) || []).length === 1,
+    'stock leaving with no billing row behind it is what a split transaction produces');
+
+  {
+    // EXACTLY ONE writer. Every other PS-502 module, and the routes, must not write it.
+    const others = [
+      'src/services/replacement-lifecycle-command.ts',
+      'src/services/replacement-label-purchase-command.ts',
+      'src/services/replacement-label-void-command.ts',
+      'src/services/replacement-shipment-command.ts',
+      'src/services/replacement-create-command.ts',
+    ];
+    const writers = others.filter((file) => /status: 'shipped'/.test(read(file)));
+    check('no other replacement command writes status shipped',
+      writers.length === 0, `also writes it: ${writers.join(", ")}`);
+    check('the shipped command does write it',
+      /status: 'shipped'/.test(code));
+  }
+
+  check('the inventory kill switch is checked BEFORE any write',
+    /env\.INVENTORY_AUTO_DEDUCT !== true/.test(code)
+    && at('INVENTORY_AUTO_DEDUCT') < at('await applyInventoryMovementInTransaction('),
+    'shipping while auto-deduct is off moves goods with no ledger entry');
+
+  check('inventory identity is replacement- and ITEM-scoped',
+    /replacement:\$\{input\.replacementId\}:shipment:\$\{input\.shipmentId\}/.test(shipCmd)
+    && /item:\$\{input\.replacementItemId\}/.test(shipCmd),
+    'keying on SKU would collapse duplicate-SKU lines into one deduction');
+
+  check('it never uses the ordinary order-scoped ledger key',
+    !/inventory:ship:order:/.test(code),
+    'the original order already shipped under that key, so the ledger would skip the deduction');
+
+  check('an unmapped replacement item blocks shipping',
+    /REPLACEMENT_INVENTORY_UNRESOLVED/.test(code)
+    && at('REPLACEMENT_INVENTORY_UNRESOLVED') < at('await applyInventoryMovementInTransaction('),
+    'a missing mapping would move goods with no ledger row and nothing would say so');
+
+  check('an unresolved package blocks shipping rather than being skipped',
+    /REPLACEMENT_PACKAGE_UNRESOLVED/.test(code)
+    && /if \(!input\.consumePackage\)/.test(code),
+    'decision 3 is unfrozen; silently skipping consumption ships a box nothing accounted for');
+
+  check('a billable replacement CANNOT ship without billing lines',
+    occursBefore(code, 'if (replacement.billable) {', "status: 'shipped'")
+    && /REPLACEMENT_BILLING_UNRESOLVED/.test(code),
+    'shipping first and billing later loses the record of what was owed');
+
+  check('a voided label is not a shipment',
+    /voidState === 'voided'/.test(code)
+    && /REPLACEMENT_LABEL_NOT_ACTIVE/.test(code));
+
+  check('drift is re-resolved before anything is deducted',
+    at('findFrozenLineDrift(') !== -1
+    && at('findFrozenLineDrift(') < at('await applyInventoryMovementInTransaction('));
+
+  check('a retry is a no-op rather than a second deduction',
+    /replacement\.status === 'shipped' \|\| replacement\.status === 'completed'/.test(code)
+    && at("replacement.status === 'shipped'") < at('await applyInventoryMovementInTransaction('));
+
+  check('the transition is guarded on expected status AND version',
+    /eq\(replacements\.status, replacement\.status\)/.test(code)
+    && /eq\(replacements\.stateVersion, replacement\.stateVersion\)/.test(code)
+    && /if \(moved\.length === 0\)/.test(code));
+
+  check('it notifies no marketplace and never touches the original order',
+    !/marketplace|notifyCustomer|shopify|walmart|ebay/i.test(code)
+    && !/\.update\(orders\)|orderStatus:/.test(code));
 }
 
 // ── Void is DESTRUCTIVE, so nothing is inferred ──────────────────────────────

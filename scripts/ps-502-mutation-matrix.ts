@@ -28,6 +28,7 @@ const LIFECYCLE = 'src/services/replacement-lifecycle-command.ts';
 const PURCHASE_REQ = 'src/services/replacement-purchase-request.ts';
 const LABEL_BUY = 'src/services/replacement-label-purchase-command.ts';
 const LABEL_VOID = 'src/services/replacement-label-void-command.ts';
+const SHIPPED = 'src/services/replacement-shipped-command.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -517,6 +518,45 @@ const MUTATIONS: Mutation[] = [
     find: '  if (!input.actor.permissions.includes(REPLACEMENT_LABEL_PERMISSION)) {',
     replace: '  if (false) {',
     expect: 'BOTH provider-reaching commands require the label capability and a reason',
+  },  {
+    id: 'M62',
+    defect: 'the inventory kill switch stops blocking, so stock moves with no ledger entry',
+    file: SHIPPED,
+    find: '    if (env.INVENTORY_AUTO_DEDUCT !== true) {',
+    replace: '    if (false) {',
+    expect: 'the inventory kill switch is checked BEFORE any write',
+  },
+  {
+    id: 'M63',
+    defect: 'the ledger key drops the replacement item, collapsing duplicate-SKU lines',
+    file: SHIPPED,
+    find: '    `:item:${input.replacementItemId}:inventory:${input.inventoryId}:ship`;',
+    replace: '    `:inventory:${input.inventoryId}:ship`;',
+    expect: 'inventory identity is replacement- and ITEM-scoped',
+  },
+  {
+    id: 'M64',
+    defect: 'a billable replacement can ship with no billing lines',
+    file: SHIPPED,
+    find: '    if (replacement.billable) {',
+    replace: '    if (false) {',
+    expect: 'a billable replacement CANNOT ship without billing lines',
+  },
+  {
+    id: 'M65',
+    defect: 'an unresolved package is silently skipped',
+    file: SHIPPED,
+    find: '    if (!input.consumePackage) {',
+    replace: '    if (false) {',
+    expect: 'an unresolved package blocks shipping rather than being skipped',
+  },
+  {
+    id: 'M66',
+    defect: 'a second command starts writing status shipped',
+    file: LIFECYCLE,
+    find: "      to: 'approved',",
+    replace: "      to: 'shipped' as never,",
+    expect: 'the lifecycle command never writes `shipped`',
   },
 ];
 

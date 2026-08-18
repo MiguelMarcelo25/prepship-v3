@@ -71,6 +71,34 @@ export const PS_502_PREREQUISITE_DDL = `
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );
+  -- The shipped command deducts through applyInventoryMovementInTransaction, so the
+  -- ledger and its idempotency index are part of the schema under test: the whole point
+  -- is that a replacement-scoped key does NOT collide with the order-scoped one.
+  CREATE TABLE inventory (
+    id serial PRIMARY KEY,
+    sku text NOT NULL,
+    name text,
+    qty_on_hand integer NOT NULL DEFAULT 0,
+    client_id integer,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE TABLE inventory_ledger (
+    id serial PRIMARY KEY,
+    inventory_id integer NOT NULL REFERENCES inventory(id),
+    type text NOT NULL,
+    qty integer NOT NULL,
+    order_id integer,
+    note text,
+    created_by text,
+    effective_at timestamptz,
+    idempotency_key text,
+    source_entity text,
+    source_id text,
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE UNIQUE INDEX inventory_ledger_idempotency_key_unq
+    ON inventory_ledger (idempotency_key) WHERE idempotency_key IS NOT NULL;
   CREATE TABLE billing_line_items (
     id serial PRIMARY KEY,
     order_id integer,
