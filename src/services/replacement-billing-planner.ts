@@ -1,3 +1,4 @@
+import { roundMoney } from '../lib/money.js';
 import type { ReplacementCustomerPostage } from './replacement-customer-money.js';
 
 /**
@@ -100,8 +101,11 @@ function money(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function cents(value: number): string {
-  return (Math.round(value * 100) / 100).toFixed(2);
+// Formatting only. The ROUNDING belongs to roundMoney, which is the repo's single cent-rounding
+// owner — a local Math.round(x*100)/100 is a second policy that can disagree with it on a
+// half-cent, and audit-money-rounding exists to refuse exactly that.
+function moneyString(value: number): string {
+  return roundMoney(value).toFixed(2);
 }
 
 /**
@@ -179,15 +183,15 @@ export function planReplacementBillingLines(
       ...common,
       lineType: 'replace_postage',
       description: `Replacement postage ${facts.reference}`,
-      unitCost: cents(postage),
-      totalCost: cents(postage),
+      unitCost: moneyString(postage),
+      totalCost: moneyString(postage),
     },
     {
       ...common,
       lineType: 'replace_pick_pack',
       description: `Replacement pick/pack ${facts.reference}`,
-      unitCost: cents(pickPack),
-      totalCost: cents(pickPack),
+      unitCost: moneyString(pickPack),
+      totalCost: moneyString(pickPack),
     },
   ];
 }
