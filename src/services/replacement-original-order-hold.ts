@@ -331,13 +331,17 @@ async function classifyAndAct(
     actor: input.actor,
     reason: input.reason,
   });
-  const billing = await cancelReplacementBillingInTransaction(tx, { replacementId: before.id });
+  await cancelReplacementBillingInTransaction(tx, { replacementId: before.id });
 
   return {
     ...base, phase: 'pre_dispatch', disposition: 'cancelled', openQuestion: null,
-    // Editable lines are gone; anything invoiced survives and is owed a credit the caller
-    // raises once this transaction has committed.
-    finalizedCreditOwed: billing.invoicedRetained > 0,
+    // ALWAYS false, and that is a fact about the classifier rather than a shortcut: the
+    // branch above sends any replacement carrying invoiced money to `review`, so nothing
+    // reaching here can owe a credit. An earlier version derived this from
+    // `invoicedRetained > 0`, which read as careful and could never be true — the audit
+    // called it a wired path that no producer could feed. The operator cancellation routes
+    // own that case now, through cancelReplacementCharges.
+    finalizedCreditOwed: false,
   };
 }
 

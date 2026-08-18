@@ -686,6 +686,47 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── "do not charge for this replacement" ─────────────────────────────────────
+console.log('\ncancelling a replacement charge');
+
+{
+  const owner = read('src/services/replacement-charge-cancellation.ts');
+  const routes = read('src/routes/replacements.ts');
+  const routeCode2 = routes.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const holdSrc = read('src/services/replacement-original-order-hold.ts');
+
+  check('the charge-cancellation owner is OUTSIDE the billing writer',
+    /export async function cancelReplacementCharges/.test(owner),
+    'the writer is transaction-parasitic so the shipped command can roll a billing failure back with the stock; an owner that opens its own transaction cannot live there');
+
+  check('it removes editable lines, then settles invoiced ones AFTER the commit',
+    /conn\.transaction\([\s\S]{0,160}cancelReplacementBillingInTransaction/.test(owner)
+    && /settleReplacementCancellationCredits\(/.test(owner)
+    // The early return must be the NOTHING-INVOICED case only. Widening it to `>= 0` left
+    // the settle call in place and unreachable.
+    && /if \(removal\.invoicedRetained === 0\) \{/.test(owner)
+    && occursBefore(owner, 'cancelReplacementBillingInTransaction',
+      'settleReplacementCancellationCredits'),
+    'the reconciler takes the CLIENT lock while replacement commands hold the ORDER one');
+
+  // Anchored on the callback being a BARE argument at its own indent. M112 wrapped it in
+  // `undefined && (...)` — present, correctly ordered, and never called.
+  check('cancelling a replacement cancels its CHARGE',
+    /^ {2}\(replacement, actor, reason\) => cancelReplacementCharges\(\{$/m.test(routeCode2)
+    && occursBefore(routeCode2, 'cancelReplacement({ replacementId, actor, reason })',
+      'cancelReplacementCharges({'),
+    'the lifecycle command moved the row and stopped, so a cancelled replacement kept any billing lines it had');
+
+  check('resolving a review INTO cancelled settles the same way',
+    /body\.to === 'cancelled'[\s\S]{0,160}cancelReplacementCharges\(\{/.test(routeCode2),
+    'reaching cancelled by a different door does not make it a different decision');
+
+  check('the sweep does not pretend it can owe a credit',
+    /finalizedCreditOwed: false,/.test(holdSrc)
+    && !/finalizedCreditOwed: billing\.invoicedRetained > 0/.test(holdSrc),
+    'the branch above sends anything carrying invoiced money to review, so deriving this from invoicedRetained read as careful and could never be true');
+}
+
 // ── a purchased label becomes recorded state ─────────────────────────────────
 console.log('\npaid-label recovery');
 

@@ -13,6 +13,7 @@ import { env } from '../lib/env';
 import { requireInternalPermission, type AuthVars } from '../middleware/auth';
 import { isOrderRowInScope, orderScopePredicate, scopeFromContext } from '../lib/order-scope';
 import { createReplacement } from '../services/replacement-create-command';
+import { cancelReplacementCharges } from '../services/replacement-charge-cancellation';
 import {
   approveReplacement,
   cancelReplacement,
@@ -263,6 +264,13 @@ const reasonBody = z.object({ reason: z.string().trim().min(1).max(2000) }).stri
 function transitionRoute(
   path: string,
   run: (replacementId: number, actor: ReplacementActor, reason: string) => Promise<unknown>,
+  /**
+   * Runs only after the transition COMMITTED. Cancelling a replacement's charge takes the
+   * client advisory lock, and the lifecycle command holds the order one — nesting them in
+   * that order deadlocks against the billing generator.
+   */
+  afterCommit?: (replacement: { id: number; clientId: number | null }, actor: ReplacementActor, reason: string)
+    => Promise<unknown>,
 ) {
   app.post(
     path,
@@ -271,9 +279,12 @@ function transitionRoute(
     async (c) => {
       const replacement = await loadInScope(c, Number(c.req.param('id')));
       if (!replacement) return c.json({ error: 'Not found' }, 404);
+      const actor = replacementActor(c);
+      const reason = c.req.valid('json').reason;
       try {
-        const result = await run(replacement.id, replacementActor(c), c.req.valid('json').reason);
-        return c.json({ replacement: result });
+        const result = await run(replacement.id, actor, reason);
+        const settled = afterCommit ? await afterCommit(replacement, actor, reason) : null;
+        return c.json({ replacement: result, ...(settled ? { billing: settled } : {}) });
       } catch (error) {
         return respondToCommandError(c, error);
       }
@@ -285,8 +296,25 @@ transitionRoute('/:id{[0-9]+}/approve', (replacementId, actor, reason) =>
   approveReplacement({ replacementId, actor, reason }));
 transitionRoute('/:id{[0-9]+}/reject', (replacementId, actor, reason) =>
   rejectReplacement({ replacementId, actor, reason }));
+/**
+ * Cancelling also cancels the CHARGE.
+ *
+ * The lifecycle command moved the row and stopped there, so a cancelled replacement kept any
+ * billing lines it had. Pre-ship there are normally none — billing is written at ship — but
+ * "normally none" is not "never", and a line nobody removed is money on an invoice for
+ * something that was called off.
+ */
 transitionRoute('/:id{[0-9]+}/cancel', (replacementId, actor, reason) =>
-  cancelReplacement({ replacementId, actor, reason }));
+  cancelReplacement({ replacementId, actor, reason }),
+  (replacement, actor, reason) => cancelReplacementCharges({
+    replacementId: replacement.id,
+    clientId: replacement.clientId ?? 0,
+    actor,
+    reason,
+    // Stable for this replacement's cancellation, so a retried request settles to the same
+    // key and the reconciler refuses a second credit for the same finalization.
+    idempotencySeed: `route-cancel:${replacement.id}`,
+  }));
 
 const resolveBody = reasonBody.extend({
   to: z.enum(['requested', 'approved', 'label_created', 'rejected', 'cancelled']),
@@ -301,13 +329,26 @@ app.post(
     if (!replacement) return c.json({ error: 'Not found' }, 404);
     const body = c.req.valid('json');
     try {
+      const actor = replacementActor(c);
       const result = await resolveReplacementReview({
         replacementId: replacement.id,
         to: body.to,
-        actor: replacementActor(c),
+        actor,
         reason: body.reason,
       });
-      return c.json({ replacement: result });
+      // Resolving a review INTO cancelled is a cancellation, and owes the same money
+      // treatment as the cancel route. Reaching cancelled by a different door does not make
+      // it a different decision.
+      const billing = body.to === 'cancelled'
+        ? await cancelReplacementCharges({
+          replacementId: replacement.id,
+          clientId: replacement.clientId ?? 0,
+          actor,
+          reason: body.reason,
+          idempotencySeed: `route-review-cancel:${replacement.id}`,
+        })
+        : null;
+      return c.json({ replacement: result, ...(billing ? { billing } : {}) });
     } catch (error) {
       return respondToCommandError(c, error);
     }

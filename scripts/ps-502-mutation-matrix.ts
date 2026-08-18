@@ -37,6 +37,7 @@ const FOLD = 'src/services/billing-replacement-finalized-fold.ts';
 const GENERATOR = 'src/services/billing.ts';
 const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
 const ROUTE = 'src/routes/replacements.ts';
+const CHARGE_CANCEL = 'src/services/replacement-charge-cancellation.ts';
 const DIAGNOSTICS = 'src/services/replacement-diagnostics.ts';
 const MAIN = 'src/main.ts';
 const SCHEMA_PROBE = 'src/services/replacement-schema-readiness.ts';
@@ -943,6 +944,29 @@ const MUTATIONS: Mutation[] = [
     find: '  const drift = await findFrozenLineDrift(tx, replacement!);',
     replace: '  const drift = null;',
     expect: 'it does every part of what the label MEANS',
+  },  {
+    id: 'M112',
+    defect: 'cancelling a replacement stops cancelling its charge, leaving money for a called-off re-ship',
+    file: ROUTE,
+    find: '  (replacement, actor, reason) => cancelReplacementCharges({',
+    replace: '  undefined && ((replacement, actor, reason) => cancelReplacementCharges({',
+    expect: 'cancelling a replacement cancels its CHARGE',
+  },
+  {
+    id: 'M113',
+    defect: 'resolving a review into cancelled skips the money, so the door taken changes the outcome',
+    file: ROUTE,
+    find: "      const billing = body.to === 'cancelled'",
+    replace: "      const billing = false",
+    expect: 'resolving a review INTO cancelled settles the same way',
+  },
+  {
+    id: 'M114',
+    defect: 'the early return swallows every case, so a credit is never raised at all',
+    file: CHARGE_CANCEL,
+    find: '  if (removal.invoicedRetained === 0) {',
+    replace: '  if (removal.invoicedRetained >= 0) {',
+    expect: 'it removes editable lines, then settles invoiced ones AFTER the commit',
   },
 ];
 
