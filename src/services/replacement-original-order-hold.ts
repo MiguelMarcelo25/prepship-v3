@@ -13,6 +13,8 @@ import {
   type LifecycleActor,
 } from './replacement-lifecycle-command';
 import { cancelReplacementBillingInTransaction } from './replacement-billing-writer';
+import { reconcileFinalizedBillingReplacementAdjustment } from './billing-finalization-policy';
+import { roundMoney } from '../lib/money';
 
 /**
  * PS-502 AC-16 — the original order was cancelled or refunded. What happens to its replacements.
@@ -59,11 +61,27 @@ export type ReplacementHoldOutcome = {
   phase: 'pre_dispatch' | 'pre_dispatch_label_at_risk' | 'post_dispatch' | 'terminal_no_action';
   disposition: 'cancelled' | 'review' | 'flagged_post_dispatch' | 'no_action';
   openQuestion: string | null;
+  /** Cancellation retained invoiced lines; a credit is owed once this transaction commits. */
+  finalizedCreditOwed: boolean;
 };
 
 export type ReplacementHoldSweepResult = {
   considered: number;
   outcomes: ReplacementHoldOutcome[];
+  /**
+   * Replacements whose cancellation left INVOICED money behind.
+   *
+   * Deleting an invoiced line is not an option — a finalized charge is history — so the
+   * difference has to become an append-only credit. That credit cannot be raised here:
+   * `reconcileFinalizedBillingReplacementAdjustment` takes the CLIENT lock (36421) and this
+   * sweep already holds the ORDER lock (36423). Taking them in that order, when the billing
+   * generator takes the client lock first, is a deadlock waiting for two clients to cancel
+   * at once.
+   *
+   * So the sweep reports, and the caller settles AFTER this transaction commits. The debt is
+   * durable in the meantime: the invoiced rows are still there and still attributable.
+   */
+  finalizedCreditPending: { replacementId: number; clientId: number }[];
   /**
    * Replacements left untouched because they already carry an OPEN hold — this signal
    * replayed, or an earlier one still awaiting a human.
@@ -110,6 +128,7 @@ export async function raiseReplacementOriginalOrderHoldsInTransaction(
     .orderBy(replacements.id);
 
   const outcomes: ReplacementHoldOutcome[] = [];
+  const finalizedCreditPending: { replacementId: number; clientId: number }[] = [];
   let alreadyHeld = 0;
 
   for (const before of rows) {
@@ -144,6 +163,12 @@ export async function raiseReplacementOriginalOrderHoldsInTransaction(
 
     const outcome = await classifyAndAct(tx, before, input);
     outcomes.push(outcome);
+    if (outcome.finalizedCreditOwed) {
+      finalizedCreditPending.push({
+        replacementId: before.id,
+        clientId: (before as { clientId: number }).clientId,
+      });
+    }
 
     await tx.insert(replacementOriginalOrderHolds).values({
       replacementId: before.id,
@@ -170,7 +195,7 @@ export async function raiseReplacementOriginalOrderHoldsInTransaction(
     });
   }
 
-  return { considered: rows.length, outcomes, alreadyHeld };
+  return { considered: rows.length, outcomes, alreadyHeld, finalizedCreditPending };
 }
 
 async function classifyAndAct(
@@ -186,7 +211,10 @@ async function classifyAndAct(
 
   // ── Already finished with. Nothing to move, nothing to decide. ────────────────────────
   if (before.status === 'cancelled' || before.status === 'rejected') {
-    return { ...base, phase: 'terminal_no_action', disposition: 'no_action', openQuestion: null };
+    return {
+      ...base, phase: 'terminal_no_action', disposition: 'no_action',
+      openQuestion: null, finalizedCreditOwed: false,
+    };
   }
 
   // ── Dispatched. Real stock left, real postage was spent. Status is never touched. ──────
@@ -204,6 +232,8 @@ async function classifyAndAct(
       // when the original was reversed is a billing-authority decision, and guessing it here
       // would either bill for something nobody owes or silently forgive real money.
       openQuestion: 'does_the_client_still_pay_for_a_delivered_replacement',
+      // The goods went out. Nothing is credited without a human deciding it should be.
+      finalizedCreditOwed: false,
     };
   }
 
@@ -229,6 +259,7 @@ async function classifyAndAct(
       phase: 'pre_dispatch_label_at_risk',
       disposition: 'review',
       openQuestion: 'void_or_retain_purchased_label',
+      finalizedCreditOwed: false,
     };
   }
 
@@ -260,6 +291,7 @@ async function classifyAndAct(
       phase: 'pre_dispatch_label_at_risk',
       disposition: 'review',
       openQuestion: 'resolve_label_purchase_intent_before_cancelling',
+      finalizedCreditOwed: false,
     };
   }
 
@@ -290,6 +322,7 @@ async function classifyAndAct(
       phase: 'pre_dispatch_label_at_risk',
       disposition: 'review',
       openQuestion: 'invoiced_money_on_an_undispatched_replacement',
+      finalizedCreditOwed: false,
     };
   }
 
@@ -298,9 +331,14 @@ async function classifyAndAct(
     actor: input.actor,
     reason: input.reason,
   });
-  await cancelReplacementBillingInTransaction(tx, { replacementId: before.id });
+  const billing = await cancelReplacementBillingInTransaction(tx, { replacementId: before.id });
 
-  return { ...base, phase: 'pre_dispatch', disposition: 'cancelled', openQuestion: null };
+  return {
+    ...base, phase: 'pre_dispatch', disposition: 'cancelled', openQuestion: null,
+    // Editable lines are gone; anything invoiced survives and is owed a credit the caller
+    // raises once this transaction has committed.
+    finalizedCreditOwed: billing.invoicedRetained > 0,
+  };
 }
 
 /** Open holds for an order — what a human still owes an answer to. */
@@ -319,4 +357,45 @@ export async function findOpenReplacementOriginalOrderHolds(
       eq(replacementOriginalOrderHolds.orderId, orderId),
       isNull(replacementOriginalOrderHolds.resolvedAt),
     ));
+}
+
+/**
+ * PS-502 AC-13 — raise the credits a cancellation left owed.
+ *
+ * MUST run after the sweep's transaction has committed. The reconciler takes the CLIENT
+ * advisory lock and the sweep holds the ORDER one; nesting them in that order deadlocks
+ * against the billing generator, which takes the client lock first.
+ *
+ * This is the caller the reconciler never had. It existed, was guarded, was proven correct in
+ * isolation, and was invoked by nothing — so a cancellation of a finalized replacement
+ * removed the editable lines, dutifully preserved the invoiced ones, and left the client
+ * charged. Every part worked; the wire between them did not exist.
+ *
+ * The idempotency key is derived from the HOLD, which is itself keyed on (replacement,
+ * evidence). A replayed signal therefore produces the same key and the reconciler refuses a
+ * second credit for the same finalization.
+ */
+export async function settleReplacementCancellationCredits(
+  pending: readonly { replacementId: number; clientId: number }[],
+  input: { reason: string; actor: LifecycleActor; idempotencySeed: string },
+  /** Injected so the settlement can be proven against the embedded harness. */
+  conn?: Parameters<typeof reconcileFinalizedBillingReplacementAdjustment>[1],
+): Promise<{ settled: number; creditedAmount: string }> {
+  let settled = 0;
+  let credited = 0;
+
+  for (const item of pending) {
+    const result = await reconcileFinalizedBillingReplacementAdjustment({
+      clientId: item.clientId,
+      replacementId: item.replacementId,
+      actorId: input.actor.email ?? 'system',
+      actorEmail: input.actor.email ?? null,
+      reason: input.reason,
+      idempotencyKey: `replacement:${item.replacementId}:cancel:${input.idempotencySeed}`,
+    }, conn);
+    if (result.adjustedCount > 0) settled += 1;
+    credited = roundMoney(credited + Number(result.creditedAmount));
+  }
+
+  return { settled, creditedAmount: credited.toFixed(2) };
 }

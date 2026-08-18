@@ -8,7 +8,10 @@
 // exact claims, and durable work; it never reopens a terminal order.
 
 import { sql as pg, db } from '../../db/client.js';
-import { raiseReplacementOriginalOrderHoldsInTransaction } from '../replacement-original-order-hold.js';
+import {
+  raiseReplacementOriginalOrderHoldsInTransaction,
+  settleReplacementCancellationCredits,
+} from '../replacement-original-order-hold.js';
 import { replacementSchemaPresent } from '../replacement-schema-readiness.js';
 import type { NormalizedWebhookEvent } from './webhook-providers.js';
 import { applyOrderLifecycleCommand } from '../order-lifecycle-command.js';
@@ -105,15 +108,33 @@ export async function reconcileOrderFromUpstreamEvent(
       `;
       if (ledgerRow) {
         for (const candidate of shippedWithReplacements) {
+          const reason = `original order cancelled upstream by ${String(event.metadata.provider ?? 'unknown')}`;
+          const actor = { type: 'system', email: null, permissions: [] };
           const swept = await db.transaction(async (tx) =>
             raiseReplacementOriginalOrderHoldsInTransaction(tx, {
               orderId: candidate.id,
               triggerKind: 'order_cancelled',
               evidence: { kind: 'webhook_event', webhookEventId: ledgerRow.id },
-              reason: `original order cancelled upstream by ${String(event.metadata.provider ?? 'unknown')}`,
-              actor: { type: 'system', email: null, permissions: [] },
+              reason,
+              actor,
             }));
           replacementHoldsRaised += swept.outcomes.length;
+
+          // AFTER the sweep has committed, never inside it. The reconciler takes the CLIENT
+          // advisory lock and the sweep holds the ORDER one; nesting them in that order
+          // deadlocks against the billing generator, which takes the client lock first.
+          //
+          // Until this existed, a cancellation removed a replacement's editable lines,
+          // correctly preserved its invoiced ones, and left the client charged for them.
+          if (swept.finalizedCreditPending.length > 0) {
+            await settleReplacementCancellationCredits(swept.finalizedCreditPending, {
+              reason,
+              actor,
+              // Derived from the ledger row, so a replayed webhook settles to the same key
+              // and the reconciler refuses a second credit for the same finalization.
+              idempotencySeed: `webhook:${ledgerRow.id}`,
+            });
+          }
         }
       }
     }

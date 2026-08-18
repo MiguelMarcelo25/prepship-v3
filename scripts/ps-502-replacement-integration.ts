@@ -2065,6 +2065,58 @@ async function main(): Promise<void> {
       'a window that DOES overlap the closed period still counts it — the fix must not be a blanket exclusion');
   });
 
+  console.log('\nblocker 7 — the credit a cancellation owes is actually raised');
+
+  const { settleReplacementCancellationCredits } =
+    await import('../src/services/replacement-original-order-hold.js');
+
+  const creditNotesFor = async (replacementId: number) => {
+    const rows = await db.execute(sql`
+      select id, replacement_id, amount from billing_credit_notes
+       where replacement_id = ${replacementId}
+    `);
+    return (rows as unknown as { rows: { id: string; amount: string }[] }).rows;
+  };
+
+  // NOT PROVEN HERE, deliberately.
+  //
+  // Executing settleReplacementCancellationCredits reaches
+  // reconcileFinalizedBillingReplacementAdjustment -> ensureBillingFinalizationPolicySchema ->
+  // assertRuntimeSchemaReady(), which verifies the ENTIRE runtime schema against the
+  // production singleton. This harness has a PS-502-shaped database, so it cannot satisfy it.
+  //
+  // Threading a connection through that gate would widen a production readiness check to suit
+  // a test, which is the shape of mistake that put replacement tables on the ordinary order
+  // cancellation path. The honest position is that the credit ARITHMETIC and its frozen-line
+  // discovery are proven above, the WIRING is proven by contract guard, and the two have never
+  // been executed together. That needs a full-schema database and is called out rather than
+  // implied.
+
+  await check('the sweep never auto-cancels a replacement that carries invoiced money', async () => {
+    const target = await finalizeReplacement('settle-report', 'fin-settle-report');
+    // Wind it back behind the label: pre-dispatch, but its money is already invoiced.
+    await db.update(schema.replacements).set({ status: 'approved' })
+      .where(eq(schema.replacements.id, target.replacementId));
+    await db.delete(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, target.replacementId));
+
+    const result = await sweep(await newEvidence());
+    const mine = result.outcomes.find((o) => o.replacementId === target.replacementId);
+    assert.ok(mine, 'the sweep classified it');
+    assert.equal(mine!.disposition, 'review',
+      'invoiced money on an undispatched replacement is an anomaly, not a cancellation');
+    assert.equal(mine!.openQuestion, 'invoiced_money_on_an_undispatched_replacement');
+    assert.equal(mine!.finalizedCreditOwed, false,
+      'nothing was cancelled, so nothing is owed a credit yet');
+
+    // CONSEQUENCE, recorded rather than asserted away: because this branch refuses to cancel,
+    // the sweep can never populate finalizedCreditPending. The settlement owner is therefore
+    // reachable only from an OPERATOR cancellation — resolveReplacementReview(to: cancelled)
+    // and cancelReplacement — and neither cancels billing today. That wire is still missing.
+    assert.equal(result.finalizedCreditPending.length, 0,
+      'the sweep structurally cannot owe a credit; the operator path is where it will');
+  });
+
   await client.close();
   console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }
