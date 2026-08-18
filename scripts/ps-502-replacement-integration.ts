@@ -62,6 +62,11 @@ async function main(): Promise<void> {
 
   const { createReplacement, ReplacementCreateError } =
     await import('../src/services/replacement-create-command.js');
+  const { env } = await import('../src/lib/env.js');
+  const {
+    purchaseReplacementLabel, ReplacementLabelError, replacementProviderIdempotencyKey,
+    classifyProviderFailure,
+  } = await import('../src/services/replacement-label-purchase-command.js');
   const {
     approveReplacement, rejectReplacement, cancelReplacement, resolveReplacementReview,
     remapReplacementItem, setReplacementBillability, completeReplacement,
@@ -662,6 +667,207 @@ async function main(): Promise<void> {
       .where(eq(schema.replacementActivityEvents.replacementId, r.id));
     assert.ok(events.some((e) => e.eventType === 'replacement_completed_tracking_evidence'),
       'the basis for completion is part of the record');
+  });
+
+  console.log('\nlabel purchase');
+
+  // A fake provider. No real postage is reachable from this suite, and every assertion
+  // below counts its calls — "the command threw" would not reveal a second purchase.
+  let providerCalls = 0;
+  let lastIdempotencyKey = '';
+  const fakeProvider = {
+    purchase: async ({ idempotencyKey }: { idempotencyKey: string }) => {
+      providerCalls += 1;
+      lastIdempotencyKey = idempotencyKey;
+      return {
+        providerTransactionId: `txn-${providerCalls}`,
+        providerLabelId: `lbl-${providerCalls}`,
+        trackingNumber: '1Z-TEST',
+        labelUrl: 'https://example.test/label.pdf',
+        shipmentCost: 8.25,
+        otherCost: 1.5,
+      };
+    },
+  };
+
+  const PURCHASE_INPUTS = {
+    address: {
+      value: {
+        name: 'Jane Roe', line1: '1 Test Way', city: 'Springfield',
+        state: 'IL', postalCode: '62704', country: 'US',
+      },
+      source: 'operator_override' as const,
+      chosenBy: 'lead@example.test', reason: 'customer confirmed address',
+    },
+    carrier: {
+      value: { carrierCode: 'ups', serviceCode: 'ups_ground', providerAccountId: 7 },
+      source: 'operator_override' as const,
+      chosenBy: 'lead@example.test', reason: 'same service as the original',
+    },
+    package: {
+      value: { packageId: 'box-a', weightOz: 32, dimsL: 10, dimsW: 8, dimsH: 6 },
+      source: 'operator_override' as const,
+      chosenBy: 'lead@example.test', reason: 'recalculated from the replacement items',
+    },
+  };
+
+  /** A replacement with an attached shipment, ready to buy. */
+  const readyToBuy = async (key: string) => {
+    const r = await makeReplacement(key);
+    await db.update(schema.replacements)
+      .set({ status: 'approved' }).where(eq(schema.replacements.id, r.id));
+    await insertReplacementShipment({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+    }, conn);
+    const [fresh] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, r.id));
+    return fresh!;
+  };
+
+  await check('the feature gate stops BEFORE any provider call or DB mutation', async () => {
+    const r = await readyToBuy('lbl-disabled');
+    const callsBefore = providerCalls;
+    (env as { REPLACEMENTS_LABEL_ENABLED: boolean }).REPLACEMENTS_LABEL_ENABLED = false;
+    await assert.rejects(
+      () => purchaseReplacementLabel({
+        replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+        purchaseInputs: PURCHASE_INPUTS,
+      }, fakeProvider, conn),
+      (e: unknown) => e instanceof ReplacementLabelError
+        && e.code === 'REPLACEMENT_LABEL_FEATURE_DISABLED',
+    );
+    assert.equal(providerCalls, callsBefore, 'no provider call while dark');
+    const intents = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intents.length, 0, 'and no durable intent written');
+    (env as { REPLACEMENTS_LABEL_ENABLED: boolean }).REPLACEMENTS_LABEL_ENABLED = true;
+  });
+
+  await check('a successful purchase records the receipt and moves to label_created', async () => {
+    const r = await readyToBuy('lbl-ok');
+    const before = providerCalls;
+    const result = await purchaseReplacementLabel({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+      purchaseInputs: PURCHASE_INPUTS,
+    }, fakeProvider, conn);
+
+    assert.equal(providerCalls, before + 1, 'exactly one provider call');
+    assert.equal(result.purchased, true);
+
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, r.id));
+    assert.equal(after!.status, 'label_created');
+
+    const [intent] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intent!.state, 'purchased');
+    assert.ok(intent!.providerTransactionId, 'stable provider identity is persisted');
+
+    const [ship] = await db.select().from(schema.shipments)
+      .where(eq(schema.shipments.id, result.shipmentId));
+    assert.equal(String(ship!.cost), '8.25', 'the customer money tuple is frozen');
+    assert.equal(String(ship!.otherCost), '1.50');
+    assert.equal(String(ship!.selectedRateCost), '9.75', 'and the normalized total agrees');
+  });
+
+  await check('the provider identity is replacement-scoped, never the order key', async () => {
+    assert.match(lastIdempotencyKey, /^replacement:\d+:shipment:\d+:attempt:1:request:/);
+    assert.ok(!lastIdempotencyKey.includes('order'),
+      'two replacements on one order must never share a purchase identity');
+  });
+
+  await check('AC-11: provider succeeds, the DB tail fails, a retry buys NOTHING more', async () => {
+    const r = await readyToBuy('lbl-crash');
+    const before = providerCalls;
+
+    // Fail the SECOND transaction — the persistence phase — after the provider succeeded.
+    let transactions = 0;
+    const crashingConn = {
+      transaction: async (fn: never) => {
+        transactions += 1;
+        if (transactions === 2) throw new Error('simulated process death after purchase');
+        return (conn as { transaction: (f: never) => unknown }).transaction(fn);
+      },
+    } as never;
+
+    await assert.rejects(() => purchaseReplacementLabel({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+      purchaseInputs: PURCHASE_INPUTS,
+    }, fakeProvider, crashingConn));
+
+    assert.equal(providerCalls, before + 1, 'the provider was called once');
+
+    // The durable intent survives, still unresolved — proof a purchase MAY exist.
+    const [intent] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intent!.state, 'provider_pending',
+      'the intent committed before dispatch is what proves a purchase may have happened');
+
+    // THE POINT: a retry refuses and does NOT dispatch again.
+    await assert.rejects(
+      () => purchaseReplacementLabel({
+        replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+        purchaseInputs: PURCHASE_INPUTS,
+      }, fakeProvider, conn),
+      (e: unknown) => e instanceof ReplacementLabelError
+        && e.code === 'REPLACEMENT_LABEL_RECONCILE_REQUIRED',
+    );
+    assert.equal(providerCalls, before + 1, 'NO second postage purchase');
+
+    const intents = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intents.length, 1, 'one durable receipt, not two');
+
+    const ships = await db.select().from(schema.shipments)
+      .where(eq(schema.shipments.orderId, 1321));
+    const forThis = ships.filter((x) => x.id === intent!.replacementShipmentId);
+    assert.equal(forThis.length, 1, 'one replacement shipment');
+  });
+
+  await check('an unknown provider outcome becomes reconcile_required, never a retry', async () => {
+    const r = await readyToBuy('lbl-unknown');
+    const before = providerCalls;
+    const timingOutProvider = {
+      purchase: async () => {
+        providerCalls += 1;
+        throw new Error('socket hang up');
+      },
+    };
+    await assert.rejects(
+      () => purchaseReplacementLabel({
+        replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+        purchaseInputs: PURCHASE_INPUTS,
+      }, timingOutProvider as never, conn),
+      (e: unknown) => e instanceof ReplacementLabelError
+        && e.code === 'REPLACEMENT_LABEL_RECONCILE_REQUIRED',
+    );
+    assert.equal(providerCalls, before + 1);
+    const [intent] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intent!.state, 'reconcile_required');
+    assert.equal(intent!.reconciliationState, 'unresolved');
+  });
+
+  await check('a provider REJECTION is recoverable, not held for reconciliation', () => {
+    assert.equal(classifyProviderFailure(new Error('address rejected')), 'failed_pre_purchase');
+    assert.equal(classifyProviderFailure(new Error('socket hang up')), 'reconcile_required');
+    assert.equal(classifyProviderFailure(new Error('ETIMEDOUT')), 'reconcile_required',
+      'anything we cannot prove did not happen must be reconciled, not retried');
+  });
+
+  await check('the idempotency key changes with the frozen request', () => {
+    const base = {
+      replacementId: 1, replacementShipmentId: 2,
+      requestFingerprint: 'fp-a', purchaseAttempt: 1,
+    };
+    assert.notEqual(
+      replacementProviderIdempotencyKey(base),
+      replacementProviderIdempotencyKey({ ...base, requestFingerprint: 'fp-b' }),
+    );
+    assert.notEqual(
+      replacementProviderIdempotencyKey(base),
+      replacementProviderIdempotencyKey({ ...base, replacementId: 2 }),
+    );
   });
 
   await client.close();

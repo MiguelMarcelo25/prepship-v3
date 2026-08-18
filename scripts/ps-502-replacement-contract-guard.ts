@@ -635,6 +635,89 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── Label purchase: the only command that can spend real money ───────────────
+console.log('\nlabel purchase (locked path)');
+
+{
+  const buy = read('src/services/replacement-label-purchase-command.ts');
+  const code = buy.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const envSource = read('src/lib/env.ts');
+  const at = (needle: string) => code.indexOf(needle);
+
+  check('the feature flag is server-authoritative and DEFAULT OFF',
+    /REPLACEMENTS_LABEL_ENABLED: booleanFlag\(false\)/.test(envSource),
+    'dark deployment means the code ships and does nothing');
+
+  check('the gate runs BEFORE any transaction or provider access',
+    at('assertReplacementLabelEnabled();') !== -1
+    && at('assertReplacementLabelEnabled();') < at('claimPurchase(input, conn)')
+    && at('assertReplacementLabelEnabled();') < at('provider.purchase('),
+    'a disabled feature must not write a durable intent or contact a provider');
+
+  check('the durable intent is committed BEFORE dispatch',
+    // Presence FIRST: indexOf returns -1 when the text is gone, and -1 < anything is true, so
+    // deleting the very thing under test made the bare position check pass.
+    at('.insert(replacementLabelPurchaseIntents)') !== -1
+    && at('.insert(replacementLabelPurchaseIntents)') < at('provider.purchase('),
+    'a crash between dispatch and persistence must leave proof a purchase may exist');
+
+  check('the provider call is OUTSIDE every transaction',
+    (() => {
+      // The dispatch must not sit inside a conn.transaction callback. Checked by position:
+      // the claim transaction closes before it and the persist transaction opens after.
+      const dispatch = at('await provider.purchase({');
+      const claimEnds = at('const claim = await claimPurchase(input, conn);');
+      const persistBegins = code.lastIndexOf('return conn.transaction(async (tx) => {');
+      return dispatch > claimEnds && dispatch < persistBegins;
+    })(),
+    'holding a transaction or lock across the network pins a connection and rolls back the intent');
+
+  check('drift is re-resolved before the claim AND after dispatch',
+    (code.match(/findFrozenLineDrift\(/g) || []).length >= 2,
+    'a line can move while the network call is in flight');
+
+  check('post-dispatch drift PRESERVES the label and reviews',
+    /replacement_label_purchased_into_review/.test(code)
+    && at('replacement_label_purchased_into_review') > at('provider.purchase('),
+    'the label is real and paid for; never discard it and never repurchase');
+
+  check('an unknown provider outcome is held, never retried',
+    /reconcile_required/.test(code)
+    && /will NOT|never be repurchased|not be repurchased/i.test(buy),
+    'a retry after an unseen success buys a second label');
+
+  check('an unresolved intent BLOCKS a further dispatch',
+    // The guard CLAUSE, not the error code: the code also appears in the type union above and
+    // in the timeout path, so its position proved nothing about whether anything checks it.
+    code.includes('if (unresolved) {')
+    && at('if (unresolved) {') < at('provider.purchase('),
+    'a missing local receipt is not proof that no purchase happened');
+
+  check('the provider identity is replacement-scoped, never the order key',
+    /'replacement', input\.replacementId/.test(code)
+    && !/orderId/.test(code.slice(at('export function replacementProviderIdempotencyKey'), at('function createStableHash'))),
+    'two replacements on one order must never share a purchase identity');
+
+  check('it never reuses createLabelV2 or the ordinary purchase intent API',
+    !/createLabelV2|assertNoUnresolvedLabelPurchaseIntent|createLabelPurchaseIntent/.test(code));
+
+  check('it never notifies a marketplace or a customer',
+    !/marketplace|confirmFulfillment|notifyCustomer|shopify|walmart|ebay/i.test(code),
+    'decision 4 is unfrozen; the only safe behaviour is none');
+
+  check('it never writes the original order status',
+    !/\.update\(orders\)|orderStatus:/.test(code));
+
+  check('it moves no inventory, packaging or billing',
+    !/\.insert\(billingLineItems\)|\.insert\(inventory|packageLedger|deductInventory/.test(code));
+
+  check('the customer money tuple is frozen onto real shipment columns',
+    /cost: String\(receipt\.shipmentCost\)/.test(code)
+    && /selectedRateCost: String\(/.test(code)
+    && !/shipmentCost: String\(/.test(code),
+    'an earlier draft wrote a shipmentCost column that does not exist');
+}
+
 // ── Purchase inputs are resolved, never invented ─────────────────────────────
 //
 // Executed, not grepped. DJ decisions 1-3 are unfrozen, and the failure mode this guards is

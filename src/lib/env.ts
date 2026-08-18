@@ -131,6 +131,11 @@ const schema = z.object({
   // putting return_processing / return_label lines on real invoices, so it stays a
   // deliberate Render env change after canary, never a deploy side effect.
   RETURN_BILLING_ENABLED: booleanFlag(false),
+  // PS-502. Server-authoritative and default-off. Gates replacement label purchase and every
+  // provider-touching side effect: dark deployment means the code ships and does nothing.
+  // Turning it on is a separate configuration change after DJ freezes decisions 1-4 and the
+  // live-postage canary passes.
+  REPLACEMENTS_LABEL_ENABLED: booleanFlag(false),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.
   RUN_SYNC_SCHEDULER: booleanFlag(true),

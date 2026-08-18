@@ -26,6 +26,8 @@ const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 const APPLIER = 'scripts/apply-ps-502-replacement-schema.ts';
 const LIFECYCLE = 'src/services/replacement-lifecycle-command.ts';
 const PURCHASE_REQ = 'src/services/replacement-purchase-request.ts';
+const LABEL_BUY = 'src/services/replacement-label-purchase-command.ts';
+const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
 const MUTATIONS: Mutation[] = [
@@ -460,6 +462,37 @@ const MUTATIONS: Mutation[] = [
     find: '      request.package.packageId, request.package.weightOz,',
     replace: '      request.package.packageId,',
     expect: 'the fingerprint covers the values a purchase depends on',
+  },  {
+    id: 'M55',
+    defect: 'the label feature flag defaults ON',
+    file: ENV,
+    find: '  REPLACEMENTS_LABEL_ENABLED: booleanFlag(false),',
+    replace: '  REPLACEMENTS_LABEL_ENABLED: booleanFlag(true),',
+    expect: 'the feature flag is server-authoritative and DEFAULT OFF',
+  },
+  {
+    id: 'M56',
+    defect: 'the durable intent is written AFTER dispatch, so a crash leaves no proof',
+    file: LABEL_BUY,
+    find: '    const [intent] = await tx.insert(replacementLabelPurchaseIntents).values({',
+    replace: '    const [intent] = await tx.insert(replacements).values({',
+    expect: 'the durable intent is committed BEFORE dispatch',
+  },
+  {
+    id: 'M57',
+    defect: 'an unresolved intent no longer blocks a further dispatch',
+    file: LABEL_BUY,
+    find: '    if (unresolved) {',
+    replace: '    if (false) {',
+    expect: 'an unresolved intent BLOCKS a further dispatch',
+  },
+  {
+    id: 'M58',
+    defect: 'drift after dispatch discards the purchased label instead of reviewing',
+    file: LABEL_BUY,
+    find: "        eventType: 'replacement_label_purchased_into_review',",
+    replace: "        eventType: 'replacement_label_discarded',",
+    expect: 'post-dispatch drift PRESERVES the label and reviews',
   },
 ];
 
