@@ -131,3 +131,42 @@ export async function regenerateReplacementBillingInTransaction(
   const written = await writeReplacementBillingInTransaction(tx, facts);
   return { ...written, deleted: removed.length };
 }
+
+/**
+ * PS-502 AC-13 — cancel ONE replacement's billing without touching its siblings.
+ *
+ * Editable lines are REMOVED; invoiced lines are never deleted. A finalized charge is
+ * history, and the difference against it becomes an append-only credit through
+ * `reconcileFinalizedBillingReplacementAdjustment` — which the caller invokes, because that
+ * reconciler owns the client lock and the credit projection and must not be nested inside
+ * this transaction.
+ *
+ * Every predicate is replacement-scoped. Cancelling A must leave B exactly as it was, and
+ * the only thing that makes that true is that identity is relational: no description
+ * matching, no order-level sweep, no reason parsing.
+ */
+export async function cancelReplacementBillingInTransaction(
+  tx: any,
+  input: { replacementId: number },
+): Promise<{ editableRemoved: number; invoicedRetained: number }> {
+  const removed = await tx
+    .delete(billingLineItems)
+    .where(and(
+      eq(billingLineItems.replacementId, input.replacementId),
+      inArray(billingLineItems.lineType, [...REPLACEMENT_LINE_TYPES]),
+      eq(billingLineItems.invoiced, false),
+      sql`${billingLineItems.sourceFinalizationId} is null`,
+      sql`${billingLineItems.billingAdjustmentId} is null`,
+    ))
+    .returning({ id: billingLineItems.id });
+
+  const retained = await tx
+    .select({ id: billingLineItems.id })
+    .from(billingLineItems)
+    .where(and(
+      eq(billingLineItems.replacementId, input.replacementId),
+      eq(billingLineItems.invoiced, true),
+    ));
+
+  return { editableRemoved: removed.length, invoicedRetained: retained.length };
+}

@@ -76,6 +76,8 @@ async function main(): Promise<void> {
     await import('../src/services/replacement-billing-writer.js');
   const { deleteOutboundBillingLinesForRebuild } =
     await import('../src/services/billing-outbound-sweep.js');
+  const { cancelReplacementBillingInTransaction } =
+    await import('../src/services/replacement-billing-writer.js');
   const { regenerateReplacementBillingInTransaction } =
     await import('../src/services/replacement-billing-writer.js');
   const { planReplacementBillingLines, ReplacementBillingPlanError } =
@@ -1383,6 +1385,82 @@ async function main(): Promise<void> {
       .where(eq(schema.billingLineItems.id, line!.id));
     assert.equal(still.length, 1, 'the invoiced row survives the rolled-back attempt');
     assert.equal(still[0]!.invoiced, true);
+  });
+
+  console.log('\nAC-13 — cancelling ONE replacement');
+
+  await check('cancelling A removes only A, and B is untouched', async () => {
+    const a = await readyToShip('cancel-a');
+    const b = await readyToShip('cancel-b');
+    for (const target of [a, b]) {
+      await shipReplacement({
+        replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+        consumePackage: packageConsumer, writeBilling: billingWriter as never,
+      }, conn);
+    }
+
+    const beforeB = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, b.replacementId));
+    assert.equal(beforeB.length, 2, 'B has its two lines');
+    const totalBBefore = beforeB.reduce((sum, l) => sum + Number(l.totalCost), 0);
+
+    const result = await (conn as { transaction: (f: never) => unknown }).transaction((async (tx: never) =>
+      cancelReplacementBillingInTransaction(tx, { replacementId: a.replacementId })) as never) as
+      { editableRemoved: number; invoicedRetained: number };
+    assert.equal(result.editableRemoved, 2, 'both of A\'s editable lines are removed');
+
+    const afterA = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, a.replacementId));
+    assert.equal(afterA.length, 0, 'A is cancelled');
+
+    const afterB = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, b.replacementId));
+    assert.equal(afterB.length, 2, 'B is UNTOUCHED — identity is relational, not a description match');
+    const totalBAfter = afterB.reduce((sum, l) => sum + Number(l.totalCost), 0);
+    assert.equal(totalBAfter.toFixed(2), totalBBefore.toFixed(2));
+  });
+
+  await check('a retried cancellation removes nothing further', async () => {
+    const a = await readyToShip('cancel-retry');
+    await shipReplacement({
+      replacementId: a.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: a.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+
+    const run = async () => (conn as { transaction: (f: never) => unknown }).transaction((async (tx: never) =>
+      cancelReplacementBillingInTransaction(tx, { replacementId: a.replacementId })) as never) as
+      Promise<{ editableRemoved: number }>;
+
+    const first = await run();
+    assert.equal(first.editableRemoved, 2);
+    const second = await run();
+    assert.equal(second.editableRemoved, 0, 'a retry is a no-op, not a second credit');
+  });
+
+  await check('an INVOICED replacement line is retained, never deleted', async () => {
+    const a = await readyToShip('cancel-invoiced');
+    await shipReplacement({
+      replacementId: a.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: a.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, a.replacementId));
+    await db.update(schema.billingLineItems).set({ invoiced: true })
+      .where(eq(schema.billingLineItems.id, lines[0]!.id));
+
+    const result = await (conn as { transaction: (f: never) => unknown }).transaction((async (tx: never) =>
+      cancelReplacementBillingInTransaction(tx, { replacementId: a.replacementId })) as never) as
+      { editableRemoved: number; invoicedRetained: number };
+    assert.equal(result.editableRemoved, 1, 'only the editable line goes');
+    assert.equal(result.invoicedRetained, 1, 'the finalized one is history');
+
+    const remaining = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, a.replacementId));
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]!.invoiced, true);
   });
 
   await client.close();

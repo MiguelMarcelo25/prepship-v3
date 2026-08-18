@@ -504,6 +504,16 @@ type BillingAdjustmentPosting = {
   adjustmentKind: BillingAdjustmentKind;
   adjustmentSource: 'manual' | 'regeneration';
   sourceOrderId: number | null;
+  /**
+   * PS-502 correction C. Which replacement this adjustment belongs to.
+   *
+   * Without it, cancelling ONE of two replacements on an order cannot be attributed: the
+   * order reconciler is order-grained, so original + replacement A + replacement B collapse
+   * into one number and the credit for A alone has nowhere to point. A deterministic
+   * idempotency key is not a substitute — parsing identity out of `reason` is the mistake
+   * PS-488 rejected.
+   */
+  replacementId: number | null;
   amount: string;
   reason: string;
   idempotencyKey: string;
@@ -528,6 +538,7 @@ async function appendBillingAdjustmentProjection(
       adjustment_kind,
       adjustment_source,
       source_order_id,
+      replacement_id,
       posting_version,
       effective_date,
       billing_policy_version,
@@ -543,6 +554,7 @@ async function appendBillingAdjustmentProjection(
       ${input.adjustmentKind},
       ${input.adjustmentSource},
       ${input.sourceOrderId},
+      ${input.replacementId},
       ${'current_period_v2'},
       ${input.effectiveDate.toISOString()}::timestamptz,
       ${input.billingPolicyVersion},
@@ -663,6 +675,8 @@ export async function createBillingCreditNote(input: {
   clientId: number;
   finalizationId: string;
   adjustmentKind?: BillingAdjustmentKind;
+  /** PS-502: relational replacement attribution, carried to the projection. */
+  replacementId?: number | null;
   amount: string;
   reason: string;
   idempotencyKey: string;
@@ -808,6 +822,7 @@ export async function createBillingCreditNote(input: {
         adjustmentKind,
         adjustmentSource: 'manual',
         sourceOrderId: null,
+        replacementId: input.replacementId ?? null,
         amount,
         reason,
         idempotencyKey,
@@ -870,6 +885,111 @@ export function resolveBillingRegenerationAdjustment(input: {
  * immutable finalized lines and prior signed corrections, then appends only
  * the remaining delta in the backend-selected current period.
  */
+/**
+ * PS-502 correction C — the REPLACEMENT-grained sibling of the order reconciler.
+ *
+ * A sibling rather than a parameter on the order reconciler, because the two answer
+ * different questions. `reconcileFinalizedBillingOrderAdjustments` takes
+ * `{ orderId, currentTotal }` and asks "what is this ORDER now worth". With original $20 +
+ * replacement A $8 + replacement B $10 on one order, that number cannot express "credit only
+ * A", and teaching it to would give one function two grains and two meanings.
+ *
+ * IDENTITY IS RELATIONAL. Invoiced lines are found by `replacement_id`, prior adjustments by
+ * `replacement_id`, and the credit carries `replacement_id`. A deterministic key is not a
+ * substitute for a queryable column — parsing identity out of `reason` is exactly the mistake
+ * PS-488 rejected.
+ *
+ * THE DELTA, NOT THE TOTAL. Frozen replacement total, minus what prior replacement-specific
+ * adjustments already corrected, gives what is still owed. Re-crediting the whole total on a
+ * retry is how a cancellation becomes a refund twice over.
+ *
+ * Lock order is unchanged: the same client lock the order reconciler takes, then the
+ * idempotency-key lock inside the low-level owner.
+ */
+export async function reconcileFinalizedBillingReplacementAdjustment(input: {
+  clientId: number;
+  replacementId: number;
+  actorId: string;
+  actorEmail?: string | null;
+  reason: string;
+  /** Includes the cancellation event, so two cancellations are two adjustments. */
+  idempotencyKey: string;
+  now?: Date;
+}, conn: BillingPolicyDatabase = db): Promise<{
+  finalizationCount: number;
+  adjustedCount: number;
+  creditedAmount: string;
+}> {
+  await ensureBillingFinalizationPolicySchema();
+
+  return conn.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(36421, ${input.clientId})`);
+
+    // Invoiced lines for THIS replacement, grouped by the finalization that froze them.
+    const frozenRows = resultRows<{ finalizationId: string; frozenTotal: string }>(
+      await tx.execute(sql`
+        select ${billingLineItems.sourceFinalizationId} as "finalizationId",
+               coalesce(sum(${billingLineItems.totalCost}), 0)::text as "frozenTotal"
+        from ${billingLineItems}
+        where ${billingLineItems.replacementId} = ${input.replacementId}
+          and ${billingLineItems.invoiced} = true
+          and ${billingLineItems.sourceFinalizationId} is not null
+        group by ${billingLineItems.sourceFinalizationId}
+      `),
+    );
+    if (frozenRows.length === 0) {
+      return { finalizationCount: 0, adjustedCount: 0, creditedAmount: '0.00' };
+    }
+
+    let adjustedCount = 0;
+    let creditedCents = 0n;
+
+    for (const frozen of frozenRows) {
+      // What replacement-specific adjustments have ALREADY corrected, relationally.
+      const prior = resultRows<{ signedTotal: string }>(
+        await tx.execute(sql`
+          select coalesce(sum(case
+            when ${billingCreditNotes.adjustmentKind} = 'credit' then -${billingCreditNotes.amount}
+            else ${billingCreditNotes.amount}
+          end), 0)::text as "signedTotal"
+          from ${billingCreditNotes}
+          where ${billingCreditNotes.replacementId} = ${input.replacementId}
+            and ${billingCreditNotes.finalizationId} = ${frozen.finalizationId}
+        `),
+      );
+
+      const frozenCents = moneyCents(frozen.frozenTotal);
+      const priorCents = moneyCents(prior[0]?.signedTotal ?? '0');
+      // Cancelled: the canonical total for this replacement is now zero, so what remains owed
+      // is the frozen total less whatever prior adjustments already removed.
+      const outstandingCents = frozenCents + priorCents;
+      if (outstandingCents <= 0n) continue;
+
+      await createBillingCreditNote({
+        clientId: input.clientId,
+        finalizationId: frozen.finalizationId,
+        adjustmentKind: 'credit',
+        replacementId: input.replacementId,
+        amount: centsMoney(outstandingCents),
+        reason: input.reason,
+        idempotencyKey: `${input.idempotencyKey}:finalization:${frozen.finalizationId}`,
+        actorId: input.actorId,
+        actorEmail: input.actorEmail ?? null,
+        now: input.now,
+      }, conn);
+
+      adjustedCount += 1;
+      creditedCents += outstandingCents;
+    }
+
+    return {
+      finalizationCount: frozenRows.length,
+      adjustedCount,
+      creditedAmount: centsMoney(creditedCents),
+    };
+  });
+}
+
 export async function reconcileFinalizedBillingOrderAdjustments(input: {
   clientId: number;
   dateFrom: string;
@@ -1005,6 +1125,9 @@ export async function reconcileFinalizedBillingOrderAdjustments(input: {
           adjustmentKind: decision.adjustmentKind,
           adjustmentSource: 'regeneration',
           sourceOrderId: Number(frozen.orderId),
+          // The ORDER reconciler is order-grained by design; a replacement-attributed
+          // adjustment comes from its sibling below, never from here.
+          replacementId: null,
           amount: decision.amount,
           reason: `Regeneration correction for order ${frozen.orderId}: canonical ${Number(currentTotal).toFixed(2)}, frozen ${Number(frozen.frozenTotal).toFixed(2)}`,
           idempotencyKey: `billing-regen:${adjustmentId}`,

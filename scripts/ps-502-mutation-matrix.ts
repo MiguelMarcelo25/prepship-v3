@@ -32,6 +32,7 @@ const SHIPPED = 'src/services/replacement-shipped-command.ts';
 const BILL_PLAN = 'src/services/replacement-billing-planner.ts';
 const BILL_WRITE = 'src/services/replacement-billing-writer.ts';
 const SWEEP = 'src/services/billing-outbound-sweep.ts';
+const POLICY = 'src/services/billing-finalization-policy.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -614,6 +615,29 @@ const MUTATIONS: Mutation[] = [
     find: '      eq(billingLineItems.invoiced, false),',
     replace: '',
     expect: 'the regeneration delete carries ALL FOUR scoping terms',
+  },  {
+    id: 'M74',
+    defect: 'the credit stops carrying replacement_id, so one of two cannot be attributed',
+    file: POLICY,
+    find: '        replacementId: input.replacementId,',
+    replace: '        replacementId: null,',
+    expect: 'the credit CARRIES replacement_id through the projection',
+  },
+  {
+    id: 'M75',
+    defect: 'the reconciler credits the whole frozen total, refunding twice on a retry',
+    file: POLICY,
+    find: 'const outstandingCents = frozenCents + priorCents;',
+    replace: 'const outstandingCents = frozenCents;',
+    expect: 'it credits the DELTA, not the frozen total',
+  },
+  {
+    id: 'M76',
+    defect: 'cancellation stops excluding invoiced lines and deletes finalized money',
+    file: BILL_WRITE,
+    find: /(cancelReplacementBillingInTransaction[\s\S]*?)      eq\(billingLineItems\.invoiced, false\),\r?\n/,
+    replace: '$1',
+    expect: 'cancellation removes ONLY editable replacement-scoped lines',
   },
 ];
 

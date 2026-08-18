@@ -67,6 +67,26 @@ function check(name: string, condition: boolean, detail?: string): void {
  * check exists to catch. This has slipped through three times in this guard; ordering
  * assertions go through here now.
  */
+/**
+ * The text of ONE function, declaration to the next top-level export.
+ *
+ * A presence check reads the whole file, so the moment a SECOND function contains the same
+ * line, deleting the first one's copy stops making the check red — the neighbour answers
+ * for it. M73 had defended regeneration's `invoiced = false` term for nine commits and
+ * silently stopped the day cancellation was added with a line of identical text. Nothing in
+ * a green run showed it; only the matrix did.
+ *
+ * So a check that owns a predicate inside a specific function must read that function.
+ */
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`export async function ${name}(`);
+  if (start === -1) {
+    throw new Error(`functionBody: ${name} not found — the check would silently pass on empty text`);
+  }
+  const next = source.indexOf('\nexport ', start + 1);
+  return next === -1 ? source.slice(start) : source.slice(start, next);
+}
+
 function occursBefore(haystack: string, a: string, b: string): boolean {
   const ia = haystack.indexOf(a);
   const ib = haystack.indexOf(b);
@@ -649,7 +669,63 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── AC-13: cancelling ONE replacement, credited relationally ─────────────────
+console.log('\ncancellation and finalized credits (AC-13)');
+
+{
+  const policy = read('src/services/billing-finalization-policy.ts');
+  const writer = read('src/services/replacement-billing-writer.ts');
+  const writeCode = writer.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  check('the reconciler is a SIBLING, not a parameter on the order reconciler',
+    /export async function reconcileFinalizedBillingReplacementAdjustment/.test(policy)
+    && /export async function reconcileFinalizedBillingOrderAdjustments/.test(policy),
+    'the two answer different questions; one function with two grains has two meanings');
+
+  check('the ORDER reconciler stays order-grained',
+    /adjustmentSource: 'regeneration',[\s\S]{0,400}replacementId: null,/.test(policy),
+    'a replacement-attributed adjustment comes from the sibling, never from there');
+
+  check('invoiced lines are found RELATIONALLY by replacement_id',
+    /billingLineItems\.replacementId\} = \$\{input\.replacementId\}/.test(policy),
+    'parsing identity out of a reason string is the mistake PS-488 rejected');
+
+  check('prior adjustments are matched by replacement_id too',
+    /billingCreditNotes\.replacementId\} = \$\{input\.replacementId\}/.test(policy));
+
+  check('the credit CARRIES replacement_id through the projection',
+    /^ {6}replacement_id,$/m.test(policy)
+    && /^ {6}\$\{input\.replacementId\},$/m.test(policy)
+    && /replacementId: input\.replacementId,/.test(policy),
+    'a deterministic key is not a substitute for a queryable column');
+
+  check('it credits the DELTA, not the frozen total',
+    /const outstandingCents = frozenCents \+ priorCents;/.test(policy)
+    && /if \(outstandingCents <= 0n\) continue;/.test(policy),
+    're-crediting the whole total on a retry is how a cancellation refunds twice');
+
+  check('the idempotency key includes the finalization',
+    /idempotencyKey: `\$\{input\.idempotencyKey\}:finalization:\$\{frozen\.finalizationId\}`/.test(policy),
+    'one cancellation spanning two finalizations is two adjustments, not one');
+
+  const cancelBody = functionBody(writeCode, 'cancelReplacementBillingInTransaction');
+
+  check('cancellation removes ONLY editable replacement-scoped lines',
+    /eq\(billingLineItems\.replacementId, input\.replacementId\)/.test(cancelBody)
+    && /eq\(billingLineItems\.invoiced, false\)/.test(cancelBody)
+    && /sourceFinalizationId\} is null/.test(cancelBody),
+    'cancelling A must leave B exactly as it was');
+
+  check('cancellation never deletes an invoiced line',
+    !/\.delete\(billingLineItems\)[\s\S]{0,400}invoiced, true/.test(cancelBody),
+    'a finalized charge is history; the difference becomes an append-only credit');
+}
+
 // ── AC-6: one regeneration owner, and the sweep cannot erase replacement money ─
+const regenBody = functionBody(
+  read('src/services/replacement-billing-writer.ts').replace(/\/\*[\s\S]*?\*\//g, ''),
+  'regenerateReplacementBillingInTransaction',
+);
 console.log('\nregeneration ownership (AC-6)');
 
 {
@@ -685,7 +761,7 @@ console.log('\nregeneration ownership (AC-6)');
   check('the regeneration delete carries ALL FOUR scoping terms',
     /eq\(billingLineItems\.replacementId, facts\.replacementId\)/.test(writeCode)
     && /inArray\(billingLineItems\.lineType/.test(writeCode)
-    && /eq\(billingLineItems\.invoiced, false\)/.test(writeCode)
+    && /eq\(billingLineItems\.invoiced, false\)/.test(regenBody)
     && /sourceFinalizationId\} is null/.test(writeCode)
     && /billingAdjustmentId\} is null/.test(writeCode),
     'dropping any one term turns a regeneration into a deletion of something it does not own');
@@ -696,7 +772,7 @@ console.log('\nregeneration ownership (AC-6)');
     'a failed insert must roll the delete back, never leave charges removed with nothing back');
 
   check('finalized rows are never deleted',
-    /eq\(billingLineItems\.invoiced, false\)/.test(writeCode),
+    /eq\(billingLineItems\.invoiced, false\)/.test(regenBody),
     'an invoiced line is history; a difference becomes an append-only adjustment');
 }
 
