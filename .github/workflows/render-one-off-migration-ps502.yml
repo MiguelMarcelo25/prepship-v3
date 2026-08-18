@@ -1,4 +1,4 @@
-# PS-502 — migrations 0096 + 0097, the replacement schema, as a Render one-off job.
+# PS-502 — migrations 0096-0099, the replacement schema, as a Render one-off job.
 #
 # WHY THIS LANE
 #
@@ -32,7 +32,7 @@
 #
 # FILES ARE SHIPPED IN, not assumed present: the deployed service runs whatever commit is
 # live. The runner refuses to start unless both SQL files match their pinned digests.
-name: Render One-Off Migration (PS-502 / 0096 + 0097)
+name: Render One-Off Migration (PS-502 / 0096-0099)
 
 on:
   workflow_dispatch:
@@ -116,6 +116,10 @@ jobs:
              'bee592ffbb801f37858ec3459fdf00889e2fb5391ce820798e4485c026f6d63a'],
             ['drizzle/0097_ps502_replacement_billing.sql',
              'cfa70218831b0ec1377238610e4df2679da7bba4000af5bb57b4fcdfc97fbd91'],
+            ['drizzle/0098_ps502_replacement_financial_restrict.sql',
+             '56ea07a48cb95127a335cbf9dd748c1507eba3077a550e0decff17021b9a2d37'],
+            ['drizzle/0099_ps502_replacement_request_signature.sql',
+             '7a44f912b90c12e94bac255e331af0bd60e2f337ca842255b411949ca37dbdfe'],
           ];
           let failed = false;
           for (const [file, expected] of checks) {

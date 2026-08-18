@@ -1,5 +1,5 @@
 /**
- * PS-502 — migrations 0096 + 0097 runner: the replacement schema.
+ * PS-502 — migrations 0096-0099 runner: the replacement schema.
  *
  * WHY A RUNNER AND NOT `npm run migrate`
  *
@@ -41,9 +41,17 @@ import postgres from 'postgres';
 
 const SQL_0096 = 'drizzle/0096_ps502_replacements.sql';
 const SQL_0097 = 'drizzle/0097_ps502_replacement_billing.sql';
+// Added after Hermes found this lane stale at 8d0dcc5c: the create command already
+// depended on request_signature (0099) and the RESTRICT contract (0098), neither of which
+// this — the OFFICIAL deploy path — applied. A deploy would have produced a schema the
+// shipped code cannot run against.
+const SQL_0098 = 'drizzle/0098_ps502_replacement_financial_restrict.sql';
+const SQL_0099 = 'drizzle/0099_ps502_replacement_request_signature.sql';
 const CONFIRM_TOKEN = 'APPLY-PS-502-REPLACEMENT-SCHEMA';
 const EXPECTED_0096 = 'bee592ffbb801f37858ec3459fdf00889e2fb5391ce820798e4485c026f6d63a';
 const EXPECTED_0097 = 'cfa70218831b0ec1377238610e4df2679da7bba4000af5bb57b4fcdfc97fbd91';
+const EXPECTED_0098 = '56ea07a48cb95127a335cbf9dd748c1507eba3077a550e0decff17021b9a2d37';
+const EXPECTED_0099 = '7a44f912b90c12e94bac255e331af0bd60e2f337ca842255b411949ca37dbdfe';
 
 const ARGS = process.argv.slice(2);
 const APPLY = ARGS.includes('--apply');
@@ -69,6 +77,8 @@ async function main(): Promise<void> {
   for (const [file, expected, argName] of [
     [SQL_0096, EXPECTED_0096, 'digest96'],
     [SQL_0097, EXPECTED_0097, 'digest97'],
+    [SQL_0098, EXPECTED_0098, 'digest98'],
+    [SQL_0099, EXPECTED_0099, 'digest99'],
   ] as const) {
     const actual = normalisedDigest(file);
     if (actual !== expected) {
@@ -140,10 +150,15 @@ async function main(): Promise<void> {
 
     // ONE transaction, in order: 0097 references replacements(id), so a failure there must
     // roll 0096 back rather than leave half a schema behind.
-    console.log('\napplying 0096 then 0097 in one transaction...');
+    console.log('\napplying 0096 -> 0099 in one transaction...');
     await sql.begin(async (tx) => {
       await tx.unsafe(readFileSync(SQL_0096, 'utf8'));
       await tx.unsafe(readFileSync(SQL_0097, 'utf8'));
+      // 0098 alters the FKs 0097 created; 0099 is additive. Same transaction, so a
+      // failure in either rolls the whole replacement schema back rather than leaving a
+      // half-deployed contract the code cannot run against.
+      await tx.unsafe(readFileSync(SQL_0098, 'utf8'));
+      await tx.unsafe(readFileSync(SQL_0099, 'utf8'));
     });
 
     const after = await state();
@@ -167,7 +182,7 @@ async function main(): Promise<void> {
 
     console.log('ok   three tables, two nullable replacement_id columns, the partial unique index,');
     console.log('ok   and a VALIDATED identity CHECK are all present.');
-    console.log('\nPS-502 0096 + 0097 applied and verified.');
+    console.log('\nPS-502 0096-0099 applied and verified.');
   } finally {
     await sql.end({ timeout: 5 });
   }

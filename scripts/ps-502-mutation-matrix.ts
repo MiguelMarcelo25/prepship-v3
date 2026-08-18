@@ -23,6 +23,7 @@ const CREATE = 'src/services/replacement-create-command.ts';
 const SHIPMENT = 'src/services/replacement-shipment-command.ts';
 const SCHEMA = 'src/db/schema/replacements.ts';
 const BILLING_SCHEMA = 'src/db/schema/billing.ts';
+const APPLIER = 'scripts/apply-ps-502-replacement-schema.ts';
 
 const MUTATIONS: Mutation[] = [
   {
@@ -371,6 +372,14 @@ const MUTATIONS: Mutation[] = [
     find: '    billabilityReason: normalizeReason(input.billabilityReason),',
     replace: '',
     expect: 'the signature covers every behaviourally significant field',
+  },
+  {
+    id: 'M44',
+    defect: 'the production migration lane goes stale again — a migration the code needs is not deployed',
+    file: APPLIER,
+    find: "const SQL_0099 = 'drizzle/0099_ps502_replacement_request_signature.sql';",
+    replace: '',
+    expect: 'the runner applies 0099_ps502_replacement_request_signature.sql',
   },
 ];
 

@@ -12,7 +12,7 @@
  *
  * Offline and pure — no database, no network, no mutation.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import {
   assertReplacementTransition,
   canTransitionReplacement,
@@ -627,6 +627,44 @@ console.log('\ndrizzle schema mirrors the migration');
   check('0098 gives activity events somewhere to keep a written reason',
     /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
+}
+
+// ── The production migration lane must deploy every PS-502 migration ─────────
+//
+// Hermes found this lane stale at 8d0dcc5c: it applied only 0096/0097 while the create
+// command already depended on 0099 (request_signature) and the RESTRICT contract in 0098.
+// A deploy would have produced a schema the shipped code cannot run against — and nothing
+// would have said so until a route 500ed in production.
+//
+// Discovered from the directory rather than from a list, so the NEXT PS-502 migration
+// fails this check on the day it is added instead of the day it is deployed.
+console.log('\nproduction migration lane');
+
+{
+  const applier = read('scripts/apply-ps-502-replacement-schema.ts');
+  const workflow = read('.github/workflows/render-one-off-migration-ps502.yml');
+  const ps502Migrations = readdirSync('drizzle')
+    .filter((name) => /ps502.*\.sql$/.test(name))
+    .sort();
+
+  check('there are PS-502 migrations to deploy', ps502Migrations.length >= 4,
+    `found: ${ps502Migrations.join(", ")}`);
+
+  for (const migration of ps502Migrations) {
+    check(`the runner applies ${migration}`, applier.includes(migration),
+      'the official deploy path must apply every migration the code depends on');
+    check(`the workflow pins a digest for ${migration}`, workflow.includes(migration),
+      'an unpinned migration can be swapped between review and deploy');
+  }
+
+  check('every pinned digest is LF-normalised',
+    /replace\(\/\\r\\n\/g, '\\n'\)/.test(applier),
+    'core.autocrlf=true, so raw bytes vary by checkout and a digest over them is not reproducible');
+
+  check('the migrations apply in ONE transaction',
+    /await conn\.begin|sql\.begin|tx\.unsafe/.test(applier)
+    && (applier.match(/tx\.unsafe\(readFileSync\(SQL_/g) || []).length === ps502Migrations.length,
+    'a partial apply leaves a schema the code cannot run against');
 }
 
 // ── The create command — the ORDER of its steps is the contract ──────────────
