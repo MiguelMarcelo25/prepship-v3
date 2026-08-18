@@ -1036,10 +1036,25 @@ console.log('\nmoney that silently disappears');
     /const frozenRows = await findFrozenReplacementLineTotals\(tx, \{/.test(policy),
     'a second copy of the predicate is a second chance to get it wrong');
 
-  check('the finalized fold counts ONLY frozen replacement money',
-    /isNotNull\(billingLineItems\.replacementId\)/.test(fold)
-    && /eq\(billingLineItems\.invoiced, true\)/.test(fold),
+  // Re-anchored when the fold moved to raw SQL and gained a period. "Invoiced" alone was
+  // never the rule: the frozen side counts a line only when its effective date falls inside
+  // a CLOSED period overlapping the window, and a fold that ignored that added money frozen
+  // on a different invoice — a debit charging the client twice.
+  check('the finalized fold counts ONLY money frozen in THIS window',
+    /line\.replacement_id is not null/.test(fold)
+    && /line\.invoiced = true/.test(fold)
+    && /join billing_finalizations closed/.test(fold)
+    && /closed\.period_start < \$\{period\.dateTo\}/.test(fold)
+    && /closed\.period_end > \$\{period\.dateFrom\}/.test(fold),
     'it must add back exactly what the frozen total counted, so the delta is zero');
+
+  check('one line is counted once even if two closed periods overlap',
+    /select distinct/.test(fold),
+    'migration 0065 discourages overlapping finalizations; a fold that doubles a charge when they exist anyway is not worth defending');
+
+  check('the generator hands the fold the RECONCILER\'s window',
+    /\{ dateFrom: fromIso, dateTo: toIso \},/.test(generator),
+    'two different windows would be two different opinions about what is frozen');
 
   check('the generator folds replacement money BEFORE reconciling',
     occursBefore(generator, 'foldFinalizedReplacementTotalsIntoCandidates(',

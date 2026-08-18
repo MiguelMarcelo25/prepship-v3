@@ -1556,10 +1556,34 @@ async function main(): Promise<void> {
   });
 
   /** Independent of the fold's own query, so the proof is not the code restating itself. */
+  // The regeneration window used by the fold proofs. The harness closes its periods at
+  // now()±30d, so this contains them; the cross-period case below deliberately does not.
+  const WINDOW_FROM = new Date(Date.parse('2020-01-01T00:00:00Z')).toISOString();
+  const WINDOW_TO = new Date(Date.parse('2999-01-01T00:00:00Z')).toISOString();
+
+  /**
+   * Independent of the fold's own query, so the proof is not the code restating itself.
+   *
+   * Written with EXISTS rather than the JOIN the fold uses, deliberately: it must express the
+   * SAME rule — invoiced, and effective inside a closed period overlapping the window — while
+   * being a different statement of it. The first version omitted the period entirely, which
+   * made it agree with the fold only while the fold was wrong.
+   */
   const invoicedReplacementMoneyOnOrder = async (orderId: number) => {
     const rows = await db.execute(sql`
-      select coalesce(sum(total_cost), 0)::text as total from billing_line_items
-      where order_id = ${orderId} and replacement_id is not null and invoiced = true
+      select coalesce(sum(b.total_cost), 0)::text as total
+      from billing_line_items b
+      where b.order_id = ${orderId}
+        and b.replacement_id is not null
+        and b.invoiced = true
+        and exists (
+          select 1 from billing_finalizations f
+           where f.client_id = b.client_id
+             and coalesce(b.billing_effective_date, b.ship_date) >= f.period_start
+             and coalesce(b.billing_effective_date, b.ship_date) < f.period_end
+             and f.period_start < ${WINDOW_TO}::timestamptz
+             and f.period_end > ${WINDOW_FROM}::timestamptz
+        )
     `);
     return Number((rows as unknown as { rows: { total: string }[] }).rows[0]!.total);
   };
@@ -1574,7 +1598,7 @@ async function main(): Promise<void> {
     // negative delta, and a credit that erases a real charge.
     const candidates = new Map<number, Map<number, number>>([[1, new Map([[1321, 20]])]]);
     const folded = await foldFinalizedReplacementTotalsIntoCandidates(
-      [1321], candidates, db as never,
+      [1321], candidates, { dateFrom: WINDOW_FROM, dateTo: WINDOW_TO }, db as never,
     );
 
     assert.equal(folded.ordersFolded, 1);
@@ -1585,7 +1609,7 @@ async function main(): Promise<void> {
 
   await check('an UNINVOICED replacement line is not folded', async () => {
     const before = await foldFinalizedReplacementTotalsIntoCandidates(
-      [1321], new Map(), db as never,
+      [1321], new Map(), { dateFrom: WINDOW_FROM, dateTo: WINDOW_TO }, db as never,
     );
 
     const open = await readyToShip('fold-open');
@@ -1596,7 +1620,7 @@ async function main(): Promise<void> {
     }, conn);
 
     const after = await foldFinalizedReplacementTotalsIntoCandidates(
-      [1321], new Map(), db as never,
+      [1321], new Map(), { dateFrom: WINDOW_FROM, dateTo: WINDOW_TO }, db as never,
     );
     assert.equal(after.amountFolded.toFixed(2), before.amountFolded.toFixed(2),
       'open-period money is not frozen money — it belongs to the period ordinary billing owns');
@@ -1989,6 +2013,56 @@ async function main(): Promise<void> {
       }, conn),
       (e: unknown) => (e as { code?: string }).code === 'REPLACEMENT_INVENTORY_UNKNOWN_ITEM',
       'an item belonging to a different replacement is not this one\'s to move');
+  });
+
+  console.log('\nblocker 5 — the fold counts only THIS period');
+
+  await check('a replacement frozen in ANOTHER period is not folded into this one', async () => {
+    // Period A: long closed, and the replacement money was invoiced inside it.
+    const target = await readyToShip('period-a');
+    await shipReplacement({
+      replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+
+    await db.execute(sql`
+      update billing_line_items
+         set billing_effective_date = now() - interval '400 days', invoiced = true
+       where replacement_id = ${target.replacementId}
+    `);
+    await db.execute(sql`
+      insert into billing_finalizations (id, client_id, period_start, period_end)
+      values ('fin-period-a', 1, now() - interval '430 days', now() - interval '370 days')
+    `);
+
+    // Regenerating a window that does NOT overlap period A must not see that money. Before
+    // the period predicate existed, the fold added it to this window's candidate and the
+    // reconciler emitted a debit for the difference — charging the client twice.
+    const candidates = new Map<number, Map<number, number>>([[1, new Map([[1321, 20]])]]);
+    const folded = await foldFinalizedReplacementTotalsIntoCandidates(
+      [1321], candidates,
+      { dateFrom: new Date(Date.parse('2000-01-01T00:00:00Z')).toISOString(),
+        dateTo: new Date(Date.parse('2000-02-01T00:00:00Z')).toISOString() },
+      db as never,
+    );
+
+    assert.equal(folded.amountFolded, 0,
+      'money frozen in a period this run is not reconciling belongs to that invoice');
+    assert.equal(candidates.get(1)!.get(1321), 20,
+      'the candidate is untouched, so the delta stays zero and no debit is raised');
+  });
+
+  await check('the SAME replacement IS folded when its period is in the window', async () => {
+    const candidates = new Map<number, Map<number, number>>([[1, new Map([[1321, 20]])]]);
+    const folded = await foldFinalizedReplacementTotalsIntoCandidates(
+      [1321], candidates,
+      { dateFrom: new Date(Date.parse('2020-01-01T00:00:00Z')).toISOString(),
+        dateTo: new Date(Date.parse('2999-01-01T00:00:00Z')).toISOString() },
+      db as never,
+    );
+    assert.ok(folded.amountFolded > 0,
+      'a window that DOES overlap the closed period still counts it — the fix must not be a blanket exclusion');
   });
 
   await client.close();

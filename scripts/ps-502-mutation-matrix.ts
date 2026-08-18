@@ -676,9 +676,9 @@ const MUTATIONS: Mutation[] = [
     id: 'M78',
     defect: 'the fold stops scoping to frozen money and folds open-period charges too',
     file: FOLD,
-    find: '      eq(billingLineItems.invoiced, true),',
+    find: '        and line.invoiced = true',
     replace: '',
-    expect: 'the finalized fold counts ONLY frozen replacement money',
+    expect: 'the finalized fold counts ONLY money frozen in THIS window',
   },
   {
     id: 'M79',
@@ -897,6 +897,21 @@ const MUTATIONS: Mutation[] = [
     find: '        qty: -item.quantity,',
     replace: '        qty: -Math.abs(Math.trunc((line as { qty?: number }).qty ?? 1)),',
     expect: 'the quantity comes from the frozen row',
+  },  {
+    id: 'M106',
+    defect: 'the fold drops its period bound and folds money frozen on a different invoice',
+    file: FOLD,
+    find: /\n        and closed\.period_start < \$\{period\.dateTo\}::timestamptz\n        and closed\.period_end > \$\{period\.dateFrom\}::timestamptz/,
+    replace: '',
+    expect: 'the finalized fold counts ONLY money frozen in THIS window',
+  },
+  {
+    id: 'M107',
+    defect: 'a line joining two overlapping closed periods is counted twice',
+    file: FOLD,
+    find: '      select distinct',
+    replace: '      select',
+    expect: 'one line is counted once even if two closed periods overlap',
   },
 ];
 

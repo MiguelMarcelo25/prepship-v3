@@ -1985,6 +1985,9 @@ export async function generateLineItems(input: GenerateInput) {
   await foldFinalizedReplacementTotalsIntoCandidates(
     finalizedOrderIds,
     finalizedCandidateTotalsByClient,
+    // The SAME window the reconciler is given below. Without it the fold added replacement
+    // money frozen in a DIFFERENT period, and the delta became a debit.
+    { dateFrom: fromIso, dateTo: toIso },
   );
   let finalizedAdjustmentCount = 0;
   let finalizedAdjustmentCreditCount = 0;
