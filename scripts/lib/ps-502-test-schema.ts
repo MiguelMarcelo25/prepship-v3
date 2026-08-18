@@ -100,6 +100,7 @@ export const PS_502_MIGRATIONS = [
   'drizzle/0097_ps502_replacement_billing.sql',
   'drizzle/0098_ps502_replacement_financial_restrict.sql',
   'drizzle/0099_ps502_replacement_request_signature.sql',
+  'drizzle/0100_ps502_replacement_operational_state.sql',
 ] as const;
 
 /** A shipped original: 3 x SKU-A at line 0, 2 x SKU-B at line 1. */

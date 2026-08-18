@@ -71,10 +71,18 @@ async function main(): Promise<void> {
   console.log('\nmigrations');
   await applyMigrations(client);
   await check('0096/0097/0098 apply against a real PostgreSQL engine', async () => {
-    const rows = await client.query<{ c: number }>(
-      "select count(*)::int as c from information_schema.tables where table_name like 'replacement%'",
-    );
-    assert.equal(rows.rows[0]!.c, 3, 'three replacement tables should exist');
+    // Named explicitly rather than counted by prefix: a prefix count silently changes
+    // meaning every time a replacement_* table is added, which is exactly what happened
+    // when 0100 landed.
+    for (const table of [
+      'replacements', 'replacement_items', 'replacement_activity_events',
+      'replacement_label_purchase_intents', 'replacement_item_remaps',
+    ]) {
+      const rows = await client.query<{ c: number }>(
+        `select count(*)::int as c from information_schema.tables where table_name = '${table}'`,
+      );
+      assert.equal(rows.rows[0]!.c, 1, `${table} should exist`);
+    }
   });
   await check('the migrations are re-runnable (applied twice, no error)', async () => {
     await applyMigrations(client);

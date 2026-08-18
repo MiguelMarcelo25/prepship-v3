@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgTable,
   serial,
   text,
@@ -184,3 +185,93 @@ export const replacementActivityEvents = pgTable(
 export type ReplacementRow = typeof replacements.$inferSelect;
 export type ReplacementItemRow = typeof replacementItems.$inferSelect;
 export type ReplacementActivityEventRow = typeof replacementActivityEvents.$inferSelect;
+
+// PS-502 (migration 0100) — replacement-scoped label purchase intents.
+//
+// Deliberately NOT `label_purchase_intents`. That table's unresolved authority is keyed on
+// `order_id`, and `assertNoUnresolvedLabelPurchaseIntent(orderId)` fails closed on it after
+// promoting every pending row for the order. A replacement intent carries the ORIGINAL
+// order's id, so sharing the table would let a stuck replacement block the original order's
+// label flow — and let a check on the original mutate replacement state.
+export const replacementLabelPurchaseIntents = pgTable(
+  'replacement_label_purchase_intents',
+  {
+    id: serial().primaryKey(),
+    replacementId: integer('replacement_id')
+      .notNull()
+      .references(() => replacements.id, { onDelete: 'restrict' }),
+    replacementShipmentId: integer('replacement_shipment_id').references(() => shipments.id, {
+      onDelete: 'set null',
+    }),
+    provider: text().notNull(),
+    /** Deterministic and replacement-scoped. Never the original order's purchase key. */
+    providerIdempotencyKey: text('provider_idempotency_key').notNull(),
+    /** Fingerprint of the FROZEN resolved request; a retry must reuse it verbatim. */
+    requestFingerprint: text('request_fingerprint').notNull(),
+    purchaseAttempt: integer('purchase_attempt').notNull().default(1),
+    state: text().notNull().default('provider_pending'),
+    /** Stable provider identity. A tracking number is not a purchase identity. */
+    providerTransactionId: text('provider_transaction_id'),
+    providerLabelId: text('provider_label_id'),
+    providerShipmentId: text('provider_shipment_id'),
+    resolvedRequest: jsonb('resolved_request'),
+    lastError: text('last_error'),
+    lastErrorClass: text('last_error_class'),
+    reconciliationState: text('reconciliation_state'),
+    reconciledAt: timestamp('reconciled_at', { withTimezone: true }),
+    voidState: text('void_state'),
+    providerVoidId: text('provider_void_id'),
+    voidedAt: timestamp('voided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('replacement_label_purchase_intents_key_unq').on(t.providerIdempotencyKey),
+    // At most one UNRESOLVED intent per replacement — the replacement-scoped analogue of
+    // label_purchase_intents_unresolved_idx, and deliberately not keyed on order_id.
+    uniqueIndex('replacement_label_purchase_intents_active_unq')
+      .on(t.replacementId)
+      .where(sql`${t.state} in ('provider_pending', 'reconcile_required')`),
+    index('replacement_label_purchase_intents_replacement_idx').on(t.replacementId, t.createdAt),
+  ],
+);
+
+// PS-502 (migration 0100) — append-only remap resolutions.
+//
+// `replacement_items` keeps the originally REQUESTED snapshot and is never rewritten; the
+// effective target is the latest remap for an item. An approved remap that overwrote the
+// frozen coordinate would destroy the evidence of what was actually asked for.
+export const replacementItemRemaps = pgTable(
+  'replacement_item_remaps',
+  {
+    id: serial().primaryKey(),
+    replacementId: integer('replacement_id')
+      .notNull()
+      .references(() => replacements.id, { onDelete: 'restrict' }),
+    replacementItemId: integer('replacement_item_id')
+      .notNull()
+      .references(() => replacementItems.id, { onDelete: 'restrict' }),
+    previousOrderLineIndex: integer('previous_order_line_index').notNull(),
+    previousSourceLineFingerprint: text('previous_source_line_fingerprint').notNull(),
+    resolvedOrderLineIndex: integer('resolved_order_line_index').notNull(),
+    resolvedSourceLineFingerprint: text('resolved_source_line_fingerprint').notNull(),
+    /** remapped | retained | rejected */
+    resolution: text().notNull(),
+    remapVersion: integer('remap_version').notNull().default(1),
+    actorType: text('actor_type').notNull(),
+    actorEmail: text('actor_email'),
+    /** Required. A remap without a written reason is an unattributable retarget. */
+    reason: text().notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('replacement_item_remaps_idempotency_unq').on(t.idempotencyKey),
+    uniqueIndex('replacement_item_remaps_item_version_unq').on(t.replacementItemId, t.remapVersion),
+    index('replacement_item_remaps_replacement_idx').on(t.replacementId, t.createdAt),
+  ],
+);
+
+export type ReplacementLabelPurchaseIntentRow = typeof replacementLabelPurchaseIntents.$inferSelect;
+export type ReplacementItemRemapRow = typeof replacementItemRemaps.$inferSelect;
