@@ -874,6 +874,29 @@ const MUTATIONS: Mutation[] = [
     find: '  if (conn) return probe(conn);',
     replace: '',
     expect: 'an explicit connection is never served from the memo',
+  },  {
+    id: 'M103',
+    defect: 'the deduction goes back to the caller\'s array, so an extra line moves unfrozen stock',
+    file: SHIPPED,
+    find: '    for (const item of items) {',
+    replace: '    for (const line2 of input.inventoryLines) { const item = items[0]!;',
+    expect: 'the deduction iterates the FROZEN items, not the caller\'s lines',
+  },
+  {
+    id: 'M104',
+    defect: 'the duplicate-mapping check goes, so one item can be deducted twice',
+    file: SHIPPED,
+    find: '      if (mappingByItem.has(line.replacementItemId)) {',
+    replace: '      if (false) {',
+    expect: 'one mapping per frozen item, and only this replacement\'s items',
+  },
+  {
+    id: 'M105',
+    defect: 'the quantity is taken from the caller again',
+    file: SHIPPED,
+    find: '        qty: -item.quantity,',
+    replace: '        qty: -Math.abs(Math.trunc((line as { qty?: number }).qty ?? 1)),',
+    expect: 'the quantity comes from the frozen row',
   },
 ];
 

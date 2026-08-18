@@ -686,6 +686,39 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── who decides how much stock moves ─────────────────────────────────────────
+console.log('\ninventory quantity authority');
+
+{
+  const shipped = read('src/services/replacement-shipped-command.ts');
+  const shippedCode = shipped.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const lineType = shippedCode.slice(
+    shippedCode.indexOf('export type ReplacementInventoryLine'),
+    shippedCode.indexOf('};', shippedCode.indexOf('export type ReplacementInventoryLine')),
+  );
+
+  check('the caller has NOWHERE to put a quantity',
+    !/\bqty\b/.test(lineType),
+    'a validated number is still the caller\'s number; the next caller would have to be trusted again');
+
+  check('the deduction iterates the FROZEN items, not the caller\'s lines',
+    /for \(const item of items\) \{/.test(shippedCode)
+    && !/for \(const line of input\.inventoryLines\) \{[\s\S]{0,400}applyInventoryMovementInTransaction/.test(shippedCode),
+    'iterating the caller\'s array is what let an extra line move stock nobody froze');
+
+  check('the quantity comes from the frozen row',
+    /qty: -item\.quantity,/.test(shippedCode)
+    && !/Math\.abs\(Math\.trunc\(line\.qty\)\)/.test(shippedCode),
+    'a replacement frozen at one unit deducted seven when the caller said seven');
+
+  check('one mapping per frozen item, and only this replacement\'s items',
+    /REPLACEMENT_INVENTORY_DUPLICATE_MAPPING/.test(shippedCode)
+    && /REPLACEMENT_INVENTORY_UNKNOWN_ITEM/.test(shippedCode)
+    && /mappingByItem\.has\(line\.replacementItemId\)/.test(shippedCode)
+    && /frozenIds\.has\(line\.replacementItemId\)/.test(shippedCode),
+    'the idempotency key includes the inventory id, so two mappings with different inventory records deduct twice and the ledger has no reason to refuse');
+}
+
 // ── code can reach production before its schema ──────────────────────────────
 console.log('\nschema-absent safety');
 

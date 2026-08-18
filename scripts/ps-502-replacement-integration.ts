@@ -1219,7 +1219,7 @@ async function main(): Promise<void> {
     for (const target of [a, b]) {
       const result = await shipReplacement({
         replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
         consumePackage: packageConsumer,
         writeBilling: billingWriter as never,
       }, conn);
@@ -1278,7 +1278,7 @@ async function main(): Promise<void> {
       .where(eq(schema.replacements.id, t.replacementId));
     const result = await shipReplacement({
       replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer,
       writeBilling: billingWriter as never,
     }, conn);
@@ -1295,7 +1295,7 @@ async function main(): Promise<void> {
       'select coalesce(sum(qty),0)::int as q from inventory_ledger where inventory_id = 900');
     const first = await shipReplacement({
       replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
     assert.equal(first.inventoryApplied, 1);
@@ -1305,7 +1305,7 @@ async function main(): Promise<void> {
 
     const again = await shipReplacement({
       replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
     assert.equal(again.shipped, false, 'a retry is a no-op');
@@ -1321,7 +1321,7 @@ async function main(): Promise<void> {
     await assert.rejects(
       () => shipReplacement({
         replacementId: t.replacementId, actor: { email: actor.email, type: 'operator' },
-        inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900, qty: 1 }],
+        inventoryLines: [{ replacementItemId: t.itemId, inventoryId: 900 }],
         consumePackage: packageConsumer, writeBilling: billingWriter as never,
       }, conn),
       (e: unknown) => e instanceof ReplacementShippedError
@@ -1414,7 +1414,7 @@ async function main(): Promise<void> {
     for (const target of [a, b]) {
       await shipReplacement({
         replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
         consumePackage: packageConsumer, writeBilling: billingWriter as never,
       }, conn);
     }
@@ -1444,7 +1444,7 @@ async function main(): Promise<void> {
     const a = await readyToShip('cancel-retry');
     await shipReplacement({
       replacementId: a.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: a.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: a.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
 
@@ -1462,7 +1462,7 @@ async function main(): Promise<void> {
     const a = await readyToShip('cancel-invoiced');
     await shipReplacement({
       replacementId: a.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: a.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: a.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
     const lines = await db.select().from(schema.billingLineItems)
@@ -1496,7 +1496,7 @@ async function main(): Promise<void> {
     const target = await readyToShip(slug);
     await shipReplacement({
       replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
 
@@ -1542,7 +1542,7 @@ async function main(): Promise<void> {
     const b = await readyToShip('frozen-scope-b');
     await shipReplacement({
       replacementId: b.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: b.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: b.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
     await db.update(schema.billingLineItems).set({ invoiced: true })
@@ -1591,7 +1591,7 @@ async function main(): Promise<void> {
     const open = await readyToShip('fold-open');
     await shipReplacement({
       replacementId: open.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: open.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: open.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
 
@@ -1708,7 +1708,7 @@ async function main(): Promise<void> {
     const target = await readyToShip('ac16-shipped');
     await shipReplacement({
       replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
     const before = await statusOf(target.replacementId);
@@ -1840,7 +1840,7 @@ async function main(): Promise<void> {
     await assert.rejects(
       () => shipReplacement({
         replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+        inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
         consumePackage: packageConsumer, writeBilling: unfencedWriter as never,
       }, conn),
       /REPLACEMENT_BILLING_MONEY_UNAVAILABLE|no frozen customer-money tuple/,
@@ -1866,7 +1866,7 @@ async function main(): Promise<void> {
     const target = await readyToShip('diag-unbilled');
     await shipReplacement({
       replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
     // The state the anomaly exists for: goods gone, money absent. Reached here by deleting
@@ -1889,7 +1889,7 @@ async function main(): Promise<void> {
     const target = await readyToShip('diag-billed');
     await shipReplacement({
       replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
-      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
       consumePackage: packageConsumer, writeBilling: billingWriter as never,
     }, conn);
 
@@ -1915,6 +1915,80 @@ async function main(): Promise<void> {
       'a list of zeroes is a list nobody finishes reading');
     assert.equal(report.healthy, report.anomalies.length === 0,
       'healthy states it explicitly, so an empty list cannot be mistaken for a failed run');
+  });
+
+  console.log('\nblocker 2 — the caller cannot choose how much stock moves');
+
+  const frozenQtyOf = async (replacementId: number) => {
+    const rows = await db.select().from(schema.replacementItems)
+      .where(eq(schema.replacementItems.replacementId, replacementId));
+    return rows;
+  };
+  const ledgerFor = async (replacementId: number, shipmentId: number, itemId: number) => {
+    const rows = await db.execute(sql`
+      select qty from inventory_ledger
+       where idempotency_key like ${`replacement:${replacementId}:shipment:${shipmentId}:item:${itemId}:%`}
+    `);
+    return (rows as unknown as { rows: { qty: number }[] }).rows;
+  };
+
+  await check('the deduction is the FROZEN quantity, which the caller never states', async () => {
+    const target = await readyToShip('qty-frozen');
+    const [item] = await frozenQtyOf(target.replacementId);
+    assert.ok(item, 'the replacement has a frozen item');
+
+    await shipReplacement({
+      replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+      // No quantity anywhere in this call. There is nowhere to put one.
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+
+    const [replacementRow] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, target.replacementId));
+    const moved = await ledgerFor(
+      target.replacementId, replacementRow!.replacementShipmentId!, target.itemId,
+    );
+    assert.equal(moved.length, 1, 'exactly one ledger row');
+    assert.equal(Number(moved[0]!.qty), -Number(item!.quantity),
+      'the ledger moved exactly what was frozen at creation');
+  });
+
+  await check('a SECOND mapping for the same item is refused, not deducted twice', async () => {
+    const target = await readyToShip('qty-duplicate');
+    await assert.rejects(
+      () => shipReplacement({
+        replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+        inventoryLines: [
+          { replacementItemId: target.itemId, inventoryId: 900 },
+          // A different inventory record, so the idempotency key differs and the ledger
+          // would have had no reason to refuse the second movement.
+          { replacementItemId: target.itemId, inventoryId: 901 },
+        ],
+        consumePackage: packageConsumer, writeBilling: billingWriter as never,
+      }, conn),
+      (e: unknown) => (e as { code?: string }).code === 'REPLACEMENT_INVENTORY_DUPLICATE_MAPPING',
+    );
+
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, target.replacementId));
+    assert.notEqual(after!.status, 'shipped', 'the refusal rolled everything back');
+  });
+
+  await check('a mapping for an item of ANOTHER replacement is refused', async () => {
+    const mine = await readyToShip('qty-scope-mine');
+    const theirs = await readyToShip('qty-scope-theirs');
+    await assert.rejects(
+      () => shipReplacement({
+        replacementId: mine.replacementId, actor: { email: actor.email, type: 'operator' },
+        inventoryLines: [
+          { replacementItemId: mine.itemId, inventoryId: 900 },
+          { replacementItemId: theirs.itemId, inventoryId: 900 },
+        ],
+        consumePackage: packageConsumer, writeBilling: billingWriter as never,
+      }, conn),
+      (e: unknown) => (e as { code?: string }).code === 'REPLACEMENT_INVENTORY_UNKNOWN_ITEM',
+      'an item belonging to a different replacement is not this one\'s to move');
   });
 
   await client.close();

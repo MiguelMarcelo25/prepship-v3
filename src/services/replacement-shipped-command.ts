@@ -50,7 +50,12 @@ export type ReplacementShippedErrorCode =
   | 'REPLACEMENT_LABEL_NOT_ACTIVE'
   | 'REPLACEMENT_PACKAGE_UNRESOLVED'
   | 'REPLACEMENT_BILLING_UNRESOLVED'
-  | 'REPLACEMENT_INVENTORY_UNRESOLVED';
+  | 'REPLACEMENT_INVENTORY_UNRESOLVED'
+  // Each names a DIFFERENT way a caller could have moved the wrong amount of stock, so an
+  // operator reading the code knows which one happened without opening the source.
+  | 'REPLACEMENT_INVENTORY_UNKNOWN_ITEM'
+  | 'REPLACEMENT_INVENTORY_DUPLICATE_MAPPING'
+  | 'REPLACEMENT_INVENTORY_QUANTITY_INVALID';
 
 export class ReplacementShippedError extends Error {
   constructor(
@@ -71,10 +76,22 @@ export class ReplacementShippedError extends Error {
  * owner's job, and this command must not become a second one. A line with no mapping FAILS
  * rather than shipping silently unaccounted.
  */
+/**
+ * WHICH inventory record fulfils a frozen replacement item. Not how many.
+ *
+ * `qty` used to live here and the deduction used it verbatim, so a caller asking to ship a
+ * replacement frozen at one unit could pass seven and the ledger would move seven. The
+ * quantity is not the caller's to state: it was frozen on `replacement_items` when the
+ * replacement was created, and that row is the only thing entitled to say how much leaves
+ * the building.
+ *
+ * Removing the field rather than validating it is deliberate. A validated number is still a
+ * number the caller supplies, and the next caller — a route, a retry, a UI — would have to
+ * be trusted again. There is now nowhere to put one.
+ */
 export type ReplacementInventoryLine = {
   replacementItemId: number;
   inventoryId: number;
-  qty: number;
   name?: string | null;
 };
 
@@ -207,12 +224,39 @@ export async function shipReplacement(
       );
     }
 
-    // Every item must be accounted for. A missing mapping would ship goods with no ledger row
-    // and nothing would say so.
+    // The frozen rows are the authority on WHAT and HOW MANY. The caller only says WHERE
+    // each one comes from, and every one of those statements is checked before anything moves.
     const items = await tx.select().from(replacementItems)
-      .where(eq(replacementItems.replacementId, replacement.id));
-    const mapped = new Set(input.inventoryLines.map((line) => line.replacementItemId));
-    const unmapped = (items as Array<{ id: number }>).filter((item) => !mapped.has(item.id));
+      .where(eq(replacementItems.replacementId, replacement.id)) as Array<{
+        id: number; quantity: number;
+      }>;
+    const frozenIds = new Set(items.map((item) => item.id));
+
+    // Exactly one mapping per frozen item. A second mapping for the same item with a
+    // DIFFERENT inventory record deducts twice — the idempotency key includes the inventory
+    // id, so the ledger has no reason to refuse it.
+    const mappingByItem = new Map<number, ReplacementInventoryLine>();
+    for (const line of input.inventoryLines) {
+      if (!frozenIds.has(line.replacementItemId)) {
+        throw new ReplacementShippedError(
+          'REPLACEMENT_INVENTORY_UNKNOWN_ITEM',
+          `replacement item ${line.replacementItemId} does not belong to replacement `
+            + `${replacement.reference}. Nothing was deducted.`,
+          400, { replacementItemId: line.replacementItemId },
+        );
+      }
+      if (mappingByItem.has(line.replacementItemId)) {
+        throw new ReplacementShippedError(
+          'REPLACEMENT_INVENTORY_DUPLICATE_MAPPING',
+          `replacement item ${line.replacementItemId} was mapped more than once. Two mappings `
+            + 'deduct twice. Nothing was deducted.',
+          400, { replacementItemId: line.replacementItemId },
+        );
+      }
+      mappingByItem.set(line.replacementItemId, line);
+    }
+
+    const unmapped = items.filter((item) => !mappingByItem.has(item.id));
     if (unmapped.length > 0) {
       throw new ReplacementShippedError(
         'REPLACEMENT_INVENTORY_UNRESOLVED',
@@ -224,18 +268,31 @@ export async function shipReplacement(
 
     let applied = 0;
     let alreadyApplied = 0;
-    for (const line of input.inventoryLines) {
+    // Iterating the FROZEN items, not the caller's lines. Anything the caller sent that is
+    // not a frozen item was already refused above, and the count comes from the row.
+    for (const item of items) {
+      const line = mappingByItem.get(item.id)!;
+      // The database CHECK guarantees quantity > 0, so this is a corruption assertion rather
+      // than input validation — but shipping a nonsense quantity is worse than refusing to.
+      if (!Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
+        throw new ReplacementShippedError(
+          'REPLACEMENT_INVENTORY_QUANTITY_INVALID',
+          `frozen quantity ${item.quantity} on replacement item ${item.id} is not a positive `
+            + 'whole number. Nothing was deducted.',
+          409, { replacementItemId: item.id },
+        );
+      }
       const movement = await applyInventoryMovementInTransaction(tx as never, {
         inventoryId: line.inventoryId,
         type: 'ship',
-        qty: -Math.abs(Math.trunc(line.qty)),
+        qty: -item.quantity,
         note: `Replacement ${replacement.reference} / shipment ${replacement.replacementShipmentId}`,
         createdBy: input.actor.email ?? 'replacement',
         effectiveAt: new Date(),
         idempotencyKey: replacementInventoryIdempotencyKey({
           replacementId: replacement.id,
           shipmentId: replacement.replacementShipmentId,
-          replacementItemId: line.replacementItemId,
+          replacementItemId: item.id,
           inventoryId: line.inventoryId,
         }),
         sourceEntity: 'shipment',
