@@ -686,6 +686,60 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── item 13: the HTTP surface ────────────────────────────────────────────────
+console.log('\nthe HTTP surface');
+
+{
+  const route = read('src/routes/replacements.ts');
+  const routeCode = route.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const main = read('src/main.ts');
+  const auth = read('src/middleware/auth.ts');
+
+  check('the router is in protectedPrefixes, not merely mounted',
+    /^\s*'\/replacements',$/m.test(main.slice(main.indexOf('const protectedPrefixes'),
+      main.indexOf(']', main.indexOf('const protectedPrefixes'))))
+    && /app\.route\('\/replacements', replacementsRoute\)/.test(main),
+    'app.route does NOT attach requireAuth; two features have shipped unauthenticated by missing the allowlist entry');
+
+  check('the WHOLE router is gated, and off means 404',
+    /app\.use\('\*', async \(c, next\) => \{[\s\S]{0,200}REPLACEMENTS_ENABLED[\s\S]{0,80}404/.test(routeCode),
+    'a per-handler gate is one revert away from protecting five routes of six, and 403 would confirm the feature exists');
+
+  check('every route denies portal roles outright',
+    /requireInternalPermission\(/.test(routeCode)
+    && !/[^l]requirePermission\(/.test(routeCode),
+    'replacements are an operator surface; requirePermission alone would admit a client portal session');
+
+  check('every replacement permission is DECLARED in the vocabulary',
+    ['replacements:read', 'replacements:write', 'replacements:hold',
+     'replacements:label', 'replacements:override', 'replacements:billing']
+      .every((perm) => auth.includes(`'${perm}'`)),
+    'a permission a service demands but the vocabulary never names is one nobody can be granted deliberately');
+
+  check('scope is DELEGATED to the order-scope owner',
+    /from '\.\.\/lib\/order-scope'/.test(route)
+    && /isOrderRowInScope\(/.test(routeCode)
+    && /orderScopePredicate\(/.test(routeCode),
+    'that owner exists because /rates/browse could read any tenant\'s order; a second copy is a second thing to get wrong');
+
+  check('an out-of-scope replacement 404s rather than 403s',
+    !/'Forbidden'|403\)/.test(routeCode),
+    'a 403 confirms the row exists, which is the fact being withheld');
+
+  check('the route never decides the status code',
+    /if \(typeof e\?\.httpStatus !== 'number' \|\| typeof e\?\.code !== 'string'\) throw error;/.test(routeCode)
+    && /const status = e\.httpStatus;/.test(routeCode),
+    'an unrecognised failure dressed as a coded refusal looks handled in the logs forever');
+
+  check('request bodies reject unknown keys',
+    (routeCode.match(/\}\)\.strict\(\)/g) ?? []).length >= 4,
+    'a silently ignored field is a caller believing something happened');
+
+  check('label purchase, void and ship are NOT exposed yet',
+    !/purchaseReplacementLabel|voidReplacementLabel|shipReplacement/.test(routeCode),
+    'they need the customer-money freeze site, so their billing path could only refuse');
+}
+
 // ── AC-10/AC-18: customer money, and money that has a bucket ─────────────────
 console.log('\nAC-10/AC-18 — where replacement money comes from and where it shows up');
 

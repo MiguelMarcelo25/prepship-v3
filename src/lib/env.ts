@@ -135,6 +135,10 @@ const schema = z.object({
   // provider-touching side effect: dark deployment means the code ships and does nothing.
   // Turning it on is a separate configuration change after DJ freezes decisions 1-4 and the
   // live-postage canary passes.
+  // PS-502 item 13: the whole replacements HTTP surface, default off. Separate from
+  // REPLACEMENTS_LABEL_ENABLED because reading and requesting a replacement is not the same
+  // risk as buying postage, and the two must be switchable independently.
+  REPLACEMENTS_ENABLED: booleanFlag(false),
   REPLACEMENTS_LABEL_ENABLED: booleanFlag(false),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.

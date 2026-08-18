@@ -56,6 +56,16 @@ export const APP_PERMISSIONS = [
   // PS-465: trained internal operators may mutate the compliance declaration.
   // Warehouse users require an explicit JWT claim; portal roles never receive it.
   'hazmat:write',
+  // PS-502: the replacement surface. read/write/hold are the route gates; label, override
+  // and billing are enforced INSIDE their commands and were referenced there before this
+  // vocabulary knew them — a permission a service demands but the vocabulary never names
+  // is one nobody can be granted deliberately.
+  'replacements:read',
+  'replacements:write',
+  'replacements:hold',
+  'replacements:label',
+  'replacements:override',
+  'replacements:billing',
   'scope:global',
 ] as const;
 

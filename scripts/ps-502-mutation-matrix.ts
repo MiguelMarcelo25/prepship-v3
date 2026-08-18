@@ -36,6 +36,8 @@ const POLICY = 'src/services/billing-finalization-policy.ts';
 const FOLD = 'src/services/billing-replacement-finalized-fold.ts';
 const GENERATOR = 'src/services/billing.ts';
 const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
+const ROUTE = 'src/routes/replacements.ts';
+const MAIN = 'src/main.ts';
 const FENCE = 'src/services/replacement-customer-money.ts';
 const PLANNER = 'src/services/replacement-billing-planner.ts';
 const INVOICE_TOTALS = 'src/services/billing-invoice-totals.ts';
@@ -784,6 +786,37 @@ const MUTATIONS: Mutation[] = [
     find: /^.*line_type = 'replace_pick_pack'.*$\r?\n/m,
     replace: '',
     expect: 'both replacement line types have a bucket in EVERY summary owner',
+  },  {
+    id: 'M92',
+    defect: 'the router is mounted but drops out of the auth allowlist, shipping unauthenticated',
+    file: MAIN,
+    find: /\n  \/\/ PS-502: mounting a router does NOT[\s\S]*?\n  '\/replacements',/,
+    replace: '',
+    expect: 'the router is in protectedPrefixes, not merely mounted',
+  },
+  {
+    id: 'M93',
+    defect: 'the feature gate answers 403, confirming the surface exists',
+    file: ROUTE,
+    find: "  if (!env.REPLACEMENTS_ENABLED) return c.json({ error: 'Not found' }, 404);",
+    replace: "  if (!env.REPLACEMENTS_ENABLED) return c.json({ error: 'Forbidden' }, 403);",
+    expect: 'the WHOLE router is gated, and off means 404',
+  },
+  {
+    id: 'M94',
+    defect: 'a route drops to requirePermission, admitting a client portal session',
+    file: ROUTE,
+    find: "app.get('/', requireInternalPermission('replacements:read')",
+    replace: "app.get('/', requirePermission('replacements:read')",
+    expect: 'every route denies portal roles outright',
+  },
+  {
+    id: 'M95',
+    defect: 'the mapper swallows an unrecognised failure as a coded refusal',
+    file: ROUTE,
+    find: "  if (typeof e?.httpStatus !== 'number' || typeof e?.code !== 'string') throw error;",
+    replace: "  if (false) throw error;",
+    expect: 'the route never decides the status code',
   },
 ];
 

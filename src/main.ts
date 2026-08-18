@@ -16,6 +16,7 @@ import {
 } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
+import replacementsRoute from './routes/replacements';
 import orderHazmatRoute from './routes/order-hazmat';
 import hazmatContactsRoute from './routes/hazmat-contacts';
 import shipmentsRoute from './routes/shipments';
@@ -137,6 +138,9 @@ app.route('/oauth', oauthRoute);
 // Everything below requires a valid Supabase JWT.
 const protectedPrefixes = [
   '/orders',
+  // PS-502: mounting a router does NOT attach requireAuth — this list does. Two features
+  // have shipped unauthenticated by missing this line.
+  '/replacements',
   '/shipments',
   '/packages',
   '/clients',
@@ -187,6 +191,10 @@ app.use('/observability', requireAdmin);
 app.use('/observability/*', requireAdmin);
 
 app.route('/orders', ordersRoute);
+// PS-502 item 13. The router itself 404s unless REPLACEMENTS_ENABLED, but it is still
+// listed in protectedPrefixes below — mounting alone does NOT attach requireAuth, which is
+// how /store-accounts and /hazmat each shipped unauthenticated.
+app.route('/replacements', replacementsRoute);
 app.route('/orders', orderHazmatRoute);
 app.route('/shipments', shipmentsRoute);
 app.route('/packages', packagesRoute);
