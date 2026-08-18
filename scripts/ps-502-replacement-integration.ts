@@ -68,6 +68,9 @@ async function main(): Promise<void> {
     classifyProviderFailure,
   } = await import('../src/services/replacement-label-purchase-command.js');
   const {
+    voidReplacementLabel, reconcileReplacementPurchaseIntent, ReplacementVoidError,
+  } = await import('../src/services/replacement-label-void-command.js');
+  const {
     approveReplacement, rejectReplacement, cancelReplacement, resolveReplacementReview,
     remapReplacementItem, setReplacementBillability, completeReplacement,
     ReplacementLifecycleError,
@@ -868,6 +871,233 @@ async function main(): Promise<void> {
       replacementProviderIdempotencyKey(base),
       replacementProviderIdempotencyKey({ ...base, replacementId: 2 }),
     );
+  });
+
+  console.log('\nlabel void and reconciliation');
+
+  const LABEL_ACTOR = {
+    email: 'lead@example.test', type: 'admin',
+    permissions: ['replacements:create', 'replacements:label'],
+  };
+  let voidCalls = 0;
+  const voidingProvider = {
+    voidLabel: async () => {
+      voidCalls += 1;
+      return { providerVoidId: `void-${voidCalls}`, voided: true };
+    },
+  };
+
+  /** A replacement with a purchased label. */
+  const withPurchasedLabel = async (key: string) => {
+    const r = await readyToBuy(key);
+    await purchaseReplacementLabel({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+      purchaseInputs: PURCHASE_INPUTS,
+    }, fakeProvider, conn);
+    return r;
+  };
+
+  await check('a void requires the label capability and a written reason', async () => {
+    const r = await withPurchasedLabel('void-perm');
+    await assert.rejects(
+      () => voidReplacementLabel({
+        replacementId: r.id, actor: { ...LABEL_ACTOR, permissions: ['replacements:create'] },
+        reason: 'no longer needed',
+      }, voidingProvider, conn),
+      (e: unknown) => e instanceof ReplacementVoidError && e.code === 'REPLACEMENT_VOID_FORBIDDEN',
+    );
+    await assert.rejects(
+      () => voidReplacementLabel({
+        replacementId: r.id, actor: LABEL_ACTOR, reason: '   ',
+      }, voidingProvider, conn),
+      (e: unknown) => e instanceof ReplacementVoidError
+        && e.code === 'REPLACEMENT_VOID_REASON_REQUIRED',
+    );
+  });
+
+  await check('a confirmed void records the provider identity and an event', async () => {
+    const r = await withPurchasedLabel('void-ok');
+    const before = voidCalls;
+    const result = await voidReplacementLabel({
+      replacementId: r.id, actor: LABEL_ACTOR, reason: 'customer cancelled',
+    }, voidingProvider, conn);
+    assert.equal(result.voided, true);
+    assert.equal(voidCalls, before + 1);
+    const [intent] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intent!.voidState, 'voided');
+    assert.ok(intent!.providerVoidId);
+    assert.ok(intent!.voidedAt);
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, r.id));
+    const voided = events.find((e) => e.eventType === 'replacement_label_voided');
+    assert.ok(voided);
+    assert.equal(voided!.detail, 'customer cancelled');
+  });
+
+  await check('a repeated void sends NO second destructive call', async () => {
+    const r = await withPurchasedLabel('void-twice');
+    await voidReplacementLabel({
+      replacementId: r.id, actor: LABEL_ACTOR, reason: 'first',
+    }, voidingProvider, conn);
+    const after = voidCalls;
+    const again = await voidReplacementLabel({
+      replacementId: r.id, actor: LABEL_ACTOR, reason: 'second',
+    }, voidingProvider, conn);
+    assert.equal(again.voided, false, 'an already-voided label is returned, not re-voided');
+    assert.equal(voidCalls, after, 'a repeated destructive call can cancel a later label');
+  });
+
+  await check('an UNCONFIRMED void is never recorded as voided', async () => {
+    const r = await withPurchasedLabel('void-unconfirmed');
+    const unsureProvider = {
+      voidLabel: async () => ({ providerVoidId: 'v-?', voided: false }),
+    };
+    await assert.rejects(
+      () => voidReplacementLabel({
+        replacementId: r.id, actor: LABEL_ACTOR, reason: 'try',
+      }, unsureProvider, conn),
+      (e: unknown) => e instanceof ReplacementVoidError
+        && e.code === 'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+    );
+    const [intent] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intent!.voidState, 'void_reconcile_required',
+      'a local voided row with a live label is worse than no row at all');
+  });
+
+  await check('a void TIMEOUT is held for reconciliation, not retried', async () => {
+    const r = await withPurchasedLabel('void-timeout');
+    const timingOut = { voidLabel: async () => { throw new Error('socket hang up'); } };
+    await assert.rejects(
+      () => voidReplacementLabel({
+        replacementId: r.id, actor: LABEL_ACTOR, reason: 'try',
+      }, timingOut, conn),
+      (e: unknown) => e instanceof ReplacementVoidError
+        && e.code === 'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+    );
+    const [intent] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(intent!.voidState, 'void_reconcile_required');
+  });
+
+  await check('a stale state_version cannot void', async () => {
+    const r = await withPurchasedLabel('void-stale');
+    await assert.rejects(
+      () => voidReplacementLabel({
+        replacementId: r.id, actor: LABEL_ACTOR, reason: 'try',
+        expectedStateVersion: 9999,
+      }, voidingProvider, conn),
+      (e: unknown) => e instanceof ReplacementVoidError
+        && e.code === 'REPLACEMENT_STATE_CONFLICT',
+    );
+  });
+
+  await check('a replacement with no purchased label cannot be voided', async () => {
+    const r = await makeReplacement('void-nolabel');
+    await assert.rejects(
+      () => voidReplacementLabel({
+        replacementId: r.id, actor: LABEL_ACTOR, reason: 'try',
+      }, voidingProvider, conn),
+      (e: unknown) => e instanceof ReplacementVoidError
+        && e.code === 'REPLACEMENT_VOID_NO_ACTIVE_LABEL',
+    );
+  });
+
+  await check('reconciliation resolves an orphaned intent the provider CONFIRMS', async () => {
+    const r = await readyToBuy('recon-found');
+    let transactions = 0;
+    const crashingConn = {
+      transaction: async (fn: never) => {
+        transactions += 1;
+        if (transactions === 2) throw new Error('crash after purchase');
+        return (conn as { transaction: (f: never) => unknown }).transaction(fn);
+      },
+    } as never;
+    await assert.rejects(() => purchaseReplacementLabel({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+      purchaseInputs: PURCHASE_INPUTS,
+    }, fakeProvider, crashingConn));
+
+    const [orphan] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+    assert.equal(orphan!.state, 'provider_pending');
+
+    const knowingProvider = {
+      voidLabel: async () => ({ providerVoidId: 'x', voided: true }),
+      lookupPurchase: async () => ({
+        providerTransactionId: 'txn-recovered', providerLabelId: 'lbl-recovered',
+        shipmentCost: 8.25, otherCost: 1.5,
+      }),
+    };
+    const outcome = await reconcileReplacementPurchaseIntent({
+      intentId: orphan!.id, actor: LABEL_ACTOR, reason: 'operator reconciliation',
+    }, knowingProvider as never, conn);
+    assert.equal(outcome.outcome, 'purchased');
+
+    const [resolved] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.id, orphan!.id));
+    assert.equal(resolved!.state, 'purchased');
+    assert.equal(resolved!.providerTransactionId, 'txn-recovered');
+    assert.equal(resolved!.reconciliationState, 'resolved_purchased');
+  });
+
+  await check('reconciliation closes an intent the provider is CERTAIN never bought', async () => {
+    const r = await readyToBuy('recon-absent');
+    let transactions = 0;
+    const crashingConn = {
+      transaction: async (fn: never) => {
+        transactions += 1;
+        if (transactions === 2) throw new Error('crash after purchase');
+        return (conn as { transaction: (f: never) => unknown }).transaction(fn);
+      },
+    } as never;
+    await assert.rejects(() => purchaseReplacementLabel({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+      purchaseInputs: PURCHASE_INPUTS,
+    }, fakeProvider, crashingConn));
+    const [orphan] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+
+    const certainProvider = {
+      voidLabel: async () => ({ providerVoidId: 'x', voided: true }),
+      lookupPurchase: async () => null,
+    };
+    const outcome = await reconcileReplacementPurchaseIntent({
+      intentId: orphan!.id, actor: LABEL_ACTOR, reason: 'provider has no record',
+    }, certainProvider as never, conn);
+    assert.equal(outcome.outcome, 'failed_pre_purchase');
+  });
+
+  await check('a provider that CANNOT tell leaves the intent unresolved', async () => {
+    const r = await readyToBuy('recon-unknown');
+    let transactions = 0;
+    const crashingConn = {
+      transaction: async (fn: never) => {
+        transactions += 1;
+        if (transactions === 2) throw new Error('crash after purchase');
+        return (conn as { transaction: (f: never) => unknown }).transaction(fn);
+      },
+    } as never;
+    await assert.rejects(() => purchaseReplacementLabel({
+      replacementId: r.id, actor: { email: actor.email, type: 'operator' },
+      purchaseInputs: PURCHASE_INPUTS,
+    }, fakeProvider, crashingConn));
+    const [orphan] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+
+    const unsureProvider = {
+      voidLabel: async () => ({ providerVoidId: 'x', voided: true }),
+      lookupPurchase: async () => { throw new Error('provider unavailable'); },
+    };
+    const outcome = await reconcileReplacementPurchaseIntent({
+      intentId: orphan!.id, actor: LABEL_ACTOR, reason: 'attempt',
+    }, unsureProvider as never, conn);
+    assert.equal(outcome.outcome, 'still_unknown',
+      'an operator chasing a stuck row beats a silent second purchase');
+    const [after] = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.id, orphan!.id));
+    assert.equal(after!.state, 'reconcile_required');
   });
 
   await client.close();

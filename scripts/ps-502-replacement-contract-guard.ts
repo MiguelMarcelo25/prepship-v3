@@ -635,6 +635,59 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── Void is DESTRUCTIVE, so nothing is inferred ──────────────────────────────
+console.log('\nlabel void and reconciliation (locked path)');
+
+{
+  const v = read('src/services/replacement-label-void-command.ts');
+  const code = v.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const at = (needle: string) => code.indexOf(needle);
+
+  check('the void command exists and is gated by the feature flag',
+    v.length > 0 && /assertReplacementLabelEnabled\(\)/.test(code)
+    && at('assertReplacementLabelEnabled()') < at('conn.transaction'));
+
+  check('BOTH provider-reaching commands require the label capability and a reason',
+    // Counted, not merely present: void and reconcile each reach a provider, and replacing
+    // one check left the other while a `.test()` stayed green — the same multi-occurrence
+    // weakness M47 exposed on the lifecycle command.
+    (code.match(/includes\(REPLACEMENT_LABEL_PERMISSION\)/g) || []).length === 2
+    && (code.match(/requireReason\(input\.reason\)/g) || []).length === 2,
+    'reconciling an intent can resolve money as surely as voiding a label');
+
+  check('the destructive call is OUTSIDE every transaction',
+    (() => {
+      const call = at('await provider.voidLabel({');
+      const claimEnds = at('const claim = await conn.transaction');
+      const persistBegins = code.lastIndexOf('return conn.transaction(async (tx) => {');
+      return call !== -1 && call > claimEnds && call < persistBegins;
+    })());
+
+  check('an UNCONFIRMED void is never recorded as voided',
+    code.includes('if (!result.voided) {')
+    && at('if (!result.voided) {') < at("voidState: 'voided'"),
+    'a local voided row with a live label is worse than no row at all');
+
+  check('an already-voided label sends no second destructive call',
+    code.includes("intent.voidState === 'voided'")
+    && at("intent.voidState === 'voided'") < at('await provider.voidLabel({'),
+    'a repeated destructive call can cancel a label a later attempt bought');
+
+  check('the intent must belong to THIS replacement',
+    /eq\(replacementLabelPurchaseIntents\.replacementId, replacement\.id\)/.test(code),
+    'a caller must not void another replacement\'s label by naming its own');
+
+  check('reconciliation asks the provider and never guesses',
+    /provider\.lookupPurchase/.test(code)
+    && /still_unknown/.test(code),
+    'a provider that cannot tell must leave the intent unresolved');
+
+  check('a void alters no order status, stock, billing or marketplace',
+    !/\.update\(orders\)|orderStatus:|\.insert\(inventory|\.delete\(billingLineItems\)/.test(code)
+    && !/marketplace|notifyCustomer|shopify|walmart|ebay/i.test(code),
+    'a voided label moved nothing and a credit is the billing owner\'s job');
+}
+
 // ── Label purchase: the only command that can spend real money ───────────────
 console.log('\nlabel purchase (locked path)');
 

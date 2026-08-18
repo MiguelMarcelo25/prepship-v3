@@ -27,6 +27,7 @@ const APPLIER = 'scripts/apply-ps-502-replacement-schema.ts';
 const LIFECYCLE = 'src/services/replacement-lifecycle-command.ts';
 const PURCHASE_REQ = 'src/services/replacement-purchase-request.ts';
 const LABEL_BUY = 'src/services/replacement-label-purchase-command.ts';
+const LABEL_VOID = 'src/services/replacement-label-void-command.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -493,6 +494,29 @@ const MUTATIONS: Mutation[] = [
     find: "        eventType: 'replacement_label_purchased_into_review',",
     replace: "        eventType: 'replacement_label_discarded',",
     expect: 'post-dispatch drift PRESERVES the label and reviews',
+  },  {
+    id: 'M59',
+    defect: 'an unconfirmed void is recorded as voided while the label is still live',
+    file: LABEL_VOID,
+    find: '  if (!result.voided) {',
+    replace: '    if (false) {',
+    expect: 'an UNCONFIRMED void is never recorded as voided',
+  },
+  {
+    id: 'M60',
+    defect: 'a repeated void sends a second destructive call',
+    file: LABEL_VOID,
+    find: "    if (intent.voidState === 'voided') {",
+    replace: '    if (false) {',
+    expect: 'an already-voided label sends no second destructive call',
+  },
+  {
+    id: 'M61',
+    defect: 'the void capability check is removed',
+    file: LABEL_VOID,
+    find: '  if (!input.actor.permissions.includes(REPLACEMENT_LABEL_PERMISSION)) {',
+    replace: '  if (false) {',
+    expect: 'BOTH provider-reaching commands require the label capability and a reason',
   },
 ];
 
