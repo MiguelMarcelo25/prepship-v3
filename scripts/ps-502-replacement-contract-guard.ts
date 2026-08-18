@@ -629,6 +629,59 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── The genuine-concurrency lane must stay genuine ───────────────────────────
+//
+// AC-12 says CONCURRENT. The PGlite lane cannot satisfy it — a single backend means two
+// transactions never overlap and the advisory lock is trivially held — so the PG17 lane is
+// the only evidence for it. Every check below defends a way that lane could quietly stop
+// proving anything while still reporting green.
+console.log('\ngenuine-concurrency lane');
+
+{
+  const pg17 = read('scripts/ps-502-replacement-concurrency-pg17.ts');
+  const workflow = read('.github/workflows/ps-502-concurrency-pg17.yml');
+  const sharedSchema = read('scripts/lib/ps-502-test-schema.ts');
+  const pglite = read('scripts/ps-502-replacement-integration.ts');
+
+  check('the PG17 concurrency suite exists', pg17.length > 0);
+
+  check('it FAILS rather than skips without a server',
+    /process\.exit\(1\)/.test(pg17) && /unskippable/i.test(pg17),
+    'a suite that skips silently reports green while proving nothing');
+
+  check('it refuses any non-loopback host',
+    /'127\.0\.0\.1', 'localhost', '::1', 'postgres'/.test(pg17)
+    && /refusing non-ephemeral host/.test(pg17),
+    'this creates and drops databases; it must never reach a real server');
+
+  check('the pool opens MULTIPLE backends',
+    /max: [2-9]\d*/.test(pg17),
+    'with max: 1 the callers queue and the suite proves nothing PGlite does not already prove');
+
+  check('assertions count PERSISTED ROWS, not resolved promises',
+    /exactly ONE shipment row exists/.test(pg17)
+    && /exactly one replacement persisted/.test(pg17),
+    'two callers can both succeed and still leave two rows behind');
+
+  check('both lanes build on ONE shared schema',
+    /PS_502_PREREQUISITE_DDL/.test(pg17) && /PS_502_PREREQUISITE_DDL/.test(pglite)
+    && sharedSchema.length > 0,
+    'a behaviour proven against one schema says nothing about the other');
+
+  check('the shared schema applies the PS-502 migrations verbatim',
+    /0096_ps502_replacements\.sql/.test(sharedSchema)
+    && /0099_ps502_replacement_request_signature\.sql/.test(sharedSchema)
+    && /0025_order_items_sync_trigger\.sql/.test(sharedSchema));
+
+  check('CI runs the concurrency lane on a real postgres:17 service',
+    /image: postgres:17/.test(workflow)
+    && /test:ps-502-concurrency-pg17/.test(workflow));
+
+  check('CI proves the pool really opened more than one backend',
+    /distinct backends observed|concurrency proofs would be vacuous/.test(workflow),
+    'if the server ever handed out one backend the assertions would pass vacuously');
+}
+
 // ── The production migration lane must deploy every PS-502 migration ─────────
 //
 // Hermes found this lane stale at 8d0dcc5c: it applied only 0096/0097 while the create

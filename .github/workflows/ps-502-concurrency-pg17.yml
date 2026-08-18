@@ -1,0 +1,124 @@
+# PS-502 — genuine multi-backend concurrency proofs against real PostgreSQL 17.
+#
+# These cannot be proven on PGlite. PGlite is a single backend, so two transactions never
+# actually overlap and an advisory lock there is trivially satisfied: the PGlite lane proves
+# only that the optimistic-concurrency PREDICATE rejects a stale update, by interleaving
+# deterministically. AC-12 says CONCURRENT, and that word is the whole difference.
+#
+# The suite FAILS rather than skips when its admin URL is absent, so this job cannot go green
+# without actually exercising a database.
+name: PS-502 concurrency PG17 proofs
+
+on:
+  # No paths filter, deliberately — the same reasoning as the PS-488 lane. The behaviour
+  # under test depends on the advisory lock in the create and shipment commands, the
+  # optimistic predicates, the reference allocator, the allowance rule and the migrations
+  # themselves. A list of "obvious" files would omit one of them, and a money- and
+  # stock-bearing path is not where a stale filter should decide whether proof runs.
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'review/ps-502-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-502-concurrency-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg17-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps502
+          POSTGRES_PASSWORD: ps502
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps502"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable here and no
+      # deploy secret is exposed to this job. The suite additionally refuses any host that
+      # is not loopback, so a misconfigured value cannot point it somewhere real.
+      PS502_PG17_ADMIN_URL: postgres://ps502:ps502@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # tsx -e compiles as CommonJS, where top-level await is a hard error. The async IIFE
+      # keeps the await inside a function.
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          set -euo pipefail
+          version="$(npx tsx -e "
+            const postgres = require('postgres');
+            (async () => {
+              const sql = postgres(process.env.PS502_PG17_ADMIN_URL, { max: 1, prepare: false });
+              try {
+                const [row] = await sql\`show server_version\`;
+                console.log(row.server_version);
+              } finally {
+                await sql.end({ timeout: 5 });
+              }
+            })().catch((e) => { console.error(e); process.exit(1); });
+          ")"
+          echo "server_version=${version}"
+          case "${version}" in
+            17*) ;;
+            *) echo "Expected PostgreSQL 17, got ${version}"; exit 1 ;;
+          esac
+
+      # Proves the server really does hand out separate backends. If this ever reports 1,
+      # every concurrency assertion below would be vacuous rather than failing, so it is
+      # checked explicitly instead of assumed.
+      - name: Confirm the pool opens multiple backends
+        run: |
+          set -euo pipefail
+          npx tsx -e "
+            const postgres = require('postgres');
+            (async () => {
+              const sql = postgres(process.env.PS502_PG17_ADMIN_URL, { max: 4, prepare: false });
+              try {
+                await Promise.all([0,1,2,3].map(() => sql\`select pg_sleep(0.2)\`));
+                const [row] = await sql\`
+                  select count(distinct pid)::int as backends from pg_stat_activity
+                  where datname = current_database() and pid <> pg_backend_pid()\`;
+                console.log('distinct backends observed:', row.backends);
+                if (row.backends < 2) { console.error('FAIL: single backend — concurrency proofs would be vacuous'); process.exit(1); }
+              } finally {
+                await sql.end({ timeout: 5 });
+              }
+            })().catch((e) => { console.error(e); process.exit(1); });
+          "
+
+      - name: PS-502 multi-backend concurrency proof
+        run: npm run test:ps-502-concurrency-pg17
+
+      # The fast lanes, so a change that satisfies concurrency by weakening a contract is
+      # still caught in the same run.
+      - name: PS-502 contract guard and PGlite integration
+        run: |
+          npm run test:ps-502-replacement-contract
+          npm run test:ps-502-integration
+
+      - name: Typecheck
+        run: npm run typecheck

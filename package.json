@@ -878,6 +878,7 @@
     "test:ps-502-replacement-contract": "tsx scripts/ps-502-replacement-contract-guard.ts",
     "test:ps-502-mutation-matrix": "tsx scripts/ps-502-mutation-matrix.ts",
     "test:ps-502-integration": "tsx scripts/ps-502-replacement-integration.ts",
+    "test:ps-502-concurrency-pg17": "tsx scripts/ps-502-replacement-concurrency-pg17.ts",
     "test:ps-507-persistence": "node scripts/ps-507-qa-stack.mjs -- npx playwright test -c playwright.ps507.config.js",
     "qa:ps-507-stack": "node scripts/ps-507-qa-stack.mjs",
     "status:sync": "tsx scripts/status-sync.ts",

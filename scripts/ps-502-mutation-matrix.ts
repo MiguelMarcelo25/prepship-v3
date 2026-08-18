@@ -24,6 +24,7 @@ const SHIPMENT = 'src/services/replacement-shipment-command.ts';
 const SCHEMA = 'src/db/schema/replacements.ts';
 const BILLING_SCHEMA = 'src/db/schema/billing.ts';
 const APPLIER = 'scripts/apply-ps-502-replacement-schema.ts';
+const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
 const MUTATIONS: Mutation[] = [
   {
@@ -380,6 +381,13 @@ const MUTATIONS: Mutation[] = [
     find: "const SQL_0099 = 'drizzle/0099_ps502_replacement_request_signature.sql';",
     replace: '',
     expect: 'the runner applies 0099_ps502_replacement_request_signature.sql',
+  },  {
+    id: 'M45',
+    defect: 'the concurrency lane drops to a single backend and proves nothing',
+    file: PG17,
+    find: 'max: 8, prepare: false',
+    replace: 'max: 1, prepare: false',
+    expect: 'the pool opens MULTIPLE backends',
   },
 ];
 
