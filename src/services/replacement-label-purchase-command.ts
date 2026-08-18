@@ -353,13 +353,65 @@ export async function purchaseReplacementLabel(
 
   // ── Phase 3. Record what happened. ─────────────────────────────────────────
   return conn.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, (
+    await recordPurchasedReplacementLabelInTransaction(tx, {
+      replacementId: input.replacementId,
+      intentId: claim.intent.id,
+      shipmentId: claim.shipmentId,
+      receipt,
+      actor: input.actor,
+    });
+    return { intentId: claim.intent.id, shipmentId: claim.shipmentId, receipt, purchased: true };
+  });
+}
+
+/**
+ * PS-502 — a purchased label becomes RECORDED state. One owner, two callers.
+ *
+ * ── WHY THIS IS SHARED ──────────────────────────────────────────────────────────────────
+ *
+ * The normal purchase reached this after dispatching to the provider. The RECOVERY path — a
+ * purchase interrupted before its receipt was written, later confirmed by the provider — did
+ * only the intent update and stopped. So a real, paid-for label existed while the replacement
+ * sat at `approved` with a shipment carrying no tracking, no label URL and no cost: safely
+ * blocked from buying a second label, and not recoverable to a shippable state either.
+ *
+ * Everything below is what "the label happened" MEANS — the intent receipt, the shipment
+ * receipt, the drift that may have appeared while the network call was in flight, the guarded
+ * transition, and exactly one event. Recovery owes every one of them, so it calls this rather
+ * than reimplementing a subset and drifting from it.
+ *
+ * ── IDEMPOTENCY IS SHARED ON PURPOSE ────────────────────────────────────────────────────
+ *
+ * The activity event's key is `replacement:<id>:label:<intentId>` for both callers, because
+ * they record the SAME fact about the same intent. Whichever arrives first wins and the other
+ * cannot double-append.
+ *
+ * ── WHAT IT STILL DOES NOT DO ───────────────────────────────────────────────────────────
+ *
+ * It writes the CARRIER receipt — cost, other_cost, selected_rate_cost — and no customer-money
+ * tuple, because nothing produces one yet. That is the separate freeze-site gap, and it is now
+ * missing in exactly one place instead of two.
+ */
+export async function recordPurchasedReplacementLabelInTransaction(
+  tx: any,
+  input: {
+    replacementId: number;
+    intentId: number;
+    shipmentId: number;
+    receipt: ProviderLabelReceipt;
+    actor: { email: string | null; type: string };
+  },
+): Promise<'label_created' | 'review'> {
+  const receipt = input.receipt;
+
+  await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, (
       select order_id from replacements where id = ${input.replacementId}
     ))`);
 
-    const [replacement] = await tx.select().from(replacements)
-      .where(eq(replacements.id, input.replacementId)).limit(1);
+  const [replacement] = await tx.select().from(replacements)
+    .where(eq(replacements.id, input.replacementId)).limit(1);
 
+  {
     await tx.update(replacementLabelPurchaseIntents)
       .set({
         state: 'purchased',
@@ -369,9 +421,9 @@ export async function purchaseReplacementLabel(
         updatedAt: new Date(),
         resolvedAt: new Date(),
       })
-      .where(eq(replacementLabelPurchaseIntents.id, claim.intent.id));
+      .where(eq(replacementLabelPurchaseIntents.id, input.intentId));
 
-    // The frozen CUSTOMER money tuple, for the billing owner. Not a raw quote.
+    // The CARRIER receipt. Not a customer-money tuple, and not a raw quote — see the docblock.
     await tx.update(shipments)
       .set({
         labelUrl: receipt.labelUrl ?? null,
@@ -386,7 +438,7 @@ export async function purchaseReplacementLabel(
         otherCost: String(receipt.otherCost),
         selectedRateCost: String(receipt.shipmentCost + receipt.otherCost),
       })
-      .where(eq(shipments.id, claim.shipmentId));
+      .where(eq(shipments.id, input.shipmentId));
 
     // Drift may have appeared WHILE the network call was in flight. The label is real and
     // paid for, so it is preserved: review, never discard, never repurchase.
@@ -417,8 +469,8 @@ export async function purchaseReplacementLabel(
         eventType: 'replacement_label_purchased_into_review',
         actor: input.actor,
         reason: 'the source line moved while the purchase was in flight; the label is retained',
-        idempotencySuffix: `label-drift:${claim.intent.id}`,
-        shipmentId: claim.shipmentId,
+        idempotencySuffix: `label-drift:${input.intentId}`,
+        shipmentId: input.shipmentId,
         extra: { labelCreatedAt: new Date() },
         // Matches the label_created branch below: on a lost race the whole persist transaction
         // rolls back, the intent stays unresolved, and the next dispatch is BLOCKED rather than
@@ -429,9 +481,7 @@ export async function purchaseReplacementLabel(
             'recorded into review. The receipt is persisted; reconcile rather than repurchasing.',
         ),
       });
-      return {
-        intentId: claim.intent.id, shipmentId: claim.shipmentId, receipt, purchased: true,
-      };
+      return 'review';
     }
 
     const moved = await tx.update(replacements)
@@ -457,15 +507,16 @@ export async function purchaseReplacementLabel(
 
     await tx.insert(replacementActivityEvents).values({
       replacementId: replacement!.id,
-      shipmentId: claim.shipmentId,
+      shipmentId: input.shipmentId,
       eventType: 'replacement_label_created',
       fromStatus: replacement!.status,
       toStatus: 'label_created',
       actorType: input.actor.type,
       actorEmail: input.actor.email,
-      idempotencyKey: `replacement:${replacement!.id}:label:${claim.intent.id}`,
+      // Shared with the recovery caller on purpose: the same fact about the same intent.
+      idempotencyKey: `replacement:${replacement!.id}:label:${input.intentId}`,
     });
 
-    return { intentId: claim.intent.id, shipmentId: claim.shipmentId, receipt, purchased: true };
-  });
+    return 'label_created';
+  }
 }

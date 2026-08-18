@@ -686,6 +686,43 @@ console.log('\ndrizzle schema mirrors the migration');
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
 }
 
+// ── a purchased label becomes recorded state ─────────────────────────────────
+console.log('\npaid-label recovery');
+
+{
+  const purchase = read('src/services/replacement-label-purchase-command.ts');
+  const purchaseCode = purchase.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const voidCmd = read('src/services/replacement-label-void-command.ts');
+  const voidCode = voidCmd.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const recorder = functionBody(purchaseCode, 'recordPurchasedReplacementLabelInTransaction');
+
+  check('ONE owner records that a label happened',
+    /export async function recordPurchasedReplacementLabelInTransaction/.test(purchase),
+    'recovery reimplemented a subset of it and drifted — the intent resolved while the shipment and the status did not');
+
+  check('it does every part of what the label MEANS',
+    /replacementLabelPurchaseIntents/.test(recorder)
+    && /update\(shipments\)/.test(recorder)
+    && /findFrozenLineDrift/.test(recorder)
+    && /status: 'label_created'/.test(recorder)
+    && /eventType: 'replacement_label_created'/.test(recorder),
+    'intent receipt, shipment receipt, in-flight drift, guarded transition, one event');
+
+  check('BOTH callers use it — the purchase and the recovery',
+    /await recordPurchasedReplacementLabelInTransaction\(tx, \{/.test(purchaseCode)
+    && /await recordPurchasedReplacementLabelInTransaction\(tx, \{/.test(voidCode),
+    'a provider-confirmed interrupted purchase owes exactly what an ordinary one owes');
+
+  check('recovery records the label in the SAME transaction as the intent',
+    occursBefore(voidCode, "reconciliationState: 'resolved_purchased'",
+      'recordPurchasedReplacementLabelInTransaction(tx, {'),
+    'recording the intent and then failing to record the label recreates the split this closes');
+
+  check('the label event key is SHARED between both callers',
+    /idempotencyKey: `replacement:\$\{replacement!\.id\}:label:\$\{input\.intentId\}`/.test(recorder),
+    'they record the same fact about the same intent, so whichever arrives first wins');
+}
+
 // ── who decides how much stock moves ─────────────────────────────────────────
 console.log('\ninventory quantity authority');
 

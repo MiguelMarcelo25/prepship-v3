@@ -31,6 +31,7 @@ import {
 } from '../db/schema/replacements';
 import {
   assertReplacementLabelEnabled,
+  recordPurchasedReplacementLabelInTransaction,
   type ProviderLabelReceipt,
 } from './replacement-label-purchase-command';
 
@@ -374,7 +375,26 @@ export async function reconcileReplacementPurchaseIntent(
         detail: reason,
         idempotencyKey: `replacement:${intent.replacementId}:reconcile-found:${intent.id}`,
       });
-      return { intentId: intent.id, outcome: 'purchased' as const };
+
+      // The label is REAL and paid for. Recording that the intent resolved is not the same as
+      // recording that the label happened, and this path used to stop at the first: the
+      // shipment kept no tracking, no label URL and no cost, and the replacement stayed at
+      // `approved`. Blocked from buying a second label, and not shippable either.
+      //
+      // The same owner the ordinary purchase uses, so recovery cannot drift from it — it also
+      // re-checks drift that appeared while the purchase was lost, and makes the guarded
+      // transition into `label_created` or into `review` if the source line moved.
+      //
+      // In the same transaction as the intent update above: a recovery that recorded the intent
+      // and then failed to record the label would recreate exactly the split it is closing.
+      const outcome = await recordPurchasedReplacementLabelInTransaction(tx, {
+        replacementId: intent.replacementId,
+        intentId: intent.id,
+        shipmentId: intent.replacementShipmentId!,
+        receipt: found,
+        actor: input.actor,
+      });
+      return { intentId: intent.id, outcome: 'purchased' as const, recorded: outcome };
     }
 
     await tx.update(replacementLabelPurchaseIntents)

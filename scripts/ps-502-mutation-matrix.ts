@@ -928,6 +928,21 @@ const MUTATIONS: Mutation[] = [
     find: '  const replacementCountSql = (await billingLineItemsHasReplacementIdColumn(conn))',
     replace: '  const replacementCountSql = (true)',
     expect: 'the canonical invoice totals probe on the CALLER\'s connection',
+  },  {
+    id: 'M110',
+    defect: 'recovery goes back to resolving the intent and never records the label',
+    file: LABEL_VOID,
+    find: '      const outcome = await recordPurchasedReplacementLabelInTransaction(tx, {',
+    replace: '      const outcome = await Promise.resolve(\'label_created\' as const); if (false) await recordPurchasedReplacementLabelInTransactionUnused({',
+    expect: 'BOTH callers use it — the purchase and the recovery',
+  },
+  {
+    id: 'M111',
+    defect: 'the recorder stops re-checking drift that appeared while the purchase was in flight',
+    file: LABEL_BUY,
+    find: '  const drift = await findFrozenLineDrift(tx, replacement!);',
+    replace: '  const drift = null;',
+    expect: 'it does every part of what the label MEANS',
   },
 ];
 

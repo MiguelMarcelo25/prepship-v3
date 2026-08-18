@@ -1070,6 +1070,30 @@ async function main(): Promise<void> {
     assert.equal(resolved!.state, 'purchased');
     assert.equal(resolved!.providerTransactionId, 'txn-recovered');
     assert.equal(resolved!.reconciliationState, 'resolved_purchased');
+
+    // The intent resolving is not the same fact as the label happening. This assertion is the
+    // whole of blocker 4: recovery used to stop above, leaving a real paid-for label attached
+    // to a replacement still sitting at `approved` with an empty shipment.
+    assert.equal(outcome.recorded, 'label_created');
+
+    const [after] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, r.id));
+    assert.equal(after!.status, 'label_created', 'the replacement is shippable again');
+    assert.ok(after!.labelCreatedAt, 'and it records when the label was earned');
+
+    const [shipment] = await db.select().from(schema.shipments)
+      .where(eq(schema.shipments.id, resolved!.replacementShipmentId!));
+    assert.equal(shipment!.selectedRateCost, '9.75',
+      'the shipment carries the carrier receipt, not nothing');
+    assert.equal(Number(shipment!.cost), 8.25);
+    assert.equal(Number(shipment!.otherCost), 1.5);
+
+    const events = await db.select().from(schema.replacementActivityEvents)
+      .where(eq(schema.replacementActivityEvents.replacementId, r.id));
+    assert.equal(
+      events.filter((e) => e.eventType === 'replacement_label_created').length, 1,
+      'exactly one label_created event — the shared idempotency key sees to that',
+    );
   });
 
   await check('reconciliation closes an intent the provider is CERTAIN never bought', async () => {
