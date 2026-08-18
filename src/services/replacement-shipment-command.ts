@@ -35,6 +35,7 @@ import {
   type ReplacementRow,
 } from '../db/schema/replacements';
 import { findFrozenLineDrift } from './replacement-drift-resolution';
+import { enterReplacementReview } from './replacement-lifecycle-command';
 import {
   evaluateReplacementSourceLineDrift,
   isReplacementStatus,
@@ -162,46 +163,31 @@ async function resolveDriftAndMaybeReview(
 
       // Persisted, then reported. Never silently retargeted.
       //
-      // The predicate carries the EXPECTED STATUS as well as the version, and the result is
-      // checked. Without both, a concurrent transition could move the replacement while this
-      // update matched nothing, and the drift event below would then be appended describing a
-      // transition that never happened — a false entry in an append-only audit log is worse
-      // than a missing one, because it is trusted.
-      const reviewed = await tx
-        .update(replacements)
-        .set({
-          status: 'review',
-          reviewReason: 'original_order_line_drift',
-          reviewRequestedAt: new Date(),
-          stateVersion: replacement.stateVersion + 1,
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(replacements.id, replacement.id),
-          eq(replacements.status, replacement.status),
-          eq(replacements.stateVersion, replacement.stateVersion),
-        ))
-        .returning();
-
-      if (reviewed.length === 0) {
-        throw new ReplacementShipmentError(
+      // DELEGATED to enterReplacementReview, the one writer of this move. The predicate that
+      // matters — expected STATUS as well as expected version, with the row count checked —
+      // used to be hand-rolled here and in two other commands, and the label-purchase copy had
+      // already lost it. Written once, it cannot be lost in one place while the others keep it.
+      //
+      // Without it, a concurrent transition could move the replacement while this update
+      // matched nothing, and the drift event would then be appended describing a transition
+      // that never happened — a false entry in an append-only audit log is worse than a missing
+      // one, because it is trusted.
+      //
+      // onConflict keeps the error THIS command's surface raises. insertReplacementShipment is
+      // documented to throw ReplacementShipmentError, and a caller discriminating on that must
+      // not have a lifecycle error escape past it because the write moved house.
+      await enterReplacementReview(tx, replacement, {
+        reviewReason: 'original_order_line_drift',
+        eventType: 'replacement_source_line_drift',
+        actor: input.actor,
+        idempotencySuffix: `drift:${item.orderLineIndex}`,
+        onConflict: () => new ReplacementShipmentError(
           'REPLACEMENT_STATE_CONFLICT',
           `replacement ${replacement.reference} moved while drift was being recorded; ` +
             'no review was written and no event was appended.',
           409,
           { expectedStatus: replacement.status, expectedStateVersion: replacement.stateVersion },
-        );
-      }
-
-      await tx.insert(replacementActivityEvents).values({
-        replacementId: replacement.id,
-        eventType: 'replacement_source_line_drift',
-        fromStatus: replacement.status,
-        toStatus: 'review',
-        actorType: input.actor.type,
-        actorEmail: input.actor.email,
-        idempotencyKey:
-          `replacement:${replacement.id}:drift:${item.orderLineIndex}:v${replacement.stateVersion}`,
+        ),
       });
 
       return { drifted: true, orderLineIndex: item.orderLineIndex, reference: replacement.reference };

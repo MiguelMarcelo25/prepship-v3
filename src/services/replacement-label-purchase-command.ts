@@ -40,6 +40,7 @@ import {
   type ReplacementLabelPurchaseIntentRow,
 } from '../db/schema/replacements';
 import { findFrozenLineDrift } from './replacement-drift-resolution';
+import { enterReplacementReview } from './replacement-lifecycle-command';
 import {
   resolveReplacementPurchaseRequest,
   type ReplacementPurchaseInputs,
@@ -391,26 +392,42 @@ export async function purchaseReplacementLabel(
     // paid for, so it is preserved: review, never discard, never repurchase.
     const drift = await findFrozenLineDrift(tx, replacement!);
     if (drift) {
-      await tx.update(replacements)
-        .set({
-          status: 'review',
-          reviewReason: 'original_order_line_drift',
-          reviewRequestedAt: new Date(),
-          stateVersion: replacement!.stateVersion + 1,
-          labelCreatedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(replacements.id, replacement!.id));
-      await tx.insert(replacementActivityEvents).values({
-        replacementId: replacement!.id,
-        shipmentId: claim.shipmentId,
+      // DELEGATED to enterReplacementReview, the one writer of this move.
+      //
+      // THIS COPY CARRIED A LOST UPDATE. It matched on `eq(replacements.id, ...)` ALONE — no
+      // expected status, no expected state_version, and no row-count check — while the two
+      // other copies of the same write carried all three, and while the label_created branch
+      // twenty lines below carries them against this very row. A transition landing between the
+      // SELECT above and this write was silently overwritten, and the event was appended anyway,
+      // describing a move from a status the row no longer held.
+      //
+      // The `before` row is the one SELECTed above under the order's advisory lock, so its
+      // observed stateVersion is the same value the label_created branch already predicates on.
+      // Nothing new had to be read to close this.
+      //
+      // Two things the shared writer does not do by default, passed explicitly rather than lost:
+      // labelCreatedAt (this path DID earn a label, and review must not erase that it exists),
+      // and the event's shipmentId (which shipment the retained label belongs to).
+      //
+      // The idempotency key gains the writer's `:v${stateVersion}` suffix. It stays unique per
+      // intent and is strictly narrower; nothing has been released against the old shape, and a
+      // replay cannot reach here twice anyway — the second attempt loses the predicate race.
+      await enterReplacementReview(tx, replacement!, {
+        reviewReason: 'original_order_line_drift',
         eventType: 'replacement_label_purchased_into_review',
-        fromStatus: replacement!.status,
-        toStatus: 'review',
-        actorType: input.actor.type,
-        actorEmail: input.actor.email,
-        detail: 'the source line moved while the purchase was in flight; the label is retained',
-        idempotencyKey: `replacement:${replacement!.id}:label-drift:${claim.intent.id}`,
+        actor: input.actor,
+        reason: 'the source line moved while the purchase was in flight; the label is retained',
+        idempotencySuffix: `label-drift:${claim.intent.id}`,
+        shipmentId: claim.shipmentId,
+        extra: { labelCreatedAt: new Date() },
+        // Matches the label_created branch below: on a lost race the whole persist transaction
+        // rolls back, the intent stays unresolved, and the next dispatch is BLOCKED rather than
+        // repurchasing. Both branches of one transaction must fail the same way.
+        onConflict: () => new ReplacementLabelError(
+          'REPLACEMENT_STATE_CONFLICT',
+          `replacement ${replacement!.reference} moved while its purchased label was being ` +
+            'recorded into review. The receipt is persisted; reconcile rather than repurchasing.',
+        ),
       });
       return {
         intentId: claim.intent.id, shipmentId: claim.shipmentId, receipt, purchased: true,

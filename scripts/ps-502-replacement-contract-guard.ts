@@ -743,11 +743,15 @@ console.log('\nAC-16 — the original order went away');
     && /cannot transition to cancelled/.test(lifecycleOwner),
     'the tempting shortcut is to relax this so the local hook fires; AC-16 must not');
 
+  // The second regex was passed as `detail`, not ANDed into the condition — `check` takes
+  // (name, boolean, detail?) — so "AC-16 uses it" was never asserted and only the export's
+  // existence was. scripts/ is outside tsconfig's include, so no compiler ever typed it. This
+  // is the same vacuous-block failure the purchase-input section records above.
   check('there is ONE shared review writer, and AC-16 uses it',
     /export async function enterReplacementReview/.test(
-      read('src/services/replacement-lifecycle-command.ts')),
-    /enterReplacementReview\(tx, before, \{/.test(holdCode),
-  );
+      read('src/services/replacement-lifecycle-command.ts'))
+    && /enterReplacementReview\(tx, before, \{/.test(holdCode),
+    'a second copy of the review write is how the label-purchase path lost its predicate');
 }
 
 // ── Three ways replacement money silently disappears ─────────────────────────
@@ -1146,6 +1150,15 @@ console.log('\nlabel purchase (locked path)');
     /replacement_label_purchased_into_review/.test(code)
     && at('replacement_label_purchased_into_review') > at('provider.purchase('),
     'the label is real and paid for; never discard it and never repurchase');
+
+  // PS-502 item 11. This path's review write matched on id ALONE — no expected status, no
+  // expected version, no row-count check — while the other two copies carried all three. It is
+  // delegated now, and this is what stops it being re-inlined.
+  check('the post-dispatch review delegates to the ONE guarded review writer',
+    /await enterReplacementReview\(tx, replacement!, \{/.test(code)
+    && !/status: 'review'/.test(code)
+    && (code.match(/\.update\(replacements\)/g) || []).length === 1,
+    'the one remaining update here is the label_created move, which carries its own predicate');
 
   check('an unknown provider outcome is held, never retried',
     /reconcile_required/.test(code)
@@ -1622,6 +1635,16 @@ console.log('\nshipment insertion (locked path)');
   const code = shipSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const at = (needle: string) => code.indexOf(needle);
 
+  // PS-502 item 11 moved this command's review write into enterReplacementReview. The checks
+  // below that used to read an inline update in THIS file now read THAT function — scoped with
+  // functionBody, because three writers in the lifecycle file contain lines of identical text
+  // and a file-wide presence check would let a neighbour answer for the one under test.
+  const reviewWriter = functionBody(
+    read('src/services/replacement-lifecycle-command.ts')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''),
+    'enterReplacementReview',
+  );
+
   check('it inserts a shipment and links it to the replacement',
     /\.insert\(shipments\)/.test(code) && /replacementShipmentId: shipment\.id/.test(code));
 
@@ -1630,10 +1653,25 @@ console.log('\nshipment insertion (locked path)');
     && at('findFrozenLineDrift(') < at('.insert(shipments)'),
     'the card requires re-resolution before label purchase, and this is the last cheap place');
 
+  // RE-ANCHORED (PS-502 item 11). The predicate this section used to read inline now lives in
+  // enterReplacementReview, so the check follows the write rather than the file: this command
+  // must CALL the one writer, must hand-roll no review of its own, and that writer must still
+  // carry both terms of the predicate on adjacent lines.
+  //
+  // The retired check was named 'the drift review is guarded by expected STATUS as well as
+  // version'. Its property is not dropped — it is asserted per update site, for EVERY site, by
+  // 'EVERY update to replacements is guarded on status AND state_version' in the lifecycle
+  // section above, which is strictly stronger than the single-file regex it replaces.
+  check('the drift review delegates to the ONE guarded review writer',
+    /await enterReplacementReview\(tx, replacement, \{/.test(code)
+    && !/status: 'review'/.test(code)
+    && /eq\(replacements\.status, before\.status\),\s*\n\s*eq\(replacements\.stateVersion, before\.stateVersion\),/.test(reviewWriter),
+    're-inlining a copy is exactly how the label-purchase path lost its predicate');
+
   check('a drift review is COMMITTED, then reported',
     // The update to review must not sit in the transaction that the throw aborts, or the
     // operator gets a 409 while the replacement stays approved and drifts again forever.
-    /status: 'review'/.test(code)
+    /await enterReplacementReview\(/.test(code)
     && /return \{ drifted: true/.test(code)
     && at("return { drifted: true") < at('throw new ReplacementShipmentError(\n      REPLACEMENT_ERROR_CODES.SOURCE_LINE_CHANGED'),
     'the review has to commit while the operation fails');
@@ -1643,13 +1681,14 @@ console.log('\nshipment insertion (locked path)');
     'the card requires no label/inventory/package/billing effect on a mismatch');
 
   // Hermes ruling A, the two details required before label purchase stacks on this.
-  check('the drift review is guarded by expected STATUS as well as version',
-    /eq\(replacements\.status, replacement\.status\),\s*\n\s*eq\(replacements\.stateVersion, replacement\.stateVersion\),/.test(code),
-    'version alone lets a concurrent transition slip past the predicate');
-
+  // RE-ANCHORED (PS-502 item 11): the row-count check moved into the shared writer with the
+  // update it guards. Presence FIRST, then position — indexOf returns -1 when the text is gone
+  // and -1 < anything is true, which is how deleting the thing under test used to pass.
   check('a lost drift race appends NO event',
-    /if \(reviewed\.length === 0\)/.test(code)
-    && at('if (reviewed.length === 0)') < at("eventType: 'replacement_source_line_drift'"),
+    /if \(reviewed\.length === 0\)/.test(reviewWriter)
+    && reviewWriter.indexOf('if (reviewed.length === 0)')
+      < reviewWriter.indexOf('.insert(replacementActivityEvents)')
+    && /await enterReplacementReview\(tx, replacement, \{/.test(code),
     'a false entry in an append-only audit log is worse than a missing one, because it is trusted');
 
   check('the already-attached fast path is documented as skipping re-resolution',

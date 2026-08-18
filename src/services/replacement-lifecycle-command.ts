@@ -180,7 +180,7 @@ function requireReason(reason: string | null | undefined, code: ReplacementLifec
 }
 
 /**
- * Park a replacement in `review`, for a NAMED reason.
+ * Park a replacement in `review`, for a NAMED reason. The ONLY writer of that move.
  *
  * Extracted because there were three hand-rolled copies of this update and every one of them
  * hard-coded reviewReason = 'original_order_line_drift'. AC-16 needed a fourth review reason,
@@ -188,11 +188,22 @@ function requireReason(reason: string | null | undefined, code: ReplacementLifec
  * the three (label-purchase) also updated on id alone, without the optimistic predicate — so
  * the copies had already drifted apart in the way that matters.
  *
+ * All three now delegate here: approval drift (below), shipment drift, post-dispatch label
+ * drift, and AC-16's original-order hold. The predicate is therefore written once, and the
+ * one copy that had lost it cannot silently be the odd one out again.
+ *
  * NOT applyTransition. `review -> review` is not in the diagram and a self-transition throws,
  * but re-parking an already-reviewing replacement under a NEW reason is legitimate: a second,
  * different thing is now wrong with it. So this writes the row directly, keeping the same
  * guard the primitive uses — expected status AND expected state_version, row count checked —
  * and appends exactly one event.
+ *
+ * WHAT CALLERS MAY VARY, and what they may not. They may add columns they own on the same row
+ * (`extra`), link the event to the shipment the decision was made against (`shipmentId`), and
+ * choose the error their own public surface raises on a lost race (`onConflict`) so a command
+ * does not leak a lifecycle error past a caller catching its own type. They may NOT vary the
+ * detection: the predicate and the row-count check are not parameters, and `onConflict`
+ * supplies an error to throw rather than deciding whether to throw one.
  */
 export async function enterReplacementReview(
   tx: any,
@@ -200,9 +211,21 @@ export async function enterReplacementReview(
   input: {
     reviewReason: string;
     eventType: string;
-    actor: LifecycleActor;
+    /**
+     * Entering review is not a capability-gated act — the CALLER decides who may trigger it —
+     * so this asks only for what the event records. Narrower than LifecycleActor on purpose:
+     * the shipment and label commands carry no permission list, and inventing an empty one at
+     * those call sites would read as "checked here, and it passed".
+     */
+    actor: Pick<LifecycleActor, 'email' | 'type'>;
     reason?: string | null;
     idempotencySuffix: string;
+    /** Columns the CALLER owns on the same row — a label timestamp it just earned, say. */
+    extra?: Record<string, unknown>;
+    /** The shipment the review was decided against, for audit linkage. */
+    shipmentId?: number | null;
+    /** The error THIS caller's surface throws on a lost race. Detection is not negotiable. */
+    onConflict?: (before: ReplacementRow) => Error;
   },
 ): Promise<ReplacementRow> {
   const reviewed = await tx
@@ -213,6 +236,7 @@ export async function enterReplacementReview(
       reviewRequestedAt: new Date(),
       stateVersion: before.stateVersion + 1,
       updatedAt: new Date(),
+      ...(input.extra ?? {}),
     })
     .where(and(
       eq(replacements.id, before.id),
@@ -222,14 +246,17 @@ export async function enterReplacementReview(
     .returning();
 
   if (reviewed.length === 0) {
-    throw new ReplacementLifecycleError(
+    throw input.onConflict?.(before) ?? new ReplacementLifecycleError(
       'REPLACEMENT_STATE_CONFLICT',
       `replacement ${before.reference} moved while review was being recorded; nothing was written`,
+      409,
+      { expectedStatus: before.status, expectedStateVersion: before.stateVersion },
     );
   }
 
   await tx.insert(replacementActivityEvents).values({
     replacementId: before.id,
+    ...(input.shipmentId != null ? { shipmentId: input.shipmentId } : {}),
     eventType: input.eventType,
     fromStatus: before.status,
     toStatus: 'review',

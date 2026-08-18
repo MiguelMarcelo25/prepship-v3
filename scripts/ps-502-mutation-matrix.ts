@@ -360,18 +360,30 @@ const MUTATIONS: Mutation[] = [
   },
   {
     id: 'M40',
-    defect: 'the drift review drops its expected-status predicate',
-    file: SHIPMENT,
-    find: '          eq(replacements.status, replacement.status),',
-    replace: '',
-    expect: 'the drift review is guarded by expected STATUS as well as version',
+    // RE-TARGETED (PS-502 item 11). The drift review's predicate moved out of the shipment
+    // command and into enterReplacementReview, so the defect is reintroduced THERE. Its owner
+    // is now the per-site check, and that is the point of the pair: M47 kills applyTransition's
+    // copy of this line and M40 kills the review writer's. A file-wide presence check would
+    // catch M47 and MISS M40 — so the two together are what prove that check walks every
+    // update site rather than settling for one match somewhere in the file.
+    defect: 'the shared review writer drops its expected-status predicate',
+    file: LIFECYCLE,
+    // Anchored on the row-count check below it, which makes the block unique to the review
+    // writer: applyTransition's copy of the same predicate is followed by moved.length, not by
+    // reviewed.length, so this block cannot match it.
+    find: /      eq\(replacements\.status, before\.status\),\n      eq\(replacements\.stateVersion, before\.stateVersion\),\n    \)\)\n    \.returning\(\);\n\n  if \(reviewed\.length === 0\) \{/,
+    replace: "      eq(replacements.stateVersion, before.stateVersion),\n    ))\n    .returning();\n\n  if (reviewed.length === 0) {",
+    expect: 'EVERY update to replacements is guarded on status AND state_version',
   },
   {
     id: 'M41',
+    // RE-TARGETED (PS-502 item 11): the row-count check moved into the shared writer with the
+    // update it guards. The name reviewed appears nowhere else in the lifecycle file, so the two-space
+    // form targets enterReplacementReview and nothing else.
     defect: 'a lost drift race still appends an event describing a transition that never happened',
-    file: SHIPMENT,
-    find: '      if (reviewed.length === 0) {',
-    replace: '      if (false) {',
+    file: LIFECYCLE,
+    find: '  if (reviewed.length === 0) {',
+    replace: '  if (false) {',
     expect: 'a lost drift race appends NO event',
   },
   {
@@ -714,6 +726,38 @@ const MUTATIONS: Mutation[] = [
     find: "      WHERE o.order_status = 'shipped'",
     replace: "      WHERE o.order_status = 'awaiting_shipment'",
     expect: 'the upstream producer raises holds WITHOUT moving the order',
+  },
+  // ── PS-502 item 11 — the three hand-rolled review writers routed through one ──────────────
+  //
+  // Deduplicating a write creates a NEW way to regress: someone re-inlines a copy. That is not
+  // hypothetical here — it is exactly what the label-purchase path had already done, matching on
+  // id alone with no predicate and no row-count check. Each of these puts a hand-rolled copy
+  // back at one call site and requires that site's delegation check to be the first to go red.
+  {
+    id: 'M86',
+    defect: 'the shipment command hand-rolls its drift review again, on id alone',
+    file: SHIPMENT,
+    find: '      await enterReplacementReview(tx, replacement, {',
+    replace: "      await tx.update(replacements).set({ status: 'review' })\n        .where(eq(replacements.id, replacement.id));\n      await inlinedReview({",
+    expect: 'the drift review delegates to the ONE guarded review writer',
+  },
+  {
+    id: 'M87',
+    defect: 'the label-purchase command hand-rolls its post-dispatch review again, on id alone',
+    file: LABEL_BUY,
+    find: '      await enterReplacementReview(tx, replacement!, {',
+    replace: "      await tx.update(replacements).set({ status: 'review' })\n        .where(eq(replacements.id, replacement!.id));\n      await inlinedReview({",
+    expect: 'the post-dispatch review delegates to the ONE guarded review writer',
+  },
+  {
+    id: 'M88',
+    // Global regex: the hold classifies three phases and calls the writer at all three, so
+    // replacing one leaves two and the check would stay green on a defect that is present.
+    defect: 'AC-16 stops using the shared review writer, so the copies can drift apart again',
+    file: HOLD,
+    find: /enterReplacementReview\(tx, before, \{/g,
+    replace: "tx.update(replacements).set({ status: 'review' })\n      .where(eq(replacements.id, before.id)); await inlinedReview({",
+    expect: 'there is ONE shared review writer, and AC-16 uses it',
   },
 ];
 
