@@ -29,6 +29,7 @@ import {
   type ShipmentVoidLifecycleDecision,
 } from './shipment-aggregate.js';
 import { enqueueInventoryClaimDeduction } from './fulfillment/inventory-deduction-outbox.js';
+import { raiseReplacementOriginalOrderHoldsInTransaction } from './replacement-original-order-hold';
 import { resolveOrderLifecycleStatus } from './order-lifecycle-status.js';
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -512,6 +513,26 @@ export async function applyOrderLifecycleCommandInTransaction(
         updatedAt: effectiveAt,
       })
       .where(eq(orders.id, input.orderId));
+
+    // PS-502 AC-16. In the SAME transaction, so "the original was cancelled" and "its
+    // replacements were held" commit or roll back together — a cancellation that left its
+    // replacements untouched would be a lie the audit log could not detect.
+    //
+    // Today this can only fire for an order that was awaiting, and an awaiting order cannot
+    // have a replacement (creation requires `shipped`). It is here anyway because the rule is
+    // "every writer of order_status=cancelled fans out", and a rule that holds only where it
+    // is currently reachable is a rule that breaks the day the reachability changes. The
+    // producer that actually fires today is the upstream-cancellation sweep, which raises
+    // holds WITHOUT cancelling the order row.
+    await raiseReplacementOriginalOrderHoldsInTransaction(tx, {
+      orderId: input.orderId,
+      triggerKind: 'order_cancelled',
+      evidence: { kind: 'order_lifecycle_event', orderLifecycleEventId: event.id },
+      reason: `original order cancelled via ${source}`,
+      // A system actor: this fan-out is a consequence of the cancellation, not an operator
+      // action, and it performs nothing that needs a permission an operator would hold.
+      actor: { type: 'system', email: null, permissions: [] },
+    });
   } else if (transition === 'external_classified') {
     await tx
       .update(orders)

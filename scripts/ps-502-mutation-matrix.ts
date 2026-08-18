@@ -36,6 +36,9 @@ const POLICY = 'src/services/billing-finalization-policy.ts';
 const FOLD = 'src/services/billing-replacement-finalized-fold.ts';
 const GENERATOR = 'src/services/billing.ts';
 const NO_CHARGE = 'src/services/billing-cancelled-no-charge.ts';
+const HOLD = 'src/services/replacement-original-order-hold.ts';
+const ORDER_LIFECYCLE = 'src/services/order-lifecycle-command.ts';
+const UPSTREAM = 'src/services/fulfillment/upstream-reconcile.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
 
@@ -672,6 +675,45 @@ const MUTATIONS: Mutation[] = [
     find: /\n      'replace_postage', 'replace_pick_pack'/,
     replace: '',
     expect: 'a cancelled original does not zero replacement money — both twins',
+  },  {
+    id: 'M81',
+    defect: 'AC-16 reuses the drift review reason, so the queue cannot tell the two apart',
+    file: HOLD,
+    find: "      reviewReason: 'original_order_cancelled_label_live',",
+    replace: "      reviewReason: 'original_order_line_drift',",
+    expect: 'AC-16 keeps its OWN review reasons, never the drift code',
+  },
+  {
+    id: 'M82',
+    defect: 'the sweep drops the order lock and can interleave with an in-flight ship',
+    file: HOLD,
+    find: '  await tx.execute(sql`select pg_advisory_xact_lock(36423, ${input.orderId})`);',
+    replace: '',
+    expect: 'the sweep takes the SAME order lock every replacement command takes',
+  },
+  {
+    id: 'M83',
+    defect: 'the open-hold check narrows to the idempotency key, aborting the second signal',
+    file: HOLD,
+    find: /sql`\(\$\{replacementOriginalOrderHolds\.resolvedAt\} is null\n[^`]*`,\n/,
+    replace: '',
+    expect: 'an open hold blocks re-classification, as the partial index requires',
+  },
+  {
+    id: 'M84',
+    defect: 'the local cancel branch stops fanning out to its replacements',
+    file: ORDER_LIFECYCLE,
+    find: '    await raiseReplacementOriginalOrderHoldsInTransaction(tx, {',
+    replace: '    if (false) await raiseReplacementOriginalOrderHoldsInTransaction(tx, {',
+    expect: 'the local cancel branch fans out IN THE SAME TRANSACTION',
+  },
+  {
+    id: 'M85',
+    defect: 'the upstream producer stops looking for shipped originals, so AC-16 never fires',
+    file: UPSTREAM,
+    find: "      WHERE o.order_status = 'shipped'",
+    replace: "      WHERE o.order_status = 'awaiting_shipment'",
+    expect: 'the upstream producer raises holds WITHOUT moving the order',
   },
 ];
 

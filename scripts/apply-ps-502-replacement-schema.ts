@@ -1,5 +1,5 @@
 /**
- * PS-502 — migrations 0096-0100 runner: the replacement schema.
+ * PS-502 — migrations 0096-0101 runner: the replacement schema.
  *
  * WHY A RUNNER AND NOT `npm run migrate`
  *
@@ -48,12 +48,14 @@ const SQL_0097 = 'drizzle/0097_ps502_replacement_billing.sql';
 const SQL_0098 = 'drizzle/0098_ps502_replacement_financial_restrict.sql';
 const SQL_0099 = 'drizzle/0099_ps502_replacement_request_signature.sql';
 const SQL_0100 = 'drizzle/0100_ps502_replacement_operational_state.sql';
+const SQL_0101 = 'drizzle/0101_ps502_replacement_original_order_holds.sql';
 const CONFIRM_TOKEN = 'APPLY-PS-502-REPLACEMENT-SCHEMA';
 const EXPECTED_0096 = 'bee592ffbb801f37858ec3459fdf00889e2fb5391ce820798e4485c026f6d63a';
 const EXPECTED_0097 = 'cfa70218831b0ec1377238610e4df2679da7bba4000af5bb57b4fcdfc97fbd91';
 const EXPECTED_0098 = '56ea07a48cb95127a335cbf9dd748c1507eba3077a550e0decff17021b9a2d37';
 const EXPECTED_0099 = '7a44f912b90c12e94bac255e331af0bd60e2f337ca842255b411949ca37dbdfe';
 const EXPECTED_0100 = '6f1524aaba51240650f380fec4af03f29d048cd66d2df1ad0c8003f2d628f9b3';
+const EXPECTED_0101 = 'fbd965fe230f44dbd34da5bf877473cd64f2ec694f71a5ba5f206f71069995a0';
 
 const ARGS = process.argv.slice(2);
 const APPLY = ARGS.includes('--apply');
@@ -82,6 +84,7 @@ async function main(): Promise<void> {
     [SQL_0098, EXPECTED_0098, 'digest98'],
     [SQL_0099, EXPECTED_0099, 'digest99'],
     [SQL_0100, EXPECTED_0100, 'digest100'],
+    [SQL_0101, EXPECTED_0101, 'digest101'],
   ] as const) {
     const actual = normalisedDigest(file);
     if (actual !== expected) {
@@ -153,7 +156,7 @@ async function main(): Promise<void> {
 
     // ONE transaction, in order: 0097 references replacements(id), so a failure there must
     // roll 0096 back rather than leave half a schema behind.
-    console.log('\napplying 0096 -> 0100 in one transaction...');
+    console.log('\napplying 0096 -> 0101 in one transaction...');
     await sql.begin(async (tx) => {
       await tx.unsafe(readFileSync(SQL_0096, 'utf8'));
       await tx.unsafe(readFileSync(SQL_0097, 'utf8'));
@@ -163,6 +166,9 @@ async function main(): Promise<void> {
       await tx.unsafe(readFileSync(SQL_0098, 'utf8'));
       await tx.unsafe(readFileSync(SQL_0099, 'utf8'));
       await tx.unsafe(readFileSync(SQL_0100, 'utf8'));
+      // 0101 references replacements(id) and the two append-only receipt tables, so it
+      // must land after 0096 and never before them.
+      await tx.unsafe(readFileSync(SQL_0101, 'utf8'));
     });
 
     const after = await state();
@@ -186,7 +192,7 @@ async function main(): Promise<void> {
 
     console.log('ok   three tables, two nullable replacement_id columns, the partial unique index,');
     console.log('ok   and a VALIDATED identity CHECK are all present.');
-    console.log('\nPS-502 0096-0100 applied and verified.');
+    console.log('\nPS-502 0096-0101 applied and verified.');
   } finally {
     await sql.end({ timeout: 5 });
   }

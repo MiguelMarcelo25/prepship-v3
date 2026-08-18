@@ -78,6 +78,18 @@ function check(name: string, condition: boolean, detail?: string): void {
  *
  * So a check that owns a predicate inside a specific function must read that function.
  */
+/** Like functionBody, for a module-PRIVATE function. */
+function functionBodyOf(source: string, name: string): string {
+  const start = source.indexOf(`async function ${name}(`);
+  if (start === -1) {
+    throw new Error(`functionBodyOf: ${name} not found — the check would pass on empty text`);
+  }
+  const next = source.indexOf('\nasync function ', start + 1);
+  const alt = source.indexOf('\nexport ', start + 1);
+  const ends = [next, alt].filter((n) => n !== -1);
+  return ends.length ? source.slice(start, Math.min(...ends)) : source.slice(start);
+}
+
 function functionBody(source: string, name: string): string {
   const start = source.indexOf(`export async function ${name}(`);
   if (start === -1) {
@@ -667,6 +679,75 @@ console.log('\ndrizzle schema mirrors the migration');
   check('0098 gives activity events somewhere to keep a written reason',
     /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
+}
+
+// ── AC-16: the original order went away ──────────────────────────────────────
+console.log('\nAC-16 — the original order went away');
+
+{
+  const hold = read('src/services/replacement-original-order-hold.ts');
+  const holdCode = hold.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const lifecycleOwner = read('src/services/order-lifecycle-command.ts');
+  const upstream = read('src/services/fulfillment/upstream-reconcile.ts');
+  const classify = functionBodyOf(holdCode, 'classifyAndAct');
+
+  check('the sweep takes the SAME order lock every replacement command takes',
+    /pg_advisory_xact_lock\(36423, \$\{input\.orderId\}\)/.test(holdCode),
+    'that lock is what makes it safe against an in-flight shipReplacement');
+
+  check('AC-16 keeps its OWN review reasons, never the drift code',
+    /original_order_cancelled_label_live/.test(holdCode)
+    && /original_order_cancelled_label_unresolved/.test(holdCode)
+    && !/original_order_line_drift/.test(holdCode),
+    'the card is explicit that a cancelled original keeps its own review path');
+
+  check('a POST-DISPATCH replacement is annotated, never transitioned',
+    /annotateReplacementOriginalOrderInTransaction/.test(classify)
+    && !/cancelReplacementForOriginalOrderInTransaction[\s\S]{0,400}status === 'shipped'/.test(classify),
+    'shipped -> [completed] is the whole of a dispatched replacement\'s future');
+
+  check('a live label is parked, never auto-voided',
+    !/voidReplacementLabel/.test(hold),
+    'a void is a one-way door and a provider action; a local cancellation cannot take it');
+
+  check('the money question on a delivered replacement is RECORDED, not answered',
+    /does_the_client_still_pay_for_a_delivered_replacement/.test(holdCode),
+    'guessing it would either bill for nothing owed or silently forgive real money');
+
+  check('a hold points at a RECEIPT, and reason is never parsed',
+    /orderLifecycleEventId/.test(holdCode)
+    && /webhookEventId/.test(holdCode)
+    && !/\breason\b[^\n]{0,60}\.(match|split|indexOf|includes)\(/.test(holdCode),
+    'inferring a cancellation from prose is the mistake PS-488 rejected');
+
+  check('an open hold blocks re-classification, as the partial index requires',
+    /resolvedAt\} is null/.test(holdCode),
+    'matching only the idempotency key aborts the sweep on the second signal');
+
+  // The call must be a BARE STATEMENT, not merely present. M84 survived an earlier version of
+  // this check by wrapping it in `if (false)` — the text was still there, still in the right
+  // order, and still doing nothing. Presence and position are both satisfied by dead code.
+  check('the local cancel branch fans out IN THE SAME TRANSACTION',
+    /^ {4}await raiseReplacementOriginalOrderHoldsInTransaction\(tx, \{$/m.test(lifecycleOwner)
+    && occursBefore(lifecycleOwner, "orderStatus: 'cancelled',",
+      'raiseReplacementOriginalOrderHoldsInTransaction(tx, {'),
+    'a cancellation that left its replacements untouched would be undetectable');
+
+  check('the upstream producer raises holds WITHOUT moving the order',
+    /o\.order_status = 'shipped'[\s\S]{0,400}EXISTS \(SELECT 1 FROM replacements/.test(upstream)
+    && !/shippedWithReplacements[\s\S]{0,600}applyOrderLifecycleCommand/.test(upstream),
+    'writing canonical_status would zero the original\'s billing through cancelled-no-charge');
+
+  check('shipped -> cancelled is STILL refused',
+    /transition === 'cancelled' && order\.orderStatus === 'shipped'/.test(lifecycleOwner)
+    && /cannot transition to cancelled/.test(lifecycleOwner),
+    'the tempting shortcut is to relax this so the local hook fires; AC-16 must not');
+
+  check('there is ONE shared review writer, and AC-16 uses it',
+    /export async function enterReplacementReview/.test(
+      read('src/services/replacement-lifecycle-command.ts')),
+    /enterReplacementReview\(tx, before, \{/.test(holdCode),
+  );
 }
 
 // ── Three ways replacement money silently disappears ─────────────────────────

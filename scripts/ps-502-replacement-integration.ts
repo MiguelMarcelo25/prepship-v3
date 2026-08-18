@@ -1599,6 +1599,153 @@ async function main(): Promise<void> {
       'the SQL predicate excludes replacement types too');
   });
 
+  console.log('\nAC-16 — the original order went away');
+
+  const { raiseReplacementOriginalOrderHoldsInTransaction } =
+    await import('../src/services/replacement-original-order-hold.js');
+
+  let evidenceSeq = 0;
+  /** A real receipt row, because a hold points at one by foreign key. */
+  const newEvidence = async () => {
+    evidenceSeq += 1;
+    const rows = await db.execute(sql`
+      insert into order_lifecycle_events (order_id, command_key, transition, source)
+      values (1321, ${'ac16-' + String(evidenceSeq)}, 'cancelled', 'test')
+      returning id
+    `);
+    return (rows as unknown as { rows: { id: number }[] }).rows[0]!.id;
+  };
+
+  const sweep = async (evidenceId: number) =>
+    (conn as { transaction: (f: never) => unknown }).transaction((async (tx: never) =>
+      raiseReplacementOriginalOrderHoldsInTransaction(tx, {
+        orderId: 1321,
+        triggerKind: 'order_cancelled',
+        evidence: { kind: 'order_lifecycle_event', orderLifecycleEventId: evidenceId },
+        reason: 'original order cancelled upstream',
+        actor: { type: 'system', email: null, permissions: [] },
+      })) as never) as Promise<{
+        considered: number; alreadyHeld: number;
+        outcomes: { replacementId: number; phase: string; disposition: string; openQuestion: string | null }[];
+      }>;
+
+  const holdFor = async (replacementId: number) => {
+    const rows = await db.select().from(schema.replacementOriginalOrderHolds)
+      .where(eq(schema.replacementOriginalOrderHolds.replacementId, replacementId));
+    return rows[rows.length - 1]!;
+  };
+  const statusOf = async (replacementId: number) => {
+    const [row] = await db.select().from(schema.replacements)
+      .where(eq(schema.replacements.id, replacementId));
+    return row!;
+  };
+
+  await check('a PRE-DISPATCH replacement with nothing spent is cancelled', async () => {
+    const target = await readyToShip('ac16-clean');
+    // Wind it back behind the label: nothing bought, nothing moved.
+    await db.update(schema.replacements).set({ status: 'approved' })
+      .where(eq(schema.replacements.id, target.replacementId));
+    await db.delete(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, target.replacementId));
+
+    const result = await sweep(await newEvidence());
+    const mine = result.outcomes.find((o) => o.replacementId === target.replacementId)!;
+    assert.equal(mine.phase, 'pre_dispatch');
+    assert.equal(mine.disposition, 'cancelled');
+    assert.equal(mine.openQuestion, null, 'nothing was spent, so nothing is owed a decision');
+
+    const after = await statusOf(target.replacementId);
+    assert.equal(after.status, 'cancelled');
+
+    const hold = await holdFor(target.replacementId);
+    assert.equal(hold.statusAtHold, 'approved', 'the hold records what it acted on');
+    assert.equal(hold.evidenceKind, 'order_lifecycle_event');
+    assert.ok(hold.orderLifecycleEventId, 'a hold points at a receipt, never at prose');
+  });
+
+  await check('a LIVE LABEL goes to review, is never auto-voided, and cannot ship', async () => {
+    const target = await readyToShip('ac16-label');
+    const before = await statusOf(target.replacementId);
+    assert.equal(before.status, 'label_created');
+
+    const result = await sweep(await newEvidence());
+    const mine = result.outcomes.find((o) => o.replacementId === target.replacementId)!;
+    assert.equal(mine.disposition, 'review');
+    assert.equal(mine.openQuestion, 'void_or_retain_purchased_label');
+
+    const after = await statusOf(target.replacementId);
+    assert.equal(after.status, 'review', 'review IS the shipping block — shipReplacement demands label_created');
+    assert.equal(after.reviewReason, 'original_order_cancelled_label_live');
+    assert.notEqual(after.reviewReason, 'original_order_line_drift',
+      'AC-16 keeps its OWN review path; the two lead an operator to different actions');
+
+    const intents = await db.select().from(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, target.replacementId));
+    assert.ok(intents.every((i) => i.voidState !== 'voided'),
+      'a local cancellation must never perform a provider action on its own authority');
+  });
+
+  await check('a SHIPPED replacement is annotated, never moved', async () => {
+    const target = await readyToShip('ac16-shipped');
+    await shipReplacement({
+      replacementId: target.replacementId, actor: { email: actor.email, type: 'operator' },
+      inventoryLines: [{ replacementItemId: target.itemId, inventoryId: 900, qty: 1 }],
+      consumePackage: packageConsumer, writeBilling: billingWriter as never,
+    }, conn);
+    const before = await statusOf(target.replacementId);
+
+    const result = await sweep(await newEvidence());
+    const mine = result.outcomes.find((o) => o.replacementId === target.replacementId)!;
+    assert.equal(mine.phase, 'post_dispatch');
+    assert.equal(mine.disposition, 'flagged_post_dispatch');
+    assert.equal(mine.openQuestion, 'does_the_client_still_pay_for_a_delivered_replacement',
+      'the money question is RECORDED, not answered by a default');
+
+    const after = await statusOf(target.replacementId);
+    assert.equal(after.status, 'shipped', 'real stock left; the status is history');
+    assert.equal(after.stateVersion, before.stateVersion + 1, 'a concurrent reader cannot miss it');
+
+    const lines = await db.select().from(schema.billingLineItems)
+      .where(eq(schema.billingLineItems.replacementId, target.replacementId));
+    assert.equal(lines.length, 2, 'a delivered replacement is not silently un-billed');
+  });
+
+  await check('the same evidence replayed moves nothing twice', async () => {
+    const target = await readyToShip('ac16-replay');
+    await db.update(schema.replacements).set({ status: 'approved' })
+      .where(eq(schema.replacements.id, target.replacementId));
+    await db.delete(schema.replacementLabelPurchaseIntents)
+      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, target.replacementId));
+
+    const evidenceId = await newEvidence();
+    const first = await sweep(evidenceId);
+    const versionAfterFirst = (await statusOf(target.replacementId)).stateVersion;
+
+    const second = await sweep(evidenceId);
+    assert.equal(second.outcomes.length, 0, "a replay classifies nothing");
+    assert.equal(second.alreadyHeld, first.considered);
+    assert.equal((await statusOf(target.replacementId)).stateVersion, versionAfterFirst);
+  });
+
+  await check('an already-cancelled replacement is recorded and left alone', async () => {
+    const target = await readyToShip('ac16-terminal');
+    await db.update(schema.replacements).set({ status: 'cancelled' })
+      .where(eq(schema.replacements.id, target.replacementId));
+    const before = await statusOf(target.replacementId);
+
+    const result = await sweep(await newEvidence());
+    const mine = result.outcomes.find((o) => o.replacementId === target.replacementId)!;
+    assert.equal(mine.phase, 'terminal_no_action');
+    assert.equal(mine.disposition, 'no_action');
+
+    const after = await statusOf(target.replacementId);
+    assert.equal(after.stateVersion, before.stateVersion, "nothing was touched");
+
+    const hold = await holdFor(target.replacementId);
+    assert.ok(hold.resolvedAt, "a hold with nothing to decide does not sit in the operator queue");
+    assert.equal(hold.resolution, 'no_action_required');
+  });
+
   await client.close();
   console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }

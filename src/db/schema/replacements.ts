@@ -273,5 +273,52 @@ export const replacementItemRemaps = pgTable(
   ],
 );
 
+/**
+ * PS-502 AC-16 — a replacement whose original order was cancelled or refunded.
+ *
+ * A row here is a HOLD, not a status: it records why, what proved it, and what a human
+ * still owes an answer to. The CHECK constraints live in 0101 and are deliberately not
+ * expressed here — Drizzle cannot state the evidence-pointer rule, and a mapping that
+ * looked complete would invite someone to trust it.
+ */
+export const replacementOriginalOrderHolds = pgTable(
+  'replacement_original_order_holds',
+  {
+    id: serial().primaryKey(),
+    replacementId: integer('replacement_id')
+      .notNull()
+      .references(() => replacements.id, { onDelete: 'restrict' }),
+    orderId: integer('order_id').notNull(),
+    /** order_cancelled | order_refunded — the latter is operator-declared only. */
+    triggerKind: text('trigger_kind').notNull(),
+    /** order_lifecycle_event | webhook_event | operator_declaration */
+    evidenceKind: text('evidence_kind').notNull(),
+    orderLifecycleEventId: integer('order_lifecycle_event_id'),
+    webhookEventId: integer('webhook_event_id'),
+    declaredBy: text('declared_by'),
+    /** Human prose. Never parsed — identity comes from the evidence pointer. */
+    reason: text().notNull(),
+    /** pre_dispatch | pre_dispatch_label_at_risk | post_dispatch | terminal_no_action */
+    phase: text().notNull(),
+    /** cancelled | review | flagged_post_dispatch | no_action */
+    disposition: text().notNull(),
+    /** Null unless a human still owes an answer. */
+    openQuestion: text('open_question'),
+    statusAtHold: text('status_at_hold').notNull(),
+    stateVersionAtHold: integer('state_version_at_hold').notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolvedBy: text('resolved_by'),
+    resolution: text(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('replacement_original_order_holds_idempotency_unq').on(t.idempotencyKey),
+    index('replacement_original_order_holds_order_idx').on(t.orderId, t.createdAt),
+  ],
+);
+
+export type ReplacementOriginalOrderHoldRow = typeof replacementOriginalOrderHolds.$inferSelect;
+
 export type ReplacementLabelPurchaseIntentRow = typeof replacementLabelPurchaseIntents.$inferSelect;
 export type ReplacementItemRemapRow = typeof replacementItemRemaps.$inferSelect;

@@ -7,13 +7,20 @@
 // OrderLifecycleCommand. That owner atomically records status, provenance,
 // exact claims, and durable work; it never reopens a terminal order.
 
-import { sql as pg } from '../../db/client.js';
+import { sql as pg, db } from '../../db/client.js';
+import { raiseReplacementOriginalOrderHoldsInTransaction } from '../replacement-original-order-hold.js';
 import type { NormalizedWebhookEvent } from './webhook-providers.js';
 import { applyOrderLifecycleCommand } from '../order-lifecycle-command.js';
 
 export type UpstreamReconcileResult = {
   matchedOrderIds: number[];
   action: 'none' | 'cancelled' | 'external_shipped';
+  /**
+   * PS-502 AC-16. Additive: how many replacements were held because their SHIPPED original
+   * was cancelled upstream. Separate from `action` because no order row changed — reporting
+   * this as 'cancelled' would claim a status move that deliberately did not happen.
+   */
+  replacementHoldsRaised?: number;
 };
 
 /**
@@ -43,8 +50,74 @@ export async function reconcileOrderFromUpstreamEvent(
     LIMIT 50
   `;
   const matchedOrderIds = candidates.map((r) => r.id);
+
+  // ── PS-502 AC-16: the producer that actually fires ──────────────────────────────────
+  //
+  // The candidate query above is awaiting-only by design: a shipped order must never be
+  // reopened or hard-cancelled. But an upstream cancellation of an order we ALREADY SHIPPED
+  // is precisely the case AC-16 exists for, and until now that signal was durably recorded
+  // in the ledger and then dropped on the floor.
+  //
+  // So this is a SECOND, replacement-scoped candidate query. It deliberately does not call
+  // applyOrderLifecycleCommand and does not write canonical_status:
+  //
+  //   * the shipped -> cancelled invariant stays untouched — we DID ship, and the order row
+  //     saying so remains true;
+  //   * writing canonical_status = 'cancelled' would additionally zero the order's billing
+  //     through the cancelled-no-charge predicate, turning a replacement question into
+  //     silent revenue loss on the original.
+  //
+  // Only holds are raised. Every decision they imply belongs to a human.
+  let replacementHoldsRaised = 0;
+  if (event.canonicalStatus === 'cancelled') {
+    const shippedWithReplacements = await pg<{ id: number }[]>`
+      SELECT o.id FROM orders o
+      WHERE o.order_status = 'shipped'
+        AND EXISTS (SELECT 1 FROM replacements r WHERE r.order_id = o.id)
+        AND (
+          (${orderNumber ?? null}::text IS NOT NULL AND (o.order_number = ${orderNumber ?? null} OR o.source_order_number = ${orderNumber ?? null}))
+          OR (${sourceId ?? null}::text IS NOT NULL AND (o.source_order_id = ${sourceId ?? null} OR o.external_order_id = ${sourceId ?? null}))
+        )
+      LIMIT 50
+    `;
+
+    if (shippedWithReplacements.length > 0) {
+      // The evidence pointer. Matched on the same facts the ledger read uses rather than by
+      // rebuilding the ledger's dedupe key here — a second copy of that key logic would be a
+      // second thing to keep in step.
+      //
+      // If no ledger row can be found the hold is NOT raised. An unfalsifiable claim is worse
+      // than a missing one, and this signal is durable: it will be reconciled again.
+      const [ledgerRow] = await pg<{ id: number }[]>`
+        SELECT id FROM webhook_events
+        WHERE canonical_status = 'cancelled'
+          AND status <> 'ignored'
+          AND (
+            (${event.externalEventId ?? null}::text IS NOT NULL AND external_event_id = ${event.externalEventId ?? null})
+            OR (${orderNumber ?? null}::text IS NOT NULL AND source_order_number = ${orderNumber ?? null})
+            OR (${sourceId ?? null}::text IS NOT NULL AND source_order_id = ${sourceId ?? null})
+          )
+        ORDER BY id DESC
+        LIMIT 1
+      `;
+      if (ledgerRow) {
+        for (const candidate of shippedWithReplacements) {
+          const swept = await db.transaction(async (tx) =>
+            raiseReplacementOriginalOrderHoldsInTransaction(tx, {
+              orderId: candidate.id,
+              triggerKind: 'order_cancelled',
+              evidence: { kind: 'webhook_event', webhookEventId: ledgerRow.id },
+              reason: `original order cancelled upstream by ${String(event.metadata.provider ?? 'unknown')}`,
+              actor: { type: 'system', email: null, permissions: [] },
+            }));
+          replacementHoldsRaised += swept.outcomes.length;
+        }
+      }
+    }
+  }
+
   const firstMatchedId = matchedOrderIds[0];
-  if (firstMatchedId === undefined) return { matchedOrderIds: [], action: 'none' };
+  if (firstMatchedId === undefined) return { matchedOrderIds: [], action: 'none', replacementHoldsRaised };
 
   if (event.canonicalStatus === 'cancelled') {
     // PS-129: record a cancellation HOLD signal (forward-only). We set canonical_status —
@@ -64,7 +137,7 @@ export async function reconcileOrderFromUpstreamEvent(
         provenance: event.metadata,
       })));
     await linkLedgerToOrder(event, firstMatchedId);
-    return { matchedOrderIds, action: 'cancelled' };
+    return { matchedOrderIds, action: 'cancelled', replacementHoldsRaised };
   }
 
   // PS-128: flag external shipment (forward-only). externally_shipped is the existing

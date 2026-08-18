@@ -143,6 +143,24 @@ export const PS_502_PREREQUISITE_DDL = `
   -- the frozen-line join reads. Present because the reconciler identifies a finalized line
   -- by JOINING here on the effective date, not by a column on the line — the distinction
   -- that made the original predicate unmatchable and undetectable by source text.
+  -- Append-only receipts owned outside PS-502. Present because an AC-16 hold points at
+  -- one by foreign key: a hold whose evidence cannot be resolved is an unfalsifiable claim,
+  -- so the pointer is a real reference rather than a loose integer.
+  CREATE TABLE order_lifecycle_events (
+    id serial PRIMARY KEY,
+    order_id integer NOT NULL REFERENCES orders(id),
+    command_key text NOT NULL,
+    transition text NOT NULL,
+    source text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE TABLE webhook_events (
+    id serial PRIMARY KEY,
+    related_order_id integer REFERENCES orders(id),
+    canonical_status text,
+    status text NOT NULL DEFAULT 'processed',
+    created_at timestamptz NOT NULL DEFAULT now()
+  );
   CREATE TABLE billing_finalizations (
     id text PRIMARY KEY,
     client_id integer NOT NULL REFERENCES clients(id),
@@ -177,6 +195,7 @@ export const PS_502_MIGRATIONS = [
   'drizzle/0098_ps502_replacement_financial_restrict.sql',
   'drizzle/0099_ps502_replacement_request_signature.sql',
   'drizzle/0100_ps502_replacement_operational_state.sql',
+  'drizzle/0101_ps502_replacement_original_order_holds.sql',
 ] as const;
 
 /** A shipped original: 3 x SKU-A at line 0, 2 x SKU-B at line 1. */

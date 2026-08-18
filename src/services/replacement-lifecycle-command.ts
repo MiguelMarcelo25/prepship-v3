@@ -180,6 +180,152 @@ function requireReason(reason: string | null | undefined, code: ReplacementLifec
 }
 
 /**
+ * Park a replacement in `review`, for a NAMED reason.
+ *
+ * Extracted because there were three hand-rolled copies of this update and every one of them
+ * hard-coded reviewReason = 'original_order_line_drift'. AC-16 needed a fourth review reason,
+ * and a fourth copy would have been the point at which the shape stopped being a shape. One of
+ * the three (label-purchase) also updated on id alone, without the optimistic predicate — so
+ * the copies had already drifted apart in the way that matters.
+ *
+ * NOT applyTransition. `review -> review` is not in the diagram and a self-transition throws,
+ * but re-parking an already-reviewing replacement under a NEW reason is legitimate: a second,
+ * different thing is now wrong with it. So this writes the row directly, keeping the same
+ * guard the primitive uses — expected status AND expected state_version, row count checked —
+ * and appends exactly one event.
+ */
+export async function enterReplacementReview(
+  tx: any,
+  before: ReplacementRow,
+  input: {
+    reviewReason: string;
+    eventType: string;
+    actor: LifecycleActor;
+    reason?: string | null;
+    idempotencySuffix: string;
+  },
+): Promise<ReplacementRow> {
+  const reviewed = await tx
+    .update(replacements)
+    .set({
+      status: 'review',
+      reviewReason: input.reviewReason,
+      reviewRequestedAt: new Date(),
+      stateVersion: before.stateVersion + 1,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(replacements.id, before.id),
+      eq(replacements.status, before.status),
+      eq(replacements.stateVersion, before.stateVersion),
+    ))
+    .returning();
+
+  if (reviewed.length === 0) {
+    throw new ReplacementLifecycleError(
+      'REPLACEMENT_STATE_CONFLICT',
+      `replacement ${before.reference} moved while review was being recorded; nothing was written`,
+    );
+  }
+
+  await tx.insert(replacementActivityEvents).values({
+    replacementId: before.id,
+    eventType: input.eventType,
+    fromStatus: before.status,
+    toStatus: 'review',
+    actorType: input.actor.type,
+    actorEmail: input.actor.email,
+    detail: input.reason ?? null,
+    idempotencyKey: `replacement:${before.id}:${input.idempotencySuffix}:v${before.stateVersion}`,
+  });
+
+  return reviewed[0] as ReplacementRow;
+}
+
+/**
+ * AC-16 — cancel a PRE-DISPATCH replacement because its original order went away.
+ *
+ * Runs inside the caller's transaction, because the hold that records WHY must commit with
+ * the cancellation that records WHAT. The diagram is asserted by applyTransition, so a
+ * shipped or completed replacement cannot reach here even by mistake: `shipped -> cancelled`
+ * is not an edge, and the guard pins that it never becomes one.
+ *
+ * This does NOT void a label. cancelReplacement has said so since it was written, for a
+ * reason that outlives AC-16: a local cancellation must never pretend a provider action
+ * happened. The caller decides that separately, and where a live label exists AC-16 does not
+ * come here at all — it parks the replacement in review instead.
+ */
+export async function cancelReplacementForOriginalOrderInTransaction(
+  tx: any,
+  before: ReplacementRow,
+  input: { actor: LifecycleActor; reason: string },
+): Promise<ReplacementRow> {
+  const reason = requireReason(input.reason, 'REPLACEMENT_REASON_REQUIRED');
+  return applyTransition(tx, before, {
+    to: 'cancelled',
+    eventType: 'replacement_cancelled_original_order',
+    actor: input.actor,
+    reason,
+    idempotencySuffix: 'original-order-cancel',
+  });
+}
+
+/**
+ * AC-16 — annotate a POST-DISPATCH replacement. Status is deliberately untouched.
+ *
+ * A shipped replacement moved real stock, consumed a real package and spent real postage.
+ * `shipped -> ['completed']` is the whole of its future, so there is no status that could
+ * express "the original was cancelled" without first making a delivered re-ship cancellable.
+ *
+ * So this records the fact and moves nothing: state_version bumps so a concurrent reader
+ * cannot miss it, and exactly one event is appended. It copies setReplacementBillability,
+ * which is the only existing shape for a status-preserving annotation — applyTransition
+ * cannot express one, because a self-transition throws at the diagram.
+ *
+ * Whether the client still pays is NOT decided here. That is a money question and it is
+ * carried on the hold as an open question for a human.
+ */
+export async function annotateReplacementOriginalOrderInTransaction(
+  tx: any,
+  before: ReplacementRow,
+  input: { actor: LifecycleActor; reason: string; eventType: string },
+): Promise<ReplacementRow> {
+  const reason = requireReason(input.reason, 'REPLACEMENT_REASON_REQUIRED');
+  const annotated = await tx
+    .update(replacements)
+    .set({
+      stateVersion: before.stateVersion + 1,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(replacements.id, before.id),
+      eq(replacements.status, before.status),
+      eq(replacements.stateVersion, before.stateVersion),
+    ))
+    .returning();
+
+  if (annotated.length === 0) {
+    throw new ReplacementLifecycleError(
+      'REPLACEMENT_STATE_CONFLICT',
+      `replacement ${before.reference} moved while the original-order note was being recorded`,
+    );
+  }
+
+  await tx.insert(replacementActivityEvents).values({
+    replacementId: before.id,
+    eventType: input.eventType,
+    fromStatus: before.status,
+    toStatus: before.status,
+    actorType: input.actor.type,
+    actorEmail: input.actor.email,
+    detail: reason,
+    idempotencyKey: `replacement:${before.id}:original-order-note:v${before.stateVersion}`,
+  });
+
+  return annotated[0] as ReplacementRow;
+}
+
+/**
  * Approve — re-resolving every frozen source line IMMEDIATELY before commit.
  *
  * Drift commits `review` and then reports 409, in that order and in separate transactions.
@@ -195,35 +341,11 @@ export async function approveReplacement(
     const finding = await findFrozenLineDrift(tx, before);
     if (!finding) return null;
 
-    const reviewed = await tx
-      .update(replacements)
-      .set({
-        status: 'review',
-        reviewReason: 'original_order_line_drift',
-        reviewRequestedAt: new Date(),
-        stateVersion: before.stateVersion + 1,
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(replacements.id, before.id),
-        eq(replacements.status, before.status),
-        eq(replacements.stateVersion, before.stateVersion),
-      ))
-      .returning();
-    if (reviewed.length === 0) {
-      throw new ReplacementLifecycleError(
-        'REPLACEMENT_STATE_CONFLICT',
-        `replacement ${before.reference} moved while drift was being recorded; nothing was written`,
-      );
-    }
-    await tx.insert(replacementActivityEvents).values({
-      replacementId: before.id,
+    await enterReplacementReview(tx, before, {
+      reviewReason: 'original_order_line_drift',
       eventType: 'replacement_source_line_drift',
-      fromStatus: before.status,
-      toStatus: 'review',
-      actorType: input.actor.type,
-      actorEmail: input.actor.email,
-      idempotencyKey: `replacement:${before.id}:approve-drift:v${before.stateVersion}`,
+      actor: input.actor,
+      idempotencySuffix: 'approve-drift',
     });
     return { reference: before.reference, finding };
   });
