@@ -3,7 +3,7 @@ import { db } from '../db/client.js';
 import { roundMoney } from '../lib/money.js';
 import { intArraySql } from '../lib/scope-sql.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
-import { billingLineItemsHasReplacementIdColumn } from './billing-row-status.js';
+import { billingLineItemsHasReplacementIdColumn } from './billing-column-presence.js';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
 import {
   nonBillableDuplicateOrderIds,

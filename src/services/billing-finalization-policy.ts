@@ -7,7 +7,7 @@
  * backstop for scripts, cascades, races, and destructive maintenance paths.
  */
 import { randomUUID } from 'node:crypto';
-import { billingCreditNotesHasReplacementIdColumn } from './billing-row-status.js';
+import { billingCreditNotesHasReplacementIdColumn } from './billing-column-presence.js';
 import { and, eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { db } from '../db/client';
 import {

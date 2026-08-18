@@ -104,7 +104,8 @@ import {
 } from './billing-outbound-sweep';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
-import { billingLineItemsHasReplacementIdColumn, billingReturnLineTypesSql, isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
+import { billingReturnLineTypesSql, isBillingReturnPostageLineType, resolveBillingRowStatus } from './billing-row-status';
+import { billingLineItemsHasReplacementIdColumn } from './billing-column-presence';
 import {
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,

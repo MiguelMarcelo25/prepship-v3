@@ -1,5 +1,4 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { db } from '../db/client.js';
 import { REPLACEMENT_LINE_TYPES } from './replacement-billing-planner.js';
 
 import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
@@ -281,64 +280,4 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
  * Memoised: the answer cannot change without a deploy-time migration, and the billing
  * summary is a hot path that must not pay for an information_schema round trip per call.
  */
-let replacementIdColumnPresent: Promise<boolean> | null = null;
 
-async function probeColumn(
-  conn: Pick<typeof db, 'execute'>,
-  table: string,
-  column: string,
-): Promise<boolean> {
-  const result = await conn.execute(sql`
-    select 1 from information_schema.columns
-     where table_schema = current_schema()
-       and table_name = ${table}
-       and column_name = ${column}
-     limit 1
-  `);
-  const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
-  return rows.length > 0;
-}
-
-/**
- * PS-502 — does `billing_credit_notes.replacement_id` exist here?
- *
- * appendBillingAdjustmentProjection is the canonical credit-note writer, used by the ORDER
- * reconciler for ordinary billing. Item 10 added `replacement_id` to its INSERT, and 0097 is
- * gated behind the operator lane — so on a production database every credit note would have
- * failed with "column replacement_id does not exist", with replacement flags off. Exactly the
- * defect already fixed for billing_line_items, in a second place nobody checked.
- */
-let creditNoteReplacementIdColumnPresent: Promise<boolean> | null = null;
-export function billingCreditNotesHasReplacementIdColumn(
-  conn?: Pick<typeof db, 'execute'>,
-): Promise<boolean> {
-  if (conn) return probeColumn(conn, 'billing_credit_notes', 'replacement_id');
-  creditNoteReplacementIdColumnPresent ??= probeColumn(db, 'billing_credit_notes', 'replacement_id')
-    .then((found) => {
-      if (!found) creditNoteReplacementIdColumnPresent = null;
-      return found;
-    })
-    .catch((error) => { creditNoteReplacementIdColumnPresent = null; throw error; });
-  return creditNoteReplacementIdColumnPresent;
-}
-
-async function probeReplacementIdColumn(conn: Pick<typeof db, 'execute'>): Promise<boolean> {
-  return probeColumn(conn, 'billing_line_items', 'replacement_id');
-}
-/**
- * Takes the CALLER'S connection, and remembers only a true answer — same two corrections as
- * replacementSchemaPresent. Reading the singleton meant an invoice-totals caller running
- * against a pre-0097 fixture probed the wrong database entirely.
- */
-export function billingLineItemsHasReplacementIdColumn(
-  conn?: Pick<typeof db, 'execute'>,
-): Promise<boolean> {
-  if (conn) return probeReplacementIdColumn(conn);
-  replacementIdColumnPresent ??= probeReplacementIdColumn(db)
-    .then((found) => {
-      if (!found) replacementIdColumnPresent = null;
-      return found;
-    })
-    .catch((error) => { replacementIdColumnPresent = null; throw error; });
-  return replacementIdColumnPresent;
-}
