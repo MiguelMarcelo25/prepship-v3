@@ -213,6 +213,7 @@ jobs:
               --data-urlencode "ownerId=${owner_id}" \
               --data-urlencode "resource=${RENDER_SERVICE_ID}" \
               --data-urlencode "startTime=${RENDER_JOB_STARTED}" \
+              --data-urlencode "text=PS508|" \
               --data-urlencode "limit=500")
             http_code=$(printf '%s' "$response" | tail -n1)
             body=$(printf '%s' "$response" | sed '$d')
@@ -223,9 +224,16 @@ jobs:
               const lines = Array.isArray(parsed?.logs) ? parsed.logs
                 : Array.isArray(parsed) ? parsed : [];
               if (!lines.length) process.exit(4);
-              for (const line of lines) {
-                process.stdout.write(String(line.message ?? line.text ?? line.log ?? "") + "\n");
-              }
+              // Keep only tagged lines and strip the tag. The service shares this log stream and
+              // emits a /health/ready line every few seconds; the server-side text filter should
+              // already have excluded them, but filtering again here costs nothing and means a
+              // looser-than-expected filter cannot pad the report with noise.
+              const report = lines
+                .map((l) => String(l.message ?? l.text ?? l.log ?? ""))
+                .filter((t) => t.includes("PS508|"))
+                .map((t) => t.slice(t.indexOf("PS508|") + 6));
+              if (!report.length) process.exit(5);
+              for (const line of report) process.stdout.write(line + "\n");
             ') && { echo "----- BEGIN PS-508 COVERAGE REPORT -----"; printf "%s\n" "$printed";
                     echo "----- END PS-508 COVERAGE REPORT -----"; exit 0; }
 

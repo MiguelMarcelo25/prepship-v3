@@ -87,6 +87,27 @@ function exclusionFor(row: ShipmentRow): CoverageExclusionReason | null {
   return null;
 }
 
+/**
+ * Every report line carries this tag, and that is what makes the report RETRIEVABLE.
+ *
+ * A Render one-off job writes into the same log stream as the web service it runs beside, and that
+ * service emits a /health/ready line every few seconds. Fetching by service and time window buries
+ * the report in health checks — proven, on the first working retrieval. Filtering the logs API by
+ * an instance id did not work either: a job id is not an instance id.
+ *
+ * Tagging every line sidesteps the question. The lane filters server-side on this exact token, so
+ * it gets the report and nothing else, without depending on API filter semantics I cannot verify
+ * from here. It also makes the report greppable in the Render dashboard by hand.
+ */
+const TAG = 'PS508|';
+function say(line = ''): void {
+  // EVERY physical line, not just the first. Several report strings embed \n for spacing, so
+  // prefixing only the head would emit untagged continuation lines — and those are content, not
+  // blanks (`\n  outbound coverage: ...`). They would then be dropped by the tag filter and the
+  // report would arrive quietly incomplete, which is worse than not arriving.
+  console.log(String(line).split('\n').map((part) => `${TAG}${part}`).join('\n'));
+}
+
 function money(value: number): string {
   const sign = value < 0 ? '-' : '';
   return `${sign}$${Math.abs(value).toFixed(2)}`;
@@ -174,56 +195,56 @@ async function main(): Promise<void> {
   const report = buildCoverageReport(rows);
   const pct = outboundCoveragePct(report);
 
-  console.log('PS-508 coverage + shadow comparison');
-  console.log(`operator: ${operator}   window: last ${days} day(s)   limit: ${limit}`);
-  console.log('READ-ONLY: this run issued SELECTs only.\n');
+  say('PS-508 coverage + shadow comparison');
+  say(`operator: ${operator}   window: last ${days} day(s)   limit: ${limit}`);
+  say('READ-ONLY: this run issued SELECTs only.\n');
 
-  console.log(`POPULATION  ${report.total} shipment(s)`);
-  console.log(`  excluded (cannot carry an outbound tuple): ${report.excludedTotal}`);
+  say(`POPULATION  ${report.total} shipment(s)`);
+  say(`  excluded (cannot carry an outbound tuple): ${report.excludedTotal}`);
   for (const [reason, count] of Object.entries(report.excluded)) {
-    if (count > 0) console.log(`      ${reason.padEnd(18)} ${count}`);
+    if (count > 0) say(`      ${reason.padEnd(18)} ${count}`);
   }
-  console.log(`  IN SCOPE: ${report.inScope}\n`);
+  say(`  IN SCOPE: ${report.inScope}\n`);
 
-  console.log('CLASSIFICATION (in-scope only)');
+  say('CLASSIFICATION (in-scope only)');
   for (const [kind, count] of Object.entries(report.byKind)) {
     const share = report.inScope > 0 ? ` (${((count / report.inScope) * 100).toFixed(1)}%)` : '';
-    console.log(`  ${kind.padEnd(24)} ${String(count).padStart(6)}${share}`);
+    say(`  ${kind.padEnd(24)} ${String(count).padStart(6)}${share}`);
   }
-  console.log(`\n  outbound coverage: ${pct == null ? 'n/a' : `${pct}%`} of in-scope rows carry ps-508-v1\n`);
+  say(`\n  outbound coverage: ${pct == null ? 'n/a' : `${pct}%`} of in-scope rows carry ps-508-v1\n`);
 
-  console.log('SHADOW COMPARISON (valid tuple vs what billing would charge today)');
-  console.log(`  compared:            ${report.compared}`);
-  console.log(`  differing:           ${report.differing}`);
-  console.log(`  signed total:        ${money(report.signedDollars)}`);
-  console.log(`  absolute total:      ${money(report.absoluteDollars)}`);
-  console.log(`  max single delta:    ${report.maxAbsoluteDelta
+  say('SHADOW COMPARISON (valid tuple vs what billing would charge today)');
+  say(`  compared:            ${report.compared}`);
+  say(`  differing:           ${report.differing}`);
+  say(`  signed total:        ${money(report.signedDollars)}`);
+  say(`  absolute total:      ${money(report.absoluteDollars)}`);
+  say(`  max single delta:    ${report.maxAbsoluteDelta
     ? `${money(report.maxAbsoluteDelta.delta)} (shipment ${report.maxAbsoluteDelta.shipmentId})`
     : 'none'}`);
-  console.log(`  uncomparable:        ${report.uncomparable}`);
+  say(`  uncomparable:        ${report.uncomparable}`);
 
   if (report.byClient.length) {
-    console.log('\n  by client (largest absolute first)');
+    say('\n  by client (largest absolute first)');
     for (const b of report.byClient.slice(0, 15)) {
-      console.log(`    client ${b.key.padEnd(10)} rows ${String(b.rows).padStart(5)}  differing ${String(b.differing).padStart(5)}  signed ${money(b.signedDollars).padStart(12)}  abs ${money(b.absoluteDollars)}`);
+      say(`    client ${b.key.padEnd(10)} rows ${String(b.rows).padStart(5)}  differing ${String(b.differing).padStart(5)}  signed ${money(b.signedDollars).padStart(12)}  abs ${money(b.absoluteDollars)}`);
     }
   }
   if (report.bySource.length) {
-    console.log('\n  by source');
+    say('\n  by source');
     for (const b of report.bySource) {
-      console.log(`    ${b.key.padEnd(18)} rows ${String(b.rows).padStart(5)}  differing ${String(b.differing).padStart(5)}  signed ${money(b.signedDollars).padStart(12)}  abs ${money(b.absoluteDollars)}`);
+      say(`    ${b.key.padEnd(18)} rows ${String(b.rows).padStart(5)}  differing ${String(b.differing).padStart(5)}  signed ${money(b.signedDollars).padStart(12)}  abs ${money(b.absoluteDollars)}`);
     }
   }
 
   if (report.activationBlockers.length) {
-    console.log('\nACTIVATION BLOCKERS — tuple precedence must NOT be enabled over this population:');
-    for (const blocker of report.activationBlockers) console.log(`  - ${blocker}`);
+    say('\nACTIVATION BLOCKERS — tuple precedence must NOT be enabled over this population:');
+    for (const blocker of report.activationBlockers) say(`  - ${blocker}`);
     process.exitCode = 1;
     return;
   }
-  console.log('\nNo activation blockers in this population.');
-  console.log('This does NOT authorise activation on its own — the plan review also requires a');
-  console.log('finalized-period dry run and an approved disposition for every non-zero divergence.');
+  say('\nNo activation blockers in this population.');
+  say('This does NOT authorise activation on its own — the plan review also requires a');
+  say('finalized-period dry run and an approved disposition for every non-zero divergence.');
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });
