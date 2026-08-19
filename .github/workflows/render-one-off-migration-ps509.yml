@@ -1,0 +1,178 @@
+# PS-509 — migration 0103, the sync-ingress customer-money durable schema, as a Render
+# one-off job.
+#
+# WHY THIS LANE
+#
+# Production execution belongs to the designated operator lane, not a developer session.
+# The Render job runs inside the environment that already holds the production
+# DATABASE_URL, so no local credential is needed, none is minted, and none passes through
+# a workstation. Same pattern as render-one-off-migration-ps488/-ps501/-ps502.
+#
+# DEPLOY ORDER IS MANDATORY
+#
+# The PS-509 writer refuses to insert sync shipments until this schema exists (fail-closed,
+# loud, retryable). Dispatch INSPECT, read the job log, dispatch APPLY — and only then let
+# the PS-509 code deploy reach prepshipv4-stable, or shipment ingestion stalls until this
+# lane runs. Purely additive: two new tables, their indexes and their mutation-guard
+# triggers; no existing relation is altered, no row is touched.
+name: Render One-Off Migration (PS-509 / 0103)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'inspect = read-only report (default). apply = create the schema.'
+        required: true
+        default: inspect
+        type: choice
+        options:
+          - inspect
+          - apply
+      confirm:
+        description: 'apply only — type APPLY-PS-509-SYNC-MONEY-SCHEMA. Leave blank for inspect.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-one-off-migration-ps-509
+  # Never cancel a migration mid-flight.
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # A blank or wrong token in apply mode stops here, before any Render call.
+      - name: Validate mode and confirmation
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          expected='APPLY-PS-509-SYNC-MONEY-SCHEMA'
+          case "$MODE" in
+            inspect)
+              echo 'Mode: INSPECT — read-only. The runner writes nothing without --apply.'
+              ;;
+            apply)
+              test "${CONFIRM:-}" = "$expected" || {
+                echo '::error::apply requires the exact confirmation token. Nothing was dispatched.'
+                exit 1
+              }
+              echo 'Mode: APPLY — confirmation accepted.'
+              ;;
+            *)
+              echo "::error::Unknown mode '${MODE}'."
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      # Proves this checkout holds the reviewed SQL before anything is shipped. The runner
+      # re-checks inside the job from its own pinned constant; this fails faster, and on
+      # the archive that is actually about to travel. LF-normalised.
+      - name: Reviewed-content digest
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { createHash } = require('node:crypto');
+          const { readFileSync } = require('node:fs');
+          const norm = (p) => createHash('sha256')
+            .update(readFileSync(p, 'utf8').replace(/\r\n/g, '\n'), 'utf8').digest('hex');
+          const file = 'drizzle/0103_ps509_customer_shipping_money_sync.sql';
+          const expected = '29840edd48b06ef030571531cb19cf0e4f5238ad52b1d933a8d0d51fa1f505d3';
+          const actual = norm(file);
+          if (actual === expected) { console.log('ok   ' + file); process.exit(0); }
+          console.error('STOP: ' + file + '\n  actual:   ' + actual + '\n  expected: ' + expected);
+          process.exit(1);
+          NODE
+
+      # The contract this migration exists to satisfy. If the guard is red, the schema
+      # change is not the thing to fix first.
+      - name: PS-509 sync-ingress freeze guard
+        run: npm run test:ps-509-sync-ingress-freeze
+
+      - name: Run the PS-509 runner as a Render one-off job
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo '::error::RENDER_API_KEY and RENDER_SERVICE_ID are required.'
+            exit 1
+          fi
+
+          d103='29840edd48b06ef030571531cb19cf0e4f5238ad52b1d933a8d0d51fa1f505d3'
+          files=(
+            scripts/apply-ps-509-sync-money-schema.ts
+            drizzle/0103_ps509_customer_shipping_money_sync.sql
+          )
+          runner='npx tsx scripts/apply-ps-509-sync-money-schema.ts'
+          run_args="--digest103=${d103}"
+          if [ "$MODE" = 'apply' ]; then
+            run_args="${run_args} --apply --confirm=APPLY-PS-509-SYNC-MONEY-SCHEMA"
+          fi
+
+          archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
+          start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && ${runner} ${run_args}"
+          payload=$(START_COMMAND="$start_command" node -e \
+            'process.stdout.write(JSON.stringify({startCommand: process.env.START_COMMAND}))')
+
+          response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+          http_code=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+          if [ "$http_code" != '201' ]; then
+            echo "::error::Render one-off job creation failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+          job_id=$(BODY="$body" node -e \
+            'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.id||""))')
+          test -n "$job_id" || { echo '::error::Render returned no job id.'; exit 1; }
+          echo "Render ${MODE} job created: ${job_id}"
+
+          for attempt in $(seq 1 90); do
+            sleep 10
+            job=$(curl -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs/${job_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H 'Accept: application/json')
+            status=$(BODY="$job" node -e \
+              'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.status||""))')
+            echo "${MODE} status=${status} (poll ${attempt})"
+            case "$status" in
+              succeeded)
+                if [ "$MODE" = 'apply' ]; then
+                  echo 'PS-509 0103 applied and shape-verified. The PS-509 deploy may now serve sync traffic.'
+                else
+                  echo 'INSPECT complete — nothing was written. Read the job log before dispatching apply.'
+                fi
+                exit 0 ;;
+              failed|canceled)
+                echo "::error::Render ${MODE} job ${status}. Read the job log; nothing is assumed."
+                exit 1 ;;
+            esac
+          done
+          echo '::error::Timed out waiting for the Render job. Check its status before re-dispatching.'
+          exit 1
