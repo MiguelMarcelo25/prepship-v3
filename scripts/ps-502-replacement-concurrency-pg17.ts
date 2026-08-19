@@ -170,6 +170,29 @@ const PURCHASE_INPUTS = {
   },
 };
 
+/**
+ * The vessel the purchase will be checked against, DERIVED from PURCHASE_INPUTS.
+ *
+ * readyForLabel() attached a shipment with no carrier, service, account or dimensions,
+ * while the purchase asked for ups/ups_ground/account 7 — so the request/shipment identity
+ * check added with the frozen-request work refused all eight fields and case 5a died on a
+ * mismatch instead of the crash it was written to exercise. The PGlite suite passed because
+ * its fixture supplies this payload; this lane predates the check and never ran on PG17.
+ *
+ * Deriving the values means a future change to PURCHASE_INPUTS cannot silently desynchronise
+ * the fixture from the request again.
+ */
+const PURCHASE_SHIPMENT = {
+  carrierCode: PURCHASE_INPUTS.carrier.value.carrierCode,
+  serviceCode: PURCHASE_INPUTS.carrier.value.serviceCode,
+  providerAccountId: PURCHASE_INPUTS.carrier.value.providerAccountId,
+  selectedPackageId: PURCHASE_INPUTS.package.value.packageId,
+  weightOz: PURCHASE_INPUTS.package.value.weightOz,
+  dimsL: PURCHASE_INPUTS.package.value.dimsL,
+  dimsW: PURCHASE_INPUTS.package.value.dimsW,
+  dimsH: PURCHASE_INPUTS.package.value.dimsH,
+};
+
 const FULL_PROVIDER_RECEIPT = {
   providerTransactionId: 'txn-ps502-race',
   providerLabelId: 'lbl-ps502-race',
@@ -287,6 +310,7 @@ async function main(): Promise<void> {
     const attached = await insertReplacementShipment({
       replacementId: created.replacement.id,
       actor: { email: actor.email, type: actor.type },
+      shipment: PURCHASE_SHIPMENT,
     }, conn);
     return {
       replacementId: created.replacement.id,
