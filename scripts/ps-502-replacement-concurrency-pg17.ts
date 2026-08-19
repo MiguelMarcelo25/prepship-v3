@@ -76,11 +76,41 @@ type Lane = {
  * backend, so the callers below genuinely overlap. With `max: 1` they would queue and this
  * file would prove nothing the PGlite lane does not already prove.
  */
+/**
+ * Prove the server really is PostgreSQL 17 before a single statement is written.
+ *
+ * The loopback check above proves LOCATION, not version — and this file's entire claim is
+ * "AC-12 proven on PostgreSQL 17". On 2026-08-19 a PostgreSQL 18.3 server was found listening
+ * on 127.0.0.1:5432 of a developer machine: it would have passed the host gate, run green, and
+ * reported a PG17 proof that never happened. A guard whose headline claim is a version must
+ * check the version.
+ *
+ * Deliberately placed on the admin connection BEFORE `drop database`/`create database`: a
+ * wrong-major server must be refused without any DDL being issued against it.
+ */
+async function assertPostgres17(a: postgres.Sql): Promise<void> {
+  const [row] = await a.unsafe('show server_version_num');
+  const raw = (row as Record<string, unknown> | undefined)?.server_version_num;
+  const version = Number(raw);
+  if (!Number.isFinite(version) || version < 170000 || version >= 180000) {
+    console.error(
+      `FAIL: server_version_num ${String(raw)} is not PostgreSQL 17.\n`
+      + '      AC-12 claims multi-backend concurrency on PostgreSQL 17 specifically, so a\n'
+      + '      different major would produce a green run that proves something else.\n'
+      + '      Nothing was created or dropped on this server.',
+    );
+    await a.end({ timeout: 5 });
+    process.exit(1);
+  }
+  console.log(`ok   server is PostgreSQL 17 (server_version_num ${version})`);
+}
+
 async function fresh(): Promise<Lane> {
   counter += 1;
   const name = `ps502_conc_${process.pid}_${counter}`;
   const a = admin();
   try {
+    await assertPostgres17(a);
     await a.unsafe(`drop database if exists ${name}`);
     await a.unsafe(`create database ${name}`);
   } finally {

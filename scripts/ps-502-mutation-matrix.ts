@@ -57,6 +57,10 @@ const FINANCIAL_MIGRATION = 'drizzle/0103_ps502_replacement_financial_actions.sq
 const MONEY_SNAPSHOT = 'src/services/customer-shipping-money-snapshot.ts';
 const PROVIDER_ADAPTER = 'src/services/replacement-label-provider.ts';
 const CREDENTIAL_AUTHORITY = 'src/services/replacement-provider-credential-authority.ts';
+const ANALYSIS = 'src/routes/analysis.ts';
+const OUTBOX = 'src/services/fulfillment/outbox.ts';
+const LABELS = 'src/services/labels.ts';
+const SYNC = 'src/services/shipment-sync.ts';
 const SCHEDULER = 'src/services/sync-scheduler.ts';
 
 const MUTATIONS: Mutation[] = [
@@ -1500,6 +1504,46 @@ const MUTATIONS: Mutation[] = [
     find: '  if (clientScope(input.requestedClientId) === null) return null;',
     replace: '',
     expect: 'a NULL replacement client selects NO provider credential authority',
+  },
+  {
+    id: 'M181',
+    defect: "the analysis scope helper stops excluding replacements, so every dashboard reader counts them",
+    file: ANALYSIS,
+    find: "  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;",
+    replace: "  return analysisShipmentScopeSelection(q);",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M182',
+    defect: "a reader becomes unbound and merely GROUPS BY order_id, which is not a constraint",
+    file: OUTBOX,
+    find: "    FROM shipments WHERE id = ${shipmentId} LIMIT 1",
+    replace: "    FROM shipments GROUP BY order_id, source LIMIT 1",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M183',
+    defect: "one reader loses its exclusion while the same file keeps it in other statements",
+    file: LABELS,
+    find: "        .where(and(ordinaryShipmentSourcePredicate, eq(shipments.providerAccountId, providerAccountId)))",
+    replace: "        .where(eq(shipments.providerAccountId, providerAccountId))",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M184',
+    defect: "a bare ordinary read is added inside a replacement-owned file, inheriting its exemption",
+    file: LIFECYCLE,
+    find: "export async function enterReplacementReview(",
+    replace: "export async function ps502BareReadProbe() {\n  return db.select({ id: shipments.id }).from(shipments).limit(1);\n}\n\nexport async function enterReplacementReview(",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M185',
+    defect: "an acknowledged site is exchanged for a different unexcluded one while the count stays the same",
+    file: SYNC,
+    find: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments);",
+    replace: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments)\n    .where(sql`true`);",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
   },
 ];
 

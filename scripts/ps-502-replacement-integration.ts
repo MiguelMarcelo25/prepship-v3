@@ -3547,6 +3547,101 @@ async function main(): Promise<void> {
       'recovery reads the committed credit and never duplicates it');
   });
 
+  // ── A fresh provider fact must equal the frozen request by an EXPLICIT rule ──
+  //
+  // This calls the real boundary, not a copy. Hermes reverted sourceRealMatches() to
+  // Math.fround on 2026-08-19 and the contract guard, every integration check and all 180
+  // mutations stayed green — the production fix had no owner, so it could have disappeared
+  // silently. Every case below is chosen to die on that reversion or to pin the rule's edge.
+  {
+    const { providerFactsMatchFrozenRequest } =
+      await import('../src/services/shipment-sync.js');
+
+    const FROZEN = { weightOz: 16, dimsL: 12, dimsW: 8, dimsH: 4 };
+    const request = {
+      carrier: { carrierCode: 'stamps_com', serviceCode: 'usps_priority_mail', providerAccountId: 'acct-1' },
+      package: { packageId: 7, ...FROZEN },
+    } as never;
+    const vessel = {
+      carrierCode: 'stamps_com',
+      serviceCode: 'usps_priority_mail',
+      providerAccountId: 'acct-1',
+      selectedPackageId: 7,
+      ...FROZEN,
+    } as never;
+    /** Only the PROVIDER-reported facts vary; the persisted vessel stays exactly frozen. */
+    const provider = (over: {
+      weight?: unknown; length?: number; width?: number; height?: number;
+    }) => ({
+      isReturnLabel: false,
+      carrierCode: 'stamps_com',
+      serviceCode: 'usps_priority_mail',
+      // Keyed on PRESENCE, not on `!== undefined`: the absent-weight case passes
+      // `{ weight: undefined }`, and a value-based check quietly substituted the valid default
+      // instead — the fixture would have hidden the very case it was written to test.
+      weight: Object.hasOwn(over, 'weight') ? over.weight : { value: 16, units: 'ounces' },
+      dimensions: {
+        length: over.length ?? 12,
+        width: over.width ?? 8,
+        height: over.height ?? 4,
+      },
+    }) as never;
+    const matches = (over: Parameters<typeof provider>[0]) =>
+      providerFactsMatchFrozenRequest(provider(over), vessel, request);
+
+    await check('an exact provider echo matches the frozen request', () => {
+      assert.equal(matches({}), true);
+    });
+
+    await check('a pound-to-ounce conversion still matches', () => {
+      // toOunces multiplies, so exact equality would reject a legitimate 1 lb = 16 oz echo.
+      assert.equal(matches({ weight: { value: 1, units: 'pounds' } }), true);
+    });
+
+    await check('representation noise below the provider quoting precision matches', () => {
+      assert.equal(matches({ weight: { value: 16.0000001, units: 'ounces' } }), true);
+    });
+
+    await check('a difference float32 would hide is rejected at large magnitude', () => {
+      // THE case float32 hides, and the one that dies if sourceRealMatches goes back to
+      // Math.fround. At 100000 a float32 ulp is ~0.0078, so fround() collapses a 0.005
+      // difference to equal while the three-decimal rule sees it. The magnitude is absurd for
+      // a parcel deliberately: float32's blind spot GROWS with the value, an explicit decimal
+      // rule does not, and that difference is the entire reason for the change.
+      assert.equal(Math.fround(100000.003), Math.fround(100000),
+        'precondition: float32 really cannot tell these apart');
+      assert.equal(
+        providerFactsMatchFrozenRequest(
+          { ...(provider({}) as object), weight: { value: 100000.003, units: 'ounces' } } as never,
+          { ...(vessel as object), weightOz: 100000 } as never,
+          {
+            carrier: (request as { carrier: unknown }).carrier,
+            package: { packageId: 7, ...FROZEN, weightOz: 100000 },
+          } as never,
+        ),
+        false,
+      );
+    });
+
+    await check('the three-decimal boundary is pinned on both sides', () => {
+      assert.equal(matches({ weight: { value: 16.0004, units: 'ounces' } }), true);
+      assert.equal(matches({ weight: { value: 16.0006, units: 'ounces' } }), false);
+    });
+
+    await check('a real dimension change is rejected, not just weight', () => {
+      assert.equal(matches({ length: 12.5 }), false);
+      assert.equal(matches({ width: 8.002 }), false);
+    });
+
+    await check('absent, NaN and infinite provider facts never match', () => {
+      // A missing or nonsense provider fact is not evidence that the label matches the request.
+      assert.equal(matches({ weight: undefined as never }), false);
+      assert.equal(matches({ weight: { value: Number.NaN, units: 'ounces' } }), false);
+      assert.equal(matches({ weight: { value: Number.POSITIVE_INFINITY, units: 'ounces' } }), false);
+      assert.equal(matches({ length: Number.NaN }), false);
+    });
+  }
+
   await client.close();
   console.log(`\nPS-502 integration passed — ${passed} checks against embedded PGlite (PostgreSQL-compatible, single-backend). Genuine multi-backend concurrency is NOT proven here.`);
 }

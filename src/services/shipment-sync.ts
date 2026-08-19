@@ -350,7 +350,13 @@ function sourceRealMatches(value: number | null | undefined, expected: number): 
     && normalizeProviderReal(value) === normalizeProviderReal(expected);
 }
 
-function providerFactsMatchFrozenRequest(
+/**
+ * Exported for the PS-502 integration suite so the fresh-provider comparison is tested at the
+ * REAL boundary rather than against a copied helper. Hermes reverted sourceRealMatches to
+ * Math.fround on 2026-08-19 and the contract guard, all 124 integration checks and all 180
+ * mutations stayed green — the normalisation could have vanished with nothing noticing.
+ */
+export function providerFactsMatchFrozenRequest(
   source: SSShipment,
   vessel: Pick<
     typeof shipments.$inferSelect,
@@ -1653,6 +1659,12 @@ async function enrichProviderAccountIds(
         and(
           inArray(shipments.trackingNumber, pairs.map((p) => p.tracking)),
           sql`${shipments.providerAccountId} is null`,
+          // A replacement vessel owns a FROZEN provider identity chosen at purchase, and this
+          // is the generic V2 backfill: it infers an account from whatever ShipStation reports
+          // for a tracking number. A vessel whose provider_account_id has not been stamped yet
+          // matches both predicates above, so without this it would be handed an ordinary
+          // account it never bought against.
+          sql`${shipments.source} is distinct from 'replacement'`,
         ),
       );
     throwIfShipmentSyncAborted(signal);
@@ -1668,7 +1680,13 @@ async function enrichProviderAccountIds(
         .update(shipments)
         .set({ providerAccountId: pair.providerId, updatedAt: new Date() })
         .where(
-          sql`${shipments.trackingNumber} = ${pair.tracking} and ${shipments.providerAccountId} is null`,
+          // The write carries the same exclusion as the read above, not because the read is
+          // untrusted but because this predicate is the race-safety backstop: the row is
+          // re-checked at UPDATE time, and a backstop that omits the replacement term would
+          // let a vessel created between the two statements be stamped anyway.
+          sql`${shipments.trackingNumber} = ${pair.tracking}
+            and ${shipments.providerAccountId} is null
+            and ${shipments.source} is distinct from 'replacement'`,
         )
         .returning({ id: shipments.id });
       updated += result.length;
