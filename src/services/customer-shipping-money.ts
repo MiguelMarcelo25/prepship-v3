@@ -46,10 +46,30 @@ export {
  * `needs_review` is deliberately NOT an error: it must not fail a paid-for label. It is a fact the
  * caller records so the row is countable and repairable, not a reason to roll anything back.
  */
+/**
+ * Why the freeze did not apply. A CLOSED union, not `string`.
+ *
+ * It was `reason: string`, which meant a new reason could be added and every consumer would keep
+ * compiling while silently failing to handle it. That is the same shape of defect as the null this
+ * type was introduced to remove — an open channel where the type system could have forced a
+ * decision. The first seven are ordinary applicability exclusions; the last two are operational
+ * states that a caller may want to treat differently.
+ */
+export type OutboundFreezeSkipReason =
+  | 'return'
+  | 'voided'
+  | 'replacement'
+  | 'test_offline'
+  | 'billing_inactive'
+  | 'no_client'
+  | 'no_billable_cost'
+  | 'shipment_not_found'
+  | 'update_matched_no_row';
+
 export type OutboundFreezeOutcome =
   | { status: 'frozen'; frozen: FrozenCustomerShippingMoney }
   | { status: 'already_frozen'; frozen: FrozenCustomerShippingMoney }
-  | { status: 'skipped'; reason: string }
+  | { status: 'skipped'; reason: OutboundFreezeSkipReason }
   | {
       status: 'needs_review';
       reason: 'malformed_known_version' | 'unknown_version';

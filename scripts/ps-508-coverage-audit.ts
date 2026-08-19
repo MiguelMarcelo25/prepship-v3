@@ -192,8 +192,18 @@ async function main(): Promise<void> {
    * source mix as though it covered ninety — a silent cap wearing the costume of a complete
    * answer. This aggregate is the honest one: one grouped count, no row limit, no truncation.
    */
-  const mixResult = await db.execute<{ source: string | null; rows: string | number }>(sql`
-    select coalesce(s.source, 'unknown') as "source", count(*)::text as "rows"
+  const mixResult = await db.execute<{
+    source: string | null; rows: string | number;
+    firstAt: string | Date | null; lastAt: string | Date | null;
+    firstId: string | number | null; lastId: string | number | null;
+  }>(sql`
+    select
+      coalesce(s.source, 'unknown') as "source",
+      count(*)::text as "rows",
+      min(s.create_date) as "firstAt",
+      max(s.create_date) as "lastAt",
+      min(s.id)::text as "firstId",
+      max(s.id)::text as "lastId"
     from shipments s
     where s.create_date >= now() - ${`${days} days`}::interval
     group by 1
@@ -256,9 +266,18 @@ async function main(): Promise<void> {
     say('');
   }
 
+  // Per-source FIRST/LAST seen, so the timeline is deterministic rather than inferred.
+  // A previous read concluded that purchase-path traffic stopped on a given date by observing
+  // that the newest N ids were all one source. That is inference from id ordering, and ids are
+  // not a clock: a backfill, an import or a sequence gap breaks it. min/max on create_date is
+  // the fact. Both are shown because a disagreement between them is itself worth seeing.
+  const isoOf = (v: string | Date | null): string =>
+    v == null ? 'n/a' : (v instanceof Date ? v.toISOString() : String(v));
   say(`FULL-WINDOW SOURCE MIX (last ${days} day(s), no row limit)`);
   for (const entry of sourceMix) {
-    say(`      ${String(entry.source ?? 'unknown').padEnd(18)} ${entry.rows}`);
+    say(`      ${String(entry.source ?? 'unknown').padEnd(20)} ${String(entry.rows).padStart(6)}`);
+    say(`        first ${isoOf(entry.firstAt)}   id ${entry.firstId ?? 'n/a'}`);
+    say(`        last  ${isoOf(entry.lastAt)}   id ${entry.lastId ?? 'n/a'}`);
   }
   say('  source is written by whichever code inserted the row: `shipstation` is external sync');
   say('  ingestion, while persistCreatedLabel — where the PS-508 freeze lives — writes the');
