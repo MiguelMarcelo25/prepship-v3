@@ -219,6 +219,45 @@ check('the operator gate is reachable: db/client is imported dynamically, after 
 check('and the money service is likewise deferred past the gate',
   !/^import\s+\{[^}]*previewShipmentCustomerShippingMoney/m.test(auditSrc)
   && /await import\('\.\.\/src\/services\/customer-shipping-money'\)/.test(auditSrc));
+
+// ── THE AUDIT RUNS ON RENDER, NOT ON A WORKSTATION ────────────────────────────────────────
+
+// Running it locally means a production database credential lives on a workstation, where it can
+// leak and must be rotated. The Render one-off job runs inside the environment that already holds
+// one. This is the repo's established pattern (BILL-DUP-OUTBOUND-CHARGE), not a new invention.
+const laneSrc = readFileSync('.github/workflows/render-one-off-ps-508-coverage-audit.yml', 'utf8');
+
+check('a Render one-off lane exists and dispatches the audit script',
+  /workflow_dispatch/.test(laneSrc)
+  && /scripts\/ps-508-coverage-audit\.ts/.test(laneSrc)
+  && /api\.render\.com\/v1\/services/.test(laneSrc));
+
+// An env var is whatever its setter types. github.actor is authenticated and cannot be forged by
+// the person dispatching, which is what makes the lane — not the env var — the real operator gate.
+check('the lane supplies the operator from the AUTHENTICATED actor, not a hand-set value',
+  /PS508_AUDIT_OPERATOR='\$\{AUDIT_OPERATOR\}'/.test(laneSrc)
+  && /AUDIT_OPERATOR:\s*\$\{\{\s*github\.actor\s*\}\}/.test(laneSrc));
+
+// The lane must refuse to dispatch a script that has grown a write, and must require the
+// server-side read-only pin. Checking the lane still CONTAINS those gates, because deleting them
+// would be silent — the lane would go green while proving nothing.
+check('the lane refuses to dispatch a script containing a write statement',
+  /A write-shaped statement appeared in the audit script/.test(laneSrc));
+check('the lane requires the session READ ONLY pin before dispatching',
+  /The audit must pin the session READ ONLY/.test(laneSrc));
+check('the audit pins the session READ ONLY at the server',
+  /SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY/.test(auditSrc));
+
+// No confirmation token and no apply mode: a token gates a write, and this lane has none. The
+// historical backfill is a separate, evidence-qualified job — bolting it on here would let an
+// approved read become an unapproved write.
+// Tested against COMMENT-STRIPPED yaml. The lane's own header says "there is no --apply", so an
+// un-stripped negative assertion fails on the prose explaining the very thing it asserts — the
+// same false positive that hit four checks in PS-502.
+const laneCode = laneSrc.replace(/^\s*#.*$/gm, '');
+check('the lane has no apply/repair mode and no write token',
+  !/--apply|confirm[_-]?token|CONFIRM=/i.test(laneCode));
+
 if (failures > 0) {
   console.log(`\nFAIL PS-508 classification guard (${failures} failing)`);
   process.exit(1);

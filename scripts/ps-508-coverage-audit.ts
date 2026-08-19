@@ -28,11 +28,25 @@ import {
  * audit is exactly the drift this ticket exists to remove. It costs one query per row; an audit
  * is allowed to be slow.
  *
+ * ── WHERE THIS IS MEANT TO RUN ──────────────────────────────────────────────────────────
+ *
+ * As a RENDER ONE-OFF JOB, dispatched from
+ * .github/workflows/render-one-off-ps-508-coverage-audit.yml — not from a workstation.
+ *
+ * The first cut of this script was built to be run locally against DATABASE_URL. That is the wrong
+ * shape and the repo already knew it: the BILL-DUP-OUTBOUND-CHARGE lane says so in its header.
+ * Running locally means a production database credential sits on a workstation, where it can leak
+ * and has to be rotated. The Render job runs inside the environment that already holds one, so no
+ * local secret needs to exist at all.
+ *
  * ── OPERATOR GATE ───────────────────────────────────────────────────────────────────────
  *
- * DATABASE_URL in this repo can point at production. Even a read-only sweep against production is
- * an operator action, so it refuses to run without PS508_AUDIT_OPERATOR naming who is running it.
- * The name is recorded in the report header so the artifact says who produced it.
+ * PS508_AUDIT_OPERATOR must name who is running this, and the report header records it.
+ *
+ * On the Render lane that value is `github.actor` — an AUTHENTICATED identity that the person
+ * dispatching cannot forge. Set by hand on a workstation it is worth much less: an env var is
+ * whatever its setter types, so a local run records an assertion, not a fact. That is the reason
+ * the lane, not the env var, is the real gate.
  */
 
 type ShipmentRow = {
@@ -95,9 +109,19 @@ async function main(): Promise<void> {
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('--limit must be a positive number');
 
   // Only now — after the gate — touch anything that opens a database connection.
-  const { db } = await import('../src/db/client');
+  const { db, sql: pg } = await import('../src/db/client');
   const { previewShipmentCustomerShippingMoney } =
     await import('../src/services/customer-shipping-money');
+
+  // Read-only enforced by the SERVER, not by my reading of the code. The guard proves the source
+  // contains no write; this makes the database refuse one anyway. Belt and braces, because the
+  // recompute path calls into the money service and I do not want its correctness resting on my
+  // having traced every query it might issue.
+  //
+  // Caveat stated rather than hidden: this pins the SESSION, and postgres-js holds a pool, so it
+  // binds the connection it runs on. It is the same mechanism the BILL-DUP-OUTBOUND-CHARGE lane
+  // uses; the guarantee that carries the weight is still the no-write proof in the guard.
+  await pg.unsafe('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY');
 
   const result = await db.execute<ShipmentRow>(sql`
     select
