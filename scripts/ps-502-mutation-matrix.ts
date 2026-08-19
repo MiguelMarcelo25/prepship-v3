@@ -60,7 +60,6 @@ const CREDENTIAL_AUTHORITY = 'src/services/replacement-provider-credential-autho
 const ANALYSIS = 'src/routes/analysis.ts';
 const ADMIN = 'src/routes/admin.ts';
 const LIFECYCLE_ORDER = 'src/services/order-lifecycle-command.ts';
-const LABEL_BUY_OWNED = 'src/services/replacement-label-purchase-command.ts';
 const OUTBOX = 'src/services/fulfillment/outbox.ts';
 const LABELS = 'src/services/labels.ts';
 const SYNC = 'src/services/shipment-sync.ts';
@@ -1514,7 +1513,7 @@ const MUTATIONS: Mutation[] = [
     file: ANALYSIS,
     find: "  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;",
     replace: "  return analysisShipmentScopeSelection(q);",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M182',
@@ -1522,7 +1521,7 @@ const MUTATIONS: Mutation[] = [
     file: OUTBOX,
     find: "    FROM shipments WHERE id = ${shipmentId} LIMIT 1",
     replace: "    FROM shipments GROUP BY order_id, source LIMIT 1",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M183',
@@ -1530,7 +1529,7 @@ const MUTATIONS: Mutation[] = [
     file: LABELS,
     find: "        .where(and(ordinaryShipmentSourcePredicate, eq(shipments.providerAccountId, providerAccountId)))",
     replace: "        .where(eq(shipments.providerAccountId, providerAccountId))",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M184',
@@ -1538,7 +1537,7 @@ const MUTATIONS: Mutation[] = [
     file: LIFECYCLE,
     find: "export async function enterReplacementReview(",
     replace: "export async function ps502BareReadProbe() {\n  return db.select({ id: shipments.id }).from(shipments).limit(1);\n}\n\nexport async function enterReplacementReview(",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M185',
@@ -1546,7 +1545,7 @@ const MUTATIONS: Mutation[] = [
     file: SYNC,
     find: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments);",
     replace: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments)\n    .where(sql`true`);",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M186',
@@ -1554,7 +1553,7 @@ const MUTATIONS: Mutation[] = [
     file: ADMIN,
     find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
     replace: "        .innerJoin(orders, eq(orders.id, shipments.orderId))\n// eslint-disable-next-line\nconst ps502AsiProbe = db.select({ id: shipments.id }).from(shipments)",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M187',
@@ -1562,7 +1561,7 @@ const MUTATIONS: Mutation[] = [
     file: ADMIN,
     find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
     replace: "        .innerJoin(clients, eq(clients.id, shipments.clientId))",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M188',
@@ -1570,7 +1569,30 @@ const MUTATIONS: Mutation[] = [
     file: ANALYSIS,
     find: "  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;",
     replace: "  return analysisShipmentScopeSelection(q);\n}\nconst ps502MovedExclusion = sql`s.source is distinct from 'replacement'`;\nfunction ps502Unused(): SQL {",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // The statement lexer must read `'{'` as a STRING, not as an opening bracket. Without
+    // that, this bare read's depth never returns to zero at its own semicolon: the scanner
+    // runs on into the order-bound query that follows and credits ITS
+    // `eq(orders.id, shipments.orderId)` to this read, which binds nothing at all.
+    //
+    // Hermes verified the behaviour at 9ebe379d but found no committed mutation owning it —
+    // the row that used to sit at M189 went out with the ownership escape hatch. This is the
+    // regression proof put back, aimed at the lexer rather than at the deleted rule.
+    //
+    // The brace must sit in a plain single-quoted string, NOT inside a sql`` template. A
+    // template is already bounded by templateRanges, so a braced template would prove only
+    // that BACKTICK tracking works — the first draft of this row did exactly that and was
+    // still caught with single-quote tracking disabled, which is to say it proved nothing.
+    // This spelling was checked the other way on 2026-08-19: disabling single-quote tracking
+    // in statementAt lets it survive.
+    id: 'M189',
+    defect: "a brace inside a quoted string extends a bare read into the next statement's binding",
+    file: ADMIN,
+    find: "      const rows = await db\n        .select({\n          ssShipmentId: shipments.labelShipmentId,",
+    replace: "      const ps502BraceProbe = await db.select({ id: shipments.id }).from(shipments).where(eq(shipments.orderNumber, '{'));\n      const rows = await db\n        .select({\n          ssShipmentId: shipments.labelShipmentId,",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
   {
     id: 'M190',
@@ -1578,7 +1600,35 @@ const MUTATIONS: Mutation[] = [
     file: LIFECYCLE_ORDER,
     find: "        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId),\r",
     replace: "        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId ?? 0),\r",
-    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // Hermes's executed counterexample at 9ebe379d. M187 above swaps in the WRONG shipments
+    // column; this one keeps the RIGHT column and swaps the counterpart, which is the harder
+    // case: `shipments.id` is present, so any rule that merely looks for it passes. The join
+    // constrains nothing — it reaches every replacement vessel whose id equals a client id.
+    id: 'M191',
+    defect: "an arbitrary table-to-table join on shipments.id is credited as a shipment-ID constraint",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(clients, eq(clients.id, shipments.id))",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // M191's rule can only REJECT a join if it knows the counterpart is a table, and this file
+    // reaches returnLabels through `const { returnLabels } = await import(...)` rather than a
+    // static import. Found while reviewing the M191 fix rather than reported: a table the
+    // parser misses is a table whose join is credited as a binding, so the same false green
+    // walks back in through a different import spelling.
+    //
+    // labels.ts is the honest home for it — that dynamic import already sits eighty lines
+    // above this read, so the mutation is a plausible edit rather than a contrivance.
+    id: 'M192',
+    defect: "a join to a DYNAMICALLY imported schema table is credited as a shipment-ID constraint",
+    file: LABELS,
+    find: "await db.update(shipments).set({ labelUrl: freshUrl, updatedAt: new Date() }).where(eq(shipments.id, row.id));",
+    replace: "await db.update(shipments).set({ labelUrl: freshUrl, updatedAt: new Date() }).where(eq(returnLabels.returnShipmentId, shipments.id));",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
 ];
 

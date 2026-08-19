@@ -3123,29 +3123,142 @@ console.log('\nordinary readers exclude source = replacement');
   };
 
   /**
+   * Local names a schema import binds to a Drizzle TABLE.
+   *
+   * Needed to tell `eq(shipments.id, input.shipmentId)` — a read pinned to one requested
+   * shipment — from `eq(clients.id, shipments.id)`, which is syntactically identical and
+   * constrains nothing. An aliased import (`orders as ordersTable`) binds under its LOCAL
+   * name, because the local name is the one the query actually writes.
+   */
+  const schemaSymbols = (source: string): Set<string> => {
+    const names = new Set<string>();
+    const forms = [
+      /import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*'[^']*db\/schema\/[^']*'/g,
+      // Four production sites reach a schema table through a DYNAMIC destructured import
+      // rather than a static one — src/routes/products.ts and three in src/services/labels.ts,
+      // one of them beside the shipments reads this sweep classifies. A table missed here is a
+      // table whose join is credited as a shipment-ID binding, which is precisely the defect
+      // Hermes found at 9ebe379d, so both forms count. M192 owns this second one.
+      /(?:const|let)\s*\{([^}]*)\}\s*=\s*await\s+import\(\s*'[^']*db\/schema\/[^']*'\s*\)/g,
+    ];
+    for (const form of forms) {
+      for (const match of source.matchAll(form)) {
+        for (const clause of match[1]!.split(',')) {
+          const parts = clause.trim().split(/\s+as\s+|\s*:\s*/);
+          const local = (parts[1] ?? parts[0] ?? '').trim();
+          if (/^[A-Za-z_]\w*$/.test(local)) names.add(local);
+        }
+      }
+    }
+    return names;
+  };
+
+  /**
+   * The arguments of a call, split on TOP-LEVEL commas with strings and nesting respected.
+   *
+   * `eq(a, b)` cannot be read with a regex once either side nests — `eq(shipments.id,
+   * coalesce(x, y))` has two arguments and two commas — and this rule turns entirely on WHICH
+   * operand sits opposite the shipments column.
+   */
+  const callArguments = (statement: string, open: number): string[] => {
+    const args: string[] = [];
+    let depth = 0;
+    let start = open + 1;
+    let quote: string | null = null;
+    for (let i = open; i < statement.length; i += 1) {
+      const c = statement[i]!;
+      if (quote !== null) {
+        if (c === String.fromCharCode(92)) { i += 1; continue; }
+        if (c === quote) quote = null;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === String.fromCharCode(96)) { quote = c; continue; }
+      if (c === '(' || c === '[' || c === '{') {
+        depth += 1;
+        if (depth === 1) start = i + 1;
+        continue;
+      }
+      if (c === ')' || c === ']' || c === '}') {
+        depth -= 1;
+        if (depth === 0) { args.push(statement.slice(start, i)); return args; }
+        continue;
+      }
+      if (c === ',' && depth === 1) { args.push(statement.slice(start, i)); start = i + 1; }
+    }
+    return args;
+  };
+
+  /**
+   * Does an equality pin shipments.id to a REQUESTED shipment identity?
+   *
+   * Hermes broke the previous rule at 9ebe379d with an executed mutation. It accepted any
+   * equality merely CONTAINING shipments.id, so
+   *
+   *     .innerJoin(clients, eq(clients.id, shipments.id))
+   *
+   * passed as a binding while constraining nothing: it reaches every replacement vessel whose
+   * id happens to equal a client id. A join to another schema table is not a shipment-identity
+   * constraint, so the operand OPPOSITE shipments.id must not be a Drizzle table column. A
+   * parameter, a local, a property or a list still binds, which covers every genuine call site.
+   *
+   * The asymmetry with orderId below is deliberate, not an oversight: order_id IS NULL on a
+   * replacement vessel and NULL is equal to nothing at all, so an orderId comparison keeps
+   * replacements out even when the other side IS another table.
+   */
+  const idPinnedToRequestedShipment = (
+    statement: string,
+    symbols: string[],
+    tables: ReadonlySet<string>,
+  ): boolean => {
+    for (const match of statement.matchAll(/\b(?:eq|inArray)\s*\(/g)) {
+      const open = (match.index ?? 0) + match[0].length - 1;
+      const args = callArguments(statement, open).map((arg) => arg.trim());
+      if (args.length < 2) continue;
+      const side = args.findIndex((arg) => symbols.some((symbol) => arg === `${symbol}.id`));
+      if (side === -1) continue;
+      const other = args[side === 0 ? 1 : 0] ?? '';
+      const owner = /^([A-Za-z_]\w*)\s*\./.exec(other)?.[1];
+      if (owner !== undefined && tables.has(owner)) continue;
+      return true;
+    }
+    return false;
+  };
+
+  /**
    * A binding proves a replacement vessel is unreachable ONLY when it binds the SHIPMENTS row.
    *
-   * `eq(clients.id, shipments.clientId)` satisfied the old rule because `\w+\.id` accepted any
+   * `eq(clients.id, shipments.clientId)` satisfied an older rule because `\w+\.id` accepted any
    * table's id — and a replacement vessel has a clientId, so that join reaches it. The symbols
    * are taken from the file so an aliased import binds correctly too.
    */
-  const orderOrIdBound = (statement: string, symbols: string[]): boolean => {
-    const alternatives = symbols.flatMap((symbol) => [
-      `(?:eq|inArray)\\([^)]{0,80}\\b${symbol}\\.(?:orderId|id)\\b`,
-      `\\$\\{\\s*${symbol}\\.(?:orderId|id)\\s*\\}\\s*=`,
-      `=\\s*\\$\\{\\s*${symbol}\\.(?:orderId|id)\\s*\\}`,
+  const orderOrIdBound = (
+    statement: string,
+    symbols: string[],
+    tables: ReadonlySet<string>,
+  ): boolean => {
+    const scoped = statement
+      .replace(/\.(?:orderBy|groupBy)\([\s\S]*$/, '')
+      .replace(/\b(?:group|order)\s+by[\s\S]*$/i, '');
+
+    const orderBound = symbols.flatMap((symbol) => [
+      `(?:eq|inArray)\\([^)]{0,80}\\b${symbol}\\.orderId\\b`,
+      `\\$\\{\\s*${symbol}\\.orderId\\s*\\}\\s*=`,
+      `=\\s*\\$\\{\\s*${symbol}\\.orderId\\s*\\}`,
     ]).concat([
       '\\b(?:s|sx|shipments)\\.order_id\\s*=(?!\\s*null)',
       '=\\s*(?:s|sx|shipments)\\.order_id\\b',
-      '\\b(?:s|sx|shipments)\\.id\\s*=\\s*(?!\\s*null)',
       '(?<![.\\w])order_id\\s*=\\s*\\$\\{',
-      '(?<![.\\w])id\\s*=\\s*\\$\\{',
     ]);
-    return new RegExp(alternatives.join('|'), 'i').test(
-      statement
-        .replace(/\.(?:orderBy|groupBy)\([\s\S]*$/, '')
-        .replace(/\b(?:group|order)\s+by[\s\S]*$/i, ''),
-    );
+    if (new RegExp(orderBound.join('|'), 'i').test(scoped)) return true;
+
+    // Raw SQL gets the same split: `s.id = ${shipmentId}` pins the read to one requested
+    // shipment, whereas `s.id = b.shipment_id` is the raw spelling of the very join above.
+    const rawIdBound = new RegExp([
+      '\\b(?:s|sx|shipments)\\.id\\s*=\\s*(?:\\$\\{|\\d)',
+      '(?<![.\\w])id\\s*=\\s*\\$\\{',
+    ].join('|'), 'i').test(scoped);
+
+    return rawIdBound || idPinnedToRequestedShipment(scoped, symbols, tables);
   };
 
   // NOTE: there is deliberately no "this reader selects replacements" escape hatch.
@@ -3193,6 +3306,7 @@ console.log('\nordinary readers exclude source = replacement');
     statement: string,
     source: string,
     symbols: string[],
+    tables: ReadonlySet<string>,
   ): boolean => {
     const whereAt = statement.indexOf('.where(');
     if (whereAt === -1) return false;
@@ -3203,7 +3317,7 @@ console.log('\nordinary readers exclude source = replacement');
       const declaration = new RegExp(`(?:const|let)\\s+${ident}\\s*=`).exec(source);
       if (!declaration) continue;
       const declared = declarationBody(source, declaration.index);
-      if (EXCLUDES_ANY.test(declared) || orderOrIdBound(declared, symbols)) return true;
+      if (EXCLUDES_ANY.test(declared) || orderOrIdBound(declared, symbols, tables)) return true;
     }
     return false;
   };
@@ -3269,6 +3383,54 @@ console.log('\nordinary readers exclude source = replacement');
       ],
       why: 'label-identity reads plus the diagnostic count(*); enrichment now excludes replacements',
     },
+
+    // ── FK-DRIVEN READS ──────────────────────────────────────────────────────
+    //
+    // The four below are one shape, unmasked when Hermes broke the shipments.id rule at
+    // 9ebe379d: the query is driven FROM another table and touches shipments only through
+    // that table's stored foreign key, in a LEFT JOIN. They are acknowledged rather than
+    // excluded, and the reason is not convenience — an exclusion here would be WRONG.
+    //
+    // `left join shipments s on s.id = x.shipment_id and s.source is distinct from
+    // 'replacement'` does not drop the row. It keeps the driving row and blanks every joined
+    // shipment column, so a replacement's invoice line would render with no postage, no
+    // carrier and no tracking instead of being absent. That is a worse failure than the one
+    // the exclusion is meant to prevent, and a silent one.
+    //
+    // Reachability for each therefore depends on the WRITER of the foreign key, which no
+    // statement-scoped reader can prove. Each is pinned by signature, so any edit to the
+    // statement re-opens the question here.
+
+    // Hermes's named example. The invoice export is driven from billing_line_items, and a
+    // replacement's billing line intentionally carries its replacement shipment id — that is
+    // how the replacement's postage reaches the invoice at all. Reaching the vessel is the
+    // POINT of this join, not a leak. (PS-502 stage 2 adds billing_line_items.replacement_id
+    // beside it; the shipment_id linkage predates it and stays.)
+    'src/services/billing.ts': {
+      sites: ['src/services/billing.ts#4:6493c7879611a065'],
+      why: 'billing lines legitimately store their replacement shipment id; the join must reach it',
+    },
+    // The same linkage in raw SQL, one read further out: the per-SKU invoice export.
+    'src/routes/billing.ts': {
+      sites: ['src/routes/billing.ts#1:643a89248f1580ef'],
+      why: 'invoice export driven from billing_line_items; same intentional shipment_id linkage',
+    },
+    // Driven from fulfillment_outbox, joined on f.shipment_id. Only the forward-label paths
+    // write that column — enqueueShipmentConfirmation() is called from labels.ts and
+    // verified-forward-label-recovery.ts, and NO replacement command imports either — so a
+    // replacement vessel's id is not written there today. Verified by inspection on
+    // 2026-08-19, not by this statement, which is precisely why it is acknowledged.
+    'src/services/fulfillment/outbox.ts': {
+      sites: ['src/services/fulfillment/outbox.ts#3:6d1cd5223c40449c'],
+      why: 'confirmation-repair read driven from fulfillment_outbox; only forward labels write shipment_id',
+    },
+    // Driven from returns, joined on r.return_shipment_id. A return is an INBOUND RMA
+    // shipment; a replacement is an outbound re-ship. Nothing in this repo writes
+    // returns.return_shipment_id from a replacement flow.
+    'src/services/return-order-read-model.ts': {
+      sites: ['src/services/return-order-read-model.ts#0:91937b0fabfc295a'],
+      why: 'return read model driven from returns.return_shipment_id, a distinct inbound concept',
+    },
   };
 
   const readers = walk('src').flatMap((path) => {
@@ -3278,22 +3440,19 @@ console.log('\nordinary readers exclude source = replacement');
     return sites.length > 0 ? [{ path, source, sites }] : [];
   });
 
-  // A replacement-owned reader proves its side by SELECTING replacements, not by excluding
-  // them. Accepting that as coverage is what lets the wholesale skip go away.
-  const SELECTS_REPLACEMENT = /eq\(\s*\w+\.source,\s*'replacement'\)|source\s*=\s*'replacement'/i;
-
   const bareByPath = new Map<string, string[]>();
   for (const { path, source, sites } of readers) {
 
     const helpers = guardedHelpers(source);
         const symbols = tableSymbols(source);
+        const tables = schemaSymbols(source);
         const ranges = templateRanges(source);
         const bare = sites
           .map((index, ordinal) => ({ ordinal, statement: statementAt(source, index, ranges) }))
           .filter(({ statement }) => !EXCLUDES_ANY.test(statement)
                 && !helpers.some((name) => statement.includes(name + '('))
-            && !orderOrIdBound(statement, symbols)
-            && !predicateLocalsCovered(statement, source, symbols))
+            && !orderOrIdBound(statement, symbols, tables)
+            && !predicateLocalsCovered(statement, source, symbols, tables))
           .map(({ ordinal, statement }) => signature(path, ordinal, statement));
     bareByPath.set(path, bare);
   }
@@ -3313,7 +3472,7 @@ console.log('\nordinary readers exclude source = replacement');
 
   const siteCount = readers.reduce((total, reader) => total + reader.sites.length, 0);
 
-  check('every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE',
+  check('every shipments READ SITE is excluded, bound, or acknowledged BY SITE',
     readers.length > 0 && unexcluded.length === 0,
     `${readers.length} files / ${siteCount} read sites; ${unexcluded.join('  ||  ')}`);
 
