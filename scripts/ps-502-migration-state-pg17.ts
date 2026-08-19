@@ -268,6 +268,9 @@ async function main(): Promise<void> {
     const apply = runApplier(db.url, 'apply');
     const afterApply = await catalogShape(db.url);
     check('absent: APPLY succeeds', apply.status === 0, apply.stderr.slice(0, 400));
+    check('absent: the WHOLE reviewed lane ran, 0096 through 0103',
+      /applying 0096 -> 0103 in one transaction/.test(apply.stdout),
+      apply.stdout.slice(-300));
     check('absent: APPLY creates the replacement tables',
       ['replacements', 'replacement_items', 'replacement_activity_events',
         'replacement_label_purchase_intents', 'replacement_item_remaps',
@@ -307,9 +310,13 @@ async function main(): Promise<void> {
     const after = await catalogShape(db.url);
     check('prefix: APPLY succeeds', apply.status === 0, apply.stderr.slice(0, 400));
     check('prefix: the suffix completed the lane', after.tables.includes('replacement_financial_actions'));
-    check('prefix: the already-installed prefix was NOT replayed',
-      !/0096/.test(apply.stdout.split('applying')[1] ?? apply.stdout),
-      'a replay would re-run 0098 FK hardening and take needless locks on live billing');
+    // The applier states the range it is about to run. That line is the evidence — the
+    // previous check grepped stdout for "0096", which every run prints while VERIFYING
+    // digests, so it could never have passed and proved nothing about replay.
+    check('prefix: ONLY the missing suffix runs — 0100 to 0103, not 0096',
+      /applying 0100 -> 0103 in one transaction/.test(apply.stdout)
+      && /reviewed migration prefix : 0096-0099/.test(apply.stdout),
+      'replaying an installed prefix re-runs 0098 FK hardening and takes needless locks on live billing');
     await dropDatabase(db.name);
   }
 
@@ -324,6 +331,10 @@ async function main(): Promise<void> {
     const apply = runApplier(db.url, 'apply');
     const after = await catalogShape(db.url);
     check('0102: APPLY succeeds', apply.status === 0, apply.stderr.slice(0, 400));
+    check('0102: ONLY 0103 runs',
+      /applying 0103 -> 0103 in one transaction/.test(apply.stdout)
+      && /reviewed migration prefix : 0096-0102/.test(apply.stdout),
+      apply.stdout.slice(-300));
     check('0102: 0103 created the durable financial-action ledger',
       after.tables.includes('replacement_financial_actions'));
     check('0102: its FK constraints landed',
