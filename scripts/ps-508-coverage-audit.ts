@@ -95,11 +95,15 @@ function exclusionFor(row: ShipmentRow): CoverageExclusionReason | null {
  * the report in health checks — proven, on the first working retrieval. Filtering the logs API by
  * an instance id did not work either: a job id is not an instance id.
  *
- * Tagging every line sidesteps the question. The lane filters server-side on this exact token, so
- * it gets the report and nothing else, without depending on API filter semantics I cannot verify
- * from here. It also makes the report greppable in the Render dashboard by hand.
+ * Tagging every line sidesteps the question. The lane fetches with only the parameters PROVEN to
+ * return data — ownerId, resource, startTime, limit — and selects on this token client-side.
+ *
+ * A server-side `text` filter was tried and abandoned: it returned `logs: null`, almost certainly
+ * because the original tag contained a `|`. Rather than keep testing filter semantics one dispatch
+ * at a time, selection now happens where it can be verified offline. The tag is alphanumeric so it
+ * also stays greppable by hand in the Render dashboard.
  */
-const TAG = 'PS508|';
+const TAG = 'PS508RPT ';
 function say(line = ''): void {
   // EVERY physical line, not just the first. Several report strings embed \n for spacing, so
   // prefixing only the head would emit untagged continuation lines — and those are content, not

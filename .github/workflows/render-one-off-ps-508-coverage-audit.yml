@@ -213,7 +213,6 @@ jobs:
               --data-urlencode "ownerId=${owner_id}" \
               --data-urlencode "resource=${RENDER_SERVICE_ID}" \
               --data-urlencode "startTime=${RENDER_JOB_STARTED}" \
-              --data-urlencode "text=PS508|" \
               --data-urlencode "limit=500")
             http_code=$(printf '%s' "$response" | tail -n1)
             body=$(printf '%s' "$response" | sed '$d')
@@ -230,8 +229,8 @@ jobs:
               // looser-than-expected filter cannot pad the report with noise.
               const report = lines
                 .map((l) => String(l.message ?? l.text ?? l.log ?? ""))
-                .filter((t) => t.includes("PS508|"))
-                .map((t) => t.slice(t.indexOf("PS508|") + 6));
+                .filter((t) => t.includes("PS508RPT "))
+                .map((t) => t.slice(t.indexOf("PS508RPT ") + 9));
               if (!report.length) process.exit(5);
               for (const line of report) process.stdout.write(line + "\n");
             ') && { echo "----- BEGIN PS-508 COVERAGE REPORT -----"; printf "%s\n" "$printed";
