@@ -147,10 +147,12 @@ async function main(): Promise<void> {
   const orderLevel = await db.execute(sql`
     select
       case
-        when active.n > 0 then 'has_active_shipment'
-        when coalesce(o.externally_shipped, false) then 'external_label_override'
-        when voided.n > 0 then 'only_voided_shipment'
-        else 'no_shipment_row'
+        when active.n > 0 then 'active_label'
+        when voided.n > 0 and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
+          then 'voided_label'
+        when coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
+          or coalesce(o.externally_shipped, false) then 'external_label'
+        else 'missing_shipment_sync'
       end as "bucket",
       count(*)::text as "rows"
     from orders o
@@ -291,6 +293,62 @@ async function main(): Promise<void> {
       + `sel ${r.selCost}  order ${r.hasOrder ? 'y' : 'N'}  provider ${r.hasProvider ? 'y' : 'N'}  `
       + `lag ${r.lagS}s  line ${r.hasLine ? 'y' : 'N'}`);
   }
+  say('');
+
+  // ── Evidence correction B: prove the no_selected_cost claim with grouped facts, not ids ─
+  // The earlier conclusion ("all 2,277 are pre-PS-381 positive-cost history") rested on the
+  // bucket's max id — and this packet itself ruled that ids are not clocks. Grouped min/max
+  // on BOTH date columns is the fact. PS-381 landed a0ab4b0c, committed 2026-07-06T03:04:44Z.
+  say('NO_SELECTED_COST BUCKET — GROUPED EVIDENCE (ids are not clocks)');
+  const legacy = await db.execute(sql`
+    select
+      count(*)::text as "total",
+      count(*) filter (where coalesce(s.cost, 0) + coalesce(s.other_cost, 0) > 0)::text as "positiveReceipt",
+      count(*) filter (where coalesce(s.cost, 0) + coalesce(s.other_cost, 0) <= 0)::text as "zeroNullReceipt",
+      count(*) filter (where s.order_id is not null and s.client_id is not null)::text as "attributed",
+      min(s.create_date)::text as "minCreateDate", max(s.create_date)::text as "maxCreateDate",
+      min(s.created_at)::text as "minCreatedAt", max(s.created_at)::text as "maxCreatedAt",
+      min(s.id)::text as "minId", max(s.id)::text as "maxId",
+      count(*) filter (where exists
+        (select 1 from billing_line_items b where b.shipment_id = s.id))::text as "withLine"
+    from shipments s
+    where s.source = 'shipstation' and s.create_date >= ${since}
+      and coalesce(s.is_return, false) = false and coalesce(s.voided, false) = false
+      and s.selected_rate_cost is null
+  `);
+  const g = (Array.isArray(legacy)
+    ? legacy
+    : ((legacy as { rows?: unknown[] }).rows ?? []))[0] as Record<string, string>;
+  say(`      total ${g.total}  positive-receipt ${g.positiveReceipt}  zero/null-receipt ${g.zeroNullReceipt}`);
+  say(`      attributed ${g.attributed}  with-billing-line ${g.withLine}`);
+  say(`      create_date  ${g.minCreateDate}  ->  ${g.maxCreateDate}`);
+  say(`      created_at   ${g.minCreatedAt}  ->  ${g.maxCreatedAt}`);
+  say(`      id           ${g.minId}  ->  ${g.maxId}`);
+  say('  PS-381 (a0ab4b0c) was committed 2026-07-06T03:04:44Z. The pre-PS-381 claim holds only');
+  say('  if max(created_at) here precedes the PS-381 DEPLOY; the commit time is the earliest');
+  say('  bound on that deploy, so read max(created_at) against it.');
+  say('');
+
+  // ── Blocker-5 groundwork: receipt vs stamped selected cost disagreement ────────────────
+  // The future receipt_revised_after_freeze class compares the receipt against the FROZEN
+  // tuple; no sync tuples exist yet, so today's measurable precursor is receipt vs the
+  // stamped selected_rate_cost column on rows that have one.
+  say('RECEIPT vs SELECTED_RATE_COST DISAGREEMENT (precursor of receipt_revised_after_freeze)');
+  const drift = await db.execute(sql`
+    select
+      count(*)::text as "stamped",
+      count(*) filter (where round((coalesce(s.cost, 0) + coalesce(s.other_cost, 0))::numeric, 2)
+        <> s.selected_rate_cost)::text as "disagree"
+    from shipments s
+    where s.source = 'shipstation' and s.create_date >= ${since}
+      and s.selected_rate_cost is not null
+  `);
+  const d = (Array.isArray(drift)
+    ? drift
+    : ((drift as { rows?: unknown[] }).rows ?? []))[0] as Record<string, string>;
+  say(`      stamped rows ${d.stamped}   receipt-disagrees ${d.disagree}`);
+  say('  A non-zero count here measures how often ShipStation revises cost after ingestion —');
+  say('  the rate at which the correction review class will fire once tuples exist.');
   say('');
   say('NEXT: none of this decides BILLABILITY. That is the blocking product-owner decision.');
 }
