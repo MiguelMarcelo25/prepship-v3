@@ -73,8 +73,8 @@ export const billingCreditNotesHasReplacementIdColumn =
 /**
  * `billing_config.house_account_enabled` — PS-508.
  *
- * This one is additively ensured at RUNTIME (`ensureHouseAccountColumn`) rather than by a numbered
- * migration, so on a database where nothing has called that yet the column is simply absent. The
+ * Owned by numbered migration 0050 (drizzle/0050_billing_config_house_account.sql) and also
+ * additively ensured at runtime by ensureHouseAccountColumn. The
  * outbound freeze needs it to know whether a client is opted in to house billing, and it reads it
  * inside the label transaction — where calling the ensure helper would mean DDL under the ship
  * lock. Probing instead keeps the freeze read-only.

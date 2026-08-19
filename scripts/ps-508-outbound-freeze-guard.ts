@@ -166,7 +166,33 @@ check('the freeze runs AFTER the shipment row exists (it needs the returned id)'
      > persistBody.indexOf('.returning({ id: shipments.id })'));
 
 check('the freeze joins the CALLER transaction, never the bare pool',
-  /freezeOutboundCustomerShippingMoney\([\s\S]{0,120}?exec\s*\)/.test(persistBody));
+  /freezeOutboundCustomerShippingMoney\([\s\S]{0,120}?sp\s*\)/.test(persistBody));
+
+// BLOCKER 1 (audit, 74%): house money must follow the PURCHASE, not the stamp.
+// captureRealizedHouseMargin — sole writer of the sidecar billing reads — is gated on
+// directProviderKey === 'shipp'. Deriving from best_rate_json + opt-in alone is a DIFFERENT
+// eligibility boundary: a stale SHIPP-winning stamp plus a non-SHIPP purchase froze house money
+// where billing applies carrier markup, and the one-shot predicate made it unrepairable.
+check('house derivation is gated on the PURCHASED provider being shipp',
+  /purchasedProviderKey === 'shipp'/.test(persistBody));
+check('a non-SHIPP purchase derives NO house rate (ordinary carrier policy)',
+  /housePurchaseEligible\s*\n?\s*\?\s*await deriveOutboundHouseCustomerRate|housePurchaseEligible$/m.test(persistBody)
+  && /:\s*null/.test(persistBody));
+check('the purchased provider is passed EXPLICITLY, not inferred from source or carrier code',
+  /purchasedProviderKey: directProviderKey/.test(labelsSrc)
+  && !/purchasedProviderKey:\s*args\.source/.test(labelsSrc));
+
+// BLOCKER 2 (audit, 74%): a failed PostgreSQL statement aborts the WHOLE transaction. Catching the
+// JavaScript exception does not restore it — the parent stays poisoned and the ledger's 'consumed'
+// flip fails, rolling back a label the carrier already charged for. Only a savepoint makes the
+// parent usable again, which is why the replacement purchase already wraps its freeze this way.
+check('the staged freeze runs in a SAVEPOINT, not a bare try/catch',
+  /exec\.transaction\(async \(sp\) =>/.test(persistBody));
+check('the savepoint wraps BOTH the derivation and the freeze',
+  persistBody.indexOf('exec.transaction(async (sp)') < persistBody.indexOf('deriveOutboundHouseCustomerRate(')
+  && persistBody.indexOf('exec.transaction(async (sp)') < persistBody.indexOf('freezeOutboundCustomerShippingMoney('));
+check('the derivation runs on the SAVEPOINT handle, not the parent transaction',
+  /exec:\s*sp,/.test(persistBody));
 
 // The cost-basis defect the map surfaced: the sidecar's drp_cost is postage only, but billing floors
 // the house amount at resolveBillingSelectedRateCost, which prefers selected_rate_cost = postage +

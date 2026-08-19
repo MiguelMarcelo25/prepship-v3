@@ -49,6 +49,9 @@ jobs:
       - name: Architecture / SOT / backend-truth guard pack (PS-464 / PS-335)
         run: npm run test:sot-guard-pack
 
+      - name: PS-508 outbound customer-money freeze guard
+        run: npm run test:ps-508-outbound-freeze
+
       - name: ShipStation batched rate fan-out guard
         run: npm run test:shipstation-batched-rate-fanout
 
