@@ -52,6 +52,9 @@ jobs:
       - name: PS-508 outbound customer-money freeze guard
         run: npm run test:ps-508-outbound-freeze
 
+      - name: PS-508 outbound freeze behavioural fixtures
+        run: npm run test:ps-508-outbound-freeze-integration
+
       - name: ShipStation batched rate fan-out guard
         run: npm run test:shipstation-batched-rate-fanout
 
