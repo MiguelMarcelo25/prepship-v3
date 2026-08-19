@@ -184,6 +184,27 @@ async function main(): Promise<void> {
     ? result
     : ((result as { rows?: unknown[] }).rows ?? [])) as ShipmentRow[];
 
+  /**
+   * The source mix over the WHOLE window, computed in SQL and NOT subject to --limit.
+   *
+   * The per-row scan is `order by id desc limit N`, so a wide --days silently collapses to "the
+   * newest N rows". A 90-day run returned exactly 500 rows spanning nine days and reported a
+   * source mix as though it covered ninety — a silent cap wearing the costume of a complete
+   * answer. This aggregate is the honest one: one grouped count, no row limit, no truncation.
+   */
+  const mixResult = await db.execute<{ source: string | null; rows: string | number }>(sql`
+    select coalesce(s.source, 'unknown') as "source", count(*)::text as "rows"
+    from shipments s
+    where s.create_date >= now() - ${`${days} days`}::interval
+    group by 1
+    order by count(*) desc
+  `);
+  const sourceMix = (Array.isArray(mixResult)
+    ? mixResult
+    : ((mixResult as { rows?: unknown[] }).rows ?? [])) as Array<{
+      source: string | null; rows: string | number;
+    }>;
+
   const rows: CoverageRow[] = [];
   for (const shipment of shipments) {
     const excluded = exclusionFor(shipment);
@@ -226,7 +247,25 @@ async function main(): Promise<void> {
   say(`operator: ${operator}   window: last ${days} day(s)   limit: ${limit}`);
   say('READ-ONLY: this run issued SELECTs only.\n');
 
-  say(`POPULATION  ${report.total} shipment(s)`);
+  // A cap that is not announced reads as completeness. Say it loudly and say what to do about it.
+  const truncated = shipments.length >= limit;
+  if (truncated) {
+    say(`!! TRUNCATED: hit --limit=${limit}. The per-row figures below describe only the NEWEST`);
+    say(`   ${limit} shipment(s), NOT the full ${days}-day window. Raise --limit to widen them.`);
+    say('   The full-window source mix below is unaffected — it is a grouped count.');
+    say('');
+  }
+
+  say(`FULL-WINDOW SOURCE MIX (last ${days} day(s), no row limit)`);
+  for (const entry of sourceMix) {
+    say(`      ${String(entry.source ?? 'unknown').padEnd(18)} ${entry.rows}`);
+  }
+  say('  source is written by whichever code inserted the row: `shipstation` is external sync');
+  say('  ingestion, while persistCreatedLabel — where the PS-508 freeze lives — writes the');
+  say('  provider key or `prepship_v2`. A window with no purchase-path rows cannot exercise it.');
+  say('');
+
+  say(`POPULATION  ${report.total} shipment(s)${truncated ? ' (TRUNCATED — see above)' : ''}`);
   say(`  excluded (cannot carry an outbound tuple): ${report.excludedTotal}`);
   for (const [reason, count] of Object.entries(report.excluded)) {
     if (count > 0) say(`      ${reason.padEnd(18)} ${count}`);

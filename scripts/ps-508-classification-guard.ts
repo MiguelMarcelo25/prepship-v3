@@ -202,7 +202,12 @@ check('a clean population raises NO activation blockers',
 
 const auditSrc = stripComments(readFileSync('scripts/ps-508-coverage-audit.ts', 'utf8'));
 check('the coverage audit issues no write of any kind',
-  !/\b(insert\s+into|update\s+[a-z_]+\s+set|delete\s+from|truncate|drop\s+table|alter\s+table)/i.test(auditSrc)
+  // Each verb must be followed by whitespace, i.e. actually head a statement. A bare `truncate`
+  // matched the word TRUNCATED inside the report's own truncation warning — the fourth time in
+  // this ticket a negative assertion fired on prose describing the thing it forbids. The lane's
+  // grep already required `\s`, so the guard was the looser of the two, not the stricter.
+  !/\b(insert\s+into|update\s+[a-z_]+\s+set|delete\s+from|truncate\s|drop\s+table|alter\s+table)/i
+    .test(auditSrc)
   && !/\.insert\(|\.update\(|\.delete\(/.test(auditSrc));
 check('the coverage audit recomputes through the canonical preview, not a private copy',
   /previewShipmentCustomerShippingMoney\(/.test(auditSrc)
