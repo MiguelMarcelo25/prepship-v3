@@ -21,8 +21,9 @@
  *   - notify a marketplace or a customer
  *   - repurchase anything
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { shipments } from '../db/schema/shipments';
 import {
   replacementActivityEvents,
   replacementLabelPurchaseIntents,
@@ -31,14 +32,16 @@ import {
 } from '../db/schema/replacements';
 import {
   assertReplacementLabelEnabled,
+  REPLACEMENT_LABEL_PERMISSION,
+  readReplacementLabelIntentInTransaction,
   recordPurchasedReplacementLabelInTransaction,
   type ProviderLabelReceipt,
+  type ReplacementLabelIntentSnapshot,
 } from './replacement-label-purchase-command';
 
-const REPLACEMENT_ORDER_LOCK_CLASS = 36423;
+export { REPLACEMENT_LABEL_PERMISSION } from './replacement-label-purchase-command';
 
-/** Purchasing and voiding a replacement label are the same privilege. */
-export const REPLACEMENT_LABEL_PERMISSION = 'replacements:label';
+const REPLACEMENT_ORDER_LOCK_CLASS = 36423;
 
 export type ReplacementVoidErrorCode =
   | 'REPLACEMENT_LABEL_FEATURE_DISABLED'
@@ -83,6 +86,11 @@ export type ReplacementLabelVoidProvider = {
    * provider is CERTAIN nothing was bought — not that it is unsure.
    */
   lookupPurchase?(input: { idempotencyKey: string }): Promise<ProviderLabelReceipt | null>;
+  /** Read-only recovery for an uncertain destructive void. It must never resend the void. */
+  lookupVoid?(input: {
+    providerTransactionId: string;
+    idempotencyKey: string;
+  }): Promise<{ disposition: 'voided' | 'active'; providerVoidId?: string | null }>;
 };
 
 type Conn = Pick<typeof db, 'transaction'>;
@@ -119,6 +127,94 @@ export function replacementVoidIdempotencyKey(intent: {
   providerIdempotencyKey: string;
 }): string {
   return `void:${intent.providerIdempotencyKey}:intent:${intent.id}`;
+}
+
+async function markReplacementShipmentVoidedInTransaction(
+  tx: any,
+  input: {
+    shipmentId: number | null;
+    replacementReference: string;
+    replacementClientId: number | null;
+    providerShipmentId: string | null;
+  },
+): Promise<void> {
+  if (input.shipmentId == null) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_SCOPE_MISMATCH',
+      'the purchased intent has no replacement shipment to mark voided',
+    );
+  }
+  const providerShipmentId = input.providerShipmentId != null
+    && /^[1-9]\d*$/.test(input.providerShipmentId)
+    ? Number(input.providerShipmentId)
+    : null;
+  if (!Number.isSafeInteger(providerShipmentId) || Number(providerShipmentId) <= 0) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_SCOPE_MISMATCH',
+      'the purchased intent has no valid provider shipment identity',
+    );
+  }
+  const updated = await tx
+    .update(shipments)
+    .set({ voided: true, updatedAt: new Date() })
+    .where(and(
+      eq(shipments.id, input.shipmentId),
+      isNull(shipments.orderId),
+      input.replacementClientId == null
+        ? isNull(shipments.clientId)
+        : eq(shipments.clientId, input.replacementClientId),
+      eq(shipments.orderNumber, input.replacementReference),
+      eq(shipments.source, 'replacement'),
+      eq(shipments.labelShipmentId, providerShipmentId!),
+    ))
+    .returning({ id: shipments.id });
+  if (updated.length === 0) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_SCOPE_MISMATCH',
+      'the voided intent no longer points at its exact replacement-owned shipment',
+      409,
+      { shipmentId: input.shipmentId },
+    );
+  }
+}
+
+async function lockReplacementShipmentForVoidInTransaction(
+  tx: any,
+  input: {
+    shipmentId: number | null;
+    replacementReference: string;
+    replacementClientId: number | null;
+    providerShipmentId: string | null;
+  },
+) {
+  const providerShipmentId = input.providerShipmentId != null
+    && /^[1-9]\d*$/.test(input.providerShipmentId)
+    ? Number(input.providerShipmentId)
+    : null;
+  if (input.shipmentId == null || !Number.isSafeInteger(providerShipmentId) || Number(providerShipmentId) <= 0) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_SCOPE_MISMATCH',
+      'the purchased intent has no exact replacement/provider shipment identity',
+    );
+  }
+  const [shipment] = await tx.select().from(shipments)
+    .where(eq(shipments.id, input.shipmentId))
+    .limit(1)
+    .for('update');
+  if (
+    !shipment
+    || shipment.orderId !== null
+    || shipment.clientId !== input.replacementClientId
+    || shipment.orderNumber !== input.replacementReference
+    || shipment.source !== 'replacement'
+    || shipment.labelShipmentId !== providerShipmentId
+  ) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_SCOPE_MISMATCH',
+      'the purchased intent no longer points at its exact replacement-owned provider shipment',
+    );
+  }
+  return shipment;
 }
 
 export async function voidReplacementLabel(
@@ -185,15 +281,99 @@ export async function voidReplacementLabel(
         'the purchase intent carries no provider identity, so nothing can be voided against it',
       );
     }
+    if (
+      intent.replacementShipmentId == null
+      || intent.replacementShipmentId !== replacement.replacementShipmentId
+    ) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_VOID_SCOPE_MISMATCH',
+        'the purchased intent is not attached to the replacement-owned shipment',
+        409,
+        {
+          intentId: intent.id,
+          intentShipmentId: intent.replacementShipmentId,
+          replacementShipmentId: replacement.replacementShipmentId,
+        },
+      );
+    }
+    const shipment = await lockReplacementShipmentForVoidInTransaction(tx, {
+      shipmentId: intent.replacementShipmentId,
+      replacementReference: replacement.reference,
+      replacementClientId: replacement.clientId,
+      providerShipmentId: intent.providerShipmentId,
+    });
+
+    // Shipment sync can observe the provider's monotonic void fact before the dedicated intent
+    // owner records it. That durable evidence is already a confirmed void: repair the intent
+    // and return without ever resending the destructive provider request.
+    if (shipment.voided) {
+      await tx.update(replacementLabelPurchaseIntents)
+        .set({
+          voidState: 'voided',
+          voidedAt: intent.voidedAt ?? new Date(),
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(replacementLabelPurchaseIntents.id, intent.id),
+          eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+          eq(replacementLabelPurchaseIntents.replacementShipmentId, shipment.id),
+          eq(replacementLabelPurchaseIntents.state, 'purchased'),
+        ));
+      await tx.insert(replacementActivityEvents).values({
+        replacementId: replacement.id,
+        shipmentId: shipment.id,
+        eventType: 'replacement_label_void_repaired_from_shipment',
+        actorType: input.actor.type,
+        actorEmail: input.actor.email,
+        detail: reason,
+        idempotencyKey: `replacement:${replacement.id}:void-from-shipment:${intent.id}`,
+      }).onConflictDoNothing({ target: replacementActivityEvents.idempotencyKey });
+      return {
+        alreadyVoided: true as const,
+        intent: { ...intent, voidState: 'voided' } as ReplacementLabelPurchaseIntentRow,
+      };
+    }
 
     // Already voided: return it rather than sending a second destructive call.
     if (intent.voidState === 'voided') {
+      // Repair legacy/process-interrupted state in the same no-provider replay. The intent is
+      // confirmed evidence; shipments is the shared durable label record read by manifests,
+      // billing, package accounting and aggregates, so the two may not disagree.
+      await markReplacementShipmentVoidedInTransaction(tx, {
+        shipmentId: intent.replacementShipmentId,
+        replacementReference: replacement.reference,
+        replacementClientId: replacement.clientId,
+        providerShipmentId: intent.providerShipmentId,
+      });
       return { alreadyVoided: true as const, intent: intent as ReplacementLabelPurchaseIntentRow };
     }
+    if (intent.voidState != null) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+        `replacement ${replacement.reference} already has an unresolved void attempt. `
+          + 'Reconcile the provider outcome; a second destructive call is not a retry.',
+        409,
+        { intentId: intent.id, voidState: intent.voidState },
+      );
+    }
 
-    await tx.update(replacementLabelPurchaseIntents)
+    const [claimedIntent] = await tx.update(replacementLabelPurchaseIntents)
       .set({ voidState: 'void_pending', updatedAt: new Date() })
-      .where(eq(replacementLabelPurchaseIntents.id, intent.id));
+      .where(and(
+        eq(replacementLabelPurchaseIntents.id, intent.id),
+        eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+        eq(replacementLabelPurchaseIntents.replacementShipmentId, shipment.id),
+        eq(replacementLabelPurchaseIntents.state, 'purchased'),
+        isNull(replacementLabelPurchaseIntents.voidState),
+      ))
+      .returning({ id: replacementLabelPurchaseIntents.id });
+    if (!claimedIntent) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+        'the label void state moved before the provider request; reconcile instead of retrying',
+      );
+    }
 
     return { alreadyVoided: false as const, intent: intent as ReplacementLabelPurchaseIntentRow };
   });
@@ -222,7 +402,11 @@ export async function voidReplacementLabel(
           lastError: String((error as Error)?.message ?? error),
           updatedAt: new Date(),
         })
-        .where(eq(replacementLabelPurchaseIntents.id, claim.intent.id));
+        .where(and(
+          eq(replacementLabelPurchaseIntents.id, claim.intent.id),
+          eq(replacementLabelPurchaseIntents.replacementId, input.replacementId),
+          eq(replacementLabelPurchaseIntents.voidState, 'void_pending'),
+        ));
     });
     throw new ReplacementVoidError(
       'REPLACEMENT_VOID_RECONCILE_REQUIRED',
@@ -241,7 +425,11 @@ export async function voidReplacementLabel(
     await conn.transaction(async (tx) => {
       await tx.update(replacementLabelPurchaseIntents)
         .set({ voidState: 'void_reconcile_required', updatedAt: new Date() })
-        .where(eq(replacementLabelPurchaseIntents.id, claim.intent.id));
+        .where(and(
+          eq(replacementLabelPurchaseIntents.id, claim.intent.id),
+          eq(replacementLabelPurchaseIntents.replacementId, input.replacementId),
+          eq(replacementLabelPurchaseIntents.voidState, 'void_pending'),
+        ));
     });
     throw new ReplacementVoidError(
       'REPLACEMENT_VOID_RECONCILE_REQUIRED',
@@ -252,15 +440,46 @@ export async function voidReplacementLabel(
   }
 
   return conn.transaction(async (tx) => {
-
-    await tx.update(replacementLabelPurchaseIntents)
+    await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, (
+      select order_id from replacements where id = ${input.replacementId}
+    ))`);
+    const [replacement] = await tx.select().from(replacements)
+      .where(eq(replacements.id, input.replacementId)).limit(1);
+    if (!replacement) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_NOT_FOUND', `replacement ${input.replacementId} does not exist`, 404,
+      );
+    }
+    const updatedIntent = await tx.update(replacementLabelPurchaseIntents)
       .set({
         voidState: 'voided',
         providerVoidId: result.providerVoidId,
         voidedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(replacementLabelPurchaseIntents.id, claim.intent.id));
+      .where(and(
+        eq(replacementLabelPurchaseIntents.id, claim.intent.id),
+        eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+        eq(replacementLabelPurchaseIntents.replacementShipmentId, claim.intent.replacementShipmentId!),
+        eq(replacementLabelPurchaseIntents.state, 'purchased'),
+        eq(replacementLabelPurchaseIntents.voidState, 'void_pending'),
+      ))
+      .returning({ id: replacementLabelPurchaseIntents.id });
+    if (updatedIntent.length === 0) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+        'the purchased intent moved before the confirmed void could be recorded; reconcile it',
+        409,
+        { intentId: claim.intent.id },
+      );
+    }
+
+    await markReplacementShipmentVoidedInTransaction(tx, {
+      shipmentId: claim.intent.replacementShipmentId,
+      replacementReference: replacement.reference,
+      replacementClientId: replacement.clientId,
+      providerShipmentId: claim.intent.providerShipmentId,
+    });
 
     await tx.insert(replacementActivityEvents).values({
       replacementId: input.replacementId,
@@ -270,13 +489,14 @@ export async function voidReplacementLabel(
       actorEmail: input.actor.email,
       detail: reason,
       idempotencyKey: `replacement:${input.replacementId}:void:${claim.intent.id}`,
-    });
+    }).onConflictDoNothing({ target: replacementActivityEvents.idempotencyKey });
 
     return { intentId: claim.intent.id, providerVoidId: result.providerVoidId, voided: true };
   });
 }
 
 export type ReconcileIntentInput = {
+  replacementId: number;
   intentId: number;
   actor: { email: string | null; type: string; permissions: readonly string[] };
   reason: string;
@@ -286,7 +506,28 @@ export type ReconcileIntentResult = {
   intentId: number;
   /** purchased | failed_pre_purchase | still_unknown */
   outcome: 'purchased' | 'failed_pre_purchase' | 'still_unknown';
+  shipmentId?: number;
+  receipt?: ProviderLabelReceipt;
+  recorded?: string;
 };
+
+function purchasedReconciliationResult(
+  snapshot: ReplacementLabelIntentSnapshot,
+): ReconcileIntentResult {
+  if (!snapshot.recorded) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+      `intent ${snapshot.intentId} has no complete recorded receipt`, 409,
+    );
+  }
+  return {
+    intentId: snapshot.intentId,
+    outcome: 'purchased',
+    shipmentId: snapshot.recorded.shipmentId,
+    receipt: snapshot.recorded.receipt,
+    recorded: snapshot.recorded.status,
+  };
+}
 
 /**
  * The admin path for an orphaned purchase intent.
@@ -304,6 +545,7 @@ export async function reconcileReplacementPurchaseIntent(
   provider: ReplacementLabelVoidProvider,
   conn: Conn = db,
 ): Promise<ReconcileIntentResult> {
+  assertReplacementLabelEnabled();
   if (!input.actor.permissions.includes(REPLACEMENT_LABEL_PERMISSION)) {
     throw new ReplacementVoidError(
       'REPLACEMENT_VOID_FORBIDDEN',
@@ -312,22 +554,24 @@ export async function reconcileReplacementPurchaseIntent(
   }
   const reason = requireReason(input.reason);
 
-  const intent = await conn.transaction(async (tx) => {
-    const [row] = await tx.select().from(replacementLabelPurchaseIntents)
-      .where(eq(replacementLabelPurchaseIntents.id, input.intentId)).limit(1);
-    if (!row) {
-      throw new ReplacementVoidError(
-        'REPLACEMENT_NOT_FOUND', `purchase intent ${input.intentId} does not exist`, 404,
-      );
-    }
-    if (row.state !== 'provider_pending' && row.state !== 'reconcile_required') {
-      throw new ReplacementVoidError(
-        'REPLACEMENT_INTENT_NOT_RECONCILABLE',
-        `intent ${row.id} is ${row.state}; only an unresolved attempt is reconciled`, 409,
-      );
-    }
-    return row as ReplacementLabelPurchaseIntentRow;
-  });
+  // Per user override unlock shipped data on 2026-08-19: recovery validates the intent's own
+  // replacement/shipment chain before provider lookup and takes the same order-before-intent
+  // lock order as ordinary Phase 3. It never dispatches a second purchase.
+  const intent = await conn.transaction((tx) =>
+    readReplacementLabelIntentInTransaction(tx, {
+      intentId: input.intentId,
+      replacementId: input.replacementId,
+    }));
+  if (intent.recorded) return purchasedReconciliationResult(intent);
+  if (intent.state === 'failed_pre_purchase') {
+    return { intentId: intent.intentId, outcome: 'failed_pre_purchase' };
+  }
+  if (intent.state !== 'provider_pending' && intent.state !== 'reconcile_required') {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+      `intent ${intent.intentId} is ${intent.state}; only an unresolved attempt is reconciled`, 409,
+    );
+  }
 
   if (!provider.lookupPurchase) {
     throw new ReplacementVoidError(
@@ -340,42 +584,54 @@ export async function reconcileReplacementPurchaseIntent(
   try {
     found = await provider.lookupPurchase({ idempotencyKey: intent.providerIdempotencyKey });
   } catch (error) {
-    await conn.transaction(async (tx) => {
-      await tx.update(replacementLabelPurchaseIntents)
+    return conn.transaction(async (tx) => {
+      const before = await readReplacementLabelIntentInTransaction(tx, {
+        intentId: intent.intentId,
+        replacementId: intent.replacementId,
+        shipmentId: intent.shipmentId,
+      });
+      if (before.recorded) return purchasedReconciliationResult(before);
+      if (before.state === 'failed_pre_purchase') {
+        return { intentId: before.intentId, outcome: 'failed_pre_purchase' as const };
+      }
+      if (before.state !== 'provider_pending' && before.state !== 'reconcile_required') {
+        throw new ReplacementVoidError(
+          'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+          `intent ${before.intentId} moved to ${before.state} during reconciliation`, 409,
+        );
+      }
+
+      const [updated] = await tx.update(replacementLabelPurchaseIntents)
         .set({
           state: 'reconcile_required',
           reconciliationState: 'unresolved',
           lastError: String((error as Error)?.message ?? error),
           updatedAt: new Date(),
         })
-        .where(eq(replacementLabelPurchaseIntents.id, intent.id));
+        .where(and(
+          eq(replacementLabelPurchaseIntents.id, before.intentId),
+          eq(replacementLabelPurchaseIntents.replacementId, before.replacementId),
+          eq(replacementLabelPurchaseIntents.replacementShipmentId, before.shipmentId),
+          sql`${replacementLabelPurchaseIntents.state} in ('provider_pending', 'reconcile_required')`,
+        ))
+        .returning({ id: replacementLabelPurchaseIntents.id });
+      if (updated) return { intentId: before.intentId, outcome: 'still_unknown' as const };
+
+      const winner = await readReplacementLabelIntentInTransaction(tx, {
+        intentId: before.intentId,
+        replacementId: before.replacementId,
+        shipmentId: before.shipmentId,
+      });
+      if (winner.recorded) return purchasedReconciliationResult(winner);
+      if (winner.state === 'failed_pre_purchase') {
+        return { intentId: winner.intentId, outcome: 'failed_pre_purchase' as const };
+      }
+      return { intentId: winner.intentId, outcome: 'still_unknown' as const };
     });
-    return { intentId: intent.id, outcome: 'still_unknown' };
   }
 
   return conn.transaction(async (tx) => {
     if (found) {
-      await tx.update(replacementLabelPurchaseIntents)
-        .set({
-          state: 'purchased',
-          providerTransactionId: found.providerTransactionId,
-          providerLabelId: found.providerLabelId ?? null,
-          providerShipmentId: found.providerShipmentId ?? null,
-          reconciliationState: 'resolved_purchased',
-          reconciledAt: new Date(),
-          resolvedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(replacementLabelPurchaseIntents.id, intent.id));
-      await tx.insert(replacementActivityEvents).values({
-        replacementId: intent.replacementId,
-        eventType: 'replacement_purchase_reconciled_found',
-        actorType: input.actor.type,
-        actorEmail: input.actor.email,
-        detail: reason,
-        idempotencyKey: `replacement:${intent.replacementId}:reconcile-found:${intent.id}`,
-      });
-
       // The label is REAL and paid for. Recording that the intent resolved is not the same as
       // recording that the label happened, and this path used to stop at the first: the
       // shipment kept no tracking, no label URL and no cost, and the replacement stayed at
@@ -387,17 +643,40 @@ export async function reconcileReplacementPurchaseIntent(
       //
       // In the same transaction as the intent update above: a recovery that recorded the intent
       // and then failed to record the label would recreate exactly the split it is closing.
-      const outcome = await recordPurchasedReplacementLabelInTransaction(tx, {
+      const recorded = await recordPurchasedReplacementLabelInTransaction(tx, {
         replacementId: intent.replacementId,
-        intentId: intent.id,
-        shipmentId: intent.replacementShipmentId!,
+        intentId: intent.intentId,
+        shipmentId: intent.shipmentId,
         receipt: found,
         actor: input.actor,
+        reconciliation: { reason },
       });
-      return { intentId: intent.id, outcome: 'purchased' as const, recorded: outcome };
+      return {
+        intentId: recorded.intentId,
+        outcome: 'purchased' as const,
+        shipmentId: recorded.shipmentId,
+        receipt: recorded.receipt,
+        recorded: recorded.status,
+      };
     }
 
-    await tx.update(replacementLabelPurchaseIntents)
+    const before = await readReplacementLabelIntentInTransaction(tx, {
+      intentId: intent.intentId,
+      replacementId: intent.replacementId,
+      shipmentId: intent.shipmentId,
+    });
+    if (before.recorded) return purchasedReconciliationResult(before);
+    if (before.state === 'failed_pre_purchase') {
+      return { intentId: before.intentId, outcome: 'failed_pre_purchase' as const };
+    }
+    if (before.state !== 'provider_pending' && before.state !== 'reconcile_required') {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+        `intent ${before.intentId} moved to ${before.state} during reconciliation`, 409,
+      );
+    }
+
+    const [updated] = await tx.update(replacementLabelPurchaseIntents)
       .set({
         state: 'failed_pre_purchase',
         reconciliationState: 'resolved_not_purchased',
@@ -405,15 +684,250 @@ export async function reconcileReplacementPurchaseIntent(
         resolvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(replacementLabelPurchaseIntents.id, intent.id));
+      .where(and(
+        eq(replacementLabelPurchaseIntents.id, before.intentId),
+        eq(replacementLabelPurchaseIntents.replacementId, before.replacementId),
+        eq(replacementLabelPurchaseIntents.replacementShipmentId, before.shipmentId),
+        sql`${replacementLabelPurchaseIntents.state} in ('provider_pending', 'reconcile_required')`,
+      ))
+      .returning({ id: replacementLabelPurchaseIntents.id });
+    if (!updated) {
+      const winner = await readReplacementLabelIntentInTransaction(tx, {
+        intentId: before.intentId,
+        replacementId: before.replacementId,
+        shipmentId: before.shipmentId,
+      });
+      if (winner.recorded) return purchasedReconciliationResult(winner);
+      if (winner.state === 'failed_pre_purchase') {
+        return { intentId: winner.intentId, outcome: 'failed_pre_purchase' as const };
+      }
+      throw new ReplacementVoidError(
+        'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+        `intent ${winner.intentId} moved to ${winner.state} during reconciliation`, 409,
+      );
+    }
+
     await tx.insert(replacementActivityEvents).values({
-      replacementId: intent.replacementId,
+      replacementId: before.replacementId,
+      shipmentId: before.shipmentId,
       eventType: 'replacement_purchase_reconciled_absent',
       actorType: input.actor.type,
       actorEmail: input.actor.email,
       detail: reason,
-      idempotencyKey: `replacement:${intent.replacementId}:reconcile-absent:${intent.id}`,
+      idempotencyKey: `replacement:${before.replacementId}:reconcile-absent:${before.intentId}`,
     });
-    return { intentId: intent.id, outcome: 'failed_pre_purchase' as const };
+    return { intentId: before.intentId, outcome: 'failed_pre_purchase' as const };
+  });
+}
+
+const VOID_ACTIVE_CONFIRMATION_GRACE_MS = 5 * 60 * 1000;
+
+export type ReconcileReplacementVoidInput = {
+  replacementId: number;
+  intentId: number;
+  actor: { email: string | null; type: string; permissions: readonly string[] };
+  reason: string;
+};
+
+export type ReconcileReplacementVoidResult = {
+  intentId: number;
+  outcome: 'voided' | 'active' | 'still_unknown';
+};
+
+/**
+ * Read-only provider reconciliation for a void whose response was lost.
+ *
+ * It never re-sends the destructive PUT. A provider-confirmed void updates the intent and
+ * shared shipment together. An exact active read is accepted only after a consistency grace;
+ * 404/transport/early-active observations leave the label held and unshippable.
+ */
+export async function reconcileReplacementVoidOutcome(
+  input: ReconcileReplacementVoidInput,
+  provider: ReplacementLabelVoidProvider,
+  conn: Conn = db,
+): Promise<ReconcileReplacementVoidResult> {
+  assertReplacementLabelEnabled();
+  if (!input.actor.permissions.includes(REPLACEMENT_LABEL_PERMISSION)) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_FORBIDDEN',
+      `reconciling a replacement void requires ${REPLACEMENT_LABEL_PERMISSION}`,
+      403,
+    );
+  }
+  const reason = requireReason(input.reason);
+
+  const claim = await conn.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, (
+      select order_id from replacements where id = ${input.replacementId}
+    ))`);
+    const [replacement] = await tx.select().from(replacements)
+      .where(eq(replacements.id, input.replacementId)).limit(1);
+    if (!replacement) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_NOT_FOUND', `replacement ${input.replacementId} does not exist`, 404,
+      );
+    }
+    const [intent] = await tx.select().from(replacementLabelPurchaseIntents)
+      .where(and(
+        eq(replacementLabelPurchaseIntents.id, input.intentId),
+        eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+        eq(replacementLabelPurchaseIntents.state, 'purchased'),
+      ))
+      .limit(1)
+      .for('update');
+    if (!intent || !intent.providerTransactionId) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+        'the addressed purchased intent is not owned by this replacement',
+        404,
+      );
+    }
+    if (
+      intent.replacementShipmentId == null
+      || intent.replacementShipmentId !== replacement.replacementShipmentId
+    ) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_VOID_SCOPE_MISMATCH',
+        'the uncertain void does not point at the replacement-owned shipment',
+      );
+    }
+    const shipment = await lockReplacementShipmentForVoidInTransaction(tx, {
+      shipmentId: intent.replacementShipmentId,
+      replacementReference: replacement.reference,
+      replacementClientId: replacement.clientId,
+      providerShipmentId: intent.providerShipmentId,
+    });
+    if (shipment.voided && intent.voidState !== 'voided') {
+      await tx.update(replacementLabelPurchaseIntents)
+        .set({
+          voidState: 'voided',
+          voidedAt: intent.voidedAt ?? new Date(),
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(replacementLabelPurchaseIntents.id, intent.id),
+          eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+          eq(replacementLabelPurchaseIntents.replacementShipmentId, shipment.id),
+          eq(replacementLabelPurchaseIntents.state, 'purchased'),
+        ));
+      await tx.insert(replacementActivityEvents).values({
+        replacementId: replacement.id,
+        shipmentId: shipment.id,
+        eventType: 'replacement_label_void_repaired_from_shipment',
+        actorType: input.actor.type,
+        actorEmail: input.actor.email,
+        detail: reason,
+        idempotencyKey: `replacement:${replacement.id}:void-from-shipment:${intent.id}`,
+      }).onConflictDoNothing({ target: replacementActivityEvents.idempotencyKey });
+      return { already: 'voided' as const, intent: { ...intent, voidState: 'voided' }, replacement };
+    }
+    if (intent.voidState === 'voided') {
+      await markReplacementShipmentVoidedInTransaction(tx, {
+        shipmentId: intent.replacementShipmentId,
+        replacementReference: replacement.reference,
+        replacementClientId: replacement.clientId,
+        providerShipmentId: intent.providerShipmentId,
+      });
+      return { already: 'voided' as const, intent, replacement };
+    }
+    if (intent.voidState !== 'void_pending' && intent.voidState !== 'void_reconcile_required') {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_INTENT_NOT_RECONCILABLE',
+        `intent ${intent.id} has no uncertain void outcome`,
+      );
+    }
+    return { already: null, intent, replacement };
+  });
+  if (claim.already === 'voided') return { intentId: claim.intent.id, outcome: 'voided' };
+  if (!provider.lookupVoid) {
+    throw new ReplacementVoidError(
+      'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+      'this provider exposes no authoritative read for an uncertain void outcome',
+    );
+  }
+
+  let observed: Awaited<ReturnType<NonNullable<ReplacementLabelVoidProvider['lookupVoid']>>>;
+  try {
+    observed = await provider.lookupVoid({
+      providerTransactionId: claim.intent.providerTransactionId!,
+      idempotencyKey: replacementVoidIdempotencyKey(claim.intent),
+    });
+  } catch {
+    return { intentId: claim.intent.id, outcome: 'still_unknown' };
+  }
+  const observedAt = new Date();
+  if (
+    observed.disposition === 'active'
+    && observedAt.getTime() - claim.intent.updatedAt.getTime() < VOID_ACTIVE_CONFIRMATION_GRACE_MS
+  ) {
+    return { intentId: claim.intent.id, outcome: 'still_unknown' };
+  }
+
+  return conn.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, (
+      select order_id from replacements where id = ${input.replacementId}
+    ))`);
+    const [replacement] = await tx.select().from(replacements)
+      .where(eq(replacements.id, input.replacementId)).limit(1);
+    if (!replacement) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_NOT_FOUND', `replacement ${input.replacementId} does not exist`, 404,
+      );
+    }
+    const shipment = await lockReplacementShipmentForVoidInTransaction(tx, {
+      shipmentId: claim.intent.replacementShipmentId,
+      replacementReference: replacement.reference,
+      replacementClientId: replacement.clientId,
+      providerShipmentId: claim.intent.providerShipmentId,
+    });
+    // A stale provider read of "active" can arrive after sync durably observed voided. Voids
+    // are monotonic; the shared vessel's true value wins and the intent is repaired to match.
+    const disposition = shipment.voided ? 'voided' as const : observed.disposition;
+    const nextVoidState = disposition === 'voided' ? 'voided' : null;
+    const [updated] = await tx.update(replacementLabelPurchaseIntents)
+      .set({
+        voidState: nextVoidState,
+        providerVoidId: disposition === 'voided'
+          ? (observed.providerVoidId ?? claim.intent.providerTransactionId)
+          : null,
+        voidedAt: disposition === 'voided' ? observedAt : null,
+        lastError: null,
+        updatedAt: observedAt,
+      })
+      .where(and(
+        eq(replacementLabelPurchaseIntents.id, claim.intent.id),
+        eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+        eq(replacementLabelPurchaseIntents.replacementShipmentId, claim.intent.replacementShipmentId!),
+        eq(replacementLabelPurchaseIntents.state, 'purchased'),
+        sql`${replacementLabelPurchaseIntents.voidState} in ('void_pending', 'void_reconcile_required')`,
+      ))
+      .returning({ id: replacementLabelPurchaseIntents.id });
+    if (!updated) {
+      throw new ReplacementVoidError(
+        'REPLACEMENT_VOID_RECONCILE_REQUIRED',
+        'the void state moved while its provider observation was being recorded; read it again',
+      );
+    }
+    if (disposition === 'voided') {
+      await markReplacementShipmentVoidedInTransaction(tx, {
+        shipmentId: claim.intent.replacementShipmentId,
+        replacementReference: replacement.reference,
+        replacementClientId: replacement.clientId,
+        providerShipmentId: claim.intent.providerShipmentId,
+      });
+    }
+    await tx.insert(replacementActivityEvents).values({
+      replacementId: replacement.id,
+      shipmentId: claim.intent.replacementShipmentId,
+      eventType: disposition === 'voided'
+        ? 'replacement_label_void_reconciled_voided'
+        : 'replacement_label_void_reconciled_active',
+      actorType: input.actor.type,
+      actorEmail: input.actor.email,
+      detail: reason,
+      idempotencyKey: `replacement:${replacement.id}:void-reconcile:${claim.intent.id}:${disposition}`,
+    }).onConflictDoNothing({ target: replacementActivityEvents.idempotencyKey });
+    return { intentId: claim.intent.id, outcome: disposition };
   });
 }

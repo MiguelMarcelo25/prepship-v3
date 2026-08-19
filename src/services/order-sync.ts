@@ -301,7 +301,11 @@ async function upsertMissingShippedOrdersBatch(
       .where(
         and(
           isNull(shipments.orderId),
-          eq(shipments.orderNumber, row.orderNumber)
+          eq(shipments.orderNumber, row.orderNumber),
+          // Replacement vessels deliberately keep order_id NULL and are owned only through
+          // replacements.replacement_shipment_id. Visible order-number text can collide; the
+          // generic orphan hydrator may never relink that dedicated vessel to an ordinary order.
+          sql`coalesce(${shipments.source}, '') <> 'replacement'`,
         )
       )
       .returning({ id: shipments.id });

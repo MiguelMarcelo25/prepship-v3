@@ -2822,6 +2822,7 @@ export async function billingDetails(input: GenerateInput) {
         .from(shipments)
         .where(and(
           eq(shipments.voided, false),
+          sql`${shipments.source} is distinct from 'replacement'`,
           // Audit B-1: never surface a return label as the order's purchased
           // shipping proof in billingDetails (tracking/cost/selected-rate).
           sql`coalesce(${shipments.isReturn}, false) = false`,

@@ -12,7 +12,7 @@
 // URL and touches no other shipped/cancelled column. Best-effort: any failure is swallowed
 // by the caller so it can never block the sync.
 
-import { and, eq, gt, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { shipments } from '../db/schema/shipments.js';
 import { ssListRecentLabels } from '../lib/shipstation/labels.js';
@@ -44,6 +44,7 @@ export async function enrichLabelUrls(
     .where(
       and(
         eq(shipments.voided, false),
+        sql`${shipments.source} is distinct from 'replacement'`,
         isNull(shipments.labelUrl),
         isNotNull(shipments.trackingNumber),
         gt(shipments.createdAt, new Date(sinceMs)),
@@ -77,7 +78,11 @@ export async function enrichLabelUrls(
     await db
       .update(shipments)
       .set({ labelUrl: u.labelUrl, updatedAt: new Date() })
-      .where(and(eq(shipments.id, u.shipmentId), isNull(shipments.labelUrl)));
+      .where(and(
+        eq(shipments.id, u.shipmentId),
+        isNull(shipments.labelUrl),
+        sql`${shipments.source} is distinct from 'replacement'`,
+      ));
     filled += 1;
   }
   if (opts.signal?.aborted) opts.signal.throwIfAborted();

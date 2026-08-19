@@ -34,6 +34,8 @@ export type OutboundPackageConsumptionInput = {
   source: string;
   sourceAccountId?: number | string | null;
   providerShipmentId?: number | string | null;
+  /** Use the globally unique local shipment PK when provider ids are not globally scoped. */
+  idempotencyIdentity?: 'provider_shipment' | 'local_shipment';
   effectiveAt: Date | string;
   selectedPackageId?: number | string | null;
   dimensions?: OutboundPackageDimensions | null;
@@ -141,14 +143,17 @@ export async function resolveOutboundPackageSelection(
 }
 
 export function buildPackageConsumptionIdempotencyKey(
-  input: Pick<OutboundPackageConsumptionInput, 'shipmentId' | 'source' | 'sourceAccountId' | 'providerShipmentId'>,
+  input: Pick<
+    OutboundPackageConsumptionInput,
+    'shipmentId' | 'source' | 'sourceAccountId' | 'providerShipmentId' | 'idempotencyIdentity'
+  >,
 ): string | null {
   const shipmentId = positiveInt(input.shipmentId);
   const source = normalizedText(input.source)?.toLowerCase().replace(/[^a-z0-9_.-]+/g, '_');
   if (!shipmentId || !source) return null;
   const providerShipmentId = normalizedText(input.providerShipmentId);
   const sourceAccountId = normalizedText(input.sourceAccountId) ?? 'default';
-  return providerShipmentId
+  return providerShipmentId && input.idempotencyIdentity !== 'local_shipment'
     ? `package-consumption:v1:${source}:${sourceAccountId}:provider:${providerShipmentId}`
     : `package-consumption:v1:${source}:local:${shipmentId}`;
 }

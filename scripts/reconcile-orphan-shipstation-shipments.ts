@@ -356,7 +356,11 @@ async function main(): Promise<void> {
   );
 
   // 1. Load orphan shipments: order_id IS NULL and not voided.
-  const baseWhere = and(isNull(shipments.orderId), eq(shipments.voided, false));
+  const baseWhere = and(
+    isNull(shipments.orderId),
+    eq(shipments.voided, false),
+    sql`${shipments.source} is distinct from 'replacement'`,
+  );
   const where = orderNumbersFilter
     ? and(baseWhere, inArray(shipments.orderNumber, orderNumbersFilter))
     : baseWhere;
@@ -502,7 +506,11 @@ async function main(): Promise<void> {
       const linked = await db
         .update(shipments)
         .set({ orderId: target.id, clientId: target.clientId, updatedAt: new Date() })
-        .where(and(isNull(shipments.orderId), eq(shipments.orderNumber, orderNumber)))
+        .where(and(
+          isNull(shipments.orderId),
+          eq(shipments.orderNumber, orderNumber),
+          sql`${shipments.source} is distinct from 'replacement'`,
+        ))
         .returning({ id: shipments.id });
       report.shipmentsLinked += linked.length;
     } else if (classification === 'hydrate' && normalizedUpstream) {
@@ -523,7 +531,11 @@ async function main(): Promise<void> {
           const linked = await db
             .update(shipments)
             .set({ orderId: row.id, clientId: row.clientId, updatedAt: new Date() })
-            .where(and(isNull(shipments.orderId), eq(shipments.orderNumber, row.orderNumber)))
+            .where(and(
+              isNull(shipments.orderId),
+              eq(shipments.orderNumber, row.orderNumber),
+              sql`${shipments.source} is distinct from 'replacement'`,
+            ))
             .returning({ id: shipments.id });
           report.shipmentsLinked += linked.length;
         }

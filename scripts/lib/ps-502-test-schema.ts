@@ -16,11 +16,23 @@
 export const PS_502_PREREQUISITE_DDL = `
   -- Only so 0025_order_items_sync_trigger.sql can be applied VERBATIM: it indexes this table.
   CREATE TABLE analytics_cache (id serial PRIMARY KEY, expires_at timestamptz);
-  CREATE TABLE clients (id serial PRIMARY KEY, name text    ,store_ids integer[]
+  CREATE TABLE clients (
+    id serial PRIMARY KEY,
+    name text,
+    store_ids integer[],
+    ss_api_key text,
+    ss_api_secret text,
+    ss_api_key_v2 text,
+    rate_source_client_id integer,
+    active boolean NOT NULL DEFAULT true,
+    is_test boolean NOT NULL DEFAULT false
   );
   CREATE TABLE orders (
     id serial PRIMARY KEY,
     client_id integer REFERENCES clients(id),
+    source_provider text,
+    source_account_id text,
+    source_order_id text,
     order_number text NOT NULL,
     order_status text NOT NULL DEFAULT 'awaiting_shipment',
     store_id integer,
@@ -72,6 +84,29 @@ export const PS_502_PREREQUISITE_DDL = `
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   );
+  -- Replacement shipment insertion resolves a package reference before attaching the
+  -- immutable vessel. Mirror the canonical package shape so the harness cannot accept a
+  -- package code that production would reject (or vice versa).
+  CREATE TABLE packages (
+    id serial PRIMARY KEY,
+    name text NOT NULL,
+    type text NOT NULL DEFAULT 'box',
+    length real NOT NULL DEFAULT 0,
+    width real NOT NULL DEFAULT 0,
+    height real NOT NULL DEFAULT 0,
+    tare_weight_oz real NOT NULL DEFAULT 0,
+    source text NOT NULL DEFAULT 'custom',
+    carrier_code text,
+    package_code text,
+    domestic boolean,
+    international boolean,
+    stock_qty integer NOT NULL DEFAULT 0,
+    reorder_level integer NOT NULL DEFAULT 10,
+    unit_cost numeric(10,2),
+    is_default boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
   -- The shipped command deducts through applyInventoryMovementInTransaction, so the
   -- ledger and its idempotency index are part of the schema under test: the whole point
   -- is that a replacement-scoped key does NOT collide with the order-scoped one.
@@ -115,6 +150,12 @@ export const PS_502_PREREQUISITE_DDL = `
   -- order-scoped one: two different keys must both be insertable.
   CREATE UNIQUE INDEX inventory_ledger_idempotency_key_unq
     ON inventory_ledger (idempotency_key) WHERE idempotency_key IS NOT NULL;
+  -- 0075's second replay identity matters independently of the explicit key. Two frozen
+  -- replacement items may legitimately map to the same SKU/inventory row, so the integration
+  -- harness must include the production constraint that caught shipment-only source ids.
+  CREATE UNIQUE INDEX inventory_ledger_source_identity_unq
+    ON inventory_ledger (source_entity, source_id, inventory_id, type)
+    WHERE source_entity IS NOT NULL AND source_id IS NOT NULL;
   -- Mirrors src/db/schema/billing.ts billingLineItems IN FULL. Drizzle emits every declared
   -- column on an insert, so a table missing one fails exactly as production would — which is
   -- how the missing return_id surfaced here rather than in a deploy.
@@ -157,9 +198,12 @@ export const PS_502_PREREQUISITE_DDL = `
   );
   CREATE TABLE webhook_events (
     id serial PRIMARY KEY,
+    provider text NOT NULL DEFAULT 'test',
+    source_order_id text,
     related_order_id integer REFERENCES orders(id),
     canonical_status text,
     status text NOT NULL DEFAULT 'processed',
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT now()
   );
   -- The customer-money policy. The AC-10 freeze reads markup and hugrab override from here to
@@ -176,11 +220,18 @@ export const PS_502_PREREQUISITE_DDL = `
     client_id integer PRIMARY KEY REFERENCES clients(id),
     active boolean NOT NULL DEFAULT true,
     billing_mode text NOT NULL DEFAULT 'markup',
+    pick_pack_fee numeric(10,2) NOT NULL DEFAULT 0,
     shipping_markup_pct numeric(10,2) NOT NULL DEFAULT 0,
     shipping_markup_flat numeric(10,2) NOT NULL DEFAULT 0,
     hugrab_shipping_rate_override_enabled boolean NOT NULL DEFAULT false,
     hugrab_shipping_rate_override_threshold numeric(10,2),
-    hugrab_shipping_rate_override_amount numeric(10,2)
+    hugrab_shipping_rate_override_amount numeric(10,2),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE TABLE settings (
+    key text PRIMARY KEY,
+    value text
   );
   CREATE TABLE billing_finalizations (
     id text PRIMARY KEY,
@@ -196,10 +247,37 @@ export const PS_502_PREREQUISITE_DDL = `
   );
   CREATE TABLE billing_credit_notes (
     id text PRIMARY KEY,
-    finalization_id text,
+    finalization_id text NOT NULL REFERENCES billing_finalizations(id) ON DELETE RESTRICT,
+    client_id integer NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+    amount numeric(12,2) NOT NULL,
+    adjustment_kind text NOT NULL DEFAULT 'credit',
+    adjustment_source text NOT NULL DEFAULT 'manual',
+    source_order_id integer REFERENCES orders(id) ON DELETE RESTRICT,
     reason text NOT NULL,
     replacement_id integer,
+    posting_version text NOT NULL DEFAULT 'legacy_credit_v1',
+    effective_date timestamptz,
+    billing_policy_version text,
+    idempotency_key text NOT NULL UNIQUE,
+    created_by text NOT NULL,
+    created_by_email text,
     created_at timestamptz NOT NULL DEFAULT now()
+  );
+  -- Migration 0102 extends this pre-existing reporting cache. Keep the prerequisite at its
+  -- 0029 shape so the PS-502 migration is exercised verbatim rather than pre-baking its columns.
+  CREATE TABLE billing_summary_metrics (
+    client_id integer NOT NULL,
+    period_from date NOT NULL,
+    period_to date NOT NULL,
+    order_count integer NOT NULL DEFAULT 0,
+    pick_pack_total numeric(14, 2) NOT NULL DEFAULT 0,
+    additional_total numeric(14, 2) NOT NULL DEFAULT 0,
+    package_total numeric(14, 2) NOT NULL DEFAULT 0,
+    shipping_total numeric(14, 2) NOT NULL DEFAULT 0,
+    storage_total numeric(14, 2) NOT NULL DEFAULT 0,
+    grand_total numeric(14, 2) NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (client_id, period_from, period_to)
   );
 `;
 
@@ -217,6 +295,8 @@ export const PS_502_MIGRATIONS = [
   'drizzle/0099_ps502_replacement_request_signature.sql',
   'drizzle/0100_ps502_replacement_operational_state.sql',
   'drizzle/0101_ps502_replacement_original_order_holds.sql',
+  'drizzle/0102_billing_summary_metrics_replacement_totals.sql',
+  'drizzle/0103_ps502_replacement_financial_actions.sql',
 ] as const;
 
 /** A shipped original: 3 x SKU-A at line 0, 2 x SKU-B at line 1. */
@@ -228,7 +308,18 @@ export const PS_502_SEED_ITEMS_JSON =
  * does. Inserting order_items by hand would test a table the trigger owns.
  */
 export const PS_502_SEED_SQL = `
-  INSERT INTO clients (id, name) VALUES (1, 'Acme');
+  -- Client 1 owns both polling (V1) and purchase (V2) credentials. Keeping the two values
+  -- visibly different prevents a test from treating a V1 account id as authority for the
+  -- V2 credential that actually bought replacement postage.
+  INSERT INTO clients (
+    id, name, ss_api_key, ss_api_secret, ss_api_key_v2, active, is_test
+  ) VALUES
+    (1, 'Acme', 'ps502-v1-key', 'ps502-v1-secret', 'ps502-v2-fixture', true, false),
+    (2, 'Offline Test Client', 'ps502-test-v1-key', 'ps502-test-v1-secret',
+      'ps502-test-v2-key', true, true),
+    (3, 'V1 Only Client', 'ps502-v1-only-key', 'ps502-v1-only-secret', null, true, false);
+  INSERT INTO packages (id, name, package_code, length, width, height, stock_qty)
+    VALUES (1, 'Fixture Box A', 'box-a', 10, 8, 6, 100);
   -- 18% markup, so the frozen CUSTOMER amount is provably different from the carrier cost
   -- the provider receipt carries. A zero-markup fixture would let a fence that returned
   -- selectedRateCost pass by coincidence.

@@ -21,6 +21,10 @@
  *
  * Flipping a decision to frozen is one boolean here, and nothing else changes.
  */
+import {
+  isReplacementProviderCredentialAuthority,
+  type ReplacementProviderCredentialAuthority,
+} from './replacement-provider-credential-authority';
 
 /** How a field's value was arrived at. The distinction is the whole point of this module. */
 export type PurchaseInputSource = 'operator_override' | 'policy_default';
@@ -91,6 +95,8 @@ export type ResolvedPurchaseRequest = {
   address: ReplacementDestinationAddress;
   carrier: ReplacementCarrierSelection;
   package: ReplacementPackageSelection;
+  /** Server-selected V2 credential identity. Null only on pure pre-binding resolver output. */
+  providerCredentialAuthority: ReplacementProviderCredentialAuthority | null;
   /** Per-field provenance, so an audit can say who chose what and why. */
   provenance: Record<'address' | 'carrier' | 'package', {
     source: PurchaseInputSource;
@@ -290,9 +296,11 @@ export function fingerprintPurchaseRequest(request: {
   address: ReplacementDestinationAddress;
   carrier: ReplacementCarrierSelection;
   package: ReplacementPackageSelection;
+  providerCredentialAuthority?: ReplacementProviderCredentialAuthority | null;
 }): string {
+  const authority = request.providerCredentialAuthority;
   return JSON.stringify([
-    'rpr1',
+    authority ? 'rpr2' : 'rpr1',
     request.replacementId,
     request.replacementShipmentId,
     [
@@ -305,6 +313,9 @@ export function fingerprintPurchaseRequest(request: {
       request.package.packageId, request.package.weightOz,
       request.package.dimsL, request.package.dimsW, request.package.dimsH,
     ],
+    ...(authority
+      ? [[authority.version, authority.scope, authority.keyFingerprint]]
+      : []),
   ]);
 }
 
@@ -317,6 +328,7 @@ export function fingerprintPurchaseRequest(request: {
  */
 export function resolveReplacementPurchaseRequest(
   inputs: ReplacementPurchaseInputs,
+  providerCredentialAuthority: ReplacementProviderCredentialAuthority | null = null,
 ): ResolvedPurchaseRequest {
   const address = acceptField('address', inputs.address);
   const carrier = acceptField('carrier', inputs.carrier);
@@ -340,14 +352,26 @@ export function resolveReplacementPurchaseRequest(
   };
 
   assertNoInternalCost(resolved);
+  if (
+    providerCredentialAuthority != null
+    && !isReplacementProviderCredentialAuthority(providerCredentialAuthority)
+  ) {
+    throw new ReplacementPurchaseRequestError(
+      'REPLACEMENT_PURCHASE_INPUT_INVALID',
+      'the server-selected provider credential authority is malformed',
+      400,
+      { field: 'providerCredentialAuthority' },
+    );
+  }
 
-  return {
+  const bound = {
     ...resolved,
+    providerCredentialAuthority,
     provenance: {
       address: { source: address.source, chosenBy: address.chosenBy, reason: address.reason },
       carrier: { source: carrier.source, chosenBy: carrier.chosenBy, reason: carrier.reason },
       package: { source: pkg.source, chosenBy: pkg.chosenBy, reason: pkg.reason },
     },
-    fingerprint: fingerprintPurchaseRequest(resolved),
   };
+  return { ...bound, fingerprint: fingerprintPurchaseRequest(bound) };
 }

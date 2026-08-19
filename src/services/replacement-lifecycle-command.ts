@@ -18,13 +18,16 @@
  * before checking the result, a third invents a transition the diagram never allowed. A guard
  * asserts no route writes `status` directly.
  */
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orderItems } from '../db/schema/order-items';
+import { shipments, type Shipment } from '../db/schema/shipments';
 import {
   replacementActivityEvents,
   replacementItemRemaps,
   replacementItems,
+  replacementLabelPurchaseIntents,
+  replacementOriginalOrderHolds,
   replacements,
   type ReplacementRow,
 } from '../db/schema/replacements';
@@ -38,6 +41,8 @@ import { findFrozenLineDrift } from './replacement-drift-resolution';
 import { buildReplacementSourceLineFingerprint } from './replacement-source-line-fingerprint';
 import { evaluateBillabilityChange, type ReplacementLiabilityOwner } from './replacement-billability';
 import { evaluateReplacementAllowance, type AllowanceRow } from './replacement-allowance';
+import { completePreShipCancellationCleanupInTransaction } from './replacement-financial-action';
+import { readFrozenReplacementCustomerShippingMoney } from './customer-shipping-money';
 
 /** Same class as the create and shipment commands: everything serialises on the order. */
 const REPLACEMENT_ORDER_LOCK_CLASS = 36423;
@@ -54,6 +59,8 @@ export type ReplacementLifecycleErrorCode =
   | 'REPLACEMENT_REMAP_TARGET_INVALID'
   | 'REPLACEMENT_ALLOWANCE_EXCEEDED'
   | 'REPLACEMENT_REASON_REQUIRED'
+  | 'REPLACEMENT_TERMINAL_LABEL_REVIEW_REQUIRED'
+  | 'REPLACEMENT_REVIEW_PREREQUISITE_REQUIRED'
   | 'REPLACEMENT_BILLABLE_FORBIDDEN_FOR_OPERATOR_LIABILITY'
   | 'REPLACEMENT_BILLABLE_FROZEN'
   | 'REPLACEMENT_BILLABLE_FINALIZED'
@@ -269,6 +276,220 @@ export async function enterReplacementReview(
   return reviewed[0] as ReplacementRow;
 }
 
+type ReplacementTerminalFenceBlock =
+  | 'label_live'
+  | 'label_unresolved'
+  | 'shipment_ownership_mismatch'
+  | 'shipment_not_empty';
+
+export type ReplacementTerminalFenceResult =
+  | { ready: true; replacement: ReplacementRow }
+  | {
+    ready: false;
+    replacement: ReplacementRow;
+    block: ReplacementTerminalFenceBlock;
+  };
+
+function isEmptyReplacementShipment(shipment: Shipment): boolean {
+  return shipment.labelShipmentId == null
+    && shipment.labelUrl == null
+    && shipment.labelCreatedAt == null
+    && shipment.labelTracking == null
+    && shipment.trackingNumber == null
+    && shipment.labelCost == null
+    && shipment.cost == null
+    && shipment.selectedRateCost == null
+    && shipment.shipDate == null;
+}
+
+/**
+ * Final pre-terminal label fence and vessel retirement owner.
+ *
+ * A provider call runs outside the order transaction, so an operator can attempt cancel or
+ * reject after Phase 1 committed `provider_pending` and before Phase 3 records the receipt.
+ * Terminalizing in that window would leave purchased postage attached to a terminal row.
+ * Every pre-ship terminal command therefore calls this under the same 36423 order lock.
+ *
+ * A clean, never-purchased shipment is only an empty replacement vessel. It is retired
+ * locally (`voided=true`) with an audit event; no provider void is implied or attempted. A
+ * provider-confirmed void may carry label snapshot fields and is also safe to retire locally.
+ */
+export async function prepareReplacementTerminalTransitionInTransaction(
+  tx: any,
+  before: ReplacementRow,
+  input: {
+    actor: Pick<LifecycleActor, 'email' | 'type'>;
+    reason: string;
+    context: 'original_order' | 'operator_terminal';
+  },
+): Promise<ReplacementTerminalFenceResult> {
+  const intents = await tx
+    .select({
+      id: replacementLabelPurchaseIntents.id,
+      state: replacementLabelPurchaseIntents.state,
+      voidState: replacementLabelPurchaseIntents.voidState,
+      replacementShipmentId: replacementLabelPurchaseIntents.replacementShipmentId,
+    })
+    .from(replacementLabelPurchaseIntents)
+    .where(eq(replacementLabelPurchaseIntents.replacementId, before.id))
+    .orderBy(desc(replacementLabelPurchaseIntents.id));
+
+  const atRisk = intents.find((intent: {
+    state: string;
+    voidState: string | null;
+  }) => (
+    intent.state === 'provider_pending'
+    || intent.state === 'reconcile_required'
+    || intent.state === 'purchased'
+  ) && intent.voidState !== 'voided');
+
+  let block: ReplacementTerminalFenceBlock | null = atRisk
+    ? (atRisk.state === 'purchased' ? 'label_live' : 'label_unresolved')
+    : null;
+  let shipment: Shipment | undefined;
+  let providerVoidProven = false;
+
+  if (!block && before.replacementShipmentId != null) {
+    [shipment] = await tx
+      .select()
+      .from(shipments)
+      .where(eq(shipments.id, before.replacementShipmentId))
+      .limit(1);
+
+    if (
+      !shipment
+      || before.clientId == null
+      || shipment.orderId !== null
+      || shipment.clientId !== before.clientId
+      || shipment.orderNumber !== before.reference
+      || shipment.source !== 'replacement'
+    ) {
+      block = 'shipment_ownership_mismatch';
+    } else if (!shipment.voided) {
+      providerVoidProven = intents.some((intent: {
+        state: string;
+        voidState: string | null;
+        replacementShipmentId: number | null;
+      }) => intent.replacementShipmentId === shipment!.id && (
+        intent.state === 'voided'
+        || (intent.state === 'purchased' && intent.voidState === 'voided')
+      ));
+      if (!providerVoidProven && !isEmptyReplacementShipment(shipment)) {
+        block = 'shipment_not_empty';
+      }
+    }
+  }
+
+  if (block) {
+    const reviewReason = input.context === 'original_order'
+      ? (block === 'label_live'
+        ? 'original_order_cancelled_label_live'
+        : 'original_order_cancelled_label_unresolved')
+      : (block === 'label_live'
+        ? 'terminal_transition_label_live'
+        : 'terminal_transition_label_unresolved');
+    if (before.status === 'cancelled' || before.status === 'rejected') {
+      return { ready: false, replacement: before, block };
+    }
+    if (before.status === 'review' && before.reviewReason === reviewReason) {
+      return { ready: false, replacement: before, block };
+    }
+    const reviewed = await enterReplacementReview(tx, before, {
+      reviewReason,
+      eventType: input.context === 'original_order'
+        ? 'replacement_original_order_cancelled'
+        : 'replacement_terminal_transition_blocked',
+      actor: input.actor,
+      reason: input.reason,
+      idempotencySuffix: `${input.context}-terminal-${block}`,
+      shipmentId: before.replacementShipmentId,
+    });
+    return { ready: false, replacement: reviewed, block };
+  }
+
+  if (shipment && !shipment.voided) {
+    const conditions = [
+      eq(shipments.id, shipment.id),
+      isNull(shipments.orderId),
+      eq(shipments.clientId, before.clientId!),
+      eq(shipments.orderNumber, before.reference),
+      eq(shipments.source, 'replacement'),
+      eq(shipments.voided, false),
+    ];
+    if (!providerVoidProven) {
+      conditions.push(
+        isNull(shipments.labelShipmentId),
+        isNull(shipments.labelUrl),
+        isNull(shipments.labelCreatedAt),
+        isNull(shipments.labelTracking),
+        isNull(shipments.trackingNumber),
+        isNull(shipments.labelCost),
+        isNull(shipments.cost),
+        isNull(shipments.selectedRateCost),
+        isNull(shipments.shipDate),
+      );
+    }
+
+    // Per user override unlock shipped data on 2026-08-19: retire only the exact detached,
+    // replacement-owned vessel proved empty or backed by a confirmed provider void. This is
+    // a local lifecycle fence; it performs no provider void and rewrites no shipment history.
+    const retired = await tx
+      .update(shipments)
+      .set({ voided: true, updatedAt: new Date() })
+      .where(and(...conditions))
+      .returning({ id: shipments.id });
+    if (retired.length === 0) {
+      const reviewReason = input.context === 'original_order'
+        ? 'original_order_cancelled_label_unresolved'
+        : 'terminal_transition_label_unresolved';
+      const reviewed = await enterReplacementReview(tx, before, {
+        reviewReason,
+        eventType: input.context === 'original_order'
+          ? 'replacement_original_order_cancelled'
+          : 'replacement_terminal_transition_blocked',
+        actor: input.actor,
+        reason: input.reason,
+        idempotencySuffix: `${input.context}-terminal-shipment-race`,
+        shipmentId: shipment.id,
+      });
+      return { ready: false, replacement: reviewed, block: 'shipment_not_empty' };
+    }
+
+    await tx.insert(replacementActivityEvents).values({
+      replacementId: before.id,
+      shipmentId: shipment.id,
+      eventType: providerVoidProven
+        ? 'replacement_voided_shipment_retired'
+        : 'replacement_empty_shipment_retired',
+      fromStatus: before.status,
+      toStatus: before.status,
+      actorType: input.actor.type,
+      actorEmail: input.actor.email,
+      detail: input.reason,
+      idempotencyKey: `replacement:${before.id}:terminal-shipment-retire:v${before.stateVersion}`,
+    });
+  }
+
+  return { ready: true, replacement: before };
+}
+
+function terminalFenceReviewError(
+  result: Extract<ReplacementTerminalFenceResult, { ready: false }>,
+  attemptedAction: 'cancel' | 'reject',
+): ReplacementLifecycleError {
+  return new ReplacementLifecycleError(
+    'REPLACEMENT_TERMINAL_LABEL_REVIEW_REQUIRED',
+    `replacement ${result.replacement.reference} has label or shipment evidence that must be ` +
+      `resolved before ${attemptedAction}; it is parked in review`,
+    409,
+    {
+      replacementId: result.replacement.id,
+      reviewReason: result.replacement.reviewReason,
+      block: result.block,
+    },
+  );
+}
+
 /**
  * AC-16 — cancel a PRE-DISPATCH replacement because its original order went away.
  *
@@ -406,13 +627,24 @@ export async function rejectReplacement(
   conn: Conn = db,
 ): Promise<ReplacementRow> {
   const reason = requireReason(input.reason, 'REPLACEMENT_REASON_REQUIRED');
-  return conn.transaction(async (tx) => {
+  const result = await conn.transaction(async (tx) => {
     const before = await loadForUpdate(tx, input.replacementId);
-    return applyTransition(tx, before, {
+    const fence = await prepareReplacementTerminalTransitionInTransaction(tx, before, {
+      actor: input.actor,
+      reason,
+      context: 'operator_terminal',
+    });
+    if (!fence.ready) return fence;
+    const replacement = await applyTransition(tx, before, {
       to: 'rejected', eventType: 'replacement_rejected', actor: input.actor,
       reason, idempotencySuffix: 'reject',
     });
+    return { ready: true as const, replacement };
   });
+  if (!result.ready) {
+    throw terminalFenceReviewError(result, 'reject');
+  }
+  return result.replacement;
 }
 
 /**
@@ -421,19 +653,160 @@ export async function rejectReplacement(
  * This does NOT void a label. A cancelled replacement holding a purchased label requires an
  * explicit void or an audited retain decision; coupling the two here would let a local
  * cancellation pretend a provider void succeeded.
+ *
+ * Per user override `unlock shipped data` on 2026-08-19: editable replacement billing is
+ * removed and recorded in the SAME transaction as the lifecycle move. A process death can
+ * no longer commit `cancelled` first and strand charge cleanup behind a terminal retry.
  */
 export async function cancelReplacement(
   input: { replacementId: number; actor: LifecycleActor; reason: string },
   conn: Conn = db,
 ): Promise<ReplacementRow> {
   const reason = requireReason(input.reason, 'REPLACEMENT_REASON_REQUIRED');
-  return conn.transaction(async (tx) => {
+  const result = await conn.transaction(async (tx) => {
     const before = await loadForUpdate(tx, input.replacementId);
-    return applyTransition(tx, before, {
+    const fence = await prepareReplacementTerminalTransitionInTransaction(tx, before, {
+      actor: input.actor,
+      reason,
+      context: 'operator_terminal',
+    });
+    if (!fence.ready) return fence;
+    await completePreShipCancellationCleanupInTransaction(tx, {
+      replacement: before,
+      actor: input.actor,
+      reason,
+      idempotencyKey: `replacement:${before.id}:pre-ship-cancel:v${before.stateVersion}`,
+    });
+    const replacement = await applyTransition(tx, before, {
       to: 'cancelled', eventType: 'replacement_cancelled', actor: input.actor,
       reason, idempotencySuffix: 'cancel',
     });
+    return { ready: true as const, replacement };
   });
+  if (!result.ready) {
+    throw terminalFenceReviewError(result, 'cancel');
+  }
+  return result.replacement;
+}
+
+const AC16_REVIEW_QUESTIONS_BY_REASON: Readonly<Record<string, readonly string[]>> = {
+  original_order_cancelled_label_live: [
+    'void_or_retain_purchased_label',
+  ],
+  original_order_cancelled_label_unresolved: [
+    'resolve_label_purchase_intent_before_cancelling',
+    'resolve_label_or_shipment_evidence_before_cancelling',
+  ],
+  original_order_cancelled_dispatch_inconsistent: [
+    'resolve_lifecycle_dispatch_inconsistency',
+  ],
+  original_order_cancelled_unexpected_billing: [
+    'invoiced_money_on_an_undispatched_replacement',
+    'editable_money_on_an_undispatched_replacement',
+  ],
+};
+
+async function assertReviewResolutionPrerequisites(
+  tx: any,
+  before: ReplacementRow,
+  to: Extract<ReplacementStatus, 'requested' | 'approved' | 'label_created' | 'rejected' | 'cancelled'>,
+): Promise<void> {
+  const ac16Questions = before.reviewReason
+    ? AC16_REVIEW_QUESTIONS_BY_REASON[before.reviewReason]
+    : undefined;
+  if (ac16Questions) {
+    const [decision] = await tx
+      .select({
+        id: replacementOriginalOrderHolds.id,
+        resolvedAt: replacementOriginalOrderHolds.resolvedAt,
+      })
+      .from(replacementOriginalOrderHolds)
+      .where(and(
+        eq(replacementOriginalOrderHolds.replacementId, before.id),
+        inArray(replacementOriginalOrderHolds.openQuestion, [...ac16Questions]),
+      ))
+      .orderBy(desc(replacementOriginalOrderHolds.id))
+      .limit(1);
+    if (!decision?.resolvedAt) {
+      throw new ReplacementLifecycleError(
+        'REPLACEMENT_REVIEW_PREREQUISITE_REQUIRED',
+        `replacement ${before.reference} still has an unanswered original-order hold; `
+          + 'resolve that exact hold before clearing its review reason',
+        409,
+        { replacementId: before.id, reviewReason: before.reviewReason, holdId: decision?.id ?? null },
+      );
+    }
+  }
+
+  if (before.reviewReason !== 'replacement_customer_money_unavailable') return;
+  if (to !== 'label_created' || before.replacementShipmentId == null) {
+    throw new ReplacementLifecycleError(
+      'REPLACEMENT_REVIEW_PREREQUISITE_REQUIRED',
+      'paid-label customer-money review may only return to label_created after pricing reconciliation',
+      409,
+      { replacementId: before.id, reviewReason: before.reviewReason, requestedStatus: to },
+    );
+  }
+
+  const [intent] = await tx
+    .select({
+      id: replacementLabelPurchaseIntents.id,
+      replacementShipmentId: replacementLabelPurchaseIntents.replacementShipmentId,
+      providerTransactionId: replacementLabelPurchaseIntents.providerTransactionId,
+      providerShipmentId: replacementLabelPurchaseIntents.providerShipmentId,
+    })
+    .from(replacementLabelPurchaseIntents)
+    .where(and(
+      eq(replacementLabelPurchaseIntents.replacementId, before.id),
+      eq(replacementLabelPurchaseIntents.state, 'purchased'),
+      isNull(replacementLabelPurchaseIntents.voidState),
+    ))
+    .orderBy(desc(replacementLabelPurchaseIntents.id))
+    .limit(1);
+  const [shipment] = intent?.replacementShipmentId == null
+    ? []
+    : await tx
+      .select()
+      .from(shipments)
+      .where(eq(shipments.id, intent.replacementShipmentId))
+      .limit(1);
+  const exactReceipt = intent != null
+    && shipment != null
+    && intent.replacementShipmentId === before.replacementShipmentId
+    && shipment.orderId === null
+    && shipment.clientId === before.clientId
+    && shipment.orderNumber === before.reference
+    && shipment.source === 'replacement'
+    && shipment.voided === false
+    && Boolean(intent.providerTransactionId?.trim())
+    && intent.providerShipmentId != null
+    && String(shipment.labelShipmentId) === intent.providerShipmentId;
+  const frozen = exactReceipt
+    ? readFrozenReplacementCustomerShippingMoney(shipment.selectedRateJson)
+    : null;
+  const [pricingAudit] = intent == null
+    ? []
+    : await tx
+      .select({ id: replacementActivityEvents.id })
+      .from(replacementActivityEvents)
+      .where(and(
+        eq(replacementActivityEvents.replacementId, before.id),
+        eq(replacementActivityEvents.shipmentId, before.replacementShipmentId),
+        eq(replacementActivityEvents.eventType, 'replacement_customer_money_reconciled'),
+        eq(
+          replacementActivityEvents.idempotencyKey,
+          `replacement:${before.id}:pricing-reconcile:${intent.id}`,
+        ),
+      ))
+      .limit(1);
+  if (!exactReceipt || !frozen || !pricingAudit) {
+    throw new ReplacementLifecycleError(
+      'REPLACEMENT_REVIEW_PREREQUISITE_REQUIRED',
+      'the exact active paid-label receipt still lacks its frozen customer-money tuple or pricing audit',
+      409,
+      { replacementId: before.id, reviewReason: before.reviewReason },
+    );
+  }
 }
 
 /**
@@ -453,9 +826,28 @@ export async function resolveReplacementReview(
   conn: Conn = db,
 ): Promise<ReplacementRow> {
   const reason = requireReason(input.reason, 'REPLACEMENT_REASON_REQUIRED');
-  return conn.transaction(async (tx) => {
+  const result = await conn.transaction(async (tx) => {
     const before = await loadForUpdate(tx, input.replacementId);
-    return applyTransition(tx, before, {
+    await assertReviewResolutionPrerequisites(tx, before, input.to);
+    if (input.to === 'cancelled' || input.to === 'rejected') {
+      const fence = await prepareReplacementTerminalTransitionInTransaction(tx, before, {
+        actor: input.actor,
+        reason,
+        context: 'operator_terminal',
+      });
+      if (!fence.ready) return fence;
+    }
+    if (input.to === 'cancelled') {
+      // Per user override `unlock shipped data` on 2026-08-19: resolving review through the
+      // cancellation door has the same atomic money boundary as the direct cancel command.
+      await completePreShipCancellationCleanupInTransaction(tx, {
+        replacement: before,
+        actor: input.actor,
+        reason,
+        idempotencyKey: `replacement:${before.id}:review-pre-ship-cancel:v${before.stateVersion}`,
+      });
+    }
+    const replacement = await applyTransition(tx, before, {
       to: input.to,
       eventType: 'replacement_review_resolved',
       actor: input.actor,
@@ -463,7 +855,12 @@ export async function resolveReplacementReview(
       idempotencySuffix: `review-${input.to}`,
       extra: { reviewReason: null },
     });
+    return { ready: true as const, replacement };
   });
+  if (!result.ready) {
+    throw terminalFenceReviewError(result, input.to === 'rejected' ? 'reject' : 'cancel');
+  }
+  return result.replacement;
 }
 
 /**

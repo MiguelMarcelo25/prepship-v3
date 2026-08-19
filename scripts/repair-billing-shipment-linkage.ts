@@ -105,6 +105,7 @@ const candidates = await db.execute<BillingShipmentRepairCandidate>(sql`
       candidate.dims_h
     from shipments candidate
     where coalesce(candidate.voided, false) = false
+      and candidate.source is distinct from 'replacement'
       and (
         candidate.order_id = b.order_id
         or (

@@ -1,6 +1,6 @@
 import {
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
-  readFrozenCustomerShippingMoney,
+  readFrozenReplacementCustomerShippingMoney,
 } from './customer-shipping-money-snapshot.js';
 
 /**
@@ -33,8 +33,9 @@ import {
  * reintroduce exactly the defect this exists to close, which is why the two are separated in
  * the frozen tuple in the first place.
  *
- * The tuple is read through `readFrozenCustomerShippingMoney`, which fails closed on anything
- * partial, legacy or out-of-policy — it "never manufactures customer money from selected cost".
+ * The tuple is read through `readFrozenReplacementCustomerShippingMoney`, which fails closed on
+ * anything partial, legacy or out-of-policy — including a tuple that cannot identify the exact
+ * active billing_config row and markup authority that authorized the customer charge.
  */
 
 /**
@@ -65,7 +66,9 @@ export type ReplacementCustomerPostage = {
 export function resolveReplacementCustomerPostage(input: {
   frozenCustomerShippingMoney: unknown;
 }): ReplacementCustomerPostage | null {
-  const frozen = readFrozenCustomerShippingMoney(input.frozenCustomerShippingMoney);
+  // Per user override unlock shipped data on 2026-08-19: replacement money may cross this fence
+  // only when the shipped snapshot proves its exact active billing policy and markup authority.
+  const frozen = readFrozenReplacementCustomerShippingMoney(input.frozenCustomerShippingMoney);
   if (!frozen) return null;
 
   // NO equality tripwire, deliberately — and this is a REVERSAL of the first version.
@@ -77,11 +80,10 @@ export function resolveReplacementCustomerPostage(input: {
   // failure, so their replacements could not SHIP at all. A guard against a wrong charge that
   // blocks the warehouse is a worse defect than the one it prevents.
   //
-  // What actually distinguishes customer money from carrier cost is PROVENANCE, and
-  // readFrozenCustomerShippingMoney has already enforced it above: customerRateSource must be
-  // a realized customer rate or a hugrab override, rateCostSource must be `label_final_cost`,
-  // the policy version must match, and the margin must reconcile against the two amounts. A
-  // number copied out of shipments.cost cannot satisfy any of that, at any markup.
+  // What actually distinguishes customer money from carrier cost is PROVENANCE, and the
+  // replacement-specific reader has already enforced it above: the active billing_config identity,
+  // selected markup authority, customer-rate source, label-cost source, policy version and margin
+  // must all reconcile. A number copied out of shipments.cost cannot satisfy that, at any markup.
 
   if (!Number.isFinite(frozen.cShippingRateAmount) || frozen.cShippingRateAmount <= 0) return null;
 

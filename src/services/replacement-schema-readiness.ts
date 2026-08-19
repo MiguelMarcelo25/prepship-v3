@@ -2,39 +2,20 @@ import { sql } from 'drizzle-orm';
 import { db } from '../db/client';
 
 /**
- * PS-502 — is the replacement schema actually present on THIS database?
+ * PS-502 — can the original-order HOLD workflow run on THIS database?
  *
- * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────
+ * Migrations are not applied by deploy in this repo, so code routinely reaches production
+ * before 0096-0101. The ordinary order-cancellation and upstream-reconciliation paths must not
+ * crash while that schema is absent, even with every replacement flag off.
  *
- * Migrations are not applied by deploy in this repo, and the PS-502 migrations (0096-0101)
- * are gated behind the designated-operator lane. Code therefore reaches production BEFORE its
- * schema, routinely, by design.
+ * This is deliberately NOT a general "replacement schema" answer. Each pre-existing caller
+ * probes only the relation or column it actually needs: finalized billing uses the canonical
+ * billing-column probe, while this module owns the larger dependency set touched by the AC-16
+ * hold sweep. An unrelated absent hold table must never suppress valid finalized money.
  *
- * That was survivable while every replacement path was reachable only through replacement
- * routes. It stopped being survivable when the AC-16 fan-out was wired into the ORDINARY order
- * cancellation branch, the upstream webhook reconciler, and the billing regeneration fold —
- * three pre-existing hot paths that now query `replacements` unconditionally. On a database
- * without the table, cancelling any order threw `relation "replacements" does not exist`, with
- * every replacement flag off. Hermes reproduced it; so does `npm run test:ps-424-order-lifecycle`.
- *
- * The argument that put it there was "every writer of order_status='cancelled' must fan out, and
- * a rule that holds only where it is currently reachable breaks the day reachability changes".
- * The rule is still right. What was wrong was making a NEW feature's schema a hard prerequisite
- * of an OLD feature's happy path.
- *
- * ── WHY A PROBE AND NOT THE FEATURE FLAG ────────────────────────────────────────────────
- *
- * REPLACEMENTS_ENABLED answers "should operators see this feature". This answers "can this query
- * run at all". They are different questions and conflating them would mean turning the flag on
- * before the migration lands produces the same crash, or that a fully-migrated database with the
- * flag off silently skips holds it should be raising.
- *
- * ── FAIL SAFE, NOT FAIL CLOSED ──────────────────────────────────────────────────────────
- *
- * Absent schema means SKIP, not throw. A replacement cannot exist on a database that has no
- * replacements table, so there is nothing to hold, fold or classify — skipping loses nothing.
- * That is only true because absence is total: once 0096-0101 are applied this returns true
- * forever and every path resumes. It must NOT be used to skip work on a migrated database.
+ * REPLACEMENTS_ENABLED answers whether operators may use the feature. This answers whether the
+ * hold query is structurally safe to execute. A fully migrated database must still record holds
+ * with the feature surface off, while an unmigrated database must safely skip the fan-out.
  */
 
 /**
@@ -52,25 +33,117 @@ import { db } from '../db/client';
  * the feature does not exist yet.
  */
 let present: Promise<boolean> | null = null;
+let shipmentSyncPresent: Promise<boolean> | null = null;
 
 type SchemaProbeConn = Pick<typeof db, 'execute'>;
 
 /**
- * Every relation the guarded callers actually touch, not just the headline table.
+ * The sync router has a deliberately smaller dependency boundary than the AC-16 hold sweep.
  *
- * `replacements` alone did not prove `billing_line_items.replacement_id` (0097) or
- * `replacement_original_order_holds` (0101), and the fold and the sweep need those. The
- * official runner applies 0096-0101 in ONE transaction, so requiring all three cannot
- * strand a partially-migrated database that the supported lane could produce.
+ * Migration 0100 is enough to route a provider row into the dedicated replacement vessel.
+ * Requiring the later hold table or billing column here would turn a healthy 0096+0100
+ * database into a dangerous false negative: the row would fall through ordinary shipment
+ * insertion simply because an unrelated financial/hold slice had not landed yet.
+ */
+async function probeShipmentSync(conn: SchemaProbeConn): Promise<boolean> {
+  const result = await conn.execute(sql`
+    select
+      to_regclass('replacements') is not null as has_replacements,
+      to_regclass('replacement_label_purchase_intents') is not null as has_label_intents,
+      to_regclass('shipments') is not null as has_shipments,
+      not exists (
+        select 1
+        from (values
+          ('replacements', 'id'),
+          ('replacements', 'client_id'),
+          ('replacements', 'order_id'),
+          ('replacements', 'reference'),
+          ('replacements', 'replacement_shipment_id'),
+          ('replacement_label_purchase_intents', 'replacement_id'),
+          ('replacement_label_purchase_intents', 'replacement_shipment_id'),
+          ('replacement_label_purchase_intents', 'state'),
+          ('replacement_label_purchase_intents', 'provider_idempotency_key'),
+          ('replacement_label_purchase_intents', 'request_fingerprint'),
+          ('replacement_label_purchase_intents', 'purchase_attempt'),
+          ('replacement_label_purchase_intents', 'resolved_request'),
+          ('replacement_label_purchase_intents', 'provider_shipment_id'),
+          ('shipments', 'id'),
+          ('shipments', 'order_id'),
+          ('shipments', 'client_id'),
+          ('shipments', 'order_number'),
+          ('shipments', 'source'),
+          ('shipments', 'label_shipment_id'),
+          ('shipments', 'voided'),
+          ('shipments', 'tracking_number'),
+          ('shipments', 'label_tracking'),
+          ('shipments', 'label_carrier'),
+          ('shipments', 'label_service'),
+          ('shipments', 'label_ship_date'),
+          ('shipments', 'ship_date'),
+          ('shipments', 'carrier_code'),
+          ('shipments', 'service_code'),
+          ('shipments', 'provider_account_id'),
+          ('shipments', 'selected_package_id'),
+          ('shipments', 'weight_oz'),
+          ('shipments', 'dims_l'),
+          ('shipments', 'dims_w'),
+          ('shipments', 'dims_h'),
+          ('shipments', 'updated_at')
+        ) as required(table_name, column_name)
+        left join information_schema.columns actual
+          on actual.table_schema = current_schema()
+         and actual.table_name = required.table_name
+         and actual.column_name = required.column_name
+        where actual.column_name is null
+      ) as has_required_columns
+  `);
+  const rows = (Array.isArray(result)
+    ? result
+    : ((result as { rows?: unknown[] }).rows ?? [])) as {
+      has_replacements: boolean;
+      has_label_intents: boolean;
+      has_shipments: boolean;
+      has_required_columns: boolean;
+    }[];
+  const row = rows[0];
+  return Boolean(
+    row?.has_replacements
+      && row.has_label_intents
+      && row.has_shipments
+      && row.has_required_columns,
+  );
+}
+
+/**
+ * Every PS-502 object the hold sweep can touch, not merely its headline table.
  *
- * to_regclass and current_schema() respect the active search_path — an unqualified
- * information_schema lookup would happily find a same-named table in another schema.
+ * A bare Drizzle `select()` from `replacements` emits request_signature (0099); lifecycle
+ * annotations write replacement_activity_events.detail (0098); classification reads the
+ * replacement-scoped label-intent table (0100) and billing_line_items.replacement_id (0097);
+ * and the receipt itself lands in replacement_original_order_holds (0101).
+ *
+ * `to_regclass` and current_schema() respect the active search_path. An unqualified
+ * information_schema lookup could otherwise accept a same-named object in another schema.
  */
 async function probe(conn: SchemaProbeConn): Promise<boolean> {
   const result = await conn.execute(sql`
     select
       to_regclass('replacements') is not null as has_replacements,
+      to_regclass('replacement_activity_events') is not null as has_activity_events,
+      to_regclass('replacement_label_purchase_intents') is not null as has_label_intents,
       to_regclass('replacement_original_order_holds') is not null as has_holds,
+      exists (
+        select 1 from information_schema.columns
+         where table_schema = current_schema()
+           and table_name = 'replacements'
+           and column_name = 'request_signature'
+      ) as has_request_signature,
+      exists (
+        select 1 from information_schema.columns
+         where table_schema = current_schema()
+           and table_name = 'replacement_activity_events'
+           and column_name = 'detail'
+      ) as has_activity_detail,
       exists (
         select 1 from information_schema.columns
          where table_schema = current_schema()
@@ -81,10 +154,24 @@ async function probe(conn: SchemaProbeConn): Promise<boolean> {
   const rows = (Array.isArray(result)
     ? result
     : ((result as { rows?: unknown[] }).rows ?? [])) as {
-      has_replacements: boolean; has_holds: boolean; has_replacement_id: boolean;
+      has_replacements: boolean;
+      has_activity_events: boolean;
+      has_label_intents: boolean;
+      has_holds: boolean;
+      has_request_signature: boolean;
+      has_activity_detail: boolean;
+      has_replacement_id: boolean;
     }[];
   const row = rows[0];
-  return Boolean(row?.has_replacements && row?.has_holds && row?.has_replacement_id);
+  return Boolean(
+    row?.has_replacements
+      && row.has_activity_events
+      && row.has_label_intents
+      && row.has_holds
+      && row.has_request_signature
+      && row.has_activity_detail
+      && row.has_replacement_id,
+  );
 }
 
 /**
@@ -93,6 +180,8 @@ async function probe(conn: SchemaProbeConn): Promise<boolean> {
  * for the real database.
  */
 export function replacementSchemaPresent(conn?: SchemaProbeConn): Promise<boolean> {
+  // Per user override unlock shipped data on 2026-08-19: this fail-safe capability gate
+  // protects the shipped-original hold path without weakening any lifecycle/status guard.
   if (conn) return probe(conn);
   present ??= probe(db)
     .then((found) => {
@@ -105,7 +194,28 @@ export function replacementSchemaPresent(conn?: SchemaProbeConn): Promise<boolea
   return present;
 }
 
+/**
+ * Can shipment sync safely inspect and update the dedicated replacement vessel?
+ *
+ * This answer intentionally excludes the hold and billing migrations. Like the broader
+ * probe, only TRUE is memoized: a worker that started before 0100 must notice the migration
+ * without a restart. An explicit harness connection is never allowed to seed the singleton.
+ */
+export function replacementShipmentSyncSchemaPresent(
+  conn?: SchemaProbeConn,
+): Promise<boolean> {
+  if (conn) return probeShipmentSync(conn);
+  shipmentSyncPresent ??= probeShipmentSync(db)
+    .then((found) => {
+      if (!found) shipmentSyncPresent = null;
+      return found;
+    })
+    .catch((error) => { shipmentSyncPresent = null; throw error; });
+  return shipmentSyncPresent;
+}
+
 /** Test seam: the memo must not leak between harness databases. */
 export function resetReplacementSchemaPresence(): void {
   present = null;
+  shipmentSyncPresent = null;
 }

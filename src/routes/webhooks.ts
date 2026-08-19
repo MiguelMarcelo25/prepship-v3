@@ -3,7 +3,8 @@
 // is established by per-provider HMAC over the raw body instead.
 //
 // Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129): this handler only
-// VERIFIES + RECORDS a redacted event and enqueues a forward-only scoped reconcile. It
+// VERIFIES + RECORDS a redacted event and completes a forward-only scoped reconcile before
+// acknowledging it. A retry resumes the same durable receipt, including after a process loss. It
 // never buys postage, creates labels, notifies marketplaces, or reopens terminal rows.
 
 import { Hono } from 'hono';
@@ -12,6 +13,8 @@ import {
   hashWebhookBody,
   webhookDedupeKey,
   recordWebhookEvent,
+  findWebhookEventIdByDedupeKey,
+  markWebhookEventStatus,
 } from '../services/fulfillment/webhook-ledger';
 import {
   verifyWebhookSignature,
@@ -93,15 +96,28 @@ app.post('/:provider', async (c) => {
     return c.json({ ok: false, recorded: false, retryable: true }, 503);
   }
 
-  // Forward-only scoped reconcile for terminal events — off the response path. Never blocks
-  // the ACK, never buys postage / notifies marketplaces.
-  if (
-    !result.deduped &&
-    (normalized.canonicalStatus === 'cancelled' || normalized.canonicalStatus === 'shipped')
-  ) {
-    void reconcileOrderFromUpstreamEvent(normalized).catch((err) => {
-      console.warn('[webhooks] scoped reconcile failed:', err instanceof Error ? err.message : err);
-    });
+  // The durable ledger is the acceptance boundary, but recording is not processing. Await
+  // terminal reconciliation before ACK so a process death cannot strand an AC-16 hold behind
+  // a fire-and-forget promise. If the insert deduped, recover the SAME receipt and retry it:
+  // duplicate means "already recorded", never "already reconciled".
+  if (normalized.canonicalStatus === 'cancelled' || normalized.canonicalStatus === 'shipped') {
+    const webhookEventId = result.id ?? await findWebhookEventIdByDedupeKey(dedupeKey);
+    if (webhookEventId == null) {
+      return c.json({ ok: false, recorded: result.recorded, retryable: true }, 503);
+    }
+    try {
+      await reconcileOrderFromUpstreamEvent(normalized, { webhookEventId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'terminal webhook reconcile failed';
+      try {
+        await markWebhookEventStatus(webhookEventId, 'failed', message.slice(0, 1000));
+      } catch {
+        // The original error remains the retry reason. A failed status is diagnostic only;
+        // the receipt itself already exists and the deduped retry will run it again.
+      }
+      console.warn('[webhooks] scoped reconcile failed:', message);
+      return c.json({ ok: false, recorded: result.recorded, retryable: true }, 503);
+    }
   }
 
   return c.json({ ok: true, recorded: result.recorded, deduped: result.deduped }, 200);

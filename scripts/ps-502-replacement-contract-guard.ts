@@ -1,10 +1,9 @@
 /**
- * PS-502 — the unlocked slice: replacement schema + lifecycle contract.
+ * PS-502 — replacement schema + lifecycle + financial-action contract.
  *
- * SCOPE. This guard covers ONLY what the card places outside `unlock shipped data`: the
- * additive tables, the additive billing/credit-note columns, and the pure state machine.
- * It inserts NO shipment fixtures and touches no shipped data — the card's read-only
- * exemption is for analytics and schema, and this stays inside it.
+ * SCOPE. DJ supplied `unlock shipped data` for PS-502 on 2026-08-19. This guard pins the
+ * resulting shipped/replacement safety boundaries without exercising them: it is offline,
+ * inserts no fixtures, calls no provider, and mutates no database or production data.
  *
  * BEHAVIOURAL where it can be. The lifecycle is executed, not grepped: a guard that only
  * matched source text would pass against a state machine that allowed
@@ -120,6 +119,7 @@ const billingSql = read('drizzle/0097_ps502_replacement_billing.sql');
 const restrictSql = read('drizzle/0098_ps502_replacement_financial_restrict.sql');
 // Hermes re-audit correction 1: idempotency binds to the whole request, stored by 0099.
 const signatureSql = read('drizzle/0099_ps502_replacement_request_signature.sql');
+const financialActionsSql = read('drizzle/0103_ps502_replacement_financial_actions.sql');
 
 // ── AC-2 — transitions enforced, illegal ones coded 409 ──────────────────────
 console.log('\nlifecycle (executed, not grepped)');
@@ -607,7 +607,7 @@ console.log('\ndrizzle schema mirrors the migration');
     if (start === -1) return new Set();
     const body = schemaSource.slice(start, schemaSource.indexOf('\n  (t) => [', start));
     const found = new Set<string>();
-    for (const m of body.matchAll(/^\s{4}(\w+):\s*(?:serial|integer|text|boolean|timestamp)\(\s*(?:'([^']+)')?/gm)) {
+    for (const m of body.matchAll(/^\s{4}(\w+):\s*(?:serial|bigint|integer|numeric|text|boolean|timestamp)\(\s*(?:'([^']+)')?/gm)) {
       found.add(m[2] ?? snake(m[1]!));
     }
     return found;
@@ -621,14 +621,18 @@ console.log('\ndrizzle schema mirrors the migration');
    */
   const migrationColumns = (table: string): Set<string> => {
     const found = new Set<string>();
-    const start = replacementsSql.indexOf(`create table if not exists ${table} (`);
+    const migrationSources = [replacementsSql, billingSql, restrictSql, signatureSql,
+      financialActionsSql];
+    const createSource = migrationSources.find((source) =>
+      source.includes(`create table if not exists ${table} (`)) ?? '';
+    const start = createSource.indexOf(`create table if not exists ${table} (`);
     if (start !== -1) {
-      const body = replacementsSql.slice(start, replacementsSql.indexOf('\n);', start));
-      for (const m of body.matchAll(/^\s{2}(\w+)\s+(serial|integer|text|boolean|timestamptz)\b/gm)) {
+      const body = createSource.slice(start, createSource.indexOf('\n);', start));
+      for (const m of body.matchAll(/^\s{2}(\w+)\s+(?:serial|bigint|integer|numeric|text|boolean|timestamptz)\b/gm)) {
         if (m[1] !== 'constraint') found.add(m[1]!);
       }
     }
-    for (const sql of [replacementsSql, billingSql, restrictSql, signatureSql]) {
+    for (const sql of migrationSources) {
       const pattern = new RegExp(
         `alter table ${table}\\s+add column(?: if not exists)? (\\w+)`,
         'gi',
@@ -638,7 +642,12 @@ console.log('\ndrizzle schema mirrors the migration');
     return found;
   };
 
-  for (const table of ['replacements', 'replacement_items', 'replacement_activity_events']) {
+  for (const table of [
+    'replacements',
+    'replacement_items',
+    'replacement_activity_events',
+    'replacement_financial_actions',
+  ]) {
     const inSchema = schemaColumns(table);
     const inMigration = migrationColumns(table);
     check(`${table}: the migration has columns to compare`, inMigration.size > 0);
@@ -684,6 +693,20 @@ console.log('\ndrizzle schema mirrors the migration');
   check('0098 gives activity events somewhere to keep a written reason',
     /alter table replacement_activity_events\s+add column if not exists detail text/i.test(restrictSql),
     'decision 7 requires a reason; validating one and discarding it is worse than not asking');
+
+  check('0103 is an append-only retry authority with strict identity and completion shape',
+    /create table if not exists replacement_financial_actions/.test(financialActionsSql)
+    && /replacement_id integer not null references replacements\(id\) on delete restrict/.test(financialActionsSql)
+    && /client_id integer not null references clients\(id\) on delete restrict/.test(financialActionsSql)
+    && /unique index if not exists replacement_financial_actions_idempotency_unq/.test(financialActionsSql)
+    && /status in \('pending', 'processing', 'retry', 'completed', 'review_required'\)/.test(financialActionsSql)
+    && /\(status = 'completed'\) = \(completed_at is not null\)/.test(financialActionsSql),
+    'a process-death obligation needs durable identity, retry states, and an unambiguous completed fact');
+
+  check('0103 exposes no public Data-API write surface',
+    /alter table replacement_financial_actions enable row level security/.test(financialActionsSql)
+    && !/create policy/i.test(financialActionsSql),
+    'the server owns financial-action writes; the public schema must not grant a parallel writer');
 }
 
 // ── "do not charge for this replacement" ─────────────────────────────────────
@@ -694,32 +717,51 @@ console.log('\ncancelling a replacement charge');
   const routes = read('src/routes/replacements.ts');
   const routeCode2 = routes.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const holdSrc = read('src/services/replacement-original-order-hold.ts');
+  const lifecycle = read('src/services/replacement-lifecycle-command.ts')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const financial = read('src/services/replacement-financial-action.ts')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const directCancel = functionBody(lifecycle, 'cancelReplacement');
+  const reviewResolution = functionBody(lifecycle, 'resolveReplacementReview');
+  const cleanup = functionBody(financial, 'completePreShipCancellationCleanupInTransaction');
 
   check('the charge-cancellation owner is OUTSIDE the billing writer',
     /export async function cancelReplacementCharges/.test(owner),
     'the writer is transaction-parasitic so the shipped command can roll a billing failure back with the stock; an owner that opens its own transaction cannot live there');
 
-  check('it removes editable lines, then settles invoiced ones AFTER the commit',
+  check('the compatibility owner removes editable lines, then settles invoiced ones AFTER the commit',
     /conn\.transaction\([\s\S]{0,160}cancelReplacementBillingInTransaction/.test(owner)
     && /settleReplacementCancellationCredits\(/.test(owner)
     // The early return must be the NOTHING-INVOICED case only. Widening it to `>= 0` left
     // the settle call in place and unreachable.
     && /if \(removal\.invoicedRetained === 0\) \{/.test(owner)
     && occursBefore(owner, 'cancelReplacementBillingInTransaction',
-      'settleReplacementCancellationCredits'),
+      'settleReplacementCancellationCredits')
+    && /settleReplacementCancellationCredits\([\s\S]*?\n\s*conn,\s*\n\s*\)/.test(owner),
     'the reconciler takes the CLIENT lock while replacement commands hold the ORDER one');
 
-  // Anchored on the callback being a BARE argument at its own indent. M112 wrapped it in
-  // `undefined && (...)` — present, correctly ordered, and never called.
-  check('cancelling a replacement cancels its CHARGE',
-    /^ {2}\(replacement, actor, reason\) => cancelReplacementCharges\(\{$/m.test(routeCode2)
-    && occursBefore(routeCode2, 'cancelReplacement({ replacementId, actor, reason })',
-      'cancelReplacementCharges({'),
-    'the lifecycle command moved the row and stopped, so a cancelled replacement kept any billing lines it had');
+  check('pre-ship cancellation cleans its charge BEFORE the lifecycle move in ONE transaction',
+    /conn\.transaction\(async \(tx\)/.test(directCancel)
+    && /^ {4}await completePreShipCancellationCleanupInTransaction\(tx, \{$/m.test(directCancel)
+    && occursBefore(directCancel, 'completePreShipCancellationCleanupInTransaction(tx, {',
+      'await applyTransition(tx, before, {')
+    && !/cancelReplacementCharges/.test(routeCode2),
+    'a process death must roll back both the cleanup fact and cancelled status, never strand one behind the other');
 
-  check('resolving a review INTO cancelled settles the same way',
-    /body\.to === 'cancelled'[\s\S]{0,160}cancelReplacementCharges\(\{/.test(routeCode2),
-    'reaching cancelled by a different door does not make it a different decision');
+  check('resolving a review INTO cancelled uses the SAME atomic cleanup boundary',
+    /if \(input\.to === 'cancelled'\) \{[\s\S]{0,260}await completePreShipCancellationCleanupInTransaction\(tx, \{/.test(reviewResolution)
+    && /^ {6}await completePreShipCancellationCleanupInTransaction\(tx, \{$/m.test(reviewResolution)
+    && occursBefore(reviewResolution, 'completePreShipCancellationCleanupInTransaction(tx, {',
+      'await applyTransition(tx, before, {'),
+    'reaching cancelled by a different door does not make it a different money decision');
+
+  check('pre-ship cleanup is replacement-scoped, refuses finalized money, and records completion atomically',
+    /cancelReplacementBillingInTransaction\(tx, \{[\s\S]{0,80}replacementId: input\.replacement\.id/.test(cleanup)
+    && /if \(removal\.invoicedRetained > 0\)/.test(cleanup)
+    && /actionType: 'pre_ship_cancellation_cleanup'/.test(cleanup)
+    && /status: 'completed'/.test(cleanup)
+    && /completedAt: new Date\(\)/.test(cleanup),
+    'pre-ship cancellation is not the shipped financial-reversal path and cannot erase invoice history');
 
   check('the sweep does not pretend it can owe a credit',
     /finalizedCreditOwed: false,/.test(holdSrc)
@@ -746,9 +788,14 @@ console.log('\nAC-10 freeze site');
     'a replacement is an outbound shipment and the client\'s ordinary markup is the right policy; demanding a separate return rate would leave every replacement unbillable');
 
   check('the money is frozen ONCE and never re-decided',
-    /customerShippingMoneyPolicyVersion'\)`/.test(freeze)
-    && /readFrozenCustomerShippingMoney\(row\.selectedRateJson\)/.test(freeze),
+    /not \(coalesce\(\$\{shipments\.selectedRateJson\}, '\{\}'::jsonb\) \? 'customerShippingMoneyPolicyVersion'\)/.test(freeze)
+    && (freeze.match(/readFrozenReplacementCustomerShippingMoney\(/g) ?? []).length >= 3,
     'a markup edited next week must not change what a shipped label cost the client');
+
+  check('the replacement freeze records exact pricing authority from the receipt transaction',
+    /decideCustomerShippingMoneyForRow\(row, \{ exec \}\)/.test(freeze)
+    && /customerShippingPricingAuthority: decision\.customerShippingPricingAuthority/.test(freeze),
+    'a global cached markup or a missing billing_config row cannot authorize replacement money');
 
   check('the purchase freezes customer money in the same commit as the label',
     /freezeReplacementCustomerShippingMoney\(input\.shipmentId, sp\)/.test(buyCode)
@@ -771,6 +818,13 @@ console.log('\npaid-label recovery');
   const voidCmd = read('src/services/replacement-label-void-command.ts');
   const voidCode = voidCmd.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const recorder = functionBody(purchaseCode, 'recordPurchasedReplacementLabelInTransaction');
+  const contextLoader = functionBodyOf(purchaseCode, 'loadReplacementLabelContextInTransaction');
+  const recovery = functionBody(voidCode, 'reconcileReplacementPurchaseIntent');
+  const replayPrefix = recorder.slice(0,
+    recorder.indexOf("if (before.intent.state !== 'provider_pending'"));
+  const foundStart = recovery.indexOf('if (found) {');
+  const foundBranch = recovery.slice(foundStart,
+    recovery.indexOf('\n    const before = await readReplacementLabelIntentInTransaction', foundStart));
 
   check('ONE owner records that a label happened',
     /export async function recordPurchasedReplacementLabelInTransaction/.test(purchase),
@@ -784,18 +838,47 @@ console.log('\npaid-label recovery');
     && /eventType: 'replacement_label_created'/.test(recorder),
     'intent receipt, shipment receipt, in-flight drift, guarded transition, one event');
 
+  check('intent-derived order locking precedes the intent row lock and every receipt mutation',
+    /join replacements r on r\.id = i\.replacement_id/.test(contextLoader)
+    && occursBefore(contextLoader, 'pg_advisory_xact_lock', ".for('update')")
+    && occursBefore(recorder, 'loadReplacementLabelContextInTransaction(tx, input)',
+      'tx.update(replacementLabelPurchaseIntents)'),
+    'a caller id must never select one order lock while the intent mutates another replacement');
+
+  check('the intent, replacement and shipment must form one replacement-owned chain',
+    /replacement\.replacementShipmentId === intent\.replacementShipmentId/.test(contextLoader)
+    && /shipment\.orderId === null/.test(contextLoader)
+    && /shipment\.clientId === replacement\.clientId/.test(contextLoader)
+    && /shipment\.orderNumber === replacement\.reference/.test(contextLoader)
+    && /shipment\.source === 'replacement'/.test(contextLoader),
+    'a matching numeric shipment id alone is not ownership');
+
   check('BOTH callers use it — the purchase and the recovery',
     /await recordPurchasedReplacementLabelInTransaction\(tx, \{/.test(purchaseCode)
     && /await recordPurchasedReplacementLabelInTransaction\(tx, \{/.test(voidCode),
     'a provider-confirmed interrupted purchase owes exactly what an ordinary one owes');
 
-  check('recovery records the label in the SAME transaction as the intent',
-    occursBefore(voidCode, "reconciliationState: 'resolved_purchased'",
-      'recordPurchasedReplacementLabelInTransaction(tx, {'),
-    'recording the intent and then failing to record the label recreates the split this closes');
+  check('a purchased replay returns the complete durable receipt without another write or event',
+    /if \(before\.intent\.state === 'purchased'\) \{[\s\S]{0,100}recordedResultFromContext\(before, false\)/.test(replayPrefix)
+    && !/\.update\(|\.insert\(/.test(replayPrefix)
+    && /receipt: durableReceiptFromContext\(context\)/.test(purchaseCode),
+    'a replay must not call the provider, append another event, or return a receipt reconstructed from request input');
+
+  check('the recorder claims only unresolved intents and a stale loser returns the purchased winner',
+    /state\} in \('provider_pending', 'reconcile_required'\)/.test(recorder)
+    && /if \(!claimed\) \{[\s\S]{0,180}loadReplacementLabelContextInTransaction\(tx, input\)/.test(recorder)
+    && /winner\.intent\.state === 'purchased'[\s\S]{0,80}recordedResultFromContext\(winner, false\)/.test(recorder),
+    'a late failure or recovery must never downgrade a receipt another transaction already recorded');
+
+  check('provider-confirmed recovery delegates directly to the recorder in ONE transaction',
+    foundStart !== -1
+    && /recordPurchasedReplacementLabelInTransaction\(tx, \{/.test(foundBranch)
+    && /reconciliation: \{ reason \}/.test(foundBranch)
+    && !/\.update\(replacementLabelPurchaseIntents\)/.test(foundBranch),
+    'pre-mutating the intent and then failing to record the shipment recreates the split this closes');
 
   check('the label event key is SHARED between both callers',
-    /idempotencyKey: `replacement:\$\{replacement!\.id\}:label:\$\{input\.intentId\}`/.test(recorder),
+    /idempotencyKey: `replacement:\$\{before\.replacement\.id\}:label:\$\{input\.intentId\}`/.test(recorder),
     'they record the same fact about the same intent, so whichever arrives first wins');
 }
 
@@ -814,9 +897,14 @@ console.log('\ninventory quantity authority');
     !/\bqty\b/.test(lineType),
     'a validated number is still the caller\'s number; the next caller would have to be trusted again');
 
+  // Pinned by the deduction loop's SHAPE, not by a bare `for (const item of items) {` header.
+  // That header also opens the inventory-authority loop above it, so the bare form stayed green
+  // while the deduction itself was rewritten to walk the caller's array — the mutation survived
+  // against a check written to stop exactly that. The proximity bound is a bound on the deduction
+  // body, which now carries a corruption assertion and is ~700 characters long.
   check('the deduction iterates the FROZEN items, not the caller\'s lines',
-    /for \(const item of items\) \{/.test(shippedCode)
-    && !/for \(const line of input\.inventoryLines\) \{[\s\S]{0,400}applyInventoryMovementInTransaction/.test(shippedCode),
+    /for \(const item of items\) \{\s*\n\s*const stock = validatedInventoryByItem\.get\(item\.id\)!;/.test(shippedCode)
+    && !/for \(const line\w* of input\.inventoryLines\) \{[\s\S]{0,900}applyInventoryMovementInTransaction/.test(shippedCode),
     'iterating the caller\'s array is what let an extra line move stock nobody froze');
 
   check('the quantity comes from the frozen row',
@@ -844,12 +932,14 @@ console.log('\nschema-absent safety');
   const upstreamSrc = read('src/services/fulfillment/upstream-reconcile.ts');
   const foldSrc = read('src/services/billing-replacement-finalized-fold.ts');
   const lifecycleSrc = read('src/services/order-lifecycle-command.ts');
+  const financialSrc = read('src/services/replacement-financial-action.ts');
 
-  check('every PRE-EXISTING path that names a replacement relation is probe-guarded',
+  check('every PRE-EXISTING path probes only the replacement dependency it reads',
     /replacementSchemaPresent\(/.test(lifecycleSrc)
     && /replacementSchemaPresent\(/.test(upstreamSrc)
-    && /replacementSchemaPresent\(/.test(foldSrc),
-    'order cancellation, webhook reconciliation and billing regeneration all ran on databases without 0096-0101, and all three now query replacements');
+    && /billingLineItemsHasReplacementIdColumn\(conn\)/.test(foldSrc)
+    && !/replacementSchemaPresent\(/.test(foldSrc),
+    'AC-16 needs the 0096-0101 hold set; finalized billing needs only 0097 and must not be disabled by an unrelated missing hold table');
 
   check('the probe answers SCHEMA presence, never the feature flag',
     !/REPLACEMENTS_ENABLED/.test(probeCode),
@@ -865,7 +955,11 @@ console.log('\nschema-absent safety');
 
   check('the probe is schema-qualified and covers what its callers touch',
     /to_regclass\('replacements'\)/.test(probeCode)
+    && /to_regclass\('replacement_activity_events'\)/.test(probeCode)
+    && /to_regclass\('replacement_label_purchase_intents'\)/.test(probeCode)
     && /to_regclass\('replacement_original_order_holds'\)/.test(probeCode)
+    && /column_name = 'request_signature'/.test(probeCode)
+    && /column_name = 'detail'/.test(probeCode)
     && /column_name = 'replacement_id'/.test(probeCode)
     && /table_schema = current_schema\(\)/.test(probeCode),
     'a bare table_name lookup finds a same-named table in another schema, and `replacements` alone does not prove 0097\'s column or 0101\'s holds table');
@@ -878,6 +972,13 @@ console.log('\nschema-absent safety');
   check('a failed probe is not cached as absent',
     /present = null; throw error;/.test(probe),
     'one transient error would otherwise disable every replacement path until restart');
+
+  check('0103 readiness is positive-only and explicit connections are never memoized',
+    /if \(conn !== db\) return probeFinancialActionSchema\(conn\)/.test(financialSrc)
+    && /if \(!present\) defaultSchemaPresence = null/.test(financialSrc)
+    && /defaultSchemaPresence = null;[\s\S]{0,40}throw error/.test(financialSrc)
+    && /REPLACEMENT_FINANCIAL_SCHEMA_NOT_READY/.test(financialSrc),
+    'flags-off old-schema boot stays safe, while a migration or injected harness becomes visible without restart');
 }
 
 // ── item 14: what an operator can see ────────────────────────────────────────
@@ -938,6 +1039,46 @@ console.log('\nthe HTTP surface');
   const routeCode = route.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const main = read('src/main.ts');
   const auth = read('src/middleware/auth.ts');
+  const envSource = read('src/lib/env.ts');
+  const financial = read('src/services/replacement-financial-action.ts')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const requestReversal = functionBody(financial, 'requestReplacementFinancialReversal');
+  const purchaseAt = routeCode.indexOf("'/:id{[0-9]+}/label/purchase'");
+  const retryAt = routeCode.indexOf("'/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/retry'");
+  const purchaseReconcileAt = routeCode.indexOf("'/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/reconcile'");
+  const pricingReconcileAt = routeCode.indexOf("'/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/pricing-reconcile'");
+  const voidReconcileAt = routeCode.indexOf("'/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/void/reconcile'");
+  const voidAt = routeCode.indexOf("'/:id{[0-9]+}/label/void'");
+  const shipAt = routeCode.indexOf("'/:id{[0-9]+}/ship'");
+  const reversalAt = routeCode.indexOf("'/:id{[0-9]+}/financial-reversal'");
+  const purchaseRoute = purchaseAt === -1 || retryAt === -1 ? '' : routeCode.slice(purchaseAt, retryAt);
+  const retryRoute = retryAt === -1 || purchaseReconcileAt === -1
+    ? '' : routeCode.slice(retryAt, purchaseReconcileAt);
+  const purchaseReconcileRoute = purchaseReconcileAt === -1 || pricingReconcileAt === -1
+    ? '' : routeCode.slice(purchaseReconcileAt, pricingReconcileAt);
+  const pricingReconcileRoute = pricingReconcileAt === -1 || voidReconcileAt === -1
+    ? '' : routeCode.slice(pricingReconcileAt, voidReconcileAt);
+  const voidReconcileRoute = voidReconcileAt === -1 || voidAt === -1
+    ? '' : routeCode.slice(voidReconcileAt, voidAt);
+  const voidRoute = voidAt === -1 || shipAt === -1 ? '' : routeCode.slice(voidAt, shipAt);
+  const shipRoute = shipAt === -1 || reversalAt === -1 ? '' : routeCode.slice(shipAt, reversalAt);
+  const reversalRoute = reversalAt === -1 ? '' : routeCode.slice(reversalAt);
+  const labelRoutes = [
+    [purchaseRoute, 'purchaseLabelBody'],
+    [retryRoute, 'retryLabelBody'],
+    [purchaseReconcileRoute, 'reconcileLabelBody'],
+    [pricingReconcileRoute, 'reconcileLabelBody'],
+    [voidReconcileRoute, 'reconcileLabelBody'],
+    [voidRoute, 'voidLabelBody'],
+  ] as const;
+  const reversalPreHandler = reversalRoute.slice(0, reversalRoute.indexOf('async (c) =>'));
+  const reversalRequestAt = reversalRoute.indexOf('await deps.requestFinancialReversal({');
+  const reversalBeforeRequest = reversalRequestAt === -1 ? '' : reversalRoute.slice(0, reversalRequestAt);
+  const shipBodyAt = routeCode.indexOf('const shipBody = z.object({');
+  const financialBodyAt = routeCode.indexOf('const financialReversalBody', shipBodyAt);
+  const shipBody = shipBodyAt === -1 || financialBodyAt === -1
+    ? ''
+    : routeCode.slice(shipBodyAt, financialBodyAt);
 
   check('a PS-502 error keeps its status when it reaches the global handler',
     /coded\.httpStatus \?\? coded\.status \?\? 500/.test(main),
@@ -954,6 +1095,11 @@ console.log('\nthe HTTP surface');
     && /REPLACEMENTS_DISABLED[\s\S]{0,40}403/.test(routeCode),
     'a per-handler gate is one revert away from protecting five routes of six; and a bare 404 could not be told apart from a missing replacement');
 
+  check('both replacement feature flags remain DEFAULT OFF',
+    /REPLACEMENTS_ENABLED: booleanFlag\(false\)/.test(envSource)
+    && /REPLACEMENTS_LABEL_ENABLED: booleanFlag\(false\)/.test(envSource),
+    'shipping code may be mounted without enabling operator access or postage purchase');
+
   check('every route denies portal roles outright',
     /requireInternalPermission\(/.test(routeCode)
     && !/[^l]requirePermission\(/.test(routeCode),
@@ -961,7 +1107,7 @@ console.log('\nthe HTTP surface');
 
   check('every replacement permission is DECLARED in the vocabulary',
     ['replacements:read', 'replacements:write', 'replacements:hold',
-     'replacements:label', 'replacements:override', 'replacements:billing']
+     'replacements:label', 'replacements:override', 'replacements:billing', 'financials:write']
       .every((perm) => auth.includes(`'${perm}'`)),
     'a permission a service demands but the vocabulary never names is one nobody can be granted deliberately');
 
@@ -987,9 +1133,206 @@ console.log('\nthe HTTP surface');
     (routeCode.match(/\}\)\.strict\(\)/g) ?? []).length >= 4,
     'a silently ignored field is a caller believing something happened');
 
-  check('label purchase, void and ship are NOT exposed yet',
-    !/purchaseReplacementLabel|voidReplacementLabel|shipReplacement/.test(routeCode),
-    'they need the customer-money freeze site, so their billing path could only refuse');
+  check('AC-13 is a strict, scoped financial-reversal route — never lifecycle cancellation',
+    reversalAt !== -1
+    && (reversalPreHandler.match(/requireInternalPermission\('[^']+'\)/g) ?? []).join('')
+      === "requireInternalPermission('replacements:billing')"
+    && /reason: z\.string\(\)\.trim\(\)\.min\(1\)/.test(routeCode)
+    && /idempotencyKey: z\.string\(\)\.trim\(\)\.min\(1\)/.test(routeCode)
+    && occursBefore(reversalRoute, 'deps.loadScopedReplacement(c,',
+      'deps.requestFinancialReversal({')
+    && !/cancelReplacement\(/.test(reversalRoute),
+    'a shipped replacement keeps its lifecycle; the route records only an attributed money decision');
+
+  check('financial reversal requires BOTH permissions before schema or database access',
+    /\[REPLACEMENT_BILLING_PERMISSION, FINANCIALS_WRITE_PERMISSION\]/.test(financial)
+    && occursBefore(requestReversal, 'requireFinancialPermissions(input.actor)',
+      'await assertFinancialActionSchema(conn)'),
+    'the route exposes only replacements:billing; the command still requires billing + financials:write before touching its database');
+
+  check('the route commits the durable obligation before best-effort processing',
+    reversalRequestAt !== -1
+    && !/deps\.(processFinancialAction|readFinancialAction)\(/.test(reversalBeforeRequest)
+    && occursBefore(reversalRoute, 'await deps.requestFinancialReversal({',
+      'await deps.processFinancialAction(Number(action.id))')
+    && /catch \{[\s\S]{0,120}deps\.readFinancialAction/.test(reversalRoute),
+    'a disconnect or process death after the request must leave work for the worker');
+
+  check('every label purchase/retry/recovery/void route stays behind label RBAC and the DEFAULT-OFF label flag',
+    labelRoutes.every(([segment]) =>
+      occursBefore(segment, "requireInternalPermission('replacements:label')", 'requireLabelFeature')),
+    'the router flag does not authorize postage; every label or recovery path keeps the narrower kill switch and capability');
+
+  check('ship requires replacement + inventory capabilities and the label feature gate',
+    /'\/:id\{\[0-9\]\+\}\/ship',[\s\S]{0,160}requireInternalPermission\('replacements:write'\),[\s\S]{0,100}requireInternalPermission\('inventory:write'\),[\s\S]{0,80}requireLabelFeature/.test(routeCode),
+    'shipping moves stock, package and billing atomically; one broad replacement permission is insufficient');
+
+  check('all pre-handler refusals run before scope loading, provider selection or commands',
+    occursBefore(routeCode, "app.use('*',", "app.route('/', createReplacementSideEffectRouter())")
+    && labelRoutes.every(([segment, body]) =>
+      occursBefore(segment, "requireInternalPermission('replacements:label')", `zValidator('json', ${body})`)
+      && occursBefore(segment, 'requireLabelFeature', `zValidator('json', ${body})`)
+      && occursBefore(segment, `zValidator('json', ${body})`, 'deps.loadScopedReplacement(c,'))
+    && occursBefore(shipRoute, "requireInternalPermission('replacements:write')", "zValidator('json', shipBody)")
+    && occursBefore(shipRoute, "requireInternalPermission('inventory:write')", "zValidator('json', shipBody)")
+    && occursBefore(shipRoute, 'requireLabelFeature', "zValidator('json', shipBody)")
+    && occursBefore(shipRoute, "zValidator('json', shipBody)", 'deps.loadScopedReplacement(c,')
+    && occursBefore(reversalRoute, "requireInternalPermission('replacements:billing')", "zValidator('json', financialReversalBody)")
+    && occursBefore(reversalRoute, "zValidator('json', financialReversalBody)", 'deps.loadScopedReplacement(c,'),
+    'feature flags, RBAC and strict-body refusal are request-boundary work; none may be deferred until a scoped lookup or side effect');
+
+  check('every side-effect route resolves tenant scope before its command or provider factory',
+    (routeCode.match(/const replacement = await deps\.loadScopedReplacement\(c,/g) ?? []).length === 8
+    && occursBefore(purchaseRoute, 'deps.loadScopedReplacement(c,', 'deps.insertShipment({')
+    && occursBefore(purchaseRoute, 'deps.loadScopedReplacement(c,', 'deps.providerFor(')
+    && occursBefore(retryRoute, 'deps.loadScopedReplacement(c,', 'deps.retryLabel({')
+    && occursBefore(retryRoute, 'deps.loadScopedReplacement(c,', 'deps.providerFor(')
+    && occursBefore(purchaseReconcileRoute, 'deps.loadScopedReplacement(c,', 'deps.reconcilePurchaseIntent({')
+    && occursBefore(purchaseReconcileRoute, 'deps.loadScopedReplacement(c,', 'deps.providerFor(')
+    && occursBefore(pricingReconcileRoute, 'deps.loadScopedReplacement(c,', 'deps.reconcileLabelPricing({')
+    && !/deps\.providerFor\(/.test(pricingReconcileRoute)
+    && occursBefore(voidReconcileRoute, 'deps.loadScopedReplacement(c,', 'deps.reconcileVoidOutcome({')
+    && occursBefore(voidReconcileRoute, 'deps.loadScopedReplacement(c,', 'deps.providerFor(')
+    && occursBefore(voidRoute, 'deps.loadScopedReplacement(c,', 'deps.providerFor(')
+    && occursBefore(voidRoute, 'deps.loadScopedReplacement(c,', 'deps.voidLabel({')
+    && occursBefore(shipRoute, 'deps.loadScopedReplacement(c,', 'deps.ship({')
+    && occursBefore(reversalRoute, 'deps.loadScopedReplacement(c,',
+      'deps.requestFinancialReversal({'),
+    'an id must 404 out of scope before provider selection or a mutation command sees it');
+
+  check('purchase input is strict operator intent, never caller-supplied customer money',
+    /const purchaseLabelBody = z\.object\(\{[\s\S]{0,900}\}\)\.strict\(\)/.test(routeCode)
+    && !/shipmentCost|otherCost|selectedRateCost|cShippingRateAmount/.test(
+      routeCode.slice(routeCode.indexOf('const purchaseLabelBody'),
+        routeCode.indexOf('const voidLabelBody')))
+    && occursBefore(routeCode, 'await deps.insertShipment({', 'await deps.purchaseLabel({'),
+    'the route may capture attributed address/carrier/package intent; money remains command-owned');
+
+  check('ship accepts inventory candidates only, never caller display or quantity data',
+    /replacementItemId: z\.coerce\.number\(\)\.int\(\)\.positive\(\)/.test(shipBody)
+    && /inventoryId: z\.coerce\.number\(\)\.int\(\)\.positive\(\)/.test(shipBody)
+    && !/\b(?:name|sku|quantity|qty)\s*:/.test(shipBody),
+    'name, SKU and quantity are frozen/database facts; the HTTP body may identify only the candidate stock row');
+}
+
+// ── The production label-provider boundary ──────────────────────────────────
+console.log('\nreplacement label provider adapter');
+
+{
+  const provider = read('src/services/replacement-label-provider.ts');
+  const providerCode = provider.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const directLabels = read('src/services/labels-direct.ts')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const factory = functionBody(providerCode, 'replacementLabelProviderFor');
+  const factoryReturnAt = factory.indexOf('return {');
+  const factoryConstruction = factoryReturnAt === -1 ? factory : factory.slice(0, factoryReturnAt);
+  const lookupMethodAt = factory.indexOf('lookupPurchase: async');
+  const purchaseMethod = lookupMethodAt === -1 ? '' : factory.slice(0, lookupMethodAt);
+  const context = functionBodyOf(providerCode, 'loadReplacementProviderContext');
+  const accountAuthority = functionBodyOf(providerCode, 'resolveShipStationAccountAuthority');
+  const purchaseAuthority = functionBodyOf(providerCode, 'resolveShipStationPurchaseAuthority');
+  const contextSafety = functionBodyOf(providerCode, 'assertReplacementContextSafety');
+  const serviceSafety = functionBodyOf(providerCode, 'assertReplacementServiceSafety');
+  const purchase = functionBodyOf(providerCode, 'purchaseShipStationLabel');
+  const intentRequest = functionBodyOf(providerCode, 'loadIntentRequest');
+  const lookupIntent = functionBodyOf(providerCode, 'findIntentForLookup');
+  const voidIntent = functionBodyOf(providerCode, 'findIntentForVoid');
+  const lookup = functionBodyOf(providerCode, 'lookupShipStationPurchase');
+  const voidLabel = functionBodyOf(providerCode, 'voidShipStationReplacementLabel');
+  const directRef = functionBody(directLabels, 'directLabelAccountRefFromProviderId');
+
+  check('constructing the replacement provider is lazy and performs no I/O',
+    factoryReturnAt !== -1
+    && ['purchase: async', 'lookupPurchase: async', 'voidLabel: async']
+      .every((method) => factory.includes(method))
+    && !/\bawait\b|\bdb\.|loadReplacementProviderContext\(|purchaseShipStationLabel\(|lookupShipStationPurchase\(|voidShipStationReplacementLabel\(|ssCreateLabel\(/.test(factoryConstruction),
+    'route construction must not select credentials, open a provider request or buy postage');
+
+  check('the provider request is bound to the replacement, its shipment and its frozen fingerprint',
+    /innerJoin\(orders, eq\(orders\.id, replacements\.orderId\)\)/.test(context)
+    && /row\.replacementShipmentId == null/.test(context)
+    && /row\.replacementClientId !== row\.orderClientId/.test(context)
+    && /request\.replacementId === context\.replacementId/.test(providerCode)
+    && /request\.replacementShipmentId === context\.replacementShipmentId/.test(providerCode)
+    && /request\.replacementReference === context\.replacementReference/.test(providerCode)
+    && /request\.fingerprint !== expectedFingerprint/.test(providerCode)
+    && /intent\.replacementId !== replacementId/.test(intentRequest)
+    && /intent\.requestFingerprint !== request\.fingerprint/.test(intentRequest),
+    'the original order supplies safety context, never the purchase identity');
+
+  check('direct, store-scoped and ambiguous account paths fail closed before postage',
+    /DIRECT_STORE_PROVIDER_ID_OFFSET/.test(directRef)
+    && /sourceTable: 'store_accounts'/.test(directRef)
+    && /DIRECT_CARRIER_PROVIDER_ID_OFFSET/.test(directRef)
+    && /sourceTable: 'carrier_accounts'/.test(directRef)
+    && occursBefore(purchaseMethod,
+      'if (directLabelAccountRefFromProviderId(request.carrier.providerAccountId)) {',
+      'return purchaseShipStationLabel(context, request, idempotencyKey)')
+    && /loadClientCredentials\(context\.clientId\)/.test(accountAuthority)
+    && /matchingCarriers\.length !== 1/.test(accountAuthority)
+    && /candidate\.carrier_id === carrierId/.test(accountAuthority)
+    && /services\.length !== 1/.test(purchaseAuthority)
+    && /services\[0\]!\.domestic !== true/.test(purchaseAuthority)
+    && /services\[0\]!\.international === true/.test(purchaseAuthority),
+    'only one exact domestic ShipStation account/service under the current credential is supported');
+
+  check('all safety preflight and canonical ship-from resolution precede ShipStation purchase',
+    /assertInternationalOriginationSupported/.test(contextSafety)
+    && /isHugrabShippingContext/.test(contextSafety)
+    && /getOrderHazmatForShipping/.test(contextSafety)
+    && /loadShippingAutomationControls/.test(serviceSafety)
+    && /isPoBoxAddress/.test(serviceSafety)
+    && occursBefore(purchase, 'resolveShipStationPurchaseAuthority(context, request)', 'ssCreateLabel({')
+    && occursBefore(purchase, 'assertCarrierFamilyEligibleForPurchase({', 'ssCreateLabel({')
+    && occursBefore(purchase, 'assertReplacementContextSafety(context, request)', 'ssCreateLabel({')
+    && occursBefore(purchase, 'assertReplacementServiceSafety(', 'ssCreateLabel({')
+    && occursBefore(purchase, 'getDefaultShipFrom()', 'ssCreateLabel({')
+    && occursBefore(purchase, 'replacementExternalShipmentId(request, idempotencyKey)', 'ssCreateLabel({'),
+    'a provider call is the last step after identity, eligibility, safety and deterministic recovery facts');
+
+  check('purchase recovery reloads one scoped frozen intent and the current exact credential',
+    /eq\(replacementLabelPurchaseIntents\.replacementId, replacementId\)/.test(lookupIntent)
+    && /eq\(replacementLabelPurchaseIntents\.providerIdempotencyKey, idempotencyKey\)/.test(lookupIntent)
+    && /\.limit\(2\)/.test(lookupIntent)
+    && /rows\.length !== 1/.test(lookupIntent)
+    && occursBefore(lookup, 'loadReplacementProviderContext(replacementId)',
+      'findIntentForLookup(replacementId, idempotencyKey)')
+    && occursBefore(lookup, 'findIntentForLookup(replacementId, idempotencyKey)',
+      'loadIntentRequest(replacementId, intent, context)')
+    && occursBefore(lookup, 'resolveShipStationAccountAuthority(context, request)',
+      'ssGetLabelByExternalShipmentId(')
+    && /replacementExternalShipmentId\(request, idempotencyKey\)/.test(lookup),
+    'recovery asks ShipStation by the deterministic purchase identity; it never guesses from an order');
+
+  check('a bare ShipStation lookup miss stays indeterminate without durable no-effect proof',
+    /if \(!found\) \{/.test(lookup)
+    && /external_shipment_not_found_without_no_effect_proof/.test(lookup)
+    && /throw lookupUnavailable\(/.test(lookup)
+    && !/if \(!found\)\s*(?:\{\s*)?return null/.test(lookup)
+    && occursBefore(lookup, 'if (!found) {', "return completeReceipt(found.label, request, 'ShipStation')"),
+    'an eventually-consistent 404 cannot authorize failed_pre_purchase and a second postage buy');
+
+  check('void reloads one purchased intent, its frozen request and its exact owning credential',
+    /eq\(replacementLabelPurchaseIntents\.replacementId, replacementId\)/.test(voidIntent)
+    && /eq\(replacementLabelPurchaseIntents\.state, 'purchased'\)/.test(voidIntent)
+    && /eq\(replacementLabelPurchaseIntents\.providerTransactionId, providerTransactionId\)/.test(voidIntent)
+    && /\.limit\(2\)/.test(voidIntent)
+    && /rows\.length !== 1/.test(voidIntent)
+    && occursBefore(voidLabel, 'loadReplacementProviderContext(replacementId)',
+      'findIntentForVoid(replacementId, providerTransactionId)')
+    && occursBefore(voidLabel, 'loadIntentRequest(replacementId, intent, context)',
+      'intent.providerLabelId !== providerTransactionId')
+    && occursBefore(voidLabel, 'input.idempotencyKey !== replacementVoidIdempotencyKey(intent)',
+      'resolveShipStationAccountAuthority(context, request)')
+    && occursBefore(voidLabel, 'resolveShipStationAccountAuthority(context, request)',
+      'ssVoidLabel(providerTransactionId, authority.apiKeyV2)'),
+    'a caller-supplied label or stale credential cannot choose what gets voided');
+
+  check('the adapter writes no local lifecycle and carries no original-order marketplace identity',
+    /ssOrderId: null/.test(purchase)
+    && !/\.update\(orders\)|\.update\(replacements\)|\.insert\(orders\)|\.delete\(orders\)/.test(providerCode)
+    && !/notifyCustomer|marketplaceFulfillment|markAsShipped|shopify|walmart|ebay/i.test(providerCode),
+    'this boundary may call ShipStation only; commands own lifecycle and marketplace effects');
 }
 
 // ── AC-10/AC-18: customer money, and money that has a bucket ─────────────────
@@ -1002,7 +1345,9 @@ console.log('\nAC-10/AC-18 — where replacement money comes from and where it s
   const cached = read('src/services/reporting-metrics.ts');
   const invoice = read('src/services/billing-invoice-totals.ts');
   const contract = read('src/services/billing-row-total-contract.ts');
+  const snapshots = read('src/services/customer-shipping-money-snapshot.ts');
   const fenceFn = functionBody(fence, 'resolveReplacementCustomerPostage');
+  const strictReader = functionBody(snapshots, 'readFrozenReplacementCustomerShippingMoney');
   const plannerCode = planner.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
   // The signature only — sliced, not regexed, because a regex literal carrying braces and a
@@ -1026,10 +1371,16 @@ console.log('\nAC-10/AC-18 — where replacement money comes from and where it s
   // zero-markup client legitimately has equal amounts — it is that the tuple came from the
   // policy owner. Asserting equality blocked those clients from shipping at all.
   check('the fence accepts only a tuple with customer-money PROVENANCE',
-    /readFrozenCustomerShippingMoney\(input\.frozenCustomerShippingMoney\)/.test(fenceFn)
+    /readFrozenReplacementCustomerShippingMoney\(input\.frozenCustomerShippingMoney\)/.test(fenceFn)
     && /if \(!frozen\) return null;/.test(fenceFn)
     && !/frozen\.cShippingRateAmount === frozen\.selectedRateCost/.test(fenceFn),
     'customerRateSource, rateCostSource and the policy version are what a number copied out of shipments.cost cannot forge, at any markup');
+
+  check('the replacement-specific reader requires exact active pricing authority',
+    /readFrozenCustomerShippingMoney\(value\)/.test(strictReader)
+    && /frozen\.customerShippingMoneyPolicyVersion !== CUSTOMER_SHIPPING_MONEY_POLICY_VERSION/.test(strictReader)
+    && /!frozen\.customerShippingPricingAuthority/.test(strictReader),
+    'the generic historical reader stays compatible, but replacement billing must fail closed on a missing or malformed authority receipt');
 
   // Reads planCode, not planner: the docblock explaining WHY the carrier fields were removed
   // names them, and a negative assertion over prose forces the next engineer to delete the
@@ -1084,11 +1435,11 @@ console.log('\nAC-16 — the original order went away');
     /pg_advisory_xact_lock\(36423, \$\{input\.orderId\}\)/.test(holdCode),
     'that lock is what makes it safe against an in-flight shipReplacement');
 
-  check('AC-16 keeps its OWN review reasons, never the drift code',
-    /original_order_cancelled_label_live/.test(holdCode)
-    && /original_order_cancelled_label_unresolved/.test(holdCode)
-    && !/original_order_line_drift/.test(holdCode),
-    'the card is explicit that a cancelled original keeps its own review path');
+  check('shipped_at is authoritative even when lifecycle text disagrees',
+    occursBefore(classify, 'if (before.shippedAt != null) {',
+      "if (before.status === 'shipped' || before.status === 'completed') {")
+    && /dispatch_evidence_disagrees_with_lifecycle_and_financials_need_review/.test(classify),
+    'status text cannot erase physical dispatch evidence or authorize a pre-dispatch cancel');
 
   check('a POST-DISPATCH replacement is annotated, never transitioned',
     /annotateReplacementOriginalOrderInTransaction/.test(classify)
@@ -1099,9 +1450,35 @@ console.log('\nAC-16 — the original order went away');
     !/voidReplacementLabel/.test(hold),
     'a void is a one-way door and a provider action; a local cancellation cannot take it');
 
+  check('a purchased but CONFIRMED-VOID intent is no longer a live label',
+    /sql`\$\{replacementLabelPurchaseIntents\.state\} in \$\{INTENT_AT_RISK_STATES\}`/.test(classify)
+    && /replacementLabelPurchaseIntents\.voidState\} is null or \$\{replacementLabelPurchaseIntents\.voidState\} <> 'voided'/.test(classify)
+    && /if \(atRiskIntent\?\.state === 'purchased'\) \{/.test(classify)
+    && !/if \(before\.status === 'label_created'\)/.test(classify)
+    && occursBefore(classify,
+      "replacementLabelPurchaseIntents.voidState} <> 'voided'",
+      "if (atRiskIntent?.state === 'purchased') {")
+    && occursBefore(classify, "if (atRiskIntent?.state === 'purchased') {",
+      'await cancelReplacementForOriginalOrderInTransaction(tx, before, {'),
+    'label_created is display state; the purchased intent ledger decides whether postage is still live');
+
   check('the money question on a delivered replacement is RECORDED, not answered',
     /does_the_client_still_pay_for_a_delivered_replacement/.test(holdCode),
     'guessing it would either bill for nothing owed or silently forgive real money');
+
+  check('lifecycle dispatch text without shipped_at enters its dedicated review',
+    /before\.status === 'shipped' \|\| before\.status === 'completed'/.test(classify)
+    && /reviewReason: 'original_order_cancelled_dispatch_inconsistent'/.test(classify)
+    && /openQuestion: 'resolve_lifecycle_dispatch_inconsistency'/.test(classify),
+    'the opposite status/reality mismatch is anomalous too; it must not be treated as delivered or clean');
+
+  check('AC-16 keeps its OWN review reasons, never the drift code',
+    /original_order_cancelled_label_live/.test(holdCode)
+    && /original_order_cancelled_label_unresolved/.test(holdCode)
+    && /original_order_cancelled_dispatch_inconsistent/.test(holdCode)
+    && /original_order_cancelled_unexpected_billing/.test(holdCode)
+    && !/original_order_line_drift/.test(holdCode),
+    'the card is explicit that a cancelled original keeps its own review path');
 
   check('a hold points at a RECEIPT, and reason is never parsed',
     /orderLifecycleEventId/.test(holdCode)
@@ -1112,6 +1489,32 @@ console.log('\nAC-16 — the original order went away');
   check('an open hold blocks re-classification, as the partial index requires',
     /resolvedAt\} is null/.test(holdCode),
     'matching only the idempotency key aborts the sweep on the second signal');
+
+  check('ANY replacement billing row blocks automatic cancellation',
+    /\.where\(eq\(billingLineItems\.replacementId, before\.id\)\)/.test(classify)
+    && !/eq\(billingLineItems\.invoiced, (?:true|false)\)/.test(classify)
+    && /invoiced_money_on_an_undispatched_replacement/.test(classify)
+    && /editable_money_on_an_undispatched_replacement/.test(classify)
+    && occursBefore(classify, '.from(billingLineItems)',
+      'cancelReplacementForOriginalOrderInTransaction(tx, before, {'),
+    'editable money is no less anomalous than finalized money on an undispatched replacement');
+
+  check('terminal lifecycle text with live intent or money creates a hold without illegal review transition',
+    /replacement_terminal_original_order_live_label/.test(classify)
+    && /replacement_terminal_original_order_unresolved_label/.test(classify)
+    && /replacement_terminal_original_order_unexpected_billing/.test(classify)
+    && /terminal_replacement_has_live_label/.test(classify)
+    && /if \(before\.status === 'cancelled' \|\| before\.status === 'rejected'\) \{[\s\S]{0,900}replacement_terminal_original_order_live_label[\s\S]{0,900}return \{[\s\S]{0,400}terminal_replacement_has_live_label/.test(classify)
+    && /if \(before\.status === 'cancelled' \|\| before\.status === 'rejected'\) \{[\s\S]{0,900}replacement_terminal_original_order_unresolved_label[\s\S]{0,900}return \{[\s\S]{0,400}terminal_replacement_has_unresolved_label_intent/.test(classify)
+    && /if \(before\.status === 'cancelled' \|\| before\.status === 'rejected'\) \{[\s\S]{0,900}replacement_terminal_original_order_unexpected_billing[\s\S]{0,900}return \{/.test(classify),
+    'cancelled/rejected -> review is illegal, but terminal text cannot erase live postage or money evidence');
+
+  check('a clean pre-dispatch cancel closes its hold in the same transaction',
+    /outcome\.disposition === 'no_action' \|\| outcome\.disposition === 'cancelled'/.test(holdCode)
+    && /resolution: outcome\.disposition === 'cancelled'[\s\S]{0,120}'clean_pre_dispatch_replacement_cancelled'/.test(holdCode)
+    && /await cancelReplacementForOriginalOrderInTransaction\(tx, before, \{/.test(classify)
+    && /await cancelReplacementBillingInTransaction\(tx, \{ replacementId: before\.id \}\)/.test(classify),
+    'no label, unresolved intent, dispatch evidence or billing row means there is no human question to leave open');
 
   // The call must be a BARE STATEMENT, not merely present. M84 survived an earlier version of
   // this check by wrapping it in `if (false)` — the text was still there, still in the right
@@ -1125,9 +1528,64 @@ console.log('\nAC-16 — the original order went away');
     'a cancellation that left its replacements untouched would be undetectable');
 
   check('the upstream producer raises holds WITHOUT moving the order',
-    /o\.order_status = 'shipped'[\s\S]{0,400}EXISTS \(SELECT 1 FROM replacements/.test(upstream)
-    && !/shippedWithReplacements[\s\S]{0,600}applyOrderLifecycleCommand/.test(upstream),
+    /candidate\.orderStatus === 'shipped'/.test(upstream)
+    && /raiseReplacementOriginalOrderHoldsInTransaction\(tx, \{/.test(upstream)
+    && occursBefore(upstream, "candidate.orderStatus === 'shipped'",
+      "candidate.orderStatus !== 'awaiting_shipment'")
+    && !/candidate\.orderStatus === 'shipped'[\s\S]{0,1200}applyOrderLifecycleCommand/.test(upstream),
     'writing canonical_status would zero the original\'s billing through cancelled-no-charge');
+
+  const create = read('src/services/replacement-create-command.ts');
+  check('a create after durable cancellation/refund evidence is refused under the order lock',
+    /replacementOriginalOrderHolds/.test(create)
+    && /priorWebhookCancellation/.test(create)
+    && /REPLACEMENT_ORIGINAL_ORDER_HELD/.test(create)
+    && /REPLACEMENT_ORIGINAL_ORDER_EVIDENCE_AMBIGUOUS/.test(create)
+    && /unboundAccountless/.test(create)
+    && /competingAccount/.test(create)
+    && occursBefore(create, 'pg_advisory_xact_lock', 'priorWebhookCancellation')
+    && occursBefore(create, 'priorWebhookCancellation', '.insert(replacements)'),
+    'a sweep or unbound pre-import receipt must remain authoritative, including after account identity becomes ambiguous');
+
+  const lifecycle = read('src/services/replacement-lifecycle-command.ts');
+  const resolveReview = functionBody(lifecycle, 'resolveReplacementReview');
+  check('every direct pre-ship terminal command fences label intent and retires only its vessel',
+    /prepareReplacementTerminalTransitionInTransaction/.test(lifecycle)
+    && /provider_pending/.test(lifecycle)
+    && /reconcile_required/.test(lifecycle)
+    && /terminal_transition_label_live/.test(lifecycle)
+    && /isEmptyReplacementShipment/.test(lifecycle)
+    && /isNull\(shipments\.orderId\)/.test(lifecycle)
+    && /eq\(shipments\.source, 'replacement'\)/.test(lifecycle)
+    && /replacement_empty_shipment_retired/.test(lifecycle),
+    'cancel/reject may race provider Phase 3; terminal state cannot hide an in-flight label');
+
+  check('generic review resolution cannot bypass AC-16 or paid-label pricing evidence',
+    /assertReviewResolutionPrerequisites/.test(lifecycle)
+    && /AC16_REVIEW_QUESTIONS_BY_REASON/.test(lifecycle)
+    && /replacementOriginalOrderHolds/.test(lifecycle)
+    && /if \(!decision\?\.resolvedAt\)/.test(lifecycle)
+    && /replacement_customer_money_unavailable/.test(lifecycle)
+    && /to !== 'label_created'/.test(lifecycle)
+    && /replacement_customer_money_reconciled/.test(lifecycle)
+    && /readFrozenReplacementCustomerShippingMoney/.test(lifecycle)
+    && occursBefore(resolveReview, 'await assertReviewResolutionPrerequisites(tx, before, input.to)',
+      'const replacement = await applyTransition(tx, before, {'),
+    'review_reason is not authority to erase its own unanswered hold or missing customer-money receipt');
+
+  check('open holds have an audited state-versioned resolution writer',
+    /resolveReplacementOriginalOrderHold/.test(hold)
+    && /expectedStateVersion/.test(hold)
+    && /assertHoldResolutionPrerequisite/.test(hold)
+    && /assertResolutionMatchesOpenQuestion\(hold\.openQuestion, input\.resolution\)/.test(hold)
+    && /REPLACEMENT_HOLD_RESOLUTION_INCOMPATIBLE/.test(hold)
+    && /void_or_retain_purchased_label: \['label_voided', 'label_retained'\]/.test(hold)
+    && /invoiced_money_on_an_undispatched_replacement: \['financial_reversal_completed'\]/.test(hold)
+    && /if \(intent\.voidState !== null\)/.test(hold)
+    && /activeShipment\.orderId !== null/.test(hold)
+    && /replacement_original_order_hold_resolved/.test(hold)
+    && /isNull\(replacementOriginalOrderHolds\.resolvedAt\)/.test(hold),
+    'the close command must answer this exact question and prove its provider/lifecycle/financial prerequisite');
 
   check('shipped -> cancelled is STILL refused',
     /transition === 'cancelled' && order\.orderStatus === 'shipped'/.test(lifecycleOwner)
@@ -1208,6 +1666,19 @@ console.log('\ncancellation and finalized credits (AC-13)');
   const policy = read('src/services/billing-finalization-policy.ts');
   const writer = read('src/services/replacement-billing-writer.ts');
   const writeCode = writer.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const financial = read('src/services/replacement-financial-action.ts');
+  const financialCode = financial.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const policyCode = policy.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const scheduler = read('src/services/sync-scheduler.ts');
+  const fulfillmentTick = functionBody(scheduler, 'runFulfillmentOutboxTick');
+  const requestAction = functionBody(financialCode, 'requestReplacementFinancialReversal');
+  const claimAction = functionBodyOf(financialCode, 'claimOneAction');
+  const processAction = functionBodyOf(financialCode, 'processClaimedAction');
+  const completeAction = functionBodyOf(financialCode, 'completeClaimedAction');
+  const repairScanner = functionBody(financialCode,
+    'enqueueStrandedReplacementCancellationCleanup');
+  const replacementAdjustment = functionBody(policyCode,
+    'reconcileFinalizedBillingReplacementAdjustment');
 
   check('the reconciler is a SIBLING, not a parameter on the order reconciler',
     /export async function reconcileFinalizedBillingReplacementAdjustment/.test(policy)
@@ -1252,7 +1723,8 @@ console.log('\ncancellation and finalized credits (AC-13)');
     're-crediting the whole total on a retry is how a cancellation refunds twice');
 
   check('the idempotency key includes the finalization',
-    /idempotencyKey: `\$\{input\.idempotencyKey\}:finalization:\$\{frozen\.finalizationId\}`/.test(policy),
+    /const actionCreditKey = `\$\{input\.idempotencyKey\}:finalization:\$\{frozen\.finalizationId\}`/.test(policy)
+    && /idempotencyKey: actionCreditKey/.test(policy),
     'one cancellation spanning two finalizations is two adjustments, not one');
 
   const cancelBody = functionBody(writeCode, 'cancelReplacementBillingInTransaction');
@@ -1266,6 +1738,81 @@ console.log('\ncancellation and finalized credits (AC-13)');
   check('cancellation never deletes an invoiced line',
     !/\.delete\(billingLineItems\)[\s\S]{0,400}invoiced, true/.test(cancelBody),
     'a finalized charge is history; the difference becomes an append-only credit');
+
+  check('the post-ship decision requires written reason + stable key and replays by full signature',
+    /REPLACEMENT_FINANCIAL_REASON_REQUIRED/.test(requestAction)
+    && /REPLACEMENT_FINANCIAL_IDEMPOTENCY_REQUIRED/.test(requestAction)
+    && /onConflictDoNothing\(\{ target: replacementFinancialActions\.idempotencyKey \}\)/.test(requestAction)
+    && /assertReplayMatches\(existing as ReplacementFinancialActionRow, expected\)/.test(requestAction),
+    'an idempotency key reused for different replacement, action or reason is a conflict, not a replay');
+
+  check('financial reversal accepts dispatch evidence or a finalized historical anomaly',
+    /eq\(billingLineItems\.replacementId, replacement\.id\)/.test(requestAction)
+    && /eq\(billingLineItems\.invoiced, true\)/.test(requestAction)
+    && /if \(replacement\.shippedAt == null && !finalizedLine\)/.test(requestAction),
+    'a clean pre-ship replacement belongs to lifecycle cancellation; shipped_at remains authoritative');
+
+  check('financial reversal preserves lifecycle and touches no provider, stock, package or marketplace',
+    !/\.update\(replacements\)/.test(financialCode)
+    && !/createLabel|voidLabel|provider\.|inventory|consumePackage|marketplace/i.test(financialCode),
+    'AC-13 is a money decision about one delivered replacement, never a disguised shipped cancellation');
+
+  check('the durable worker claims with a lease and SKIP LOCKED',
+    /for update skip locked/.test(claimAction)
+    && /status = 'processing'/.test(claimAction)
+    && /attempts = action\.attempts \+ 1/.test(claimAction)
+    && /lease_expires_at/.test(claimAction)
+    && /status in \('pending', 'retry'\)/.test(claimAction),
+    'a crash must leave a reclaimable obligation, while concurrent workers process it once');
+
+  check('the worker removes and credits ONLY the action replacement on the supplied database',
+    (processAction.match(/^ {8}replacementId: action\.replacement_id,$/gm) ?? []).length === 2
+    && /cancelReplacementBillingInTransaction\(tx, \{[\s\S]{0,80}replacementId: action\.replacement_id,/.test(processAction)
+    && /reconcileFinalizedBillingReplacementAdjustment\(\{[\s\S]{0,180}replacementId: action\.replacement_id,/.test(processAction)
+    && /idempotencyKey: `replacement-financial-action:\$\{action\.id\}`/.test(processAction)
+    && /\}, conn, async \(\) => undefined\)/.test(processAction),
+    'reversing A must leave sibling B unchanged and must not escape an injected database');
+
+  check('a retry recovers its already-committed credit into the durable action result',
+    /where \$\{billingCreditNotes\.idempotencyKey\} = \$\{actionCreditKey\}/.test(replacementAdjustment)
+    && /if \(existingActionCredit\) \{/.test(replacementAdjustment)
+    && /existingActionCredit\.finalizationId !== frozen\.finalizationId/.test(replacementAdjustment)
+    && /Number\(existingActionCredit\.replacementId\) !== input\.replacementId/.test(replacementAdjustment)
+    && /existingActionCredit\.reason !== input\.reason\.trim\(\)/.test(replacementAdjustment)
+    && /adjustedCount \+= 1;\s*creditedCents \+= moneyCents\(existingActionCredit\.amount\);\s*continue;/.test(replacementAdjustment)
+    && occursBefore(replacementAdjustment, 'if (existingActionCredit) {',
+      'const prior = resultRows<{ signedTotal: string }>'),
+    'a crash after credit commit must not let the action retry complete with false zero results');
+
+  check('completion is append-only and replay-safe',
+    /eq\(replacementFinancialActions\.status, 'processing'\)/.test(completeAction)
+    && /eq\(replacementFinancialActions\.attempts, action\.attempts\)/.test(completeAction)
+    && /if \(existing\) return existing;/.test(completeAction)
+    && /replacement_financial_reversal_completed/.test(completeAction)
+    && /onConflictDoNothing\(\{ target: replacementActivityEvents\.idempotencyKey \}\)/.test(completeAction),
+    'a repeated worker may reread completion but may not append another financial fact');
+
+  check('the repair scanner targets only stranded pre-ship cancelled replacement money',
+    /replacement\.status = 'cancelled'/.test(repairScanner)
+    && /replacement\.shipped_at is null/.test(repairScanner)
+    && /line\.replacement_id = replacement\.id/.test(repairScanner)
+    && /on conflict \(idempotency_key\) do nothing/.test(repairScanner),
+    'historical repair must not invent a broad order-level cleanup or touch dispatched history');
+
+  check('the DEFAULT-OFF replacement flag blocks historical replacement discovery',
+    /const replacementCleanupRecovered = env\.REPLACEMENTS_ENABLED\s*\? await enqueueStrandedReplacementCancellationCleanup/.test(fulfillmentTick)
+    && (fulfillmentTick.match(/enqueueStrandedReplacementCancellationCleanup\(/g) ?? []).length === 1
+    && /: \{ schemaReady: false, enqueued: 0 \};/.test(fulfillmentTick),
+    'a flags-off deploy must not discover and enqueue mutations for historical replacements');
+
+  check('already-authorized durable financial obligations drain even while flags are off',
+    /replacementFinancials = await processReplacementFinancialActionsOnce\(\{ limit: 5 \}\);/.test(fulfillmentTick)
+    && !/processReplacementFinancialActionsOnce[\s\S]{0,120}REPLACEMENTS_ENABLED/.test(fulfillmentTick)
+    && (fulfillmentTick.match(/processReplacementFinancialActionsOnce\(/g) ?? []).length === 1
+    && occursBefore(fulfillmentTick,
+      'replacementFinancials = await processReplacementFinancialActionsOnce({ limit: 5 });',
+      'return {'),
+    'a committed financial action is an explicit obligation; rollback must not strand it halfway through');
 }
 
 // ── AC-6: one regeneration owner, and the sweep cannot erase replacement money ─
@@ -1395,6 +1942,7 @@ console.log('\nthe atomic shipped command');
 {
   const shipCmd = read('src/services/replacement-shipped-command.ts');
   const code = shipCmd.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const shipTransaction = functionBody(code, 'shipReplacement');
   const at = (needle: string) => code.indexOf(needle);
 
   check('the shipped command exists and is a single transaction',
@@ -1447,9 +1995,36 @@ console.log('\nthe atomic shipped command');
     && /REPLACEMENT_BILLING_UNRESOLVED/.test(code),
     'shipping first and billing later loses the record of what was owed');
 
-  check('a voided label is not a shipment',
-    /voidState === 'voided'/.test(code)
-    && /REPLACEMENT_LABEL_NOT_ACTIVE/.test(code));
+  check('ONLY an explicit active/null void state can ship',
+    /eq\(replacementLabelPurchaseIntents\.state, 'purchased'\)/.test(shipTransaction)
+    && /intent\.voidState === null/.test(shipTransaction)
+    && /REPLACEMENT_LABEL_NOT_ACTIVE/.test(shipTransaction)
+    && occursBefore(shipTransaction,
+      'intent.voidState === null',
+      'findFrozenLineDrift('),
+    'pending, reconcile-required, voided and future unknown states all mean the label is not proven active');
+
+  check('inventory ids stay candidates until remapped SKU, client and active authority all agree',
+    /orderBy\(desc\(replacementItemRemaps\.remapVersion\)\)/.test(shipTransaction)
+    && /const effectiveLineIndex = latestRemap\?\.resolvedOrderLineIndex \?\? item\.orderLineIndex;/.test(shipTransaction)
+    && /eq\(orderItems\.lineIndex, effectiveLineIndex\)/.test(shipTransaction)
+    && /eq\(inventory\.clientId, Number\(replacement\.clientId\)\)/.test(shipTransaction)
+    && /eq\(inventory\.active, true\)/.test(shipTransaction)
+    && /lower\(btrim\(\$\{inventory\.sku\}\)\) = lower\(btrim\(\$\{expectedSku\}\)\)/.test(shipTransaction)
+    && /allowedStock\.length !== 1/.test(shipTransaction)
+    && /allowedStock\[0\]!\.id !== candidate\.inventoryId/.test(shipTransaction)
+    && /validatedInventoryByItem\.set\(item\.id, \{ id: allowedStock\[0\]!\.id \}\)/.test(shipTransaction)
+    && occursBefore(shipTransaction,
+      'validatedInventoryByItem.set(item.id, { id: allowedStock[0]!.id });',
+      'await applyInventoryMovementInTransaction(')
+    && /inventoryId: stock\.id/.test(shipTransaction),
+    'inventory:write does not authorize cross-client, inactive or wrong-effective-SKU stock');
+
+  check('duplicate-SKU items keep distinct ledger source identities',
+    /sourceEntity: 'replacement_shipment_item'/.test(shipTransaction)
+    && /sourceId: `\$\{replacement\.replacementShipmentId\}:\$\{item\.id\}`/.test(shipTransaction)
+    && /replacementItemId: item\.id/.test(shipTransaction),
+    'the ledger has a second source-identity unique key, so shipment-only identity collapses two items mapped to one SKU');
 
   check('drift is re-resolved before anything is deducted',
     at('findFrozenLineDrift(') !== -1
@@ -1475,18 +2050,19 @@ console.log('\nlabel void and reconciliation (locked path)');
 {
   const v = read('src/services/replacement-label-void-command.ts');
   const code = v.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const voidCommand = functionBody(code, 'voidReplacementLabel');
   const at = (needle: string) => code.indexOf(needle);
 
   check('the void command exists and is gated by the feature flag',
     v.length > 0 && /assertReplacementLabelEnabled\(\)/.test(code)
     && at('assertReplacementLabelEnabled()') < at('conn.transaction'));
 
-  check('BOTH provider-reaching commands require the label capability and a reason',
-    // Counted, not merely present: void and reconcile each reach a provider, and replacing
+  check('ALL THREE provider-reaching void/reconcile commands require the label capability and a reason',
+    // Counted, not merely present: void, purchase recovery and void recovery each reach a provider, and replacing
     // one check left the other while a `.test()` stayed green — the same multi-occurrence
     // weakness M47 exposed on the lifecycle command.
-    (code.match(/includes\(REPLACEMENT_LABEL_PERMISSION\)/g) || []).length === 2
-    && (code.match(/requireReason\(input\.reason\)/g) || []).length === 2,
+    (code.match(/includes\(REPLACEMENT_LABEL_PERMISSION\)/g) || []).length === 3
+    && (code.match(/requireReason\(input\.reason\)/g) || []).length === 3,
     'reconciling an intent can resolve money as surely as voiding a label');
 
   check('the destructive call is OUTSIDE every transaction',
@@ -1499,13 +2075,28 @@ console.log('\nlabel void and reconciliation (locked path)');
 
   check('an UNCONFIRMED void is never recorded as voided',
     code.includes('if (!result.voided) {')
-    && at('if (!result.voided) {') < at("voidState: 'voided'"),
+    && /if \(!result\.voided\) \{[\s\S]{0,500}voidState: 'void_reconcile_required'/.test(voidCommand)
+    && !/if \(!result\.voided\) \{[\s\S]{0,500}voidState: 'voided'/.test(voidCommand),
     'a local voided row with a live label is worse than no row at all');
 
   check('an already-voided label sends no second destructive call',
     code.includes("intent.voidState === 'voided'")
     && at("intent.voidState === 'voided'") < at('await provider.voidLabel({'),
     'a repeated destructive call can cancel a label a later attempt bought');
+
+  check('an unresolved void attempt is a hard stop before a second destructive call',
+    /if \(intent\.voidState != null\) \{/.test(voidCommand)
+    && occursBefore(voidCommand,
+      'if (intent.voidState != null) {',
+      ".set({ voidState: 'void_pending', updatedAt: new Date() })")
+    && occursBefore(voidCommand,
+      'if (intent.voidState != null) {',
+      "return { alreadyVoided: false as const")
+    && occursBefore(voidCommand,
+      'if (intent.voidState != null) {',
+      'await provider.voidLabel({')
+    && /REPLACEMENT_VOID_RECONCILE_REQUIRED[\s\S]{0,260}a second destructive call is not a retry/.test(voidCommand),
+    'void_pending is evidence of an in-flight call, not permission to send it again');
 
   check('the intent must belong to THIS replacement',
     /eq\(replacementLabelPurchaseIntents\.replacementId, replacement\.id\)/.test(code),
@@ -1530,16 +2121,23 @@ console.log('\nlabel purchase (locked path)');
   const code = buy.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const envSource = read('src/lib/env.ts');
   const at = (needle: string) => code.indexOf(needle);
+  const purchaseCommand = functionBody(code, 'purchaseReplacementLabel');
+  const retryCommand = functionBody(code, 'retryFailedReplacementLabel');
+  const dispatch = functionBodyOf(code, 'dispatchClaimedReplacementPurchase');
 
   check('the feature flag is server-authoritative and DEFAULT OFF',
     /REPLACEMENTS_LABEL_ENABLED: booleanFlag\(false\)/.test(envSource),
     'dark deployment means the code ships and does nothing');
 
   check('the gate runs BEFORE any transaction or provider access',
-    at('assertReplacementLabelEnabled();') !== -1
-    && at('assertReplacementLabelEnabled();') < at('claimPurchase(input, conn)')
-    && at('assertReplacementLabelEnabled();') < at('provider.purchase('),
-    'a disabled feature must not write a durable intent or contact a provider');
+    [purchaseCommand, retryCommand].every((command) =>
+      occursBefore(command, 'assertReplacementLabelEnabled();',
+        command === purchaseCommand ? 'claimPurchase(input, conn)' : 'conn.transaction(async (tx) =>')
+      && occursBefore(command, 'input.actor.permissions?.includes(REPLACEMENT_LABEL_PERMISSION)',
+        command === purchaseCommand ? 'claimPurchase(input, conn)' : 'conn.transaction(async (tx) =>'))
+    && !/provider\.purchase\(/.test(purchaseCommand)
+    && !/provider\.purchase\(/.test(retryCommand),
+    'a disabled or unauthorized feature must not write a durable intent or contact a provider');
 
   check('the durable intent is committed BEFORE dispatch',
     // Presence FIRST: indexOf returns -1 when the text is gone, and -1 < anything is true, so
@@ -1549,14 +2147,11 @@ console.log('\nlabel purchase (locked path)');
     'a crash between dispatch and persistence must leave proof a purchase may exist');
 
   check('the provider call is OUTSIDE every transaction',
-    (() => {
-      // The dispatch must not sit inside a conn.transaction callback. Checked by position:
-      // the claim transaction closes before it and the persist transaction opens after.
-      const dispatch = at('await provider.purchase({');
-      const claimEnds = at('const claim = await claimPurchase(input, conn);');
-      const persistBegins = code.lastIndexOf('return conn.transaction(async (tx) => {');
-      return dispatch > claimEnds && dispatch < persistBegins;
-    })(),
+    /await provider\.purchase\(\{/.test(dispatch)
+    && occursBefore(dispatch, 'await provider.purchase({',
+      'const winner = await conn.transaction(async (tx) =>')
+    && occursBefore(dispatch, 'await provider.purchase({',
+      'return conn.transaction(async (tx) =>'),
     'holding a transaction or lock across the network pins a connection and rolls back the intent');
 
   check('drift is re-resolved before the claim AND after dispatch',
@@ -1572,10 +2167,10 @@ console.log('\nlabel purchase (locked path)');
   // expected version, no row-count check — while the other two copies carried all three. It is
   // delegated now, and this is what stops it being re-inlined.
   check('the post-dispatch review delegates to the ONE guarded review writer',
-    /await enterReplacementReview\(tx, replacement!, \{/.test(code)
+    (code.match(/await enterReplacementReview\(tx, before\.replacement, \{/g) || []).length === 2
     && !/status: 'review'/.test(code)
-    && (code.match(/\.update\(replacements\)/g) || []).length === 1,
-    'the one remaining update here is the label_created move, which carries its own predicate');
+    && (code.match(/\.update\(replacements\)/g) || []).length === 2,
+    'money failure and drift both delegate; the only direct updates preserve an AC-16 hold or move to label_created, both with optimistic predicates');
 
   check('an unknown provider outcome is held, never retried',
     /reconcile_required/.test(code)
@@ -1819,6 +2414,35 @@ console.log('\nlifecycle command (locked path)');
     'callers persist the review; this only answers the question');
 }
 
+// ── Immutable runtime identity is API/worker evidence, not a deploy guess ───
+console.log('\nimmutable API/worker runtime identity');
+
+{
+  const runtimeVersion = read('src/lib/runtime-version.ts');
+  const workerStatus = read('src/services/worker-status.ts');
+  const health = read('src/routes/health.ts');
+  const workerRoute = read('src/routes/worker.ts');
+  const packageJson = read('package.json');
+  const concurrencyWorkflow = read('.github/workflows/ps-502-concurrency-pg17.yml');
+  const migrationWorkflow = read('.github/workflows/render-one-off-migration-ps502.yml');
+
+  check('runtime evidence accepts only a full immutable Render SHA captured at process boot',
+    /const FULL_GIT_SHA = \/\^\[0-9a-f\]\{40\}\$\/i/.test(runtimeVersion)
+    && /source\.RENDER_GIT_COMMIT/.test(runtimeVersion)
+    && /commitSha \? 'RENDER_GIT_COMMIT' : 'unknown'/.test(runtimeVersion)
+    && /export const runtimeVersionIdentity = readRuntimeVersionIdentity\(\);/.test(runtimeVersion),
+    'a short, mutable or guessed version cannot prove which reviewed commit a process runs');
+
+  check('API and persisted worker identities are separate and certified in both PS-502 lanes',
+    /"test:ps-502-runtime-version": "tsx scripts\/ps-502-runtime-version-guard\.ts"/.test(packageJson)
+    && (workerStatus.match(/runtime: runtimeVersionIdentity/g) ?? []).length >= 2
+    && (health.match(/runtime: runtimeVersionIdentity/g) ?? []).length >= 2
+    && /api: getApiRuntimeStatus\(\),[\s\S]*worker,/.test(workerRoute)
+    && /npm run test:ps-502-runtime-version/.test(concurrencyWorkflow)
+    && /npm run test:ps-502-runtime-version/.test(migrationWorkflow),
+    'an API SHA cannot stand in for a separately running worker, or vice versa');
+}
+
 // ── The genuine-concurrency lane must stay genuine ───────────────────────────
 //
 // AC-12 says CONCURRENT. The PGlite lane cannot satisfy it — a single backend means two
@@ -1879,8 +2503,8 @@ console.log('\ngenuine-concurrency lane');
 // A deploy would have produced a schema the shipped code cannot run against — and nothing
 // would have said so until a route 500ed in production.
 //
-// Discovered from the directory rather than from a list, so the NEXT PS-502 migration
-// fails this check on the day it is added instead of the day it is deployed.
+// Discovered from the directory rather than from the runner. 0102 has a reporting-owned
+// filename but is part of this operator lane; later ps502-named migrations are picked up too.
 console.log('\nproduction migration lane');
 
 {
@@ -1896,10 +2520,15 @@ console.log('\nproduction migration lane');
     workflow.indexOf('\n', workflow.indexOf('run_args="')),
   );
   const ps502Migrations = readdirSync('drizzle')
-    .filter((name) => /ps502.*\.sql$/.test(name))
+    .filter((name) => /ps502.*\.sql$/.test(name)
+      || name === '0102_billing_summary_metrics_replacement_totals.sql')
     .sort();
 
-  check('there are PS-502 migrations to deploy', ps502Migrations.length >= 4,
+  check('the operator lane contains the complete 0096-0103 sequence',
+    ps502Migrations.length >= 8
+    && ps502Migrations[0]?.startsWith('0096_')
+    && ps502Migrations.slice(-1)[0]?.startsWith('0103_')
+    && ps502Migrations.includes('0102_billing_summary_metrics_replacement_totals.sql'),
     `found: ${ps502Migrations.join(", ")}`);
 
   for (const migration of ps502Migrations) {
@@ -1919,10 +2548,76 @@ console.log('\nproduction migration lane');
     /replace\(\/\\r\\n\/g, '\\n'\)/.test(applier),
     'core.autocrlf=true, so raw bytes vary by checkout and a digest over them is not reproducible');
 
+  check('every migration digest is mandatory, including 0102 and 0103',
+    /file: SQL_0102, expected: EXPECTED_0102, argName: 'digest102'/.test(applier)
+    && /file: SQL_0103, expected: EXPECTED_0103, argName: 'digest103'/.test(applier)
+    && /for \(const \{ file, expected, argName \} of REVIEWED_MIGRATIONS\)/.test(applier)
+    && /if \(supplied !== expected\)/.test(applier),
+    'an omitted argument must stop before a connection opens, not silently accept the runner checkout');
+
   check('the migrations apply in ONE transaction',
-    /await conn\.begin|sql\.begin|tx\.unsafe/.test(applier)
-    && (applier.match(/tx\.unsafe\(readFileSync\(SQL_/g) || []).length === ps502Migrations.length,
+    /await sql\.begin\(async \(tx\) =>/.test(applier)
+    && /for \(const migration of pendingMigrations\)/.test(applier)
+    && /await tx\.unsafe\(readFileSync\(migration\.file, 'utf8'\)\)/.test(applier)
+    && occursBefore(applier, 'const pendingMigrations = REVIEWED_MIGRATIONS.filter(',
+      'await sql.begin(async (tx) =>'),
     'a partial apply leaves a schema the code cannot run against');
+
+  check('the runner reads back 0103 columns, indexes, constraints, FKs and RLS',
+    /replacement_financial_actions is absent/.test(applier)
+    && /replacement_financial_actions_due_idx/.test(applier)
+    && /replacement_financial_actions_completion_check/.test(applier)
+    && /replacement_financial_actions_replacement_id_fkey/.test(applier)
+    && /\['clients', 'replacement_financial_actions_client_id_fkey'\]/.test(applier)
+    && /financialRls/.test(applier),
+    'running SQL without verifying the durable obligation shape is not a certified operator lane');
+
+  // ── The five states the lane can meet, and what it does in each ────────────
+  //
+  // Pinned at the decision level, not executed. main() runs at module load and opens a real
+  // connection, so importing detectReviewedPrefix to drive synthetic snapshots is not possible
+  // without restructuring a certified operator lane; executing the five states for real needs
+  // a live PostgreSQL, which is the PG17 lane. What is pinned here is what actually decides
+  // each state — the stage arithmetic and, above all, the ORDER: every refusal and every
+  // no-op must be settled BEFORE the first write.
+  const applyBegin = 'await sql.begin(async (tx) =>';
+
+  check('a WHOLLY ABSENT lane is stage 0 and installs the entire reviewed sequence',
+    applier.includes('let stage = 0;')
+    && applier.includes('while (stage < 8 && complete[stage + 1]) stage += 1;')
+    && applier.includes('(migration) => migration.stage > beforePrefix.stage,'),
+    'stage 0 must leave every reviewed migration pending, not silently skip the first');
+
+  check('an EXACT REVIEWED PREFIX applies only the missing suffix',
+    applier.includes('const pendingMigrations = REVIEWED_MIGRATIONS.filter(')
+    && applier.includes('(migration) => migration.stage > beforePrefix.stage,')
+    && occursBefore(applier, 'const pendingMigrations = REVIEWED_MIGRATIONS.filter(', applyBegin),
+    'replaying an installed prefix re-runs 0098 FK hardening and takes needless locks on live billing');
+
+  check('the 0096-0102-then-0103 state is a real stage, so only 0103 remains pending',
+    /snapshot\.tables\.financial_actions && rlsMarkers\.length === 7/.test(applier)
+    && /holdMarkers\.every\(Boolean\)/.test(applier)
+    && /metricMarkers\.every\(Boolean\)/.test(applier),
+    '0103 must be its own completeness stage or an installed 0096-0102 lane reads as fully exact');
+
+  check('a FULLY EXACT REPLAY writes nothing at all',
+    applier.includes('if (beforePrefix.stage === 8) {')
+    && applier.includes('Already exact through 0103 — APPLY replay is a no-op. Nothing was written.')
+    && occursBefore(applier, 'if (beforePrefix.stage === 8) {', applyBegin),
+    'a replay that reaches sql.begin has already decided to write on an exact lane');
+
+  check('a MALFORMED or PARTIAL lane is refused BEFORE the first write, in both modes',
+    applier.includes('STOP: INSPECT found schema drift from the reviewed 0096-0103 shape (nothing was written)')
+    && applier.includes('STOP: APPLY target is partially present or drifted; nothing was written')
+    && occursBefore(applier, 'STOP: APPLY target is partially present or drifted', applyBegin)
+    && applier.includes('PS-502 schema is not a contiguous reviewed prefix: stage ')
+    && occursBefore(applier, 'if (highestPresent > stage) {', 'problems.push(...validateReplacementSchema(snapshot, stage));'),
+    'IF NOT EXISTS would preserve a malformed object and commit additive statements on top of it');
+
+  check('the non-contiguous case is drift, not an installable prefix',
+    /const highestPresent = present\.reduce\(/.test(applier)
+    && /if \(highestPresent > stage\) \{/.test(applier),
+    'a later stage present while an earlier one is incomplete must never read as installable');
 }
 
 // ── The create command — the ORDER of its steps is the contract ──────────────
@@ -2167,6 +2862,65 @@ console.log('\nshipment insertion (locked path)');
   ].map(read).join('\n');
   check('every new module is pure (no db, no network)',
     !/from '\.\.\/db|drizzle-orm|node-fetch|axios/.test(sources));
+}
+
+// ── Ordinary readers must never adopt a replacement-owned shipment ──────────
+//
+// A replacement shipment is deliberately shaped like an orphan: order_id IS NULL,
+// source = 'replacement', order_number = the replacement reference rather than an order
+// number. Every reader below is an ORDINARY order-number / tracking / billing /
+// reconciliation fallback whose entire job is to find shipments that look unattached and
+// repair them. Without the exclusion they re-link a replacement to an order, re-bill its
+// postage against the original, or reconcile it away as a ShipStation orphan.
+console.log('\nordinary readers exclude source = replacement');
+
+{
+  const GENERIC_FALLBACK_READERS = [
+    'src/services/shipment-unattributed-audit-loader.ts',
+    'src/services/shipment-sync-watchdog.ts',
+    'src/services/shipstation-deleted-awaiting-reconciliation.ts',
+    'src/services/shipment-label-url-enrich.ts',
+    'src/services/labels.ts',
+    'src/services/billing.ts',
+    'src/services/order-sync.ts',
+    'src/routes/orders.ts',
+    'src/routes/shipments.ts',
+    'scripts/reconcile-orphan-shipstation-shipments.ts',
+    'scripts/reconcile-shipstation-awaiting.ts',
+    'scripts/reconcile-external-shipped-orders.ts',
+    'scripts/repair-billing-shipment-linkage.ts',
+  ];
+
+  // TWO null-safe spellings are in use and both are correct: `is distinct from 'replacement'`
+  // and `coalesce(source, '') <> 'replacement'`. Accepting both is deliberate — demanding a
+  // single spelling would make this guard a reason to rewrite correct SQL, which is how a
+  // regex guard starts dictating production instead of defending it.
+  const NULL_SAFE = /is distinct from\s+'replacement'|coalesce\([^)]*\)\s*<>\s*'replacement'/i;
+
+  const unsafe: string[] = [];
+  for (const path of GENERIC_FALLBACK_READERS) {
+    const source = read(path);
+    // read() returns '' for a path that no longer exists, which would make the absence
+    // check below pass vacuously on a renamed file. Prove the file was actually read.
+    check(`${path} is readable`, source.length > 0,
+      'a renamed or deleted reader must fail loudly, not silently stop being checked');
+    check(`${path} excludes replacement-owned shipments`,
+      NULL_SAFE.test(source),
+      'this reader treats an order-less shipment as repairable, and a replacement shipment is exactly that');
+
+    for (const line of source.split('\n')) {
+      if (/(<>|!=)\s*'replacement'/.test(line) && !/coalesce/i.test(line)) {
+        unsafe.push(`${path}: ${line.trim().slice(0, 90)}`);
+      }
+    }
+  }
+
+  // `source <> 'replacement'` evaluates to UNKNOWN when source IS NULL, so it silently drops
+  // every legacy NULL-source shipment from the very sweep written to find it. That failure is
+  // invisible: the query still runs, still returns rows, and just quietly misses a class.
+  check('no ordinary reader uses a NULL-UNSAFE replacement exclusion',
+    unsafe.length === 0,
+    `use \`is distinct from\` or \`coalesce(...)\`: ${unsafe.join(' | ')}`);
 }
 
 console.log(`\n${failures === 0 ? 'PS-502 replacement contract guard passed.' : `PS-502 replacement contract guard FAILED with ${failures} failure(s).`}`);

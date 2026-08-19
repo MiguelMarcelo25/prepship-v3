@@ -32,12 +32,13 @@ const EMPTY: ClientCredentials = {
  */
 export async function loadClientCredentials(
   clientId: number | null | undefined,
-  opts: { storeId?: number } = {},
+  opts: { storeId?: number; conn?: Pick<typeof db, 'select'> } = {},
 ): Promise<ClientCredentials> {
   void opts;
   if (!clientId) return EMPTY;
+  const conn = opts.conn ?? db;
 
-  const [row] = await db
+  const [row] = await conn
     .select({
       apiKeyV2: clients.ssApiKeyV2,
       apiKey: clients.ssApiKey,
@@ -54,7 +55,7 @@ export async function loadClientCredentials(
   let sourceClientId = apiKeyV2 ? clientId : null;
 
   if (!apiKeyV2 && row.rateSourceClientId != null) {
-    const [source] = await db
+    const [source] = await conn
       .select({ id: clients.id, active: clients.active, ssApiKeyV2: clients.ssApiKeyV2 })
       .from(clients)
       .where(eq(clients.id, row.rateSourceClientId))

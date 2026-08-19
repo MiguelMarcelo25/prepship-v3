@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { roundMoney } from '../lib/money.js';
-import { replacementSchemaPresent } from './replacement-schema-readiness.js';
+import { billingLineItemsHasReplacementIdColumn } from './billing-column-presence.js';
 
 /**
  * PS-502 AC-6 at the FINALIZATION layer — the same defect item 9 fixed one layer down.
@@ -50,7 +50,11 @@ export async function foldFinalizedReplacementTotalsIntoCandidates(
 
   // Billing regeneration is a pre-existing path that runs on every database, migrated or not.
   // `billing_line_items.replacement_id` arrives with 0097.
-  if (!(await replacementSchemaPresent(conn))) return { ordersFolded: 0, amountFolded: 0 };
+  // Per user override unlock shipped data on 2026-08-19: this finalized replacement-money
+  // read now gates only on the column it actually queries; no shipment/order row is mutated.
+  if (!(await billingLineItemsHasReplacementIdColumn(conn))) {
+    return { ordersFolded: 0, amountFolded: 0 };
+  }
 
   const result = await conn.execute(sql`
     select "clientId", "orderId", coalesce(sum("totalCost"), 0)::text as "total"

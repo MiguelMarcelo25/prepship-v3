@@ -36,6 +36,7 @@ import {
 } from '../db/schema/replacements';
 import { findFrozenLineDrift } from './replacement-drift-resolution';
 import { enterReplacementReview } from './replacement-lifecycle-command';
+import { resolveOutboundPackageSelection } from './package-consumption';
 import {
   evaluateReplacementSourceLineDrift,
   isReplacementStatus,
@@ -60,7 +61,8 @@ export type ReplacementShipmentErrorCode =
   | 'REPLACEMENT_NOT_FOUND'
   | 'REPLACEMENT_STATE_CONFLICT'
   | 'REPLACEMENT_SOURCE_LINE_CHANGED'
-  | 'REPLACEMENT_NOT_ATTACHABLE';
+  | 'REPLACEMENT_NOT_ATTACHABLE'
+  | 'REPLACEMENT_PACKAGE_UNRESOLVED';
 
 export class ReplacementShipmentError extends Error {
   constructor(
@@ -221,10 +223,38 @@ export async function insertReplacementShipment(
   return conn.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, ${before.orderId})`);
 
+    // A package reference supplied for an operational label snapshot must be resolvable before
+    // the immutable shipment is attached. Validating only in the later purchase claim safely
+    // prevented postage, but permanently froze the typo and made a corrected retry impossible.
+    if (input.shipment?.selectedPackageId != null) {
+      const packageSelection = await resolveOutboundPackageSelection({
+        selectedPackageId: input.shipment.selectedPackageId,
+        dimensions: {
+          length: input.shipment.dimsL ?? null,
+          width: input.shipment.dimsW ?? null,
+          height: input.shipment.dimsH ?? null,
+        },
+      }, tx);
+      if (packageSelection.status !== 'matched') {
+        throw new ReplacementShipmentError(
+          'REPLACEMENT_PACKAGE_UNRESOLVED',
+          'the package reference does not resolve to one consumable PrepShip package; no '
+            + 'replacement shipment was attached',
+          409,
+          { reason: packageSelection.reason },
+        );
+      }
+    }
+
     const [shipment] = await tx
       .insert(shipments)
       .values({
-        orderId: before.orderId,
+        // Per user override unlock shipped data on 2026-08-19: the original order remains
+        // relational authority on `replacements.order_id`, but its replacement vessel is not
+        // an ordinary order shipment. Keeping this NULL prevents generic order DTO, billing,
+        // print, void, lifecycle and marketplace consumers from treating a re-ship as a second
+        // shipment of the original order.
+        orderId: null,
         clientId: before.clientId,
         // The replacement's own identity, so it is never mistaken for a second label on the
         // original order.

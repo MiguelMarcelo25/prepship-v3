@@ -15,6 +15,15 @@ export type NormalizedWebhookEvent = {
   eventType: string;
   canonicalStatus: CanonicalWebhookStatus;
   externalEventId: string | null;
+  /**
+   * Canonical source-account hint when the signed provider payload supplies one.
+   *
+   * This is deliberately separate from `sourceOrderId`: provider order ids are only unique
+   * inside an account. Reconciliation may resolve a missing hint only when the local
+   * `(provider, sourceOrderId)` candidate set has exactly one account; it never guesses when
+   * two tenants use the same provider id.
+   */
+  sourceAccountId: string | null;
   sourceOrderNumber: string | null;
   sourceOrderId: string | null;
   occurredAt: Date | null;
@@ -111,6 +120,7 @@ export function normalizeWebhookEvent(input: {
   let eventType = '';
   let canonicalStatus: CanonicalWebhookStatus = 'other';
   let externalEventId: string | null = null;
+  let sourceAccountId: string | null = null;
   let sourceOrderNumber: string | null = null;
   let sourceOrderId: string | null = null;
   let occurredAt: Date | null = null;
@@ -118,6 +128,14 @@ export function normalizeWebhookEvent(input: {
   if (p === 'shopify') {
     eventType = String(h('x-shopify-topic') ?? 'shopify.unknown');
     externalEventId = firstString(h('x-shopify-webhook-id'));
+    // Shopify's shop-domain header is not PrepShip's canonical source-account id. Accept an
+    // explicit account identity only; the reconcile owner may bind an omitted hint when the
+    // local provider/order-id candidate is unique.
+    sourceAccountId = firstString(
+      (b as any).sourceAccountId, (b as any).source_account_id,
+      (b as any).storeAccountId, (b as any).store_account_id,
+      (b as any).accountId, (b as any).account_id,
+    );
     sourceOrderNumber = firstString((b as any).order_number, (b as any).name, (b as any).order_id);
     sourceOrderId = firstString((b as any).id, (b as any).order_id, (b as any).admin_graphql_api_id);
     occurredAt = toDate((b as any).cancelled_at) ?? toDate((b as any).updated_at) ?? toDate((b as any).created_at);
@@ -130,6 +148,12 @@ export function normalizeWebhookEvent(input: {
     ) ?? `${p}.event`;
     externalEventId = firstString(
       (b as any).eventId, (b as any).event_id, (b as any).id, h('x-event-id'),
+    );
+    sourceAccountId = firstString(
+      (b as any).sourceAccountId, (b as any).source_account_id,
+      (b as any).storeAccountId, (b as any).store_account_id,
+      (b as any).marketplaceAccountId, (b as any).marketplace_account_id,
+      (b as any).accountId, (b as any).account_id,
     );
     sourceOrderNumber = firstString(
       (b as any).orderNumber, (b as any).order_number, (b as any).purchaseOrderId,
@@ -150,6 +174,7 @@ export function normalizeWebhookEvent(input: {
     eventType: eventType || `${p}.event`,
     canonicalStatus,
     externalEventId,
+    sourceAccountId,
     sourceOrderNumber,
     sourceOrderId,
     occurredAt,
@@ -158,6 +183,8 @@ export function normalizeWebhookEvent(input: {
       provider: p,
       eventType: eventType || `${p}.event`,
       canonicalStatus,
+      ...(sourceAccountId ? { sourceAccountId } : {}),
+      hasSourceAccountId: Boolean(sourceAccountId),
       hasOrderNumber: Boolean(sourceOrderNumber),
       hasOrderId: Boolean(sourceOrderId),
     },

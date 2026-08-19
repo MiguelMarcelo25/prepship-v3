@@ -226,6 +226,7 @@ export async function runExternalShippedReconcile(
   const noLocalShipment = sql`not exists (
     select 1 from shipments s
     where (s.order_id = ${orders.id} or s.order_number = ${orders.orderNumber})
+      and s.source is distinct from 'replacement'
       and coalesce(s.voided, false) = false
   )`;
   const scopedMissingLocal = orderNumbersFilter

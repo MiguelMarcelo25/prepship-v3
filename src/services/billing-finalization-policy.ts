@@ -693,7 +693,7 @@ export async function createBillingCreditNote(input: {
   actorId: string;
   actorEmail?: string | null;
   now?: Date;
-}, conn: BillingPolicyDatabase = db): Promise<{
+}, conn: BillingPolicyDatabase = db, ensureSchema: () => Promise<void> = ensureBillingFinalizationPolicySchema): Promise<{
   creditNote: BillingCreditNoteDto;
   finalization: BillingFinalizationDto;
   alreadyCreated: boolean;
@@ -737,7 +737,7 @@ export async function createBillingCreditNote(input: {
       400,
     );
   }
-  await ensureBillingFinalizationPolicySchema();
+  await ensureSchema();
 
   try {
     return await conn.transaction(async (tx) => {
@@ -964,28 +964,115 @@ export async function reconcileFinalizedBillingReplacementAdjustment(input: {
   /** Includes the cancellation event, so two cancellations are two adjustments. */
   idempotencyKey: string;
   now?: Date;
-}, conn: BillingPolicyDatabase = db): Promise<{
+}, conn: BillingPolicyDatabase = db, ensureSchema: () => Promise<void> = ensureBillingFinalizationPolicySchema): Promise<{
   finalizationCount: number;
   adjustedCount: number;
   creditedAmount: string;
 }> {
-  await ensureBillingFinalizationPolicySchema();
+  await ensureSchema();
 
   return conn.transaction(async (tx) => {
+    // Legacy data may contain overlapping closed periods. Without a source-finalization id on
+    // ordinary replacement lines, one line would join every overlapping finalization and be
+    // credited once in each. That ambiguity cannot be settled automatically: park the durable
+    // action for review before taking credit locks or writing money.
+    const ambiguousLines = resultRows<{ lineId: number; finalizationCount: number }>(
+      await tx.execute(sql`
+        select line.id as "lineId", count(distinct closed.id)::int as "finalizationCount"
+        from billing_line_items line
+        join billing_finalizations closed
+          on closed.client_id = line.client_id
+          and coalesce(line.billing_effective_date, line.ship_date) >= closed.period_start
+          and coalesce(line.billing_effective_date, line.ship_date) < closed.period_end
+        where line.client_id = ${input.clientId}
+          and line.replacement_id = ${input.replacementId}
+          and line.invoiced = true
+        group by line.id
+        having count(distinct closed.id) > 1
+        limit 1
+      `),
+    );
+    if (ambiguousLines.length > 0) {
+      throw new BillingCloseWorkflowError(
+        'BILLING_REPLACEMENT_FINALIZATION_AMBIGUOUS',
+        'A finalized replacement line belongs to overlapping legacy periods. No automatic '
+          + 'credit was written; this action requires financial review.',
+        409,
+        { ambiguousLineCount: ambiguousLines.length },
+      );
+    }
+
+    // Resolve immutable finalized identities first, then take every credit-idempotency lock
+    // BEFORE the client lock. createBillingCreditNote uses that canonical order. Taking the
+    // client lock first here and then opening the credit writer inverted it and could deadlock
+    // a concurrent replay (global key -> client versus client -> global key).
+    const observedFrozenRows = await findFrozenReplacementLineTotals(tx, {
+      clientId: input.clientId,
+      replacementId: input.replacementId,
+    });
+    if (observedFrozenRows.length === 0) {
+      return { finalizationCount: 0, adjustedCount: 0, creditedAmount: '0.00' };
+    }
+    const creditKeys = observedFrozenRows
+      .map((frozen) => `${input.idempotencyKey}:finalization:${frozen.finalizationId}`)
+      .sort();
+    for (const key of creditKeys) {
+      await tx.execute(sql`select pg_advisory_xact_lock(36422, hashtext(${key}))`);
+    }
     await tx.execute(sql`select pg_advisory_xact_lock(36421, ${input.clientId})`);
 
+    // Re-read under the client lock. Finalized rows are immutable, but the second read makes
+    // the invariant explicit and keeps this routine correct if that enforcement ever moves.
     const frozenRows = await findFrozenReplacementLineTotals(tx, {
       clientId: input.clientId,
       replacementId: input.replacementId,
     });
-    if (frozenRows.length === 0) {
-      return { finalizationCount: 0, adjustedCount: 0, creditedAmount: '0.00' };
-    }
-
     let adjustedCount = 0;
     let creditedCents = 0n;
 
     for (const frozen of frozenRows) {
+      const actionCreditKey = `${input.idempotencyKey}:finalization:${frozen.finalizationId}`;
+      const existingActionCredit = resultRows<{
+        clientId: number;
+        finalizationId: string;
+        replacementId: number | null;
+        adjustmentKind: string;
+        amount: string;
+        reason: string;
+      }>(await tx.execute(sql`
+        select ${billingCreditNotes.clientId} as "clientId",
+               ${billingCreditNotes.finalizationId} as "finalizationId",
+               ${billingCreditNotes.replacementId} as "replacementId",
+               ${billingCreditNotes.adjustmentKind} as "adjustmentKind",
+               ${billingCreditNotes.amount}::text as "amount",
+               ${billingCreditNotes.reason} as "reason"
+        from ${billingCreditNotes}
+        where ${billingCreditNotes.idempotencyKey} = ${actionCreditKey}
+        limit 1
+      `))[0];
+
+      if (existingActionCredit) {
+        if (
+          Number(existingActionCredit.clientId) !== input.clientId
+          || existingActionCredit.finalizationId !== frozen.finalizationId
+          || Number(existingActionCredit.replacementId) !== input.replacementId
+          || existingActionCredit.adjustmentKind !== 'credit'
+          || existingActionCredit.reason !== input.reason.trim()
+        ) {
+          throw new BillingCloseWorkflowError(
+            'BILLING_CREDIT_IDEMPOTENCY_CONFLICT',
+            'Replacement adjustment idempotency key was already used for a different request.',
+            409,
+          );
+        }
+        // A worker may have crashed after this credit committed but before its durable action
+        // row was completed. Recover the action-owned result instead of reporting a false
+        // zero-credit success on replay. Global prior credits remain outside this result.
+        adjustedCount += 1;
+        creditedCents += moneyCents(existingActionCredit.amount);
+        continue;
+      }
+
       // What replacement-specific adjustments have ALREADY corrected, relationally.
       const prior = resultRows<{ signedTotal: string }>(
         await tx.execute(sql`
@@ -1013,11 +1100,14 @@ export async function reconcileFinalizedBillingReplacementAdjustment(input: {
         replacementId: input.replacementId,
         amount: centsMoney(outstandingCents),
         reason: input.reason,
-        idempotencyKey: `${input.idempotencyKey}:finalization:${frozen.finalizationId}`,
+        idempotencyKey: actionCreditKey,
         actorId: input.actorId,
         actorEmail: input.actorEmail ?? null,
         now: input.now,
-      }, conn);
+      // Use the current transaction/savepoint authority. Opening a sibling transaction here
+      // would wait forever on the client advisory lock held above, and an injected harness
+      // would also escape to the singleton database during replacement credit settlement.
+      }, tx, ensureSchema);
 
       adjustedCount += 1;
       creditedCents += outstandingCents;

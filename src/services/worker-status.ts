@@ -5,6 +5,10 @@ import { getSetting } from './settings';
 import { nextWorkerJobSkipSummary } from './worker-job-skip-health';
 import { recordWorkerStatusEvent } from './worker-status-events';
 import { classifyWorkerResolvedResult } from './worker-result-classification';
+import {
+  runtimeVersionIdentity,
+  type RuntimeVersionIdentity,
+} from '../lib/runtime-version';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
 const WORKER_STATUS_STALE_SECONDS = 120;
@@ -48,6 +52,7 @@ export type WorkerJobSnapshot = {
 
 export type WorkerStatusSnapshot = {
   version: 1;
+  runtime: RuntimeVersionIdentity;
   service: 'api' | 'worker';
   mode: WorkerMode;
   schedulerEnabled: boolean;
@@ -142,6 +147,7 @@ function createSnapshot(mode: WorkerMode): WorkerStatusSnapshot {
   const now = new Date().toISOString();
   return {
     version: 1,
+    runtime: runtimeVersionIdentity,
     service: mode === 'api-scheduler' ? 'api' : 'worker',
     mode,
     schedulerEnabled: mode === 'api-scheduler' || mode === 'worker-scheduler',
@@ -536,6 +542,7 @@ export async function getPersistedWorkerStatus(): Promise<{
 
 export function getApiRuntimeStatus() {
   return {
+    runtime: runtimeVersionIdentity,
     schedulerEnabled: env.RUN_SYNC_SCHEDULER,
     workerPlaceholder: env.WORKER_PLACEHOLDER,
     pid: process.pid,

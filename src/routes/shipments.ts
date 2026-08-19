@@ -114,6 +114,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
   const where = and(
     ...[
+      // Per user override unlock shipped data on 2026-08-19: the generic shipment DTO is an
+      // original-order surface. Replacement vessels are exposed only through the replacement
+      // workflow, whose authorization and lifecycle semantics are intentionally separate.
+      sql`${shipments.source} is distinct from 'replacement'`,
       q.clientId !== undefined ? eq(shipments.clientId, q.clientId) : undefined,
       q.orderId !== undefined ? eq(shipments.orderId, q.orderId) : undefined,
       q.dateFrom ? gte(shipments.shipDate, new Date(q.dateFrom)) : undefined,
@@ -141,7 +145,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
 
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
-  const [row] = await db.select().from(shipments).where(eq(shipments.id, id)).limit(1);
+  const [row] = await db.select().from(shipments).where(and(
+    eq(shipments.id, id),
+    sql`${shipments.source} is distinct from 'replacement'`,
+  )).limit(1);
   if (!row) return c.json({ error: 'Shipment not found' }, 404);
   // PS-233: out-of-scope shipment → same 404 as not-found (no cross-tenant leak).
   const scope = shipmentScopeFromContext(c);

@@ -42,6 +42,7 @@ const noActiveShipment = sql`not exists (
         and deleted_awaiting_shipment.order_number = ${orders.orderNumber}
       )
     )
+    and deleted_awaiting_shipment.source is distinct from 'replacement'
     and coalesce(deleted_awaiting_shipment.voided, false) = false
     and coalesce(deleted_awaiting_shipment.is_return, false) = false
 )`;

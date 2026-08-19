@@ -59,12 +59,14 @@ export async function loadUnattributedShipmentAudit(
       SELECT x.id, x.order_id
       FROM shipments x
       WHERE x.order_id IS NOT NULL
+        AND x.source IS DISTINCT FROM 'replacement'
         AND x.tracking_number = s.tracking_number
         AND s.tracking_number IS NOT NULL
       ORDER BY x.created_at
       LIMIT 1
     ) dup ON true
     WHERE s.order_id IS NULL
+      AND s.source IS DISTINCT FROM 'replacement'
     ORDER BY s.id
   `;
 

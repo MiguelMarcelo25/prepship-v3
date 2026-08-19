@@ -655,6 +655,7 @@ export async function readRecentShippedMissingShipmentRows(
             SELECT 1
             FROM shipments s
             WHERE s.order_id = o.id
+              AND s.source IS DISTINCT FROM 'replacement'
               AND coalesce(s.voided, false) = false
               AND coalesce(s.is_return, false) = false
           )
@@ -663,6 +664,7 @@ export async function readRecentShippedMissingShipmentRows(
             FROM shipments s
             WHERE s.order_id IS NULL
               AND s.order_number = o.order_number
+              AND s.source IS DISTINCT FROM 'replacement'
               AND coalesce(s.voided, false) = false
               AND coalesce(s.is_return, false) = false
           )
