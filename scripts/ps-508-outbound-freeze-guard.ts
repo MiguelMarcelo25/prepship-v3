@@ -165,8 +165,11 @@ check('the freeze runs AFTER the shipment row exists (it needs the returned id)'
   && persistBody.indexOf('freezeOutboundCustomerShippingMoney(')
      > persistBody.indexOf('.returning({ id: shipments.id })'));
 
+// Re-anchored, not loosened: the call gained a return value and now wraps across lines, so the
+// argument ends `sp,` with a trailing comma. Same property — the SAVEPOINT handle is what is
+// passed, never the bare pool.
 check('the freeze joins the CALLER transaction, never the bare pool',
-  /freezeOutboundCustomerShippingMoney\([\s\S]{0,120}?sp\s*\)/.test(persistBody));
+  /freezeOutboundCustomerShippingMoney\([\s\S]{0,200}?\bsp\b,?\s*\)/.test(persistBody));
 
 // BLOCKER 1 (audit, 74%): house money must follow the PURCHASE, not the stamp.
 // captureRealizedHouseMargin — sole writer of the sidecar billing reads — is gated on
@@ -236,9 +239,48 @@ check('the outbound freeze refuses returns and voided rows',
 // It runs inside the committed ship transaction, so throwing rolls back a label already paid for at
 // the carrier. Inactive billing config / absent client / $0 cost are ordinary states, not errors —
 // pre-checked and skipped, NOT swallowed by a blanket catch that would also hide real defects.
+// Re-anchored and STRENGTHENED. The three states were one combined condition; they are now
+// separate early returns that each name their reason, so the check pins the skip STATUS too —
+// previously it only proved the condition existed, not that it skipped rather than threw.
 check('the outbound freeze SKIPS the three ordinary non-billable states rather than throwing',
-  /!row\.billingActive \|\| row\.clientId == null/.test(freezeBody)
-  && /selectedRateCost == null \|\| selectedRateCost <= 0/.test(freezeBody));
+  /!row\.billingActive\)\s*return \{ status: 'skipped', reason: 'billing_inactive' \}/.test(freezeBody)
+  && /row\.clientId == null\)\s*return \{ status: 'skipped', reason: 'no_client' \}/.test(freezeBody)
+  && /selectedRateCost == null \|\| selectedRateCost <= 0/.test(freezeBody)
+  && /reason: 'no_billable_cost'/.test(freezeBody));
+
+// PS-509 prerequisite: the four meanings of "no billable tuple" must stay distinguishable.
+// A malformed tuple silently returning null was indistinguishable from an ordinary skip, so a row
+// this build wrote WRONG looked exactly like one it had correctly left alone.
+check('the freeze classifies rather than asking only whether a tuple is billable',
+  /classifyCustomerShippingMoney\(row\.selectedRateJson\)/.test(freezeBody));
+// SCOPED to the malformed branch. The first version asserted `kind === 'malformed_known_version'`
+// and `status: 'needs_review'` appeared SOMEWHERE in the body — satisfied by the unknown_version
+// branch even after the malformed branch was reverted to a silent skip. The behavioural fixture
+// caught that; this check did not. Evidence transferring to an unrelated line is the same decay
+// that hit the cost-basis check earlier in this ticket.
+// Anchored on `classification.` specifically. Two branches in this function share the shape —
+// the primary classification check and the race-recovery path, which uses `raced.kind`. A regex
+// matching either was satisfied by the race branch while the primary was reverted to a silent
+// skip, so it passed a mutation the behavioural fixture caught. Both are now pinned separately.
+check('the PRIMARY malformed branch enters review and is NEVER rewritten in place',
+  /classification\.kind === 'malformed_known_version'\)[\s\S]{0,240}?status: 'needs_review'/
+    .test(freezeBody));
+check('the PRIMARY unknown-version branch likewise returns review',
+  /classification\.kind === 'unknown_version'\)[\s\S]{0,240}?status: 'needs_review'/
+    .test(freezeBody));
+check('the race-recovery path also classifies rather than returning a bare skip',
+  /raced\.kind === 'malformed_known_version'\)[\s\S]{0,200}?status: 'needs_review'/
+    .test(freezeBody));
+check('an unknown version enters review and is never overwritten',
+  /kind === 'unknown_version'/.test(freezeBody)
+  && !/update[\s\S]{0,200}unknown_version/.test(freezeBody));
+check('a valid tuple still short-circuits as one-shot',
+  /kind === 'valid_ps508' \|\| classification\.kind === 'valid_ps437'/.test(freezeBody)
+  && /status: 'already_frozen'/.test(freezeBody));
+// The caller must record review cases. A `needs_review` that nobody logs is the masquerade again,
+// one level up.
+check('the label writer records needs_review rather than discarding it',
+  /outcome\.status === 'needs_review'/.test(persistBody));
 
 check('the outbound freeze is one-shot (never re-decides an already-versioned tuple)',
   /customerShippingMoneyPolicyVersion/.test(freezeBody) && /not \(coalesce\(/.test(freezeBody));

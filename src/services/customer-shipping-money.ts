@@ -14,6 +14,7 @@ import {
 import { loadCarrierMarkups, SS_BASELINE_CARRIER_CODES } from './rates.js';
 import { resolveCanonicalMarkup } from './shipping-workflow/markup-resolver.js';
 import { resolvePerAccountMarkupRule } from './shipping-workflow/per-account-markup-key.js';
+import { classifyCustomerShippingMoney } from './customer-shipping-money-classification.js';
 import type { RateAdjustmentKind } from './shipping-workflow/rate-money.js';
 import {
   ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
@@ -33,6 +34,27 @@ export {
   type CustomerShippingRateSource,
   type FrozenCustomerShippingMoney,
 } from './customer-shipping-money-snapshot.js';
+
+/**
+ * PS-508 — what the outbound freeze actually did, discriminated.
+ *
+ * It used to return `FrozenCustomerShippingMoney | null`, and that null carried four unrelated
+ * meanings: not applicable, nothing to freeze, we wrote something invalid, and a policy this build
+ * cannot read. Billing after cutover has to treat those completely differently — only genuine
+ * absence may recompute — so the caller must be able to tell them apart.
+ *
+ * `needs_review` is deliberately NOT an error: it must not fail a paid-for label. It is a fact the
+ * caller records so the row is countable and repairable, not a reason to roll anything back.
+ */
+export type OutboundFreezeOutcome =
+  | { status: 'frozen'; frozen: FrozenCustomerShippingMoney }
+  | { status: 'already_frozen'; frozen: FrozenCustomerShippingMoney }
+  | { status: 'skipped'; reason: string }
+  | {
+      status: 'needs_review';
+      reason: 'malformed_known_version' | 'unknown_version';
+      detail: string;
+    };
 
 export type CustomerShippingMoneyDecision = FrozenCustomerShippingMoney & {
   billingSource: ShippingLineBillingResult['source'];
@@ -590,19 +612,59 @@ export async function freezeOutboundCustomerShippingMoney(
    * whose customer money says nothing.
    */
   exec: Pick<typeof db, 'execute' | 'update' | 'select'> = db,
-): Promise<FrozenCustomerShippingMoney | null> {
+): Promise<OutboundFreezeOutcome> {
   const row = await loadCustomerShippingMoneyRow(shipmentId, exec);
-  if (!row || row.isReturn || row.voided) return null;
-  if (row.source === 'replacement' || row.source === 'test_offline') return null;
-  if (!row.billingActive || row.clientId == null) return null;
+  if (!row) return { status: 'skipped', reason: 'shipment_not_found' };
+  if (row.isReturn) return { status: 'skipped', reason: 'return' };
+  if (row.voided) return { status: 'skipped', reason: 'voided' };
+  if (row.source === 'replacement') return { status: 'skipped', reason: 'replacement' };
+  if (row.source === 'test_offline') return { status: 'skipped', reason: 'test_offline' };
+  if (!row.billingActive) return { status: 'skipped', reason: 'billing_inactive' };
+  if (row.clientId == null) return { status: 'skipped', reason: 'no_client' };
   const selectedRateCost = finiteNumber(row.selectedRateCost);
-  if (selectedRateCost == null || selectedRateCost <= 0) return null;
+  if (selectedRateCost == null || selectedRateCost <= 0) {
+    return { status: 'skipped', reason: 'no_billable_cost' };
+  }
 
-  const existing = readFrozenCustomerShippingMoney(row.selectedRateJson, {
-    accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
-  });
-  if (existing) return existing;
+  /**
+   * PS-509 prerequisite — classify, do not merely ask "is there a billable tuple".
+   *
+   * readFrozenCustomerShippingMoney returns null for FOUR different situations, and the previous
+   * shape collapsed them: a malformed tuple fell through to a decision, got blocked by the
+   * one-shot predicate, re-read to null, and returned null — byte-identical to "skipped, not
+   * applicable". A row we wrote WRONG was therefore indistinguishable from a row we had correctly
+   * left alone, and after cutover billing would have silently recomputed it as though it were
+   * ordinary legacy history. That is the masquerade the audit ruling names.
+   */
+  const classification = classifyCustomerShippingMoney(row.selectedRateJson);
 
+  if (classification.kind === 'valid_ps508' || classification.kind === 'valid_ps437') {
+    // One-shot: money frozen once must not move because a markup changed afterwards.
+    return { status: 'already_frozen', frozen: classification.frozen };
+  }
+
+  if (classification.kind === 'malformed_known_version') {
+    // Ours, and wrong. NOT repaired here: the ruling requires repair be operator-controlled and
+    // evidence-backed, and a writer that silently rewrites its own bad output would destroy the
+    // evidence of what it got wrong. Surfaced instead, so it is countable and fixable.
+    return {
+      status: 'needs_review',
+      reason: 'malformed_known_version',
+      detail: `${classification.policyVersion}: ${classification.reason}`,
+    };
+  }
+
+  if (classification.kind === 'unknown_version') {
+    // A policy this build cannot read — quite possibly NEWER than this build. Overwriting it
+    // would destroy a fact a later version owns, so this never writes, in any circumstance.
+    return {
+      status: 'needs_review',
+      reason: 'unknown_version',
+      detail: classification.rawVersion,
+    };
+  }
+
+  // Only `legacy_absent` reaches a write.
   const decision = await decideCustomerShippingMoneyForRow(row, {
     cShippingRateAmount: input.cShippingRateAmount ?? undefined,
     policyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
@@ -642,19 +704,37 @@ export async function freezeOutboundCustomerShippingMoney(
     .returning({ selectedRateJson: shipments.selectedRateJson });
 
   if (updated) {
-    return readFrozenCustomerShippingMoney(updated.selectedRateJson, {
+    const written = readFrozenCustomerShippingMoney(updated.selectedRateJson, {
       accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
     });
+    // We just wrote it; if it does not read back, the writer produced something invalid. Loud,
+    // because this is the case that MAKES malformed rows, and it must never be a silent null.
+    return written
+      ? { status: 'frozen', frozen: written }
+      : { status: 'needs_review', reason: 'malformed_known_version', detail: 'write did not read back' };
   }
 
-  // Lost the one-shot race, or the row stopped qualifying between the read and the write.
-  // Either way the other writer's snapshot is the truth; never overwrite it.
+  // Lost the one-shot race, or the row stopped qualifying between the read and the write. The
+  // other writer's snapshot is the truth; never overwrite it — but classify it rather than
+  // returning a bare null, or a racing writer that produced a BAD tuple would look like a skip.
   const [concurrent] = await exec
     .select({ selectedRateJson: shipments.selectedRateJson })
     .from(shipments)
     .where(eq(shipments.id, shipmentId))
     .limit(1);
-  return readFrozenCustomerShippingMoney(concurrent?.selectedRateJson, {
-    accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
-  });
+  const raced = classifyCustomerShippingMoney(concurrent?.selectedRateJson);
+  if (raced.kind === 'valid_ps508' || raced.kind === 'valid_ps437') {
+    return { status: 'already_frozen', frozen: raced.frozen };
+  }
+  if (raced.kind === 'malformed_known_version') {
+    return {
+      status: 'needs_review',
+      reason: 'malformed_known_version',
+      detail: `${raced.policyVersion}: ${raced.reason}`,
+    };
+  }
+  if (raced.kind === 'unknown_version') {
+    return { status: 'needs_review', reason: 'unknown_version', detail: raced.rawVersion };
+  }
+  return { status: 'skipped', reason: 'update_matched_no_row' };
 }

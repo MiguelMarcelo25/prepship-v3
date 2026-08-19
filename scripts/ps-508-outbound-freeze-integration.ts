@@ -129,7 +129,8 @@ async function main(): Promise<void> {
     houseRate === 13.0, String(houseRate));
 
   // The SHIPP purchase: the gate passes the derived rate through.
-  const shipp = await freezeOutboundCustomerShippingMoney(900, { cShippingRateAmount: houseRate }, db);
+  const shippOutcome = await freezeOutboundCustomerShippingMoney(900, { cShippingRateAmount: houseRate }, db);
+  const shipp = shippOutcome.status === 'frozen' ? shippOutcome.frozen : null;
   check('SHIPP purchase freezes HOUSE money (13.00, house provenance)',
     shipp?.cShippingRateAmount === 13.0
     && shipp?.customerRateSource === 'house_next_best_customer_rate',
@@ -138,7 +139,8 @@ async function main(): Promise<void> {
   // The non-SHIPP purchase on the SAME order, with the SAME live stamp. After the blocker-1 fix
   // persistCreatedLabel derives nothing here, so the freeze receives null and must take the
   // ordinary carrier path: 10.00 + 20% = 12.00.
-  const nonShipp = await freezeOutboundCustomerShippingMoney(901, { cShippingRateAmount: null }, db);
+  const nonShippOutcome = await freezeOutboundCustomerShippingMoney(901, { cShippingRateAmount: null }, db);
+  const nonShipp = nonShippOutcome.status === 'frozen' ? nonShippOutcome.frozen : null;
   check('non-SHIPP purchase freezes CARRIER money (12.00, realized provenance) despite the live stamp',
     nonShipp?.cShippingRateAmount === 12.0
     && nonShipp?.customerRateSource === 'realized_customer_shipping_rate',
@@ -151,6 +153,75 @@ async function main(): Promise<void> {
     && Number(shipp?.cShippingRateAmount) - Number(nonShipp?.cShippingRateAmount) === 1.0,
     `${shipp?.cShippingRateAmount} vs ${nonShipp?.cShippingRateAmount}`);
 
+
+  // ── FIXTURE 3: a bad tuple must not masquerade as legacy absence ─────────────────────────
+  //
+  // Before this, all four outcomes collapsed to `null`: not applicable, nothing frozen, we wrote
+  // something invalid, and a policy this build cannot read. A row we got WRONG was therefore
+  // indistinguishable from one we correctly left alone, and after cutover billing would silently
+  // recompute it as ordinary history. These execute the distinction.
+
+  await client.exec(`
+    insert into shipments (id, order_id, client_id, source, selected_rate_cost, selected_rate_json)
+      values (910, 100, 1, 'prepship_v2', 10.00, '{
+        "selectedRateCost": 10, "cShippingRateAmount": 12, "shippingMarginAmount": 5,
+        "shippingMarginPct": 16.7, "rateCostSource": "label_final_cost",
+        "customerRateSource": "realized_customer_shipping_rate",
+        "customerShippingMoneyPolicyVersion": "ps-437-v1" }'::jsonb);
+    insert into shipments (id, order_id, client_id, source, selected_rate_cost, selected_rate_json)
+      values (911, 100, 1, 'prepship_v2', 10.00, '{
+        "selectedRateCost": 10, "cShippingRateAmount": 12, "shippingMarginAmount": 2,
+        "shippingMarginPct": 16.7, "rateCostSource": "label_final_cost",
+        "customerRateSource": "realized_customer_shipping_rate",
+        "customerShippingMoneyPolicyVersion": "ps-999-v9" }'::jsonb);
+    insert into shipments (id, order_id, client_id, source, selected_rate_cost, selected_rate_json)
+      values (912, 100, 1, 'prepship_v2', 10.00,
+        '{"carrierCode": "ups", "totalCost": 10}'::jsonb);
+  `);
+
+  // 910 carries OUR version with a margin that does not reconcile (12 - 10 != 5).
+  const malformed = await freezeOutboundCustomerShippingMoney(910, {}, db);
+  check('a malformed KNOWN version enters review, not a silent skip',
+    malformed.status === 'needs_review' && malformed.reason === 'malformed_known_version',
+    JSON.stringify(malformed));
+  check('and it names why, so the row is repairable without opening it by hand',
+    malformed.status === 'needs_review' && /margin does not reconcile/.test(malformed.detail),
+    malformed.status === 'needs_review' ? malformed.detail : malformed.status);
+
+  // 911 carries a version this build cannot read — quite possibly NEWER than this build.
+  const unknown = await freezeOutboundCustomerShippingMoney(911, {}, db);
+  check('an UNKNOWN version enters review',
+    unknown.status === 'needs_review' && unknown.reason === 'unknown_version',
+    JSON.stringify(unknown));
+
+  // THE property. Neither row may be rewritten: one is evidence of a writer defect, the other
+  // belongs to a policy that knows more than this code does.
+  const after = await client.query(
+    "select id, selected_rate_json->>'customerShippingMoneyPolicyVersion' as v, "
+    + "selected_rate_json->>'shippingMarginAmount' as m from shipments where id in (910, 911) order by id",
+  );
+  check('NEITHER row was overwritten — the bad tuple survives as evidence',
+    JSON.stringify(after.rows) === JSON.stringify([
+      { id: 910, v: 'ps-437-v1', m: '5' },
+      { id: 911, v: 'ps-999-v9', m: '2' },
+    ]), JSON.stringify(after.rows));
+
+  // And genuine absence still freezes — the repair must not make the writer timid.
+  const absent = await freezeOutboundCustomerShippingMoney(912, {}, db);
+  check('genuine legacy absence still freezes normally',
+    absent.status === 'frozen' && absent.frozen.cShippingRateAmount === 12,
+    JSON.stringify(absent));
+
+  // Re-running over a freshly frozen row is one-shot, and says so distinctly from a skip.
+  const again = await freezeOutboundCustomerShippingMoney(912, {}, db);
+  check('a second call reports already_frozen, distinct from both frozen and skipped',
+    again.status === 'already_frozen', JSON.stringify(again));
+
+  // A non-applicable row is still an ordinary skip with a stated reason.
+  const skipped = await freezeOutboundCustomerShippingMoney(901, {}, db);
+  check('an already-frozen replacement/return-style row is not confused with review',
+    skipped.status === 'already_frozen' || skipped.status === 'skipped',
+    JSON.stringify(skipped));
   // ── FIXTURE 2: a failed freeze inside a SAVEPOINT leaves the parent transaction committable ──
 
   let parentCommitted = false;

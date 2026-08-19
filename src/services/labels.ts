@@ -1395,7 +1395,19 @@ export async function persistCreatedLabel(args: {
           exec: sp,
         })
       : null;
-      await freezeOutboundCustomerShippingMoney(row.id, { cShippingRateAmount }, sp);
+      const outcome = await freezeOutboundCustomerShippingMoney(
+        row.id, { cShippingRateAmount }, sp,
+      );
+      // `needs_review` is a FACT, not a failure: the row carries a tuple this build wrote wrong,
+      // or one written by a policy it cannot read. It must not fail a paid-for label, and it must
+      // not vanish either — before this it returned a bare null and looked exactly like an
+      // ordinary skip, so a shipment we mis-wrote was indistinguishable from one we correctly left
+      // alone. Repair is a separate operator-controlled action; this makes it findable.
+      if (outcome.status === 'needs_review') {
+        console.warn(
+          `[labels] PS-508 shipment ${row.id} needs review: ${outcome.reason} (${outcome.detail})`,
+        );
+      }
     });
   } catch (err) {
     // Rolled back to the savepoint; the parent ship transaction is intact and commits without a
