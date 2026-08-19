@@ -59,6 +59,7 @@ const PROVIDER_ADAPTER = 'src/services/replacement-label-provider.ts';
 const CREDENTIAL_AUTHORITY = 'src/services/replacement-provider-credential-authority.ts';
 const ANALYSIS = 'src/routes/analysis.ts';
 const ADMIN = 'src/routes/admin.ts';
+const SNAPSHOTS = 'src/services/shipstation-carrier-account-snapshots.ts';
 const LIFECYCLE_ORDER = 'src/services/order-lifecycle-command.ts';
 const OUTBOX = 'src/services/fulfillment/outbox.ts';
 const LABELS = 'src/services/labels.ts';
@@ -1628,6 +1629,41 @@ const MUTATIONS: Mutation[] = [
     file: LABELS,
     find: "await db.update(shipments).set({ labelUrl: freshUrl, updatedAt: new Date() }).where(eq(shipments.id, row.id));",
     replace: "await db.update(shipments).set({ labelUrl: freshUrl, updatedAt: new Date() }).where(eq(returnLabels.returnShipmentId, shipments.id));",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // Hermes's executed counterexample at 6b26efae, and the third spelling of one defect.
+    // M191 rejects the bare join and M192 the dynamically imported table, but both rules read
+    // only the operand's LEADING identifier — so wrapping the same column hid it again:
+    //
+    //     eq(shipments.id, sql`${clients.id}`)
+    //
+    // begins with `sql`, not with a table, so it passed as a bound parameter while comparing
+    // one table's id to another's. The operand is now scanned WHOLE, which is what makes the
+    // rule about reach rather than about spelling.
+    id: 'M193',
+    defect: "a table column WRAPPED in sql`` is credited as a requested shipment-ID constraint",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(clients, eq(shipments.id, sql`${clients.id}`))",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // The fourth import spelling, and the reason the rule stopped reading imports at all.
+    // shipstation-carrier-account-snapshots.ts reaches `clients` by destructuring
+    // `await Promise.all([... import(...) ...])`, which neither the static nor the dynamic
+    // form recognised. The file reads no shipments today, so this was never a live defect —
+    // but a future shipment read there would have walked straight back into the original
+    // false green, which is why Hermes required an owning mutation rather than a note.
+    //
+    // Table symbols now come from what src/db/schema EXPORTS, so this mutation is caught for
+    // a reason that has nothing to do with how `clients` arrived. That is the difference
+    // between closing a form and closing the class.
+    id: 'M194',
+    defect: "a schema table reached through Promise.all destructuring is not known as a table",
+    file: SNAPSHOTS,
+    find: "    const [{ db }, { clients }, { and, eq, isNotNull }] = await Promise.all([\n      import('../db/client.js'),\n      import('../db/schema/clients.js'),\n      import('drizzle-orm'),\n    ]);",
+    replace: "    const [{ db }, { clients }, { shipments }, { and, eq, isNotNull }] = await Promise.all([\n      import('../db/client.js'),\n      import('../db/schema/clients.js'),\n      import('../db/schema/shipments.js'),\n      import('drizzle-orm'),\n    ]);\n    const ps502SnapshotProbe = await db.select({ id: shipments.id }).from(shipments).where(eq(shipments.id, clients.id));",
     expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
 ];

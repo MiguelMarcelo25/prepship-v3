@@ -3123,32 +3123,44 @@ console.log('\nordinary readers exclude source = replacement');
   };
 
   /**
-   * Local names a schema import binds to a Drizzle TABLE.
+   * Every Drizzle table in the repository, taken from what src/db/schema EXPORTS rather than
+   * from how any file imports it.
    *
-   * Needed to tell `eq(shipments.id, input.shipmentId)` — a read pinned to one requested
-   * shipment — from `eq(clients.id, shipments.id)`, which is syntactically identical and
-   * constrains nothing. An aliased import (`orders as ordersTable`) binds under its LOCAL
-   * name, because the local name is the one the query actually writes.
+   * Three import spellings were closed one at a time — static named, dynamic destructured
+   * `await import(...)`, and destructuring through `await Promise.all([...import(...)])` — and
+   * each fix invited the next, because the rule was keyed on the SPELLING of the import rather
+   * than on what a table is. Hermes said so directly at 6b26efae after retracting the claim
+   * that no spelling escaped: derive the symbols instead of adding a regex per form.
+   *
+   * So: a table is a name src/db/schema exports as a pgTable. A query writing `clients.id`
+   * names the clients table however that identifier arrived — namespace import, barrel,
+   * require, Promise.all destructuring, or a spelling nobody has written yet — because no
+   * import statement is consulted at all. That is what makes this closed rather than
+   * one-more-form-closed.
+   */
+  const SCHEMA_TABLES: ReadonlySet<string> = new Set(
+    walk('src/db/schema').flatMap((path) => [...read(path)
+      .matchAll(/^export const (\w+)\s*=\s*pgTable\(/gm)].map((m) => m[1]!)),
+  );
+
+  // Anti-vacuity. An empty or partial inventory would not fail — it would silently turn every
+  // table-to-table join back into an accepted binding, which is the original defect wearing a
+  // green tick. The rule's INPUT is checked, not just its output.
+  check('the schema table inventory is discovered, not assumed',
+    SCHEMA_TABLES.size >= 40 && SCHEMA_TABLES.has('shipments') && SCHEMA_TABLES.has('clients'),
+    `a partial inventory silently disables the table-column rule; found ${SCHEMA_TABLES.size} tables`);
+
+  /**
+   * The table symbols visible in ONE file: every repository table, plus local renames.
+   *
+   * `orders as ordersTable` binds the same table under another name and the query writes the
+   * local one. Renames only ever ADD symbols, so a false positive here can make the sweep
+   * stricter but never blind — the safe direction for a guard.
    */
   const schemaSymbols = (source: string): Set<string> => {
-    const names = new Set<string>();
-    const forms = [
-      /import\s*(?:type\s+)?\{([^}]*)\}\s*from\s*'[^']*db\/schema\/[^']*'/g,
-      // Four production sites reach a schema table through a DYNAMIC destructured import
-      // rather than a static one — src/routes/products.ts and three in src/services/labels.ts,
-      // one of them beside the shipments reads this sweep classifies. A table missed here is a
-      // table whose join is credited as a shipment-ID binding, which is precisely the defect
-      // Hermes found at 9ebe379d, so both forms count. M192 owns this second one.
-      /(?:const|let)\s*\{([^}]*)\}\s*=\s*await\s+import\(\s*'[^']*db\/schema\/[^']*'\s*\)/g,
-    ];
-    for (const form of forms) {
-      for (const match of source.matchAll(form)) {
-        for (const clause of match[1]!.split(',')) {
-          const parts = clause.trim().split(/\s+as\s+|\s*:\s*/);
-          const local = (parts[1] ?? parts[0] ?? '').trim();
-          if (/^[A-Za-z_]\w*$/.test(local)) names.add(local);
-        }
-      }
+    const names = new Set(SCHEMA_TABLES);
+    for (const match of source.matchAll(/\b(\w+)\s+as\s+(\w+)\b/g)) {
+      if (SCHEMA_TABLES.has(match[1]!)) names.add(match[2]!);
     }
     return names;
   };
@@ -3205,6 +3217,30 @@ console.log('\nordinary readers exclude source = replacement');
    * replacement vessel and NULL is equal to nothing at all, so an orderId comparison keeps
    * replacements out even when the other side IS another table.
    */
+  /**
+   * Does an expression reach a schema-table column ANYWHERE inside it?
+   *
+   * Hermes broke the first version of this rule at 6b26efae, which inspected only the operand's
+   * LEADING identifier:
+   *
+   *     eq(shipments.id, sql`${clients.id}`)
+   *
+   * begins with `sql`, not with a table, so it read as a bound parameter while comparing one
+   * table's id to another's — the same reach as the join it was written to reject. A wrapper is
+   * not a constraint, so the whole expression is scanned: sql`` templates, nested calls,
+   * casts, anything. Parameters, locals, request properties, literals and id lists carry no
+   * `<schemaTable>.<column>` at all and still bind, which is every genuine call site.
+   */
+  const referencesSchemaColumn = (
+    expression: string,
+    tables: ReadonlySet<string>,
+  ): boolean => {
+    for (const match of expression.matchAll(/\b([A-Za-z_]\w*)\s*\.\s*[A-Za-z_]\w*/g)) {
+      if (tables.has(match[1]!)) return true;
+    }
+    return false;
+  };
+
   const idPinnedToRequestedShipment = (
     statement: string,
     symbols: string[],
@@ -3216,9 +3252,7 @@ console.log('\nordinary readers exclude source = replacement');
       if (args.length < 2) continue;
       const side = args.findIndex((arg) => symbols.some((symbol) => arg === `${symbol}.id`));
       if (side === -1) continue;
-      const other = args[side === 0 ? 1 : 0] ?? '';
-      const owner = /^([A-Za-z_]\w*)\s*\./.exec(other)?.[1];
-      if (owner !== undefined && tables.has(owner)) continue;
+      if (referencesSchemaColumn(args[side === 0 ? 1 : 0] ?? '', tables)) continue;
       return true;
     }
     return false;
@@ -3327,9 +3361,10 @@ console.log('\nordinary readers exclude source = replacement');
     'i',
   );
 
-  // NOTHING is exempted by path any more. Replacement-owned readers are classified like
-  // every other file: they prove their side by SELECTING replacements explicitly, so a bare
-  // ordinary read dropped beside them is caught rather than inheriting an exemption.
+  // NOTHING is exempted by path, and nothing is exempted by SELECTING replacements either.
+  // Files that own replacement code are classified exactly like every other file — by
+  // exclusion, by binding, or by an explicit per-site acknowledgement — so a bare ordinary
+  // read dropped beside legitimate replacement code is caught instead of inheriting cover.
 
   // Each acknowledgement names the EXACT read sites it excuses, by signature. A count alone
   // let one site become safe while a different unsafe one appeared without the total moving.
