@@ -582,7 +582,7 @@ export async function freezeOutboundCustomerShippingMoney(
      * null when the client is not on house billing. Supplying it is what selects billing's house
      * branch; omitting it takes the ordinary carrier-markup path.
      */
-    houseCustomerRate?: number | null;
+    cShippingRateAmount?: number | null;
   } = {},
   /**
    * The transaction that just wrote the shipment row. The tuple must become true in the same
@@ -604,7 +604,7 @@ export async function freezeOutboundCustomerShippingMoney(
   if (existing) return existing;
 
   const decision = await decideCustomerShippingMoneyForRow(row, {
-    cShippingRateAmount: input.houseCustomerRate ?? undefined,
+    cShippingRateAmount: input.cShippingRateAmount ?? undefined,
     policyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
   });
   const original = recordOrNull(row.selectedRateJson) ?? {};

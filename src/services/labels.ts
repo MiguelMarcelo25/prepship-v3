@@ -1354,7 +1354,7 @@ export async function persistCreatedLabel(args: {
   // That reasoning expires at cutover. The moment billing reads ps-508-v1, a skipped freeze becomes
   // a shipment billing cannot price, and this must become fail-closed.
   try {
-    const houseCustomerRate = await deriveOutboundHouseCustomerRate({
+    const cShippingRateAmount = await deriveOutboundHouseCustomerRate({
       orderId: args.orderId,
       clientId: args.clientId,
       // The SAME basis the tuple is frozen against — postage + insurance, never bare postage.
@@ -1363,7 +1363,7 @@ export async function persistCreatedLabel(args: {
       selectedRateCost: Number((created.cost + insuranceCost).toFixed(2)),
       exec,
     });
-    await freezeOutboundCustomerShippingMoney(row.id, { houseCustomerRate }, exec);
+    await freezeOutboundCustomerShippingMoney(row.id, { cShippingRateAmount }, exec);
   } catch (err) {
     console.warn(
       '[labels] PS-508 outbound customer-money freeze skipped:',
