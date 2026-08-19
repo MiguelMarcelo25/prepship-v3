@@ -174,6 +174,124 @@ async function main(): Promise<void> {
   say('  which is why the PS-508 coverage audit correctly reported zero exclusions while the');
   say('  operator UI showed Ext. Label rows.');
   say('');
+
+  // ── Item 5: purchase → ingestion lag ────────────────────────────────────────────────
+  // shipments has TWO timestamps: create_date (ShipStation's label-creation time, from the
+  // payload) and created_at (DB insertion, defaultNow). Their difference IS the purchase→
+  // ingestion gap — the fact that decides whether "policy at ingestion" can honestly stand
+  // in for "policy at purchase". Reported for the whole window AND for the last 7 days,
+  // because created_at on rows predating the column's migration reflects the backfill
+  // moment, not real ingestion; recent rows carry the true steady-state lag.
+  say('PURCHASE -> INGESTION LAG (created_at minus create_date, seconds)');
+  for (const [label, extra] of [
+    [`whole ${days}d window`, sql``],
+    ['last 7 days only', sql` and s.create_date >= now() - interval '7 days'`],
+  ] as const) {
+    const lag = await db.execute(sql`
+      select
+        count(*)::text as "rows",
+        round(percentile_cont(0.5) within group
+          (order by extract(epoch from (s.created_at - s.create_date))))::text as "p50",
+        round(percentile_cont(0.9) within group
+          (order by extract(epoch from (s.created_at - s.create_date))))::text as "p90",
+        round(percentile_cont(0.99) within group
+          (order by extract(epoch from (s.created_at - s.create_date))))::text as "p99",
+        round(max(extract(epoch from (s.created_at - s.create_date))))::text as "max"
+      from shipments s
+      where s.source = 'shipstation' and s.create_date >= ${since}
+        and s.created_at is not null and s.create_date is not null${extra}
+    `);
+    const l = rowsOf(lag)[0] as unknown as Record<string, string>;
+    say(`      ${String(label).padEnd(22)} rows ${l.rows}  p50 ${l.p50}s  p90 ${l.p90}s  p99 ${l.p99}s  max ${l.max}s`);
+  }
+  say('  The sync scheduler runs every 3 minutes (SYNC_CADENCE_MS.shipments), so steady-state');
+  say('  lag should be minutes. Large values on the whole window can be column-backfill');
+  say('  artefacts; the 7-day figures are the honest steady-state measure.');
+  say('');
+
+  // ── Item 5: carrier distribution (house eligibility) ────────────────────────────────
+  say('CARRIER DISTRIBUTION ON SYNC ROWS (house eligibility check)');
+  const carriers = await db.execute(sql`
+    select coalesce(s.carrier_code, '(null)') as "bucket", count(*)::text as "rows"
+    from shipments s
+    where s.source = 'shipstation' and s.create_date >= ${since}
+    group by 1 order by count(*) desc limit 12
+  `);
+  for (const b of rowsOf(carriers)) {
+    say(`      ${String(b.bucket).padEnd(26)} ${String(b.rows).padStart(6)}`);
+  }
+  say('  House pricing requires a SHIPP-DIRECT purchase (directProviderKey === shipp). A');
+  say('  ShipStation-synced row is by construction not a SHIPP-direct purchase, so house');
+  say('  eligibility for this ingress should be NEVER; a shipp carrier code appearing here');
+  say('  would challenge that and needs investigating, not assuming.');
+  say('');
+
+  // ── Item 5: purchased-provider identity is POST-HOC ─────────────────────────────────
+  say('PROVIDER-ACCOUNT IDENTITY ON SYNC ROWS');
+  const provider = await db.execute(sql`
+    select
+      case when s.provider_account_id is not null
+        then 'provider_account_resolved' else 'provider_account_null' end as "bucket",
+      count(*)::text as "rows"
+    from shipments s
+    where s.source = 'shipstation' and s.create_date >= ${since}
+    group by 1 order by count(*) desc
+  `);
+  for (const b of rowsOf(provider)) {
+    say(`      ${String(b.bucket).padEnd(26)} ${String(b.rows).padStart(6)}`);
+  }
+  say('  The v1 payload carries NO provider/payer identity. provider_account_id arrives via a');
+  say('  LATER best-effort V2 enrichment pass (enrichProviderAccountIds), keyed on tracking');
+  say('  number, only for accounts with a V2 key — the same written-later-by-a-task-allowed-');
+  say('  to-fail shape as the PS-508 house sidecar. It is NOT available at the insert.');
+  say('');
+
+  // ── Item 6: redacted samples per eligibility class ──────────────────────────────────
+  // Shape, not identity: internal ids, carrier/service codes, money and flags only. No
+  // order numbers, no tracking numbers, no names, no addresses.
+  say('REDACTED SAMPLES (3 newest per class — shape only, no order/tracking identifiers)');
+  const samples = await db.execute(sql`
+    with classed as (
+      select s.*,
+        case
+          when coalesce(s.is_return, false) then 'return'
+          when coalesce(s.voided, false) then 'voided'
+          when s.selected_rate_cost is null then 'no_selected_cost'
+          when s.selected_rate_cost <= 0 then 'zero_or_negative_cost'
+          when s.order_id is null then 'unattributed_no_order'
+          when s.client_id is null then 'no_client'
+          else 'positive_cost_attributed'
+        end as bucket
+      from shipments s
+      where s.source = 'shipstation' and s.create_date >= ${since}
+    ), ranked as (
+      select c.*, row_number() over (partition by c.bucket order by c.id desc) as rn
+      from classed c
+    )
+    select r.bucket as "bucket", r.id as "id", r.client_id as "clientId",
+      coalesce(r.carrier_code, '-') as "carrier", coalesce(r.service_code, '-') as "service",
+      coalesce(r.cost::text, 'null') as "cost",
+      coalesce(r.other_cost::text, 'null') as "otherCost",
+      coalesce(r.selected_rate_cost::text, 'null') as "selCost",
+      (r.order_id is not null) as "hasOrder",
+      (r.provider_account_id is not null) as "hasProvider",
+      coalesce(round(extract(epoch from (r.created_at - r.create_date)))::text, '?') as "lagS",
+      exists (select 1 from billing_line_items bli where bli.shipment_id = r.id) as "hasLine"
+    from ranked r where r.rn <= 3
+    order by r.bucket, r.rn
+  `);
+  const sampleRows = (Array.isArray(samples)
+    ? samples
+    : ((samples as { rows?: unknown[] }).rows ?? [])) as Array<Record<string, unknown>>;
+  let lastBucket = '';
+  for (const r of sampleRows) {
+    if (r.bucket !== lastBucket) { say(`    ${String(r.bucket)}:`); lastBucket = String(r.bucket); }
+    say(`      id ${String(r.id).padEnd(7)} client ${String(r.clientId ?? '-').padEnd(5)} `
+      + `${String(r.carrier)}/${String(r.service)}  cost ${r.cost}  other ${r.otherCost}  `
+      + `sel ${r.selCost}  order ${r.hasOrder ? 'y' : 'N'}  provider ${r.hasProvider ? 'y' : 'N'}  `
+      + `lag ${r.lagS}s  line ${r.hasLine ? 'y' : 'N'}`);
+  }
+  say('');
   say('NEXT: none of this decides BILLABILITY. That is the blocking product-owner decision.');
 }
 
