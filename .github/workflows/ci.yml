@@ -55,6 +55,9 @@ jobs:
       - name: PS-508 outbound freeze behavioural fixtures
         run: npm run test:ps-508-outbound-freeze-integration
 
+      - name: PS-508 snapshot classification guard
+        run: npm run test:ps-508-classification
+
       - name: ShipStation batched rate fan-out guard
         run: npm run test:shipstation-batched-rate-fanout
 
