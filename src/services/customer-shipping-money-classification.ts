@@ -2,6 +2,7 @@ import {
   ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
+  CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION,
   readFrozenCustomerShippingMoney,
   type CustomerShippingMoneyPolicyVersion,
   type FrozenCustomerShippingMoney,
@@ -39,12 +40,13 @@ import {
 export type CustomerShippingMoneyClassKind =
   | 'valid_ps508'
   | 'valid_ps437'
+  | 'valid_ps509'
   | 'legacy_absent'
   | 'malformed_known_version'
   | 'unknown_version';
 
 export type CustomerShippingMoneyClassification =
-  | { kind: 'valid_ps508' | 'valid_ps437'; frozen: FrozenCustomerShippingMoney;
+  | { kind: 'valid_ps508' | 'valid_ps437' | 'valid_ps509'; frozen: FrozenCustomerShippingMoney;
       policyVersion: CustomerShippingMoneyPolicyVersion }
   | { kind: 'legacy_absent' }
   | { kind: 'malformed_known_version'; policyVersion: CustomerShippingMoneyPolicyVersion;
@@ -94,7 +96,9 @@ export function classifyCustomerShippingMoney(
   return {
     kind: policyVersion === CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND
       ? 'valid_ps508'
-      : 'valid_ps437',
+      : policyVersion === CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION
+        ? 'valid_ps509'
+        : 'valid_ps437',
     frozen,
     policyVersion,
   };
@@ -121,6 +125,20 @@ function explainInvalid(row: Record<string, unknown>): string {
   if (Math.abs((customer - cost) - margin) > 0.001) {
     return `margin does not reconcile: ${customer} - ${cost} != ${margin}`;
   }
+  // PS-509: the dimension rules are version-conditional, so the diagnosis is too.
+  if (row.customerShippingMoneyPolicyVersion === CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION) {
+    if (row.rateCostSource !== 'shipstation_sync_receipt_cost') {
+      return `rateCostSource: ${String(row.rateCostSource)} (ps-509-v1 requires shipstation_sync_receipt_cost)`;
+    }
+    if (row.customerShippingMoneyCaptureSource !== 'shipstation_sync_ingestion') {
+      return `customerShippingMoneyCaptureSource: ${String(row.customerShippingMoneyCaptureSource)} `
+        + '(ps-509-v1 requires shipstation_sync_ingestion)';
+    }
+    return `customerRateSource: ${String(row.customerRateSource)} (not a sync-ingress formula)`;
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'customerShippingMoneyCaptureSource')) {
+    return 'customerShippingMoneyCaptureSource: present on a version that never recorded one';
+  }
   if (row.rateCostSource !== 'label_final_cost') return `rateCostSource: ${String(row.rateCostSource)}`;
   return `customerRateSource: ${String(row.customerRateSource)}`;
 }
@@ -135,7 +153,8 @@ export function billableUnder(
   c: CustomerShippingMoneyClassification,
   accept: readonly CustomerShippingMoneyPolicyVersion[],
 ): FrozenCustomerShippingMoney | null {
-  return (c.kind === 'valid_ps508' || c.kind === 'valid_ps437') && accept.includes(c.policyVersion)
+  return (c.kind === 'valid_ps508' || c.kind === 'valid_ps437' || c.kind === 'valid_ps509')
+    && accept.includes(c.policyVersion)
     ? c.frozen
     : null;
 }

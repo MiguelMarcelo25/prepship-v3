@@ -45,6 +45,15 @@ import {
   reportUnattributedShipments,
   type UnattributedShipmentSample,
 } from './shipment-sync-unattributed';
+// PS-509: the ONE canonical sync-ingress customer-money writer, called from the INSERT
+// transaction below (driven off insertedRows); receipt-revision detection on the UPDATE
+// path; the retry sweep that re-drives non-terminal outcomes once per run; and the
+// migration-0103 readiness gate that refuses to insert before the durable-outcome
+// schema exists.
+import { freezeSyncIngressCustomerShippingMoney } from './customer-shipping-money-sync-ingress';
+import { ensureCustomerShippingMoneySyncSchema } from './customer-shipping-money-sync-readiness';
+import { detectReceiptRevisionsAfterFreeze } from './customer-shipping-money-receipt-revision';
+import { sweepSyncIngressFreezeRetries } from './customer-shipping-money-sync-retry-sweep';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
@@ -500,6 +509,12 @@ async function upsertShipmentsBatch(
   // inserts reference it. Standalone insert (no wrapping tx) so no lock/deadlock risk;
   // memoized (real DDL only on the first sync after a deploy, then a no-op).
   if (toInsert.length) await ensureShipmentsSelectedRateCostColumn();
+  // PS-509: every INSERT below evaluates customer-money eligibility and persists a
+  // durable outcome inside the same transaction, so the inserts must not start until
+  // migration 0103 is applied. Failing here is loud and retryable by design — the
+  // upstream receipts survive in ShipStation, and no row can commit without its
+  // evaluation.
+  if (toInsert.length) await ensureCustomerShippingMoneySyncSchema();
   throwIfShipmentSyncAborted(signal);
   let inserted = 0;
   const chunkSize = 500;
@@ -615,6 +630,20 @@ async function upsertShipmentsBatch(
           } else {
             await consumeOutboundPackageInTransaction(packageConsumption, tx);
           }
+          // PS-509: freeze customer shipping money at the first authoritative cost —
+          // the INSERT, driven off insertedRows so replay safety is inherited from
+          // onConflictDoNothing + returning(). Deliberately NOT wrapped in a savepoint
+          // or try/catch — the REVERSE of persistCreatedLabel's rule, per the accepted
+          // contract: the upstream receipt is durable in ShipStation, so an unexpected
+          // freeze failure must abort this insert transaction and retry as an INSERT
+          // next sync. A savepoint would commit the row tuple-less, the next sync would
+          // take the UPDATE path (which never freezes), and the gap would be permanent.
+          // Ordinary ineligibility does not throw — it persists a durable named outcome
+          // in this same transaction.
+          await freezeSyncIngressCustomerShippingMoney(row.id, {
+            boundary: 'sync_insert',
+            exec: tx,
+          });
         }
         inserted += insertedRows.length;
       });
@@ -636,6 +665,22 @@ async function upsertShipmentsBatch(
       )
     );
     updated += batch.length;
+  }
+
+  // PS-509: receipt_revised_after_freeze. The updates above may have written a revised
+  // provider cost onto rows whose customer money is already frozen; the frozen tuple is
+  // NEVER auto-repriced, so a disagreement becomes a durable review record instead.
+  // Best-effort per batch: detection is idempotent and re-runs every update pass (the
+  // disagreement persists in state), so a failed pass self-heals on the next one.
+  if (toUpdate.length) {
+    try {
+      await detectReceiptRevisionsAfterFreeze(toUpdate.map((u) => u.id));
+    } catch (err) {
+      console.error(
+        '[shipment-sync] PS-509 receipt-revision detection failed:',
+        (err as Error).message,
+      );
+    }
   }
 
   for (const row of toUpdate) {
@@ -1002,6 +1047,18 @@ export async function syncShipments(
     // PS-265: stop starting new accounts once the run is out of time budget; their watermarks
     // are unchanged, so they resume on the next run (fair round-robin across runs).
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
+  }
+
+  // PS-509: re-drive non-terminal freeze outcomes whose blocking fact has changed —
+  // orphans relinked through the UPDATE path, and link transactions that aborted.
+  // Best-effort once per run; each failure is recorded per-shipment as needs_retry
+  // and retried on the next run, so a failed sweep never fails the sync result.
+  if (!opts.signal?.aborted) {
+    try {
+      await sweepSyncIngressFreezeRetries();
+    } catch (err) {
+      console.error('[shipment-sync] PS-509 retry sweep failed:', (err as Error).message);
+    }
   }
 
   throwIfShipmentSyncAborted(opts.signal);

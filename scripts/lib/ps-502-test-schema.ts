@@ -16,7 +16,9 @@
 export const PS_502_PREREQUISITE_DDL = `
   -- Only so 0025_order_items_sync_trigger.sql can be applied VERBATIM: it indexes this table.
   CREATE TABLE analytics_cache (id serial PRIMARY KEY, expires_at timestamptz);
-  CREATE TABLE clients (id serial PRIMARY KEY, name text    ,store_ids integer[]
+  CREATE TABLE clients (id serial PRIMARY KEY, name text    ,store_ids integer[],
+    -- PS-509: the shared customer-money row loader now selects coalesce(c.is_test, false).
+    is_test boolean NOT NULL DEFAULT false
   );
   CREATE TABLE orders (
     id serial PRIMARY KEY,

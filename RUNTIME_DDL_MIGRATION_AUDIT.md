@@ -47,6 +47,16 @@ creating or altering schema.
   stores, Rate Browser jobs, and worker status events.
 - `drizzle/0064_print_queue_merge_jobs.sql`: per-job PDF-merge metadata and its
   updated-at lookup index.
+- `drizzle/0103_ps509_customer_shipping_money_sync.sql`: PS-509 durable sync-ingress
+  customer-money outcomes (`customer_shipping_money_sync_outcomes`, one row per
+  shipment, frozen-is-terminal mutation guard) and the `receipt_revised_after_freeze`
+  review sidecar (`customer_shipping_money_receipt_revisions`, one open record per
+  shipment, durable evidence guard). Additive-only; no existing relation is altered.
+  Readiness gate: `src/services/customer-shipping-money-sync-readiness.ts`
+  (verify-only, scoped to the sync-ingress freeze so a lagging migration stalls only
+  sync, loudly and retryably — the relations join `runtime-schema-readiness.ts` as
+  part of the deployment step once 0103 is applied in production, per the PS-502
+  staging). Deploy order is mandatory: apply `0103`, then let the deploy serve sync.
 
 `src/services/rate-browse-job-store.ts` now reads/writes migration-owned
 `rate_browse_jobs` and `rate_browse_job_provider_statuses`; no rate request creates

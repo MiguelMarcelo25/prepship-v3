@@ -100,7 +100,7 @@ const ZERO_EXCLUSIONS: Record<CoverageExclusionReason, number> = {
   return: 0, replacement: 0, voided: 0, test_offline: 0, no_billable_cost: 0,
 };
 const ZERO_KINDS: Record<CustomerShippingMoneyClassKind, number> = {
-  valid_ps508: 0, valid_ps437: 0, legacy_absent: 0,
+  valid_ps508: 0, valid_ps437: 0, valid_ps509: 0, legacy_absent: 0,
   malformed_known_version: 0, unknown_version: 0,
 };
 
@@ -183,7 +183,8 @@ export function buildCoverageReport(
       }
     }
 
-    const hasTuple = row.kind === 'valid_ps508' || row.kind === 'valid_ps437';
+    const hasTuple = row.kind === 'valid_ps508' || row.kind === 'valid_ps437'
+      || row.kind === 'valid_ps509';
     if (!hasTuple || row.tupleAmount == null) continue;
     if (row.recomputeAmount == null) {
       // A tuple with nothing to compare against. Counted, never silently skipped — it means the

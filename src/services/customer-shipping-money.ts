@@ -107,7 +107,9 @@ export type CustomerShippingMoneyInput = {
   policyVersion?: CustomerShippingMoneyPolicyVersion;
 };
 
-type CustomerShippingMoneyRow = {
+// PS-509: exported so the sync-ingress freeze reuses the ONE canonical policy row shape
+// instead of re-implementing the join and letting the two drift.
+export type CustomerShippingMoneyRow = {
   shipmentId: number;
   orderId: number | null;
   clientId: number | null;
@@ -116,6 +118,10 @@ type CustomerShippingMoneyRow = {
   voided: boolean;
   /** PS-508: free-form provenance marker ('replacement', 'test_offline', 'prepship_v2', …). */
   source: string | null;
+  /** PS-509: provider shipment identity, denormalized into the durable outcome record. */
+  labelShipmentId: number | null;
+  /** PS-509: sync ingress must never freeze (or bill) a test client's shipments. */
+  clientIsTest: boolean;
   selectedRateCost: string | number | null;
   selectedRateJson: unknown;
   carrierCode: string | null;
@@ -241,7 +247,9 @@ export function resolveCustomerShippingMoney(
   };
 }
 
-async function loadCustomerShippingMoneyRow(
+// PS-509: exported (unchanged in behaviour) so freezeSyncIngressCustomerShippingMoney reads
+// policy facts through the same query every other freeze uses — one owner, no drift.
+export async function loadCustomerShippingMoneyRow(
   shipmentId: number,
   /** PS-502: so a freeze can read the row inside the transaction that is about to write it. */
   exec: Pick<typeof db, 'execute'> = db,
@@ -255,6 +263,8 @@ async function loadCustomerShippingMoneyRow(
       coalesce(s.is_return, false) as "isReturn",
       coalesce(s.voided, false) as voided,
       s.source as "source",
+      s.label_shipment_id as "labelShipmentId",
+      coalesce(c.is_test, false) as "clientIsTest",
       s.selected_rate_cost as "selectedRateCost",
       s.selected_rate_json as "selectedRateJson",
       s.carrier_code as "carrierCode",
@@ -312,7 +322,9 @@ export async function getShipmentCustomerShippingMoneyTarget(
   };
 }
 
-async function decideCustomerShippingMoneyForRow(
+// PS-509: exported (unchanged in behaviour) so the sync-ingress freeze resolves customer
+// money through the one canonical policy owner rather than a parallel implementation.
+export async function decideCustomerShippingMoneyForRow(
   row: CustomerShippingMoneyRow,
   options: {
     requireExplicitReturnPolicy?: boolean;
@@ -658,8 +670,12 @@ export async function freezeOutboundCustomerShippingMoney(
    */
   const classification = classifyCustomerShippingMoney(row.selectedRateJson);
 
-  if (classification.kind === 'valid_ps508' || classification.kind === 'valid_ps437') {
+  if (classification.kind === 'valid_ps508' || classification.kind === 'valid_ps437'
+    || classification.kind === 'valid_ps509') {
     // One-shot: money frozen once must not move because a markup changed afterwards.
+    // PS-509: a sync-frozen tuple counts — a shipstation-sourced row can never reach this
+    // writer today, but if one ever did, its frozen money must read as already frozen
+    // rather than fall through to the one-shot predicate and come back as a bare skip.
     return { status: 'already_frozen', frozen: classification.frozen };
   }
 
@@ -743,7 +759,8 @@ export async function freezeOutboundCustomerShippingMoney(
     .where(eq(shipments.id, shipmentId))
     .limit(1);
   const raced = classifyCustomerShippingMoney(concurrent?.selectedRateJson);
-  if (raced.kind === 'valid_ps508' || raced.kind === 'valid_ps437') {
+  if (raced.kind === 'valid_ps508' || raced.kind === 'valid_ps437'
+    || raced.kind === 'valid_ps509') {
     return { status: 'already_frozen', frozen: raced.frozen };
   }
   if (raced.kind === 'malformed_known_version') {

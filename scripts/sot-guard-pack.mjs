@@ -1400,6 +1400,21 @@ const REQUIRED_GUARDS = [
   // suite keeps passing while no longer being evidence of anything — silent by
   // construction, which is exactly what this pack exists to catch.
   'test:ps-507-qa-harness',
+  // ── PS-509: sync-ingress customer shipping money ──
+  //
+  // ShipStation sync is the ONLY ingress still producing shipment rows (PS-508's
+  // production evidence), so these guard the one boundary that can move the parent
+  // symptom. The structural guard pins the reversed transaction rule (freeze failure
+  // ABORTS the eligible insert — no savepoint, no try/catch), the link+freeze
+  // transaction, the shipmentValues clobber guard, and the version-conditional strict
+  // reader. The integration guard is in-memory PGlite inside the pack's offline
+  // contract: it applies migration 0103 VERBATIM and executes first-ingestion, replay,
+  // late-link freeze-once, the abort + savepoint counterexample, receipt-revision
+  // detection, void exclusion, the durability triggers and the retry sweep. Both were
+  // verified green under this runner's OFFLINE_GUARD_ENV before admission (~1.6s and
+  // ~7s respectively).
+  'test:ps-509-sync-ingress-freeze',
+  'test:ps-509-sync-ingress-freeze-integration',
 ];
 
 const npmCli = process.env.npm_execpath;

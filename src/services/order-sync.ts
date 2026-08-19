@@ -21,6 +21,13 @@ import {
 } from './order-source-identity';
 import { applyOrderLifecycleCommand } from './order-lifecycle-command';
 import { importStoreOrders } from './store-connector-orchestrator';
+// PS-509: the orphan-link update is a customer-money trigger boundary — link and freeze
+// commit together, or neither does. See hydrateMissingShippedStoreOrders below.
+import {
+  freezeSyncIngressCustomerShippingMoney,
+  recordSyncIngressFreezeRetry,
+} from './customer-shipping-money-sync-ingress';
+import { ensureCustomerShippingMoneySyncSchema } from './customer-shipping-money-sync-readiness';
 import type { NormalizedOrder } from '../connectors/types';
 import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
 import {
@@ -292,20 +299,80 @@ async function upsertMissingShippedOrdersBatch(
 
   let shipmentsLinked = 0;
   let shippedHydrated = 0;
+  // PS-509: the orphan-link update is a customer-money trigger boundary. Late attribution
+  // is the ordinary business path, so the link and the freeze must commit together — a
+  // link that commits without its freeze strands the shipment on the UPDATE path, which
+  // never freezes. If migration 0103 is not applied yet, defer ALL linking this pass
+  // rather than linking without freezing: the orders are already inserted above, the
+  // shipments stay orphaned, and the sync/link/sweep passes converge once the schema
+  // exists.
+  let linkFreezeReady = true;
+  try {
+    await ensureCustomerShippingMoneySyncSchema();
+  } catch (err) {
+    linkFreezeReady = false;
+    console.error(
+      '[order-sync] PS-509 schema not ready; deferring orphan links this pass:',
+      (err as Error).message,
+    );
+  }
   for (const row of insertedRows) {
     if (row.orderStatus !== 'shipped') continue;
     shippedHydrated += 1;
-    const linked = await db
-      .update(shipments)
-      .set({ orderId: row.id, clientId: row.clientId, updatedAt: new Date() })
+    if (!linkFreezeReady) continue;
+    // Candidates are read before the transaction so a failed transactional freeze can
+    // still record a durable needs_retry outcome for each after the rollback.
+    const candidates = await db
+      .select({ id: shipments.id })
+      .from(shipments)
       .where(
         and(
           isNull(shipments.orderId),
           eq(shipments.orderNumber, row.orderNumber)
         )
-      )
-      .returning({ id: shipments.id });
-    shipmentsLinked += linked.length;
+      );
+    if (!candidates.length) continue;
+    try {
+      const linked = await db.transaction(async (tx) => {
+        const updated = await tx
+          .update(shipments)
+          .set({ orderId: row.id, clientId: row.clientId, updatedAt: new Date() })
+          .where(
+            and(
+              isNull(shipments.orderId),
+              eq(shipments.orderNumber, row.orderNumber)
+            )
+          )
+          .returning({ id: shipments.id });
+        for (const shipment of updated) {
+          // Freeze exactly once, in the SAME transaction as the link. Ordinary
+          // ineligibility persists a durable named outcome; an unexpected failure
+          // throws, rolling back link and freeze together.
+          await freezeSyncIngressCustomerShippingMoney(shipment.id, {
+            boundary: 'orphan_link',
+            exec: tx,
+          });
+        }
+        return updated;
+      });
+      shipmentsLinked += linked.length;
+    } catch (err) {
+      // The transactional link+freeze could not complete: both rolled back. Per the
+      // accepted contract, late_attributed survives only as a failure classification —
+      // recorded durably (outside the failed transaction) so the retry sweep re-drives
+      // it once the row is relinked.
+      console.error(
+        `[order-sync] PS-509 link+freeze failed for order ${row.id}:`,
+        (err as Error).message,
+      );
+      for (const candidate of candidates) {
+        await recordSyncIngressFreezeRetry(candidate.id, {
+          boundary: 'orphan_link',
+          failureClassification: 'late_attributed',
+          detail: (err as Error).message ?? String(err),
+        });
+      }
+    }
   }
 
   // Observability (PS-046): redacted counts only — no order numbers, no PII,

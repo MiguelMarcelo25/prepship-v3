@@ -880,6 +880,8 @@
     "test:ps-508-outbound-freeze-integration": "tsx scripts/ps-508-outbound-freeze-integration.ts",
     "test:ps-508-classification": "tsx scripts/ps-508-classification-guard.ts",
     "audit:ps-508-coverage": "tsx scripts/ps-508-coverage-audit.ts",
+    "test:ps-509-sync-ingress-freeze": "tsx scripts/ps-509-sync-ingress-freeze-guard.ts",
+    "test:ps-509-sync-ingress-freeze-integration": "tsx scripts/ps-509-sync-ingress-freeze-integration.ts",
     "test:ps-502-mutation-matrix": "tsx scripts/ps-502-mutation-matrix.ts",
     "test:ps-502-integration": "tsx scripts/ps-502-replacement-integration.ts",
     "test:ps-502-concurrency-pg17": "tsx scripts/ps-502-replacement-concurrency-pg17.ts",

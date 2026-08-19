@@ -27,7 +27,8 @@ function check(name: string, ok: boolean, detail?: string): void {
 const DDL = `
 create table clients (
   id serial primary key,
-  store_ids integer[] default '{}'
+  store_ids integer[] default '{}',
+  is_test boolean default false
 );
 create table orders (
   id serial primary key,
@@ -55,6 +56,7 @@ create table shipments (
   id serial primary key,
   order_id integer,
   client_id integer,
+  label_shipment_id bigint,
   is_return boolean default false,
   voided boolean default false,
   source text,
