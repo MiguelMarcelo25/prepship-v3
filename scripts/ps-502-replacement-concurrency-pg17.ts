@@ -196,7 +196,11 @@ const PURCHASE_SHIPMENT = {
 const FULL_PROVIDER_RECEIPT = {
   providerTransactionId: 'txn-ps502-race',
   providerLabelId: 'lbl-ps502-race',
-  providerShipmentId: 'shp-ps502-race',
+  // NUMERIC on purpose. shipments.labelShipmentId is an integer column and the recorder
+  // refuses a receipt without a positive numeric shipment identity — it is what binds the
+  // receipt to the shared shipment row. This fixture carried a descriptive string, which
+  // predates that rule and only surfaced on the first real PostgreSQL 17 run.
+  providerShipmentId: '50021',
   trackingNumber: '1Z-PS502-RACE',
   labelUrl: 'https://example.test/ps502-race-label.pdf',
   shipmentCost: 8.25,
