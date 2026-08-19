@@ -4280,7 +4280,12 @@ export async function resolveCarrierNickname(
       const [row] = await db
         .select({ nickname: shipments.providerAccountNickname })
         .from(shipments)
-        .where(eq(shipments.providerAccountId, providerAccountId))
+        // Same defect Hermes found in shipping-margin's provider_account_names subquery, in a
+        // second place: this resolves a DISPLAY nickname for a provider account across all
+        // shipments, so a nickname carried only by a replacement vessel was returned for an
+        // ordinary label sharing that account. Excluding replacement money does not exclude
+        // replacement metadata, and every other read in this file already uses this predicate.
+        .where(and(ordinaryShipmentSourcePredicate, eq(shipments.providerAccountId, providerAccountId)))
         .limit(1);
       if (row?.nickname) return row.nickname;
     } catch {

@@ -2931,7 +2931,45 @@ console.log('\nordinary readers exclude source = replacement');
       return entry.isFile() && full.endsWith('.ts') ? [full] : [];
     });
 
-  const READS_SHIPMENTS = /from\(shipments\)|join\(shipments|from shipments|join shipments|update\(shipments\)/;
+  // Discovery is per-OCCURRENCE, not per-file, and that distinction is the whole lesson.
+  // The previous version asked "does this file contain an exclusion?", so ONE excluded query
+  // vouched for every other read in the same file — which is precisely how the
+  // provider_account_names subquery in shipping-margin-analytics.ts kept leaking replacement
+  // nicknames onto ordinary margin rows twelve lines below an exclusion I had just added.
+  //
+  // Aliased imports also defeated the old matcher: Hermes passed 443/443 with a probe file
+  // doing `import { shipments as vessel }`. Symbols are now resolved per file, and the raw
+  // forms are matched case-insensitively.
+  const tableSymbols = (source: string): string[] => [
+    'shipments',
+    ...[...source.matchAll(/import\s*\{[^}]*\bshipments\s+as\s+(\w+)/g)].map((m) => m[1]!),
+  ];
+
+  const occurrenceRegex = (symbol: string): RegExp => new RegExp(
+    [
+      `(?:from|join)\\s*\\(\\s*${symbol}\\s*[),]`,   // drizzle .from(x) / .leftJoin(x, ...)
+      `(?:from|join)\\s+\\$\\{\\s*${symbol}\\s*\\}`, // sql`... from ${x}`
+      `(?:from|join)\\s+${symbol}\\b`,               // raw SQL, any case
+      `update\\s*\\(\\s*${symbol}\\s*\\)`,           // drizzle .update(x)
+    ].join('|'),
+    'gi',
+  );
+
+  // How far past a read to look for its exclusion. A predicate lives in the same statement;
+  // 1500 characters covers the long analytic SELECTs in this codebase without letting the NEXT
+  // query's exclusion answer for this one.
+  const PREDICATE_WINDOW = 1500;
+
+  // A replacement vessel is created with order_id IS NULL — that is the whole isolation design.
+  // So a read bound to an order, or to one shipment id, PROVABLY cannot return one, and needs
+  // no source predicate. This is a derived proof rather than a written excuse, which matters:
+  // the two acknowledgement rationales that turned out to be false were both written from a
+  // glance instead of from the query. `order_id is null` is deliberately NOT accepted as a
+  // binding — a reader hunting order-less shipments is the orphan sweep this all exists for.
+  // The optional `}` matters: interpolated SQL writes `${shipments.orderId} = ${orders.id}`,
+  // and without it store-order-import.ts read as unbound when it is order-joined.
+  const ORDER_OR_ID_BOUND =
+    /order_?[Ii]d\}?\s*(?:=|,|\))(?![^;]{0,40}is\s+null)|(?:eq|inArray)\(\s*shipments\.(?:id|orderId)|shipments\.id\}?\s*=|\bs\.id\s*=/;
 
   // Acknowledged: these read shipments but cannot adopt a replacement vessel, or legitimately
   // see one. A replacement vessel has order_id IS NULL, so any reader bound to an order — or
@@ -2941,7 +2979,14 @@ console.log('\nordinary readers exclude source = replacement');
     'src/routes/admin.ts': 'order/id-bound diagnostics; an order-less vessel is unreachable',
     'src/routes/billing.ts': 'order-bound billing reads',
     'src/routes/clients.ts': 'client detail, shipment id-bound',
-    'src/routes/manifests.ts': 'manifest membership is order-bound',
+    // CORRECTED 2026-08-19. The previous reason — "manifest membership is order-bound" — was
+    // simply false: loadManifest selects on voided/carrier/client/scope with no order join and
+    // no order_id predicate, so a replacement vessel reaches it. It is listed here because a
+    // replacement parcel PHYSICALLY exists and plausibly belongs on a carrier manifest, not
+    // because it is unreachable. ⚠ OPEN DECISION for DJ: confirm replacement parcels belong on
+    // physical manifests, and whether a null order_id renders acceptably there.
+    'src/routes/manifests.ts':
+      'NOT order-bound — a replacement vessel is reachable; physical-manifest inclusion is an open decision',
     'src/services/billing-coverage-gap.ts': 'order-bound coverage comparison',
     'src/services/combo-package-defaults.ts': 'shipment id-bound package defaulting',
     'src/services/fulfillment/sole-outbound-shipment.ts': 'order-bound by definition',
@@ -2950,9 +2995,21 @@ console.log('\nordinary readers exclude source = replacement');
     'src/services/print-queue.ts': 'print queue entries are order/shipment id-bound',
     'src/services/print-queue/queue-send-preflight.ts': 'shipment id-bound preflight',
     'src/services/print-queue/shipstation-operation-reconciler.ts': 'operation id-bound',
-    'src/services/ref-rates-fetch.ts': 'rate reference sampling, shipment id-bound',
+    // CORRECTED 2026-08-19. "shipment id-bound" described the wrong query: the one I judged is
+    // inert (limit(0)). The OPERATIVE query joins shipments to orders, and an order-less
+    // replacement vessel cannot survive that join.
+    'src/services/ref-rates-fetch.ts': 'operative query joins shipments to orders; an order-less vessel cannot match',
     'src/services/reporting-projection.ts': 'order-bound projection',
     'src/services/return-order-read-model.ts': 'return-scoped, and returns are order-bound',
+    // The replacement-aware sync owner itself. Its four unbound reads were each read before
+    // being listed here: a provider-identity collision check bound by label_shipment_id; a
+    // label-id lookup that SELECTS source and branches on `existing.source === 'replacement'`
+    // further down than any window reaches; a tracking-bound provider-account enrichment; and
+    // `select count(*) from shipments` for the sync-status readout. ⚠ That last one genuinely
+    // counts replacement vessels — it is a diagnostic row count, not a business metric, so it
+    // is accepted rather than filtered. Revisit if it is ever surfaced as "orders shipped".
+    'src/services/shipment-sync.ts':
+      'replacement-aware sync owner; identity/label/tracking-bound reads plus a diagnostic total row count',
     // The one genuine judgement call: client-scoped, NOT order-bound, so it DOES see
     // replacement vessels. It gathers evidence of which package dimensions a client actually
     // used, and a replacement really did consume that package — so including it is correct
@@ -2970,16 +3027,58 @@ console.log('\nordinary readers exclude source = replacement');
     'i',
   );
 
-  const discovered = walk('src').filter((path) => READS_SHIPMENTS.test(read(path)));
-  const unclassified = discovered.filter((path) => {
-    if (/replacement/.test(path)) return false;            // replacement-owned by definition
-    if (EXCLUDES_ANY.test(read(path))) return false;        // excludes, in SQL or in code
-    return ACKNOWLEDGED_NO_EXCLUSION[path] === undefined;  // consciously acknowledged
+  const readers = walk('src').flatMap((path) => {
+    const source = read(path);
+    const sites = tableSymbols(source)
+      .flatMap((symbol) => [...source.matchAll(occurrenceRegex(symbol))].map((m) => m.index ?? 0));
+    return sites.length > 0 ? [{ path, source, sites }] : [];
   });
 
-  check('every production shipments reader is excluded, replacement-owned, or acknowledged',
-    discovered.length > 0 && unclassified.length === 0,
-    `discovered ${discovered.length} readers; unclassified: ${unclassified.join(', ')}`);
+  // Exclusions are legitimately FACTORED in this codebase — analysis.ts carries one inside
+  // analysisShipmentScopePredicate(), shared by every reader in the file. A site whose window
+  // invokes such a helper is covered by it. Without this, the guard would demand an inlined
+  // copy of the predicate beside every read, i.e. dictate worse production code to satisfy
+  // itself. A helper counts only if its own body actually carries the exclusion.
+  const guardedHelpers = (source: string): string[] =>
+    [...source.matchAll(/(?:function|const)\s+(\w+)/g)]
+      .filter((match) => EXCLUDES_ANY.test(source.slice(match.index ?? 0, (match.index ?? 0) + 2000)))
+      .map((match) => match[1]!)
+      .filter((name) => /Predicate|Sql|Scope|Filter|Clause|Exclusion|Where/i.test(name));
+
+  const unexcluded = readers.flatMap(({ path, source, sites }) => {
+    if (/replacement/.test(path)) return [];                       // replacement-owned
+    const helpers = guardedHelpers(source);
+    const bare = sites.filter((index) => {
+      const window = source.slice(index, index + PREDICATE_WINDOW);
+      return !EXCLUDES_ANY.test(window)
+        && !helpers.some((name) => window.includes(name))
+        && !ORDER_OR_ID_BOUND.test(window);
+    });
+    if (bare.length === 0) return [];                              // every site excluded
+    if (ACKNOWLEDGED_NO_EXCLUSION[path] !== undefined) return [];  // consciously acknowledged
+    return [`${path} (${bare.length}/${sites.length} sites unexcluded)`];
+  });
+
+  const siteCount = readers.reduce((total, reader) => total + reader.sites.length, 0);
+
+  check('every shipments READ SITE is excluded, replacement-owned, or acknowledged',
+    readers.length > 0 && unexcluded.length === 0,
+    `${readers.length} files / ${siteCount} read sites; unexcluded: ${unexcluded.join(' | ')}`);
+
+  // An acknowledgement that outlives its reader is permission nobody re-derived — and two of
+  // these were found to be factually wrong on 2026-08-19 (manifests.ts was not order-bound at
+  // all; ref-rates-fetch.ts described an inert limit(0) query). Stale entries rot the same way.
+  const staleAcknowledgements = Object.keys(ACKNOWLEDGED_NO_EXCLUSION)
+    .filter((path) => !readers.some((reader) => reader.path === path));
+  check('no acknowledgement outlives the reader it excuses',
+    staleAcknowledgements.length === 0,
+    `stale: ${staleAcknowledgements.join(', ')}`);
+
+  // ⚠ HEURISTIC, deliberately named as one. This is textual discovery, not AST analysis, and
+  // it is stated here rather than implied so no future reader mistakes it for exhaustive:
+  // a read hidden behind a helper that takes the table as a parameter, or assembled from
+  // dynamically concatenated SQL, is still invisible to it. It resolves direct references,
+  // aliased imports and interpolated table references, in any case, at every read site.
 
   const unsafe: string[] = [];
   for (const path of GENERIC_FALLBACK_READERS) {

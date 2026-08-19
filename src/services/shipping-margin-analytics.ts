@@ -520,6 +520,13 @@ export async function shippingMarginAnalytics(
       from shipments
       where provider_account_id is not null
         and nullif(btrim(provider_account_nickname), '') is not null
+        -- The outer query excluding replacement vessels is NOT enough: this subquery resolves
+        -- a display nickname per provider account across ALL shipments, so a nickname carried
+        -- only by a replacement vessel was still projected onto an ORDINARY margin row sharing
+        -- that account. Hermes reproduced it at 7e14a095 — an ordinary row on 'acct-42' with a
+        -- null nickname rendered as "Replacement House Account". Excluding the financial row
+        -- does not exclude its metadata.
+        and source is distinct from 'replacement'
       group by provider_account_id
     ) provider_account_names
       on provider_account_names.provider_account_id = ${shipments.providerAccountId}

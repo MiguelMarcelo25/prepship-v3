@@ -308,16 +308,46 @@ function resolvedRequestForReplacement(
   return parsed;
 }
 
+/**
+ * Compare a PERSISTED vessel value against the frozen request.
+ *
+ * float32 is the right rule here and only here: these columns are Postgres REAL, so the
+ * database has already collapsed the value to float32 on write. Comparing in float64 would
+ * report a mismatch that exists only because we widened the stored value on read.
+ */
 function frozenRealMatches(value: number | null, expected: number): boolean {
   return value != null
     && Number.isFinite(value)
     && Math.fround(value) === Math.fround(expected);
 }
 
+/**
+ * The provider's own quoted precision for a dimension or weight. Carriers quote these to at
+ * most three decimals; anything beyond that is representation noise from unit conversion.
+ */
+const PROVIDER_FACT_DECIMALS = 1000;
+
+const normalizeProviderReal = (value: number): number =>
+  Math.round(value * PROVIDER_FACT_DECIMALS) / PROVIDER_FACT_DECIMALS;
+
+/**
+ * Compare a FRESH provider fact against the frozen request.
+ *
+ * This used to be byte-identical to frozenRealMatches, and that was wrong: a value straight
+ * off the provider payload has NOT passed through a REAL column, so float32 there is not
+ * canonicalisation — it is a silent widening whose size depends on magnitude. At a weight of
+ * 16 it hides ~2e-6; at 100000 it hides ~0.008. Hermes flagged it on 2026-08-19 as accepting
+ * a provider fact the fingerprinted request never named.
+ *
+ * Exact equality is not the answer either: toOunces() converts pounds and grams, and 453.592 g
+ * does not land exactly on 16 oz in binary floating point. So normalise BOTH sides by an
+ * explicit, documented rule — the provider's own three-decimal quoting precision — and require
+ * exact equality after it. That is bounded and magnitude-independent, unlike float32 collapse.
+ */
 function sourceRealMatches(value: number | null | undefined, expected: number): boolean {
   return value != null
     && Number.isFinite(value)
-    && Math.fround(value) === Math.fround(expected);
+    && normalizeProviderReal(value) === normalizeProviderReal(expected);
 }
 
 function providerFactsMatchFrozenRequest(
