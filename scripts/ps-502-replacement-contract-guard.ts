@@ -11,6 +11,7 @@
  *
  * Offline and pure — no database, no network, no mutation.
  */
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import {
   assertReplacementTransition,
@@ -2970,94 +2971,242 @@ console.log('\nordinary readers exclude source = replacement');
   );
 
   /**
-   * The ONE statement containing a read, not a fixed character window.
+   * The ONE statement containing a read — lexically, not by counting characters.
    *
-   * Scans forward to the first `;` at bracket depth zero, so a `.where()` belonging to the
-   * next query can never vouch for this one. The cap is a runaway guard, not a scope.
+   * The previous version scanned to the first depth-zero `;`, which Hermes defeated three ways
+   * at 57cf3301: JavaScript does not require that semicolon, so a bare read on one line was
+   * blessed by the exclusion on the NEXT statement; a function declaration absorbed the query
+   * after it and passed as an exclusion-carrying helper; and a `'{'` inside a SQL string kept
+   * the bracket depth non-zero straight past the real end of the statement.
+   *
+   * So: strings and template literals are tracked (including `${}` re-entry), brackets are only
+   * counted in code, and a newline at depth zero ENDS the statement unless the next meaningful
+   * character continues the expression — a leading `.`, `?.`, `)`, `,` or a binary operator.
+   * That is the automatic-semicolon-insertion rule the previous scanner ignored.
    */
-  const statementAt = (source: string, index: number): string => {
+  /**
+   * Where every template literal in a file starts and ends.
+   *
+   * A raw-SQL read sits INSIDE a sql tagged template, and a scanner starting mid-template does
+   * not know that: it reads the SQL as code, so the first newline whose next character is not a
+   * chain continuation ends the "statement" after a single line, and every raw read hashes to
+   * the same signature. A read inside a template is bounded by that template instead, which is
+   * the statement it actually belongs to.
+   */
+  const templateRanges = (source: string): Array<[number, number]> => {
+    const ranges: Array<[number, number]> = [];
+    const reentry: number[] = [];
+    const BACKTICK = String.fromCharCode(96);
+    const starts: number[] = [];
+    let quote: string | null = null;
     let depth = 0;
-    const limit = Math.min(source.length, index + 6000);
-    for (let i = index; i < limit; i += 1) {
+    for (let i = 0; i < source.length; i += 1) {
       const c = source[i]!;
-      if (c === '(' || c === '[' || c === '{') depth += 1;
-      else if (c === ')' || c === ']' || c === '}') depth -= 1;
-      else if (c === ';' && depth <= 0) return source.slice(index, i);
+      const next = source[i + 1];
+      if (quote) {
+        if (c === String.fromCharCode(92)) { i += 1; continue; }
+        if (quote === BACKTICK && c === '$' && next === '{') {
+          reentry.push(depth);
+          depth += 1;
+          quote = null;
+          i += 1;
+          continue;
+        }
+        if (c === quote) {
+          if (quote === BACKTICK) {
+            const opened = starts.pop();
+            if (opened !== undefined) ranges.push([opened, i]);
+          }
+          quote = null;
+        }
+        continue;
+      }
+      if (c === '(' || c === '[' || c === '{') { depth += 1; continue; }
+      if (c === ')' || c === ']' || c === '}') {
+        depth -= 1;
+        if (reentry.length > 0 && depth === reentry[reentry.length - 1]) {
+          reentry.pop();
+          quote = BACKTICK;
+        }
+        continue;
+      }
+      if (c === "'" || c === '"' || c === BACKTICK) {
+        quote = c;
+        if (c === BACKTICK) starts.push(i);
+      }
+    }
+    return ranges;
+  };
+
+  const statementAt = (
+    source: string,
+    index: number,
+    ranges: Array<[number, number]> = [],
+  ): string => {
+    const enclosing = ranges.find(([from, to]) => index > from && index < to);
+    if (enclosing) return source.slice(index, enclosing[1]);
+    const limit = Math.min(source.length, index + 8000);
+    const templateDepths: number[] = [];
+    let quote: string | null = null;
+    let depth = 0;
+    let i = index;
+    while (i < limit) {
+      const c = source[i]!;
+      const next = source[i + 1];
+      if (quote) {
+        if (c === '\\') { i += 2; continue; }
+        if (quote === '`' && c === '$' && next === '{') {
+          templateDepths.push(depth);
+          depth += 1;
+          quote = null;
+          i += 2;
+          continue;
+        }
+        if (c === quote) { quote = null; }
+        i += 1;
+        continue;
+      }
+      if (c === '/' && next === '/') { while (i < limit && source[i] !== '\n') i += 1; continue; }
+      if (c === '/' && next === '*') {
+        i += 2;
+        while (i < limit && !(source[i] === '*' && source[i + 1] === '/')) i += 1;
+        i += 2;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') { quote = c; i += 1; continue; }
+      if (c === '(' || c === '[' || c === '{') { depth += 1; i += 1; continue; }
+      if (c === ')' || c === ']' || c === '}') {
+        depth -= 1;
+        if (templateDepths.length > 0 && depth === templateDepths[templateDepths.length - 1]) {
+          templateDepths.pop();
+          quote = '`';
+        }
+        i += 1;
+        continue;
+      }
+      if (c === ';' && depth <= 0) return source.slice(index, i);
+      if (c === '\n' && depth <= 0) {
+        let j = i + 1;
+        while (j < limit && /\s/.test(source[j]!)) j += 1;
+        if (!/^(?:\.|\?\.|\)|,|\+|-|\*|\|\||&&|\?)/.test(source.slice(j, j + 2))) {
+          return source.slice(index, i);
+        }
+      }
+      i += 1;
     }
     return source.slice(index, limit);
   };
 
   /**
-   * A binding is a COMPARISON, never punctuation.
+   * A helper's OWN body.
    *
-   * A replacement vessel is created with order_id IS NULL, so a read genuinely constrained to
-   * an order — or to one shipment id — cannot return one. That is a proof. But `order_id,` in a
-   * projection and `group by order_id` are not constraints, and accepting them turned this rule
-   * into a way to wave readers through. GROUP BY / ORDER BY tails are removed before the test
-   * for exactly that reason, and `order_id is null` is still never a binding: that reader IS
-   * the orphan sweep this whole guard exists for.
+   * `function name(...) { ... }` needs no trailing semicolon, so the statement scanner ran
+   * straight through it into the next query and credited that query's exclusion to the helper.
+   * A function body is therefore taken by balanced braces; only `const`/`let` forms use the
+   * statement scanner, where the terminator genuinely belongs to the declaration.
    */
-  const REAL_BINDING = new RegExp([
-    '(?:eq|inArray)\\(\\s*\\w+\\.(?:orderId|id)\\b',
-    '\\b\\w*\\.?order_id\\s*=(?!\\s*null)',
-    '=\\s*\\w*\\.?order_id\\b',
-    '\\$\\{\\s*\\w+\\.(?:orderId|id)\\s*\\}\\s*=',
-    '=\\s*\\$\\{\\s*\\w+\\.(?:orderId|id)\\s*\\}',
-    '(?<![.\\w])id\\s*=\\s*\\$\\{',
-    '\\b(?:s|shipments|sx)\\.id\\s*=\\s*(?!\\s*null)',
-  ].join('|'), 'i');
-
-  const isOrderOrIdBound = (statement: string): boolean => REAL_BINDING.test(
-    statement
-      .replace(/\.(?:orderBy|groupBy)\([\s\S]*$/, '')
-      .replace(/\b(?:group|order)\s+by[\s\S]*$/i, ''),
-  );
+  const declarationBody = (source: string, index: number): string => {
+    const head = source.slice(index, index + 200);
+    if (!/^\s*function\b/.test(head)) return statementAt(source, index);
+    const open = source.indexOf('{', index);
+    if (open === -1) return statementAt(source, index);
+    let depth = 0;
+    for (let i = open; i < Math.min(source.length, open + 8000); i += 1) {
+      const c = source[i]!;
+      if (c === '{') depth += 1;
+      else if (c === '}') {
+        depth -= 1;
+        if (depth === 0) return source.slice(index, i + 1);
+      }
+    }
+    return source.slice(index, index + 8000);
+  };
 
   /**
-   * Helpers that genuinely carry the exclusion, identified from their OWN declaration body.
+   * A binding proves a replacement vessel is unreachable ONLY when it binds the SHIPMENTS row.
    *
-   * Three deliberate narrowings, each one closing a demonstrated false pass: the name must be
-   * long enough and shaped like a predicate (a local called `scope` qualified under the old
-   * rule); the body is the real declaration statement rather than the next 2,000 characters of
-   * whatever follows; and the reader must CALL it — a bare mention of the identifier is not
-   * evidence that this query used it.
+   * `eq(clients.id, shipments.clientId)` satisfied the old rule because `\w+\.id` accepted any
+   * table's id — and a replacement vessel has a clientId, so that join reaches it. The symbols
+   * are taken from the file so an aliased import binds correctly too.
+   */
+  const orderOrIdBound = (statement: string, symbols: string[]): boolean => {
+    const alternatives = symbols.flatMap((symbol) => [
+      `(?:eq|inArray)\\([^)]{0,80}\\b${symbol}\\.(?:orderId|id)\\b`,
+      `\\$\\{\\s*${symbol}\\.(?:orderId|id)\\s*\\}\\s*=`,
+      `=\\s*\\$\\{\\s*${symbol}\\.(?:orderId|id)\\s*\\}`,
+    ]).concat([
+      '\\b(?:s|sx|shipments)\\.order_id\\s*=(?!\\s*null)',
+      '=\\s*(?:s|sx|shipments)\\.order_id\\b',
+      '\\b(?:s|sx|shipments)\\.id\\s*=\\s*(?!\\s*null)',
+      '(?<![.\\w])order_id\\s*=\\s*\\$\\{',
+      '(?<![.\\w])id\\s*=\\s*\\$\\{',
+    ]);
+    return new RegExp(alternatives.join('|'), 'i').test(
+      statement
+        .replace(/\.(?:orderBy|groupBy)\([\s\S]*$/, '')
+        .replace(/\b(?:group|order)\s+by[\s\S]*$/i, ''),
+    );
+  };
+
+  // NOTE: there is deliberately no "this reader selects replacements" escape hatch.
+  // One existed briefly; disabling it changed no classification, because every
+  // replacement-owned read is independently bound or excluded. A rule nothing depends on
+  // cannot be proven by a mutation, and an unprovable rule in a guard is a liability.
+
+  /**
+   * A site identity, not a prefix.
+   *
+   * The old signature was the first 64 normalised characters, which is a prefix two statements
+   * can deliberately share — two order-lifecycle sites already did. Identity is now the file,
+   * the occurrence ordinal within it, and a digest of the WHOLE normalised statement.
+   */
+  const signature = (path: string, ordinal: number, statement: string): string =>
+    `${path}#${ordinal}:${createHash('sha256')
+      .update(statement.replace(/\s+/g, ' ').trim())
+      .digest('hex')
+      .slice(0, 16)}`;
+
+  /**
+   * Helpers that genuinely carry the exclusion, judged from their OWN body.
+   *
+   * The name must be long enough and predicate-shaped — a local called `scope` once qualified —
+   * the body comes from declarationBody so a function cannot absorb the query after it, and the
+   * reader must CALL it: a bare mention of the identifier is not evidence this query used it.
    */
   const guardedHelpers = (source: string): string[] => {
     const names: string[] = [];
     for (const match of source.matchAll(/(?:function|const)\s+(\w{10,})\s*[=(]/g)) {
       const name = match[1]!;
       if (!/Predicate|Sql|Scope|Filter|Clause|Exclusion|Where/i.test(name)) continue;
-      if (EXCLUDES_ANY.test(statementAt(source, match.index ?? 0))) names.push(name);
+      if (EXCLUDES_ANY.test(declarationBody(source, match.index ?? 0))) names.push(name);
     }
     return names;
   };
 
   /**
-   * Resolve a predicate that was BUILT INTO A LOCAL before the statement ran.
-   *
-   * routes/shipments.ts composes its filter as `const where = and(...)` and then calls
-   * .where(where); a forward-only statement scan cannot see that, and calling it unexcluded
-   * would be a false accusation. Only identifiers actually PASSED AS THE PREDICATE are
-   * resolved — not every name mentioned nearby — and the declaration is then judged by the
-   * same two rules as an inline one: it excludes, or it binds to an order/id.
+   * Resolve a predicate BUILT INTO A LOCAL before the statement ran — routes/shipments.ts
+   * composes `const where = and(...)` and then calls .where(where). Only identifiers in this
+   * statement's predicate region are resolved, and the declaration must itself carry an
+   * exclusion or a shipments binding, so the proof is indirect but still a proof.
    */
-  const predicateLocalsCovered = (statement: string, source: string): boolean => {
+  const predicateLocalsCovered = (
+    statement: string,
+    source: string,
+    symbols: string[],
+  ): boolean => {
     const whereAt = statement.indexOf('.where(');
-    const args = whereAt === -1 ? [] : [statement.slice(whereAt)];
+    if (whereAt === -1) return false;
     const idents = new Set(
-      args.flatMap((arg) => [...arg.matchAll(/\b([A-Za-z_]\w*)\b/g)].map((m) => m[1]!)),
+      [...statement.slice(whereAt).matchAll(/\b([A-Za-z_]\w*)\b/g)].map((m) => m[1]!),
     );
     for (const ident of idents) {
       const declaration = new RegExp(`(?:const|let)\\s+${ident}\\s*=`).exec(source);
       if (!declaration) continue;
-      const declared = statementAt(source, declaration.index);
-      if (EXCLUDES_ANY.test(declared) || isOrderOrIdBound(declared)) return true;
+      const declared = declarationBody(source, declaration.index);
+      if (EXCLUDES_ANY.test(declared) || orderOrIdBound(declared, symbols)) return true;
     }
     return false;
   };
-  /** A short, readable fingerprint of one read site — stable under reformatting. */
-  const signature = (statement: string): string =>
-    statement.replace(/\s+/g, ' ').trim().slice(0, 64);
 
   const EXCLUDES_ANY = new RegExp(
     `${NULL_SAFE.source}|source\\s*[!=]==\\s*'replacement'`,
@@ -3072,58 +3221,51 @@ console.log('\nordinary readers exclude source = replacement');
   // let one site become safe while a different unsafe one appeared without the total moving.
   const ACKNOWLEDGED_NO_EXCLUSION: Readonly<Record<string, { sites: string[]; why: string }>> = {
     // DECIDED 2026-08-19 by DJ: replacement parcels DO belong on physical carrier manifests.
-    // Reachability is intentional, not a leak — the parcel exists and the warehouse has to hand
-    // it to the carrier. The original rationale ("manifest membership is order-bound") was
-    // false: loadManifest selects on voided/carrier/client/scope with no order join at all.
-    // The null order_id renders acceptably because the manifest prints shipments.order_number,
-    // and a vessel carries the allocated reference (1321-REPLACE) there, so the row identifies
-    // itself on the sheet and cannot be confused with the original parcel.
+    // Reachability is intentional. loadManifest selects on voided/carrier/client/scope with no
+    // order join, and the null order_id renders acceptably because the manifest prints
+    // shipments.order_number, where a vessel carries the allocated 1321-REPLACE reference.
     'src/routes/manifests.ts': {
-      sites: ['from(shipments) .where( and( eq(shipments.voided, false), gte(sh'],
+      sites: ['src/routes/manifests.ts#0:684d9891f4b6183f'],
       why: 'replacement parcels belong on physical manifests (DJ, 2026-08-19)',
     },
-    // Client-scoped, NOT order-bound, so it DOES see replacement vessels — and that is correct.
-    // It gathers evidence of which package dimensions a client actually used, and a replacement
-    // really did consume that package. Revisit if it ever feeds an order count or an average.
+    // Client-scoped, NOT order-bound, so it DOES see replacement vessels — correctly. It
+    // gathers evidence of which package dimensions a client used, and a replacement really did
+    // consume that package. Revisit if it ever feeds an order count or a per-order average.
     'src/services/billing-client-package-pricing.ts': {
-      sites: ['from(shipments) .where( and( eq(shipments.clientId, clientId), e'],
+      sites: ['src/services/billing-client-package-pricing.ts#0:72fcb460ca07b2e5'],
       why: 'client-scoped package-dimension evidence; the replacement genuinely consumed that package',
     },
-    // Order-bound by proof, through an IMPORTED predicate the sweep does not follow across
-    // files: activeOutboundShipmentPredicate({ orderId }) resolves to
-    // eq(shipments.orderId, input.orderId) in shipment-aggregate.ts. It binds only BECAUSE the
-    // orderId argument is passed — which is exactly why these are pinned by signature rather
-    // than by a registry entry. Drop the argument and the signature changes and this fails.
+    // Order-bound through an IMPORTED predicate this sweep does not follow across files:
+    // activeOutboundShipmentPredicate({ orderId }) resolves to eq(shipments.orderId, ...) in
+    // shipment-aggregate.ts, and binds only BECAUSE the argument is passed. Pinned per site so
+    // dropping that argument changes the digest and fails here.
     'src/services/order-lifecycle-command.ts': {
       sites: [
-        'from(shipments) .where(and( activeOutboundShipmentPredicate({ or',
-        'from(shipments) .where(activeOutboundShipmentPredicate({ orderId',
-        'from(shipments) .where(activeOutboundShipmentPredicate({ orderId',
+        'src/services/order-lifecycle-command.ts#0:08868cc4117dfb43',
+        'src/services/order-lifecycle-command.ts#1:edf953b981770710',
+        'src/services/order-lifecycle-command.ts#4:9f8936e9e04326d4',
       ],
-      why: 'imported activeOutboundShipmentPredicate binds shipments.orderId at each of these call sites',
+      why: 'imported activeOutboundShipmentPredicate binds shipments.orderId at each of these sites',
     },
-    // Genuinely unbound, and genuinely inert: this Drizzle query carries limit(0). The
-    // OPERATIVE rate-reference query below it joins shipments to orders, where an order-less
-    // vessel cannot survive. Listed rather than "fixed" because adding a predicate to a query
-    // that returns nothing would be theatre.
+    // Genuinely unbound and genuinely inert: this Drizzle query carries limit(0). The OPERATIVE
+    // rate-reference query joins shipments to orders, where an order-less vessel cannot survive.
+    // Listed rather than "fixed" — adding a predicate to a query returning nothing is theatre.
     'src/services/ref-rates-fetch.ts': {
-      sites: ['from(shipments) .where( and( isNotNull(shipments.weightOz), gte('],
+      sites: ['src/services/ref-rates-fetch.ts#0:2d1141d9dbb3157b'],
       why: 'inert limit(0) sampling query; the operative query joins shipments to orders',
     },
-    // The replacement-aware sync owner. Two provider-IDENTITY reads bound by label_shipment_id
-    // — one collision check, one label-id lookup that selects source and branches on
-    // `existing.source === 'replacement'` further down than any statement scope reaches — plus
-    // the sync-status readout. Both generic provider-account ENRICHMENT operations, which used
-    // to sit here too, now carry the exclusion instead.
-    // ⚠ getShipmentSyncStatus()'s `select count(*) from shipments` genuinely counts replacement
-    // vessels. It is a diagnostic ROW count named shipmentCount, not ordersShipped, so it is
-    // accepted rather than filtered — split or filter it the moment it is surfaced as an
-    // order-level or KPI metric.
+    // The replacement-aware sync owner: two provider-IDENTITY reads bound by label_shipment_id
+    // — a collision check and a label-id lookup that branches on source further down than any
+    // statement reaches — plus the sync-status readout. Both generic provider-account
+    // ENRICHMENT operations, which used to sit here, now carry the exclusion instead.
+    // ⚠ getShipmentSyncStatus()'s count(*) genuinely counts replacement vessels. It is a
+    // diagnostic ROW count named shipmentCount, not ordersShipped, so it is accepted rather
+    // than filtered — split or filter it the moment it is surfaced as an order-level metric.
     'src/services/shipment-sync.ts': {
       sites: [
-        'from(shipments) .where(eq(shipments.labelShipmentId, source.ship',
-        'from(shipments) .where(inArray(shipments.labelShipmentId, labelI',
-        'from(shipments)',
+        'src/services/shipment-sync.ts#1:b7bded4e82f11586',
+        'src/services/shipment-sync.ts#3:457611f9a7a28b47',
+        'src/services/shipment-sync.ts#6:60cab2ffa37a3731',
       ],
       why: 'label-identity reads plus the diagnostic count(*); enrichment now excludes replacements',
     },
@@ -3144,14 +3286,15 @@ console.log('\nordinary readers exclude source = replacement');
   for (const { path, source, sites } of readers) {
 
     const helpers = guardedHelpers(source);
-    const bare = sites
-      .map((index) => statementAt(source, index))
-      .filter((statement) => !EXCLUDES_ANY.test(statement)
-        && !SELECTS_REPLACEMENT.test(statement)
-        && !helpers.some((name) => statement.includes(`${name}(`))
-        && !isOrderOrIdBound(statement)
-        && !predicateLocalsCovered(statement, source))
-      .map(signature);
+        const symbols = tableSymbols(source);
+        const ranges = templateRanges(source);
+        const bare = sites
+          .map((index, ordinal) => ({ ordinal, statement: statementAt(source, index, ranges) }))
+          .filter(({ statement }) => !EXCLUDES_ANY.test(statement)
+                && !helpers.some((name) => statement.includes(name + '('))
+            && !orderOrIdBound(statement, symbols)
+            && !predicateLocalsCovered(statement, source, symbols))
+          .map(({ ordinal, statement }) => signature(path, ordinal, statement));
     bareByPath.set(path, bare);
   }
 

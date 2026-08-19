@@ -165,15 +165,31 @@ function runApplier(url: string, mode: 'inspect' | 'apply'): Run {
 
 /** An independent catalog fingerprint — not the applier's own read-back. */
 async function catalogShape(url: string): Promise<{
-  tables: string[]; indexes: string[]; constraints: string[]; rls: string[];
+  tables: string[]; indexes: string[]; constraints: string[]; rls: string[]; metrics: string[];
 }> {
   const target = postgres(url, { max: 1, prepare: false, onnotice: () => {} });
   try {
+    // PS-502 objects ONLY. billing_summary_metrics is PREREQUISITE — 0029 creates it and
+    // 0102 merely extends it — so counting it here made the "wholly absent" scenario assert
+    // zero tables against a fixture that had just created one. Hermes found that the harness
+    // could not pass its own first check.
     const tables = await target.unsafe(`
       select table_name from information_schema.tables
        where table_schema = 'public'
-         and (table_name like 'replacement%' or table_name = 'billing_summary_metrics')
+         and table_name like 'replacement%'
        order by table_name`);
+    // 0102's columns are read back independently of the applier's own verification, with the
+    // type, nullability and default it is supposed to install — "the column exists" would pass
+    // against a wrong-typed or nullable column carrying money.
+    const metrics = await target.unsafe(`
+      select column_name, data_type, numeric_precision, numeric_scale,
+             is_nullable, column_default
+        from information_schema.columns
+       where table_schema = 'public'
+         and table_name = 'billing_summary_metrics'
+         and column_name in
+             ('replace_postage_total', 'replace_pick_pack_total', 'replacement_count')
+       order by column_name`);
     const indexes = await target.unsafe(`
       select indexname from pg_indexes
        where schemaname = 'public'
@@ -188,6 +204,13 @@ async function catalogShape(url: string): Promise<{
        where relrowsecurity = true and relname like 'replacement%'
        order by relname`);
     return {
+      metrics: metrics.map((r) => {
+        const row = r as Record<string, unknown>;
+        return [
+          row.column_name, row.data_type, row.numeric_precision, row.numeric_scale,
+          row.is_nullable, row.column_default,
+        ].join('|');
+      }),
       tables: tables.map((r) => String((r as Record<string, unknown>).table_name)),
       indexes: indexes.map((r) => String((r as Record<string, unknown>).indexname)),
       constraints: constraints.map((r) => String((r as Record<string, unknown>).conname)),
@@ -214,8 +237,12 @@ async function main(): Promise<void> {
   {
     const db = await freshDatabase('1. wholly absent — INSPECT writes nothing, APPLY installs the exact shape');
     const before = await catalogShape(db.url);
-    check('absent: no PS-502 table exists before the run', before.tables.length === 0,
+    check('absent: no PS-502 replacement object exists before the run',
+      before.tables.length === 0,
       `found: ${before.tables.join(', ')}`);
+    check('absent: the PREREQUISITE reporting table is present but un-extended',
+      before.metrics.length === 0,
+      `0102 columns already present: ${before.metrics.join(' ; ')}`);
 
     const inspect = runApplier(db.url, 'inspect');
     const afterInspect = await catalogShape(db.url);
@@ -234,6 +261,13 @@ async function main(): Promise<void> {
       `tables: ${afterApply.tables.join(', ')}`);
     check('absent: RLS is enabled on all seven replacement relations',
       afterApply.rls.length === 7, `rls: ${afterApply.rls.join(', ')}`);
+    check('absent: 0102 extended the reporting table with the exact reviewed money columns',
+      afterApply.metrics.join(' ; ') === [
+        'replace_pick_pack_total|numeric|14|2|NO|0',
+        'replace_postage_total|numeric|14|2|NO|0',
+        'replacement_count|integer|32|0|NO|0',
+      ].join(' ; '),
+      `actual: ${afterApply.metrics.join(' ; ')}`);
     check('absent: the 0103 durable-obligation index exists',
       afterApply.indexes.some((i) => i.includes('replacement_financial_actions')),
       `indexes: ${afterApply.indexes.join(', ')}`);

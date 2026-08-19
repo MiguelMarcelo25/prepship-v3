@@ -58,6 +58,9 @@ const MONEY_SNAPSHOT = 'src/services/customer-shipping-money-snapshot.ts';
 const PROVIDER_ADAPTER = 'src/services/replacement-label-provider.ts';
 const CREDENTIAL_AUTHORITY = 'src/services/replacement-provider-credential-authority.ts';
 const ANALYSIS = 'src/routes/analysis.ts';
+const ADMIN = 'src/routes/admin.ts';
+const LIFECYCLE_ORDER = 'src/services/order-lifecycle-command.ts';
+const LABEL_BUY_OWNED = 'src/services/replacement-label-purchase-command.ts';
 const OUTBOX = 'src/services/fulfillment/outbox.ts';
 const LABELS = 'src/services/labels.ts';
 const SYNC = 'src/services/shipment-sync.ts';
@@ -1543,6 +1546,38 @@ const MUTATIONS: Mutation[] = [
     file: SYNC,
     find: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments);",
     replace: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments)\n    .where(sql`true`);",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M186',
+    defect: "a semicolon-free bare read is blessed by the exclusion in the NEXT statement",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(orders, eq(orders.id, shipments.orderId))\n// eslint-disable-next-line\nconst ps502AsiProbe = db.select({ id: shipments.id }).from(shipments)",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M187',
+    defect: "an unrelated table id is accepted as a shipments binding",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(clients, eq(clients.id, shipments.clientId))",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M188',
+    defect: "a predicate-shaped helper absorbs the following statement and passes as exclusion-carrying",
+    file: ANALYSIS,
+    find: "  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;",
+    replace: "  return analysisShipmentScopeSelection(q);\n}\nconst ps502MovedExclusion = sql`s.source is distinct from 'replacement'`;\nfunction ps502Unused(): SQL {",
+    expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
+  },
+  {
+    id: 'M190',
+    defect: "an acknowledged site is changed only BEYOND its first 64 characters",
+    file: LIFECYCLE_ORDER,
+    find: "        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId),\r",
+    replace: "        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId ?? 0),\r",
     expect: "every shipments READ SITE is excluded, replacement-owned, or acknowledged BY SITE",
   },
 ];
