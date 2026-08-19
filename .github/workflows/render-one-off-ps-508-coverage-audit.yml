@@ -43,6 +43,11 @@ on:
         required: false
         default: '50'
         type: string
+      watermark:
+        description: 'ISO time the outbound freeze went live (rows at/after it SHOULD carry a tuple). Blank = no split.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -99,6 +104,7 @@ jobs:
           AUDIT_DAYS: ${{ inputs.days }}
           AUDIT_LIMIT: ${{ inputs.limit }}
           AUDIT_OPERATOR: ${{ github.actor }}
+          AUDIT_WATERMARK: ${{ inputs.watermark }}
         run: |
           set -euo pipefail
           if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
@@ -116,7 +122,16 @@ jobs:
           )
           archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
 
-          runner="PS508_AUDIT_OPERATOR='${AUDIT_OPERATOR}' npx tsx scripts/ps-508-coverage-audit.ts --days=${AUDIT_DAYS} --limit=${AUDIT_LIMIT}"
+          # Reject anything that is not a plain ISO timestamp before it reaches a shell command.
+          wm_arg=""
+          if [ -n "${AUDIT_WATERMARK:-}" ]; then
+            case "${AUDIT_WATERMARK}" in
+              [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+              *) echo '::error::watermark must look like 2026-08-19T02:23:00Z'; exit 1;;
+            esac
+            wm_arg=" --watermark=${AUDIT_WATERMARK}"
+          fi
+          runner="PS508_AUDIT_OPERATOR='${AUDIT_OPERATOR}' npx tsx scripts/ps-508-coverage-audit.ts --days=${AUDIT_DAYS} --limit=${AUDIT_LIMIT}${wm_arg}"
           start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && ${runner}"
 
           payload=$(START_COMMAND="$start_command" node -e \

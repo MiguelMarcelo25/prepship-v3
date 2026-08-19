@@ -123,7 +123,7 @@ function stripComments(source: string): string {
 }
 
 const row = (over: Partial<CoverageRow> = {}): CoverageRow => ({
-  shipmentId: 1, clientId: 1, source: 'prepship_v2', excluded: null,
+  shipmentId: 1, clientId: 1, source: 'prepship_v2', excluded: null, createdAt: null,
   kind: 'valid_ps508', tupleAmount: 12, recomputeAmount: 12, ...over,
 });
 
@@ -284,6 +284,92 @@ check('the job id is exported to the environment before the poll loop can fail',
 check('an unresolvable log fetch still prints the job id and where to read it',
   /Could not transcribe the Render log automatically/.test(laneCode)
   && /Jobs -> \$\{RENDER_JOB_ID\} -> Logs/.test(laneCode));
+
+// ── THE WATERMARK SPLIT ───────────────────────────────────────────────────────────────────
+
+// The first production run returned 100% legacy_absent over 32 rows. That number is unreadable on
+// its own: "nothing shipped since the writer deployed" and "the writer is live and not firing"
+// produce exactly the same figure, and they are opposite conclusions. These checks are the reason
+// the split exists.
+const WM = '2026-08-19T02:23:00Z';
+const dated = (createdAt: string, over: Partial<CoverageRow> = {}): CoverageRow =>
+  row({ createdAt, ...over });
+
+// Before the writer existed: absent is history, and no amount of re-running changes it.
+{
+  const r = buildCoverageReport([
+    dated('2026-08-18T10:00:00Z', { shipmentId: 1, kind: 'legacy_absent', tupleAmount: null }),
+    dated('2026-08-18T11:00:00Z', { shipmentId: 2, kind: 'legacy_absent', tupleAmount: null }),
+  ], WM);
+  check('pre-watermark legacy_absent is history, NOT an activation blocker',
+    r.preWatermark.rows === 2 && r.postWatermark.rows === 0
+    && r.activationBlockers.length === 0, JSON.stringify(r.activationBlockers));
+  check('and the report says plainly that nothing post-dates the watermark',
+    r.postWatermark.rows === 0);
+}
+
+// After the writer deployed: absent means the freeze is live and not firing. THE finding the first
+// run could not have surfaced.
+{
+  const r = buildCoverageReport([
+    dated('2026-08-19T05:00:00Z', { shipmentId: 3, kind: 'legacy_absent', tupleAmount: null }),
+    dated('2026-08-18T10:00:00Z', { shipmentId: 4, kind: 'legacy_absent', tupleAmount: null }),
+  ], WM);
+  check('post-watermark legacy_absent RAISES an activation blocker',
+    r.activationBlockers.some((b) => /created AFTER the writer deployed/.test(b)),
+    JSON.stringify(r.activationBlockers));
+  check('the split counts each side separately',
+    r.postWatermark.rows === 1 && r.preWatermark.rows === 1
+    && r.postWatermark.byKind.legacy_absent === 1);
+}
+
+// A post-watermark row that DID freeze is the healthy case and must stay silent.
+{
+  const r = buildCoverageReport([
+    dated('2026-08-19T05:00:00Z', { shipmentId: 5, kind: 'valid_ps508' }),
+  ], WM);
+  check('a post-watermark row carrying a tuple raises nothing',
+    r.activationBlockers.length === 0 && r.postWatermark.byKind.valid_ps508 === 1);
+}
+
+// Without a watermark there is no split and no blocker — the report must not invent a verdict it
+// cannot support.
+{
+  const r = buildCoverageReport([
+    dated('2026-08-19T05:00:00Z', { kind: 'legacy_absent', tupleAmount: null }),
+  ]);
+  check('with NO watermark the report claims neither side and raises no blocker',
+    r.watermark === null && r.postWatermark.rows === 0 && r.preWatermark.rows === 0
+    && r.activationBlockers.length === 0);
+}
+
+// The window describes the whole sweep, excluded rows included — it reports what was looked at.
+{
+  const r = buildCoverageReport([
+    dated('2026-08-17T09:00:00Z', { shipmentId: 1, excluded: 'return' }),
+    dated('2026-08-19T06:00:00Z', { shipmentId: 2 }),
+    dated('2026-08-18T12:00:00Z', { shipmentId: 3 }),
+  ], WM);
+  check('the population window spans every scanned row, excluded ones included',
+    r.populationWindow.earliest === '2026-08-17T09:00:00Z'
+    && r.populationWindow.latest === '2026-08-19T06:00:00Z',
+    JSON.stringify(r.populationWindow));
+}
+
+// `excluded: 0` against a UI full of Ext. Label rows was unverifiable in the first run. The source
+// breakdown covers every in-scope row so the claim can be checked instead of trusted.
+{
+  const r = buildCoverageReport([
+    dated('2026-08-19T01:00:00Z', { shipmentId: 1, source: 'prepship_v2' }),
+    dated('2026-08-19T02:00:00Z', { shipmentId: 2, source: 'prepship_v2' }),
+    dated('2026-08-19T03:00:00Z', { shipmentId: 3, source: 'shipstation' }),
+    dated('2026-08-19T04:00:00Z', { shipmentId: 4, excluded: 'return', source: 'x' }),
+  ], WM);
+  const bySource = Object.fromEntries(r.inScopeBySource.map((s) => [s.source, s.rows]));
+  check('in-scope source breakdown counts every in-scope row and omits excluded ones',
+    bySource.prepship_v2 === 2 && bySource.shipstation === 1 && bySource.x === undefined,
+    JSON.stringify(r.inScopeBySource));
+}
 if (failures > 0) {
   console.log(`\nFAIL PS-508 classification guard (${failures} failing)`);
   process.exit(1);

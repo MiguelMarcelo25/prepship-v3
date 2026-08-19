@@ -57,6 +57,7 @@ type ShipmentRow = {
   voided: boolean;
   selectedRateCost: string | number | null;
   selectedRateJson: unknown;
+  createdAt: string | Date | null;
 };
 
 function arg(name: string): string | null {
@@ -133,6 +134,22 @@ async function main(): Promise<void> {
   if (!Number.isFinite(days) || days <= 0) throw new Error('--days must be a positive number');
   if (!Number.isFinite(limit) || limit <= 0) throw new Error('--limit must be a positive number');
 
+  /**
+   * The cutover watermark: when the outbound freeze went live. Rows at or after it SHOULD carry a
+   * tuple; rows before it never can, and never will.
+   *
+   * Without it a coverage number is unreadable. The first production run came back 100%
+   * legacy_absent, which meant either "nothing shipped since the writer deployed" or "the writer
+   * is live and not firing" — opposite conclusions, and the report could not tell them apart.
+   *
+   * An explicit input rather than a guess: it is a deploy time only the operator knows, and
+   * inferring it from the newest tuple would be circular — it would define the writer as working.
+   */
+  const watermark = arg('watermark');
+  if (watermark && !Number.isFinite(Date.parse(watermark))) {
+    throw new Error('--watermark must be an ISO timestamp, e.g. 2026-08-19T02:23:00Z');
+  }
+
   // Only now — after the gate — touch anything that opens a database connection.
   const { db, sql: pg } = await import('../src/db/client');
   const { previewShipmentCustomerShippingMoney } =
@@ -156,7 +173,8 @@ async function main(): Promise<void> {
       coalesce(s.is_return, false) as "isReturn",
       coalesce(s.voided, false) as "voided",
       s.selected_rate_cost as "selectedRateCost",
-      s.selected_rate_json as "selectedRateJson"
+      s.selected_rate_json as "selectedRateJson",
+      s.create_date as "createdAt"
     from shipments s
     where s.create_date >= now() - ${`${days} days`}::interval
     order by s.id desc
@@ -189,6 +207,11 @@ async function main(): Promise<void> {
       shipmentId: shipment.id,
       clientId: shipment.clientId,
       source: shipment.source,
+      // Normalised here: drizzle hands back a Date over postgres-js and a string over PGlite, and
+      // the aggregator compares timestamps rather than guessing which it got.
+      createdAt: shipment.createdAt instanceof Date
+        ? shipment.createdAt.toISOString()
+        : (shipment.createdAt ?? null),
       excluded,
       kind: classification.kind,
       tupleAmount,
@@ -196,7 +219,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const report = buildCoverageReport(rows);
+  const report = buildCoverageReport(rows, watermark);
   const pct = outboundCoveragePct(report);
 
   say('PS-508 coverage + shadow comparison');
@@ -208,14 +231,44 @@ async function main(): Promise<void> {
   for (const [reason, count] of Object.entries(report.excluded)) {
     if (count > 0) say(`      ${reason.padEnd(18)} ${count}`);
   }
-  say(`  IN SCOPE: ${report.inScope}\n`);
+  say(`  IN SCOPE: ${report.inScope}`);
+  say(`  created between: ${report.populationWindow.earliest ?? 'n/a'}`);
+  say(`              and: ${report.populationWindow.latest ?? 'n/a'}`);
+  // Every in-scope source, so `excluded: 0` can be checked against what the UI shows rather than
+  // taken on trust. The first run reported no exclusions against a UI full of `Ext. Label` rows.
+  if (report.inScopeBySource.length) {
+    say('  in-scope by source:');
+    for (const s of report.inScopeBySource) say(`      ${s.source.padEnd(18)} ${s.rows}`);
+  }
+  say();
 
   say('CLASSIFICATION (in-scope only)');
   for (const [kind, count] of Object.entries(report.byKind)) {
     const share = report.inScope > 0 ? ` (${((count / report.inScope) * 100).toFixed(1)}%)` : '';
     say(`  ${kind.padEnd(24)} ${String(count).padStart(6)}${share}`);
   }
-  say(`\n  outbound coverage: ${pct == null ? 'n/a' : `${pct}%`} of in-scope rows carry ps-508-v1\n`);
+  say(`\n  outbound coverage: ${pct == null ? 'n/a' : `${pct}%`} of in-scope rows carry ps-508-v1`);
+
+  // THE reading that a bare coverage percentage cannot give you.
+  say('');
+  if (!report.watermark) {
+    say('WATERMARK: not supplied — pass --watermark=<ISO deploy time>.');
+    say('  Without it, legacy_absent is unreadable: "nothing shipped since the writer deployed"');
+    say('  and "the writer is live and not firing" produce the identical number.');
+  } else {
+    say(`WATERMARK ${report.watermark}`);
+    say(`  before it: ${report.preWatermark.rows} row(s) — cannot ever carry a tuple, this is history`);
+    say(`  at/after:  ${report.postWatermark.rows} row(s) — these SHOULD carry ps-508-v1`);
+    if (report.postWatermark.rows === 0) {
+      say('  => nothing shipped since the writer deployed. 0% coverage says nothing about the');
+      say('     writer either way; re-run over a window that contains post-deploy shipments.');
+    } else {
+      for (const [kind, count] of Object.entries(report.postWatermark.byKind)) {
+        if (count > 0) say(`      ${kind.padEnd(24)} ${count}`);
+      }
+    }
+  }
+  say('');
 
   say('SHADOW COMPARISON (valid tuple vs what billing would charge today)');
   say(`  compared:            ${report.compared}`);

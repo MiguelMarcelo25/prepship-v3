@@ -33,6 +33,13 @@ export type CoverageRow = {
   shipmentId: number;
   clientId: number | null;
   source: string | null;
+  /**
+   * When the shipment was created, ISO. Needed because a coverage percentage alone is unreadable:
+   * the first production run returned 100% legacy_absent, which could equally have meant "nothing
+   * shipped since the writer deployed" or "the writer is deployed and not firing". Opposite
+   * conclusions, indistinguishable without dates.
+   */
+  createdAt: string | null;
   /** Set when the row is NOT an ordinary billable outbound shipment. */
   excluded: CoverageExclusionReason | null;
   /** Classification of selected_rate_json. Only meaningful when `excluded` is null. */
@@ -69,6 +76,22 @@ export type CoverageReport = {
   uncomparable: number;
   byClient: CoverageDeltaBucket[];
   bySource: CoverageDeltaBucket[];
+  /**
+   * Every in-scope row by `source`, not just the compared ones. The first run reported
+   * `excluded: 0` against a UI visibly showing `Ext. Label` rows, and there was no way to tell
+   * whether the window genuinely held none or the exclusion predicate failed to recognise them.
+   */
+  inScopeBySource: Array<{ source: string; rows: number }>;
+  /** Earliest and latest create_date in the scanned population, ISO. */
+  populationWindow: { earliest: string | null; latest: string | null };
+  /**
+   * THE watermark split the plan review demanded. Rows created at or after the writer's deploy
+   * SHOULD carry a tuple; rows before it never can. Collapsing the two hides a broken writer
+   * behind a legitimately empty history.
+   */
+  watermark: string | null;
+  postWatermark: { rows: number; byKind: Record<CustomerShippingMoneyClassKind, number> };
+  preWatermark: { rows: number };
   /** Non-empty means the population is NOT safe to activate tuple precedence over. */
   activationBlockers: string[];
 };
@@ -106,11 +129,24 @@ function bucketOf(map: Map<string, CoverageDeltaBucket>, key: string): CoverageD
   return bucket;
 }
 
-export function buildCoverageReport(rows: readonly CoverageRow[]): CoverageReport {
+export function buildCoverageReport(
+  rows: readonly CoverageRow[],
+  /** ISO timestamp of the writer's deploy. Rows at or after it are expected to carry a tuple. */
+  watermark: string | null = null,
+): CoverageReport {
   const excluded = { ...ZERO_EXCLUSIONS };
   const byKind = { ...ZERO_KINDS };
   const byClient = new Map<string, CoverageDeltaBucket>();
   const bySource = new Map<string, CoverageDeltaBucket>();
+  const inScopeSources = new Map<string, number>();
+  const postKinds = { ...ZERO_KINDS };
+  let postRows = 0;
+  let preRows = 0;
+  let earliest: string | null = null;
+  let latest: string | null = null;
+  // Compared as timestamps, not strings: ISO strings only sort correctly when the offsets match,
+  // and these come from the database rather than from one normalised formatter.
+  const watermarkMs = watermark ? Date.parse(watermark) : Number.NaN;
 
   let inScope = 0;
   let compared = 0;
@@ -121,12 +157,31 @@ export function buildCoverageReport(rows: readonly CoverageRow[]): CoverageRepor
   let maxAbsoluteDelta: { shipmentId: number; delta: number } | null = null;
 
   for (const row of rows) {
+    // Window spans the WHOLE scanned population, excluded rows included — it describes what was
+    // looked at, so narrowing it to in-scope rows would misreport the sweep's reach.
+    if (row.createdAt) {
+      const ms = Date.parse(row.createdAt);
+      if (Number.isFinite(ms)) {
+        if (earliest == null || ms < Date.parse(earliest)) earliest = row.createdAt;
+        if (latest == null || ms > Date.parse(latest)) latest = row.createdAt;
+      }
+    }
+
     if (row.excluded) {
       excluded[row.excluded] += 1;
       continue;
     }
     inScope += 1;
     byKind[row.kind] += 1;
+    inScopeSources.set(row.source ?? 'unknown', (inScopeSources.get(row.source ?? 'unknown') ?? 0) + 1);
+
+    if (Number.isFinite(watermarkMs) && row.createdAt) {
+      const ms = Date.parse(row.createdAt);
+      if (Number.isFinite(ms)) {
+        if (ms >= watermarkMs) { postRows += 1; postKinds[row.kind] += 1; }
+        else preRows += 1;
+      }
+    }
 
     const hasTuple = row.kind === 'valid_ps508' || row.kind === 'valid_ps437';
     if (!hasTuple || row.tupleAmount == null) continue;
@@ -181,6 +236,15 @@ export function buildCoverageReport(rows: readonly CoverageRow[]): CoverageRepor
       + 'the divergence is unmeasurable, not zero',
     );
   }
+  // The writer is deployed and not producing. Distinct from `legacy_absent` before the watermark,
+  // which is simply history and can never be otherwise. Only reportable once a watermark exists —
+  // which is exactly why the first run's 100% legacy_absent could not be read either way.
+  if (postKinds.legacy_absent > 0) {
+    activationBlockers.push(
+      `${postKinds.legacy_absent} of ${postRows} shipment(s) created AFTER the writer deployed `
+      + 'carry no tuple — the freeze is live and not firing for them',
+    );
+  }
 
   const sortByAbsolute = (a: CoverageDeltaBucket, b: CoverageDeltaBucket) =>
     b.absoluteDollars - a.absoluteDollars;
@@ -200,6 +264,13 @@ export function buildCoverageReport(rows: readonly CoverageRow[]): CoverageRepor
     uncomparable,
     byClient: [...byClient.values()].sort(sortByAbsolute),
     bySource: [...bySource.values()].sort(sortByAbsolute),
+    inScopeBySource: [...inScopeSources.entries()]
+      .map(([source, rowCount]) => ({ source, rows: rowCount }))
+      .sort((a, b) => b.rows - a.rows),
+    populationWindow: { earliest, latest },
+    watermark,
+    postWatermark: { rows: postRows, byKind: postKinds },
+    preWatermark: { rows: preRows },
     activationBlockers,
   };
 }
