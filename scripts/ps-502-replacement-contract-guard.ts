@@ -2978,15 +2978,22 @@ console.log('\nordinary readers exclude source = replacement');
   // to one shipment id — provably cannot reach it. Each entry states why, so a future reader
   // cannot be waved through by adding a bare path.
   const ACKNOWLEDGED_NO_EXCLUSION: Readonly<Record<string, { sites: number; why: string }>> = {
-    // CORRECTED 2026-08-19. The previous reason — "manifest membership is order-bound" — was
-    // simply false: loadManifest selects on voided/carrier/client/scope with no order join and
-    // no order_id predicate, so a replacement vessel reaches it. It is listed because a
-    // replacement parcel PHYSICALLY exists and plausibly belongs on a carrier manifest, not
-    // because it is unreachable. ⚠ OPEN DECISION for DJ: confirm replacement parcels belong on
-    // physical manifests, and whether a null order_id renders acceptably there.
+    // DECIDED 2026-08-19 by DJ: replacement parcels DO belong on physical carrier manifests.
+    // Reachability here is therefore intentional, not a leak — the parcel physically exists and
+    // the warehouse has to hand it to the carrier with everything else going out that day.
+    //
+    // What was false was the ORIGINAL rationale, "manifest membership is order-bound":
+    // loadManifest selects on voided/carrier/client/scope with no order join and no order_id
+    // predicate, so a vessel was always reachable. The entry stayed; the reason was wrong.
+    //
+    // The null order_id also renders acceptably, which was the other half of the question. The
+    // manifest displays shipments.order_number, and a replacement vessel carries the ALLOCATED
+    // reference there — 1321-REPLACE, not the original order number
+    // (replacement-shipment-command.ts:261). The row identifies itself on the sheet rather than
+    // printing blank, and it cannot be mistaken for the original parcel.
     'src/routes/manifests.ts': {
       sites: 1,
-      why: 'NOT order-bound — a replacement vessel is reachable; physical-manifest inclusion is an open decision',
+      why: 'replacement parcels belong on physical manifests (DJ, 2026-08-19); order_number carries the reference',
     },
     // Order-bound by proof, but through a LOCAL predicate rather than a named helper, so the
     // derived rules cannot see it: every read is scoped by
