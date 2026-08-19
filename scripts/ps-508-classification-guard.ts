@@ -258,6 +258,32 @@ const laneCode = laneSrc.replace(/^\s*#.*$/gm, '');
 check('the lane has no apply/repair mode and no write token',
   !/--apply|confirm[_-]?token|CONFIRM=/i.test(laneCode));
 
+
+// ── THE REPORT COMES BACK TO WHERE THE RUN WAS TRIGGERED ──────────────────────────────────
+
+// The lane's first dispatch succeeded and still left the numbers only in Render's log: green, and
+// practically useless. Retrieval brings them into the Actions log.
+check('the lane retrieves the Render job log into the run',
+  /Retrieve the Render job log into this run/.test(laneSrc)
+  && /api\.render\.com\/v1\/logs/.test(laneCode));
+
+// THE safety property. The audit exits NON-ZERO to report activation blockers — that is a result,
+// not a malfunction — so retrieval must run even when the previous step failed, and must never
+// change the verdict in either direction. A transcription step that can turn a failing audit green
+// is worse than no transcription at all.
+check('retrieval runs even when the audit step failed, and cannot alter the verdict',
+  /if: always\(\) && env\.RENDER_JOB_ID != ''/.test(laneCode)
+  && /continue-on-error: true/.test(laneCode));
+
+// The job id is exported before polling, so a blocker-reporting (non-zero) run still has an id to
+// fetch by. Exporting it only on success would lose the log exactly when it matters most.
+check('the job id is exported to the environment before the poll loop can fail',
+  laneCode.indexOf('RENDER_JOB_ID=${job_id}') < laneCode.indexOf('for attempt in $(seq'));
+
+// Every failure path must leave something actionable rather than a silent blank.
+check('an unresolvable log fetch still prints the job id and where to read it',
+  /Could not transcribe the Render log automatically/.test(laneCode)
+  && /Jobs -> \$\{RENDER_JOB_ID\} -> Logs/.test(laneCode));
 if (failures > 0) {
   console.log(`\nFAIL PS-508 classification guard (${failures} failing)`);
   process.exit(1);

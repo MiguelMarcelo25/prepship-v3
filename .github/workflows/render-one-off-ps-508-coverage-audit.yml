@@ -140,6 +140,14 @@ jobs:
           echo "PS-508 coverage audit job created: ${job_id}"
           echo "operator: ${AUDIT_OPERATOR}   window: ${AUDIT_DAYS}d   limit: ${AUDIT_LIMIT}"
 
+          # Exported so the log-retrieval step below can run even when this step fails: the audit
+          # exits non-zero to REPORT activation blockers, and that is exactly the case where you
+          # most want to read its output.
+          {
+            echo "RENDER_JOB_ID=${job_id}"
+            echo "RENDER_JOB_STARTED=$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_ENV"
+
           for attempt in $(seq 1 120); do
             sleep 10
             job=$(curl -sS \
@@ -168,3 +176,53 @@ jobs:
 
           echo '::error::Audit job did not finish within the polling window.'
           exit 1
+
+      # Bring the report back HERE, so results are read where the run was triggered rather than in
+      # a second dashboard. The first dispatch of this lane succeeded and still left the numbers
+      # only in Render's log, which made the run technically green and practically useless.
+      #
+      # BEST-EFFORT, BY CONSTRUCTION. No other lane in this repo fetches Render logs, so this API
+      # shape is unproven; `always()` plus `continue-on-error` mean a wrong guess prints a pointer
+      # instead of destroying the verdict. It must never turn a failing audit green or a passing
+      # one red — the audit's own exit status is the result, and this step only transcribes it.
+      - name: Retrieve the Render job log into this run
+        if: always() && env.RENDER_JOB_ID != ''
+        continue-on-error: true
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          set -uo pipefail   # deliberately NOT -e: a failed fetch must fall through to the pointer
+
+          echo "Render job: ${RENDER_JOB_ID}"
+
+          owner_id=$(curl -sS --max-time 30 \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" -H 'Accept: application/json' \
+            | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+                try{process.stdout.write(String(JSON.parse(d).ownerId||""))}catch{process.stdout.write("")}})')
+
+          if [ -n "${owner_id}" ]; then
+            body=$(curl -sS --max-time 60 -G \
+              "https://api.render.com/v1/logs" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" -H 'Accept: application/json' \
+              --data-urlencode "ownerId=${owner_id}" \
+              --data-urlencode "resource=${RENDER_SERVICE_ID}" \
+              --data-urlencode "instance=${RENDER_JOB_ID}" \
+              --data-urlencode "startTime=${RENDER_JOB_STARTED}" \
+              --data-urlencode "limit=200" \
+              --data-urlencode "direction=forward")
+
+            printed=$(BODY="$body" node -e '
+              const raw = process.env.BODY || "";
+              let parsed; try { parsed = JSON.parse(raw); } catch { process.exit(3); }
+              const lines = Array.isArray(parsed?.logs) ? parsed.logs : [];
+              if (!lines.length) process.exit(4);
+              for (const line of lines) process.stdout.write(String(line.message ?? line.text ?? "") + "\n");
+            ') && { echo "----- BEGIN PS-508 COVERAGE REPORT -----"; printf "%s\n" "$printed";
+                    echo "----- END PS-508 COVERAGE REPORT -----"; exit 0; }
+          fi
+
+          # Every failure path lands here with something actionable, never a silent blank.
+          echo "::warning::Could not transcribe the Render log automatically (owner=${owner_id:-unresolved})."
+          echo "Read it directly: Render dashboard -> the API service -> Jobs -> ${RENDER_JOB_ID} -> Logs"
