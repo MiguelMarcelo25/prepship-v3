@@ -115,6 +115,21 @@ async function freshDatabase(scenario: string): Promise<{ name: string; url: str
   const target = postgres(url.toString(), { max: 1, prepare: false, onnotice: () => {} });
   try {
     await target.unsafe(PS_502_PREREQUISITE_DDL);
+    // Rewind to a genuine PRE-PS-502 catalog.
+    //
+    // PS_502_PREREQUISITE_DDL is written for the PGlite suite, where the reviewed migrations
+    // are layered on top of it — so it pre-bakes billing_line_items.replacement_id and
+    // billing_credit_notes.replacement_id, which migration 0097 (stage 2) is what actually
+    // adds. Starting there, the applier saw stage-2 objects with stage-1 missing and refused
+    // the whole lane as non-contiguous drift. It was right to: that IS drift. The fixture was
+    // the wrong starting state for a migration-state test, not the applier.
+    //
+    // Dropping them is safe for every scenario: the prefix installs below re-add them through
+    // 0097 itself, which is the point — the migration must do the work, not the fixture.
+    await target.unsafe(`
+      alter table billing_line_items drop column if exists replacement_id;
+      alter table billing_credit_notes drop column if exists replacement_id;
+    `);
   } finally {
     await target.end({ timeout: 5 });
   }
