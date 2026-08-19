@@ -9,6 +9,11 @@ import {
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
 } from '../src/services/customer-shipping-money-snapshot';
+import {
+  buildCoverageReport,
+  outboundCoveragePct,
+  type CoverageRow,
+} from '../src/services/customer-shipping-money-coverage';
 
 /**
  * PS-508 step 1 — the five-state classifier.
@@ -110,6 +115,110 @@ check('the classifier never value-imports db/client',
   !/^\s*import\s+(?!type\b)[^;]*['"][^'"]*db\/client/m.test(src)
   && !/from '\.\/customer-shipping-money\.js'/.test(src));
 
+
+// ── COVERAGE REPORT (behavioural, offline) ────────────────────────────────────────────────
+
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+const row = (over: Partial<CoverageRow> = {}): CoverageRow => ({
+  shipmentId: 1, clientId: 1, source: 'prepship_v2', excluded: null,
+  kind: 'valid_ps508', tupleAmount: 12, recomputeAmount: 12, ...over,
+});
+
+// Excluded rows are CORRECTLY without an outbound tuple. Folding them into "no tuple" inflates the
+// gap and would be used to justify a backfill over rows that must never receive one.
+{
+  const r = buildCoverageReport([
+    row({ shipmentId: 1, excluded: 'return' }),
+    row({ shipmentId: 2, excluded: 'replacement' }),
+    row({ shipmentId: 3, excluded: 'voided' }),
+    row({ shipmentId: 4, excluded: 'test_offline' }),
+    row({ shipmentId: 5, excluded: 'no_billable_cost' }),
+    row({ shipmentId: 6, kind: 'valid_ps508' }),
+  ]);
+  check('excluded rows are counted by reason and kept OUT of the in-scope population',
+    r.excludedTotal === 5 && r.inScope === 1 && r.excluded.return === 1
+    && r.excluded.no_billable_cost === 1, JSON.stringify({ ex: r.excludedTotal, io: r.inScope }));
+  check('an excluded row never lands in a classification bucket',
+    Object.values(r.byKind).reduce((a, b) => a + b, 0) === 1);
+  check('coverage is measured against IN-SCOPE rows, not the total',
+    outboundCoveragePct(r) === 100, String(outboundCoveragePct(r)));
+}
+
+// THE trap for a bill-and-log policy: opposite-signed deltas cancel. A signed total of zero can
+// hide real per-line divergence, so absolute is reported alongside it and never derived from it.
+{
+  const r = buildCoverageReport([
+    row({ shipmentId: 1, tupleAmount: 13, recomputeAmount: 12 }),
+    row({ shipmentId: 2, tupleAmount: 11, recomputeAmount: 12 }),
+  ]);
+  check('offsetting deltas cancel in the SIGNED total but not the ABSOLUTE total',
+    r.signedDollars === 0 && r.absoluteDollars === 2 && r.differing === 2,
+    JSON.stringify({ s: r.signedDollars, a: r.absoluteDollars, d: r.differing }));
+  check('the largest single delta is reported with its shipment',
+    r.maxAbsoluteDelta?.shipmentId === 1 && r.maxAbsoluteDelta?.delta === 1);
+}
+
+// Float noise must not read as a money difference.
+check('comparison is cent-safe (12.00 vs 11.999999 is not a divergence)',
+  buildCoverageReport([row({ tupleAmount: 12, recomputeAmount: 11.999999 })]).differing === 0);
+
+// These are stop conditions, not statistics.
+{
+  const r = buildCoverageReport([
+    row({ shipmentId: 1, kind: 'malformed_known_version', tupleAmount: null }),
+    row({ shipmentId: 2, kind: 'unknown_version', tupleAmount: null }),
+  ]);
+  check('malformed and unknown rows each raise an ACTIVATION BLOCKER',
+    r.activationBlockers.length === 2
+    && r.activationBlockers.some((b) => /malformed_known_version/.test(b))
+    && r.activationBlockers.some((b) => /unknown_version/.test(b)),
+    JSON.stringify(r.activationBlockers));
+}
+
+// A tuple billing cannot reproduce is unmeasurable divergence, not zero divergence.
+{
+  const r = buildCoverageReport([row({ tupleAmount: 12, recomputeAmount: null })]);
+  check('a valid tuple with no comparable recompute is uncomparable AND blocks activation',
+    r.uncomparable === 1 && r.compared === 0
+    && r.activationBlockers.some((b) => /unmeasurable, not zero/.test(b)),
+    JSON.stringify(r));
+}
+
+check('a clean population raises NO activation blockers',
+  buildCoverageReport([row(), row({ shipmentId: 2 })]).activationBlockers.length === 0);
+
+// legacy_absent is in scope (it is a real gap) but has no tuple to compare.
+{
+  const r = buildCoverageReport([row({ kind: 'legacy_absent', tupleAmount: null, recomputeAmount: 12 })]);
+  check('legacy_absent counts as an in-scope coverage gap, not a comparison or a blocker',
+    r.inScope === 1 && r.byKind.legacy_absent === 1 && r.compared === 0
+    && r.activationBlockers.length === 0 && outboundCoveragePct(r) === 0);
+}
+
+// ── THE AUDIT IS READ-ONLY ────────────────────────────────────────────────────────────────
+
+const auditSrc = stripComments(readFileSync('scripts/ps-508-coverage-audit.ts', 'utf8'));
+check('the coverage audit issues no write of any kind',
+  !/\b(insert\s+into|update\s+[a-z_]+\s+set|delete\s+from|truncate|drop\s+table|alter\s+table)/i.test(auditSrc)
+  && !/\.insert\(|\.update\(|\.delete\(/.test(auditSrc));
+check('the coverage audit recomputes through the canonical preview, not a private copy',
+  /previewShipmentCustomerShippingMoney\(/.test(auditSrc)
+  && !/resolveCustomerShippingMoney\(\{/.test(auditSrc));
+check('the coverage audit refuses to run without a named operator',
+  /PS508_AUDIT_OPERATOR/.test(auditSrc) && /process\.exit\(2\)/.test(auditSrc));
+
+// The gate must be REACHED, not merely present. A top-level `import { db } from db/client`
+// validates the database env at module load, so the process dies with "Invalid environment
+// variables" before the refusal ever runs — the gate exists and never fires. Found by executing it.
+check('the operator gate is reachable: db/client is imported dynamically, after the gate',
+  !/^import\s+\{[^}]*\bdb\b[^}]*\}\s+from\s+'[^']*db\/client'/m.test(auditSrc)
+  && /await import\('\.\.\/src\/db\/client'\)/.test(auditSrc));
+check('and the money service is likewise deferred past the gate',
+  !/^import\s+\{[^}]*previewShipmentCustomerShippingMoney/m.test(auditSrc)
+  && /await import\('\.\.\/src\/services\/customer-shipping-money'\)/.test(auditSrc));
 if (failures > 0) {
   console.log(`\nFAIL PS-508 classification guard (${failures} failing)`);
   process.exit(1);
