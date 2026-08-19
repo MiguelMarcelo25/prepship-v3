@@ -203,19 +203,30 @@ jobs:
                 try{process.stdout.write(String(JSON.parse(d).ownerId||""))}catch{process.stdout.write("")}})')
 
           if [ -n "${owner_id}" ]; then
-            # NO `instance` filter. The first attempt passed the JOB id there and got nothing back;
-            # that parameter takes an instance id, which is not the same thing. Scoping by service
-            # plus the job's start time is enough — this lane is serialised by its concurrency
-            # group, so the window belongs to this job.
-            response=$(curl -sS --max-time 60 -G -w $'\n%{http_code}' \
-              "https://api.render.com/v1/logs" \
-              -H "Authorization: Bearer ${RENDER_API_KEY}" -H 'Accept: application/json' \
-              --data-urlencode "ownerId=${owner_id}" \
-              --data-urlencode "resource=${RENDER_SERVICE_ID}" \
-              --data-urlencode "startTime=${RENDER_JOB_STARTED}" \
-              --data-urlencode "limit=500")
-            http_code=$(printf '%s' "$response" | tail -n1)
-            body=$(printf '%s' "$response" | sed '$d')
+            # Try the JOB as the resource first, then the service. The previous attempt fetched 91
+            # lines scoped to the service and not one carried the tag: those were the API's own
+            # health checks. A one-off job's output does not land in the web service's stream — it
+            # is addressed separately, which is why every service-scoped attempt found real logs
+            # and never the report.
+            for resource in "${RENDER_JOB_ID}" "${RENDER_SERVICE_ID}"; do
+              response=$(curl -sS --max-time 60 -G -w $'\n%{http_code}' \
+                "https://api.render.com/v1/logs" \
+                -H "Authorization: Bearer ${RENDER_API_KEY}" -H 'Accept: application/json' \
+                --data-urlencode "ownerId=${owner_id}" \
+                --data-urlencode "resource=${resource}" \
+                --data-urlencode "startTime=${RENDER_JOB_STARTED}" \
+                --data-urlencode "limit=500")
+              http_code=$(printf '%s' "$response" | tail -n1)
+              body=$(printf '%s' "$response" | sed '$d')
+              if BODY="$body" node -e '
+                const p = JSON.parse(process.env.BODY || "{}");
+                const l = Array.isArray(p?.logs) ? p.logs : [];
+                process.exit(l.some((x) => String(x.message ?? "").includes("PS508RPT ")) ? 0 : 1);
+              ' 2>/dev/null; then
+                echo "report found under resource=${resource}"
+                break
+              fi
+            done
 
             printed=$(BODY="$body" node -e '
               const raw = process.env.BODY || "";
