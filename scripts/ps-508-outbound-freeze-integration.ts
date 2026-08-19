@@ -104,6 +104,9 @@ async function main(): Promise<void> {
   process.env.SUPABASE_URL = 'https://example.test';
   process.env.SUPABASE_ANON_KEY = 'test';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'test';
+  // Required on the Render lane. Omitting it passed locally — a local .env masks the omission —
+  // and failed CI, which is the exact trap PS-488 documented for behavioural guards.
+  process.env.SUPABASE_JWT_SECRET = 'test';
   delete process.env.BILLING_PER_ACCOUNT_MARKUP;
 
   const { PGlite } = await import('@electric-sql/pglite');
