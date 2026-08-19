@@ -33,6 +33,11 @@ import {
   readShipStationForwardLabelPersistenceFacts,
 } from './shipstation-forward-label-operation';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
+// PS-508: the canonical outbound writer now freezes customer money. Until this ticket labels.ts
+// had no coupling to the money owner at all — the receipt was written here and the customer
+// amount was recomputed at invoice time, which is the defect PS-508 closes.
+import { freezeOutboundCustomerShippingMoney } from './customer-shipping-money';
+import { deriveOutboundHouseCustomerRate } from './outbound-house-rate';
 import { linkBundleShipment } from './shipment-bundles/create-bundle';
 import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
 import { deductBundleMembersOnce } from './shipment-bundles/deduct-bundle-members';
@@ -1329,6 +1334,42 @@ export async function persistCreatedLabel(args: {
     })
     .returning({ id: shipments.id });
   if (!row) throw new Error('Failed to persist shipment row');
+
+  // PS-508: freeze the CUSTOMER money tuple in the SAME transaction that just wrote the carrier
+  // receipt. This is the canonical outbound producer and its only sanctioned freeze point — the
+  // receipt and the customer money become true together or neither does.
+  //
+  // The house rate is DERIVED here, not read: order_competitive_rate is written by
+  // captureRealizedHouseMargin, which labels.ts fires through timer.background AFTER this
+  // transaction commits and which keys on a shipment_id that does not exist until the insert
+  // above returns. Reading it here would race a write that is allowed to fail silently.
+  //
+  // ── WHY A FAILURE HERE IS NOT FATAL (AND WHEN THAT MUST CHANGE) ────────────────────────
+  //
+  // Tuples written here carry ps-508-v1, and readFrozenCustomerShippingMoney accepts ONLY
+  // ps-437-v1 unless a caller opts in. So today nothing reads these — billing still recomputes at
+  // invoice time exactly as before, and a missing tuple changes no money. Failing a paid-for label
+  // purchase over a write that currently has no consumer would be strictly worse than skipping it.
+  //
+  // That reasoning expires at cutover. The moment billing reads ps-508-v1, a skipped freeze becomes
+  // a shipment billing cannot price, and this must become fail-closed.
+  try {
+    const houseCustomerRate = await deriveOutboundHouseCustomerRate({
+      orderId: args.orderId,
+      clientId: args.clientId,
+      // The SAME basis the tuple is frozen against — postage + insurance, never bare postage.
+      // Billing floors the house amount at resolveBillingSelectedRateCost, which prefers this
+      // column; using created.cost would miss insurance on every insured shipment.
+      selectedRateCost: Number((created.cost + insuranceCost).toFixed(2)),
+      exec,
+    });
+    await freezeOutboundCustomerShippingMoney(row.id, { houseCustomerRate }, exec);
+  } catch (err) {
+    console.warn(
+      '[labels] PS-508 outbound customer-money freeze skipped:',
+      err instanceof Error ? err.message : err,
+    );
+  }
   return row.id;
 }
 

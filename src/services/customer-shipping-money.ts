@@ -16,14 +16,21 @@ import { resolveCanonicalMarkup } from './shipping-workflow/markup-resolver.js';
 import { resolvePerAccountMarkupRule } from './shipping-workflow/per-account-markup-key.js';
 import type { RateAdjustmentKind } from './shipping-workflow/rate-money.js';
 import {
+  ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
+  CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
   readFrozenCustomerShippingMoney,
+  type CustomerShippingMoneyPolicyVersion,
   type FrozenCustomerShippingMoney,
 } from './customer-shipping-money-snapshot.js';
 
 export {
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
+  CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
+  ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
   readFrozenCustomerShippingMoney,
+  type CustomerShippingMoneyPolicyVersion,
+  type CustomerShippingRateSource,
   type FrozenCustomerShippingMoney,
 } from './customer-shipping-money-snapshot.js';
 
@@ -45,6 +52,17 @@ export type CustomerShippingMoneyInput = {
   shippingMarkupFlat?: number | null;
   shippingMarkupKind?: RateAdjustmentKind | null;
   hugrabShippingRateOverride?: HugrabShippingRateOverrideConfig | null;
+  /**
+   * PS-508: which policy version this tuple is being frozen UNDER. Defaults to ps-437-v1, so every
+   * pre-existing caller is byte-unchanged.
+   *
+   * It is an input rather than a constant because the version is a property of the CALL SITE, not
+   * of this module. The replacement freeze flows through this same function; bumping the constant
+   * in place would have silently re-versioned replacement money while the Client Portal still
+   * pinned the ps-437-v1 literal in four independent runtime sites, and replacement money would
+   * have disappeared from the portal with nothing failing loudly at either end.
+   */
+  policyVersion?: CustomerShippingMoneyPolicyVersion;
 };
 
 type CustomerShippingMoneyRow = {
@@ -54,6 +72,8 @@ type CustomerShippingMoneyRow = {
   storeIds: number[] | null;
   isReturn: boolean;
   voided: boolean;
+  /** PS-508: free-form provenance marker ('replacement', 'test_offline', 'prepship_v2', …). */
+  source: string | null;
   selectedRateCost: string | number | null;
   selectedRateJson: unknown;
   carrierCode: string | null;
@@ -159,11 +179,20 @@ export function resolveCustomerShippingMoney(
     shippingMarginPct: Math.abs(margin) >= 0.005 && customer > 0
       ? roundPercent(margin / customer)
       : null,
+    // PS-508: provenance follows whatever actually PRODUCED the amount, in precedence order.
+    // The HUGRAB override wraps the house branch (withHugrabShippingRateOverride), so when it
+    // fires the billed number came from the override and not from the house rate — it has to win.
+    // `source: 'c_shipping_rate'` is billing-shipping-line's house branch: the captured next-best
+    // competitor rate floored at label cost, with reference-rate flooring and carrier markup both
+    // suppressed. That is a different formula from carrier markup, so stamping it
+    // `realized_customer_shipping_rate` would make the two indistinguishable after the fact.
     customerRateSource: decision.hugrabOverrideApplied
       ? 'hugrab_shipping_rate_override'
-      : 'realized_customer_shipping_rate',
+      : decision.source === 'c_shipping_rate'
+        ? 'house_next_best_customer_rate'
+        : 'realized_customer_shipping_rate',
     rateCostSource: 'label_final_cost',
-    customerShippingMoneyPolicyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
+    customerShippingMoneyPolicyVersion: input.policyVersion ?? CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
     billingSource: decision.source,
     billingDescriptionSuffix: decision.descriptionSuffix,
     markupApplied: decision.markupApplied,
@@ -183,6 +212,7 @@ async function loadCustomerShippingMoneyRow(
       c.store_ids as "storeIds",
       coalesce(s.is_return, false) as "isReturn",
       coalesce(s.voided, false) as voided,
+      s.source as "source",
       s.selected_rate_cost as "selectedRateCost",
       s.selected_rate_json as "selectedRateJson",
       s.carrier_code as "carrierCode",
@@ -247,6 +277,15 @@ async function decideCustomerShippingMoneyForRow(
     selectedRateCost?: number;
     carrierCode?: string | null;
     providerAccountId?: number | null;
+    /**
+     * PS-508: the derived HOUSE customer rate, supplied only by the ordinary-outbound freeze.
+     * Left undefined everywhere else, which is what keeps the return and replacement freezes
+     * byte-identical — passing it is what selects billing's house branch, and neither of those
+     * paths has ever taken it.
+     */
+    cShippingRateAmount?: number | null;
+    /** PS-508: which policy version the resulting tuple is stamped with. Defaults to ps-437-v1. */
+    policyVersion?: CustomerShippingMoneyPolicyVersion;
   } = {},
 ): Promise<CustomerShippingMoneyDecision> {
   if (!row.billingActive) {
@@ -293,6 +332,9 @@ async function decideCustomerShippingMoneyForRow(
   }
   const decision = resolveCustomerShippingMoney({
     selectedRateCost,
+    // PS-508: undefined on every pre-existing path (returns, replacements, previews), so they take
+    // the carrier branch exactly as before. Only the ordinary-outbound freeze supplies it.
+    cShippingRateAmount: options.cShippingRateAmount,
     billingMode: row.billingMode,
     carrierCode,
     refUspsRate: finiteNumber(row.refUspsRate),
@@ -305,6 +347,7 @@ async function decideCustomerShippingMoneyForRow(
       threshold: row.hugrabOverrideThreshold,
       amount: row.hugrabOverrideAmount,
     },
+    policyVersion: options.policyVersion,
   });
   if (
     options.requireExplicitReturnPolicy &&
@@ -497,4 +540,121 @@ export async function freezeReturnCustomerShippingMoney(
   const concurrentSnapshot = readFrozenCustomerShippingMoney(concurrent?.selectedRateJson);
   if (!concurrentSnapshot) throw new Error('Customer shipping money snapshot could not be frozen');
   return concurrentSnapshot;
+}
+
+/**
+ * PS-508 — freeze the CUSTOMER money tuple for an ORDINARY OUTBOUND shipment.
+ *
+ * ── WHY A THIRD FREEZE ──────────────────────────────────────────────────────────────────
+ *
+ * The other two cannot be reused and must not be relaxed to fit. freezeReturnCustomerShippingMoney
+ * is double-gated on `isReturn = true` in both the guard and the UPDATE predicate; the replacement
+ * freeze is deliberately replacement-shaped. Widening either to admit ordinary outbound is how a
+ * fence stops meaning what its readers think it means.
+ *
+ * ── IT SKIPS, IT DOES NOT THROW ─────────────────────────────────────────────────────────
+ *
+ * This runs inside the committed ship transaction, so a throw rolls back a label that has ALREADY
+ * been paid for at the carrier. decideCustomerShippingMoneyForRow throws on three ordinary,
+ * entirely-legitimate states — inactive billing config, no resolvable client, non-positive selected
+ * cost (every $0 test_offline row) — none of which is an error at label time. Those are pre-checked
+ * and skipped here rather than caught, so a genuinely unexpected failure still propagates instead
+ * of being swallowed by a blanket try/catch.
+ *
+ * Returning null means "no tuple was frozen", never "the money is zero".
+ *
+ * ── WHAT IT EXCLUDES, AND WHY EACH ONE ──────────────────────────────────────────────────
+ *
+ *  - `isReturn` — a return has its own freeze and its own policy fence.
+ *  - `source = 'replacement'` — the replacement freeze owns these. The one-shot jsonb guards test
+ *    KEY PRESENCE, not value, so an outbound tuple landing on a replacement row first would make
+ *    freezeReplacementCustomerShippingMoney update 0 rows and then throw on its re-select. Loud,
+ *    but a genuine collision, and this side is the one that must yield.
+ *  - `source = 'test_offline'` — mock rows with a literal '0.00' cost that buy no postage.
+ *  - already-frozen — idempotent by design; money frozen once must not move because a markup
+ *    changed afterwards. Checked against BOTH accepted versions so a retry cannot double-freeze.
+ */
+export async function freezeOutboundCustomerShippingMoney(
+  shipmentId: number,
+  input: {
+    /**
+     * The house customer rate derived in THIS transaction (deriveOutboundHouseCustomerRate), or
+     * null when the client is not on house billing. Supplying it is what selects billing's house
+     * branch; omitting it takes the ordinary carrier-markup path.
+     */
+    houseCustomerRate?: number | null;
+  } = {},
+  /**
+   * The transaction that just wrote the shipment row. The tuple must become true in the same
+   * commit as the label, or a crash between them leaves a shipment whose cost says one thing and
+   * whose customer money says nothing.
+   */
+  exec: Pick<typeof db, 'execute' | 'update' | 'select'> = db,
+): Promise<FrozenCustomerShippingMoney | null> {
+  const row = await loadCustomerShippingMoneyRow(shipmentId, exec);
+  if (!row || row.isReturn || row.voided) return null;
+  if (row.source === 'replacement' || row.source === 'test_offline') return null;
+  if (!row.billingActive || row.clientId == null) return null;
+  const selectedRateCost = finiteNumber(row.selectedRateCost);
+  if (selectedRateCost == null || selectedRateCost <= 0) return null;
+
+  const existing = readFrozenCustomerShippingMoney(row.selectedRateJson, {
+    accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
+  });
+  if (existing) return existing;
+
+  const decision = await decideCustomerShippingMoneyForRow(row, {
+    cShippingRateAmount: input.houseCustomerRate ?? undefined,
+    policyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
+  });
+  const original = recordOrNull(row.selectedRateJson) ?? {};
+  const frozen: FrozenCustomerShippingMoney = {
+    selectedRateCost: decision.selectedRateCost,
+    cShippingRateAmount: decision.cShippingRateAmount,
+    shippingMarginAmount: decision.shippingMarginAmount,
+    shippingMarginPct: decision.shippingMarginPct,
+    customerRateSource: decision.customerRateSource,
+    rateCostSource: decision.rateCostSource,
+    customerShippingMoneyPolicyVersion: decision.customerShippingMoneyPolicyVersion,
+    // PS-508: billing appends this to the line description, and description participates in the
+    // unique index that suppresses duplicates. Freezing the amount without it would reproduce the
+    // number but not the line.
+    billingDescriptionSuffix: decision.billingDescriptionSuffix,
+  };
+
+  // NOTE: unlike the return/replacement freezes this does NOT rewrite selected_rate_cost. That
+  // column is the carrier receipt persistCreatedLabel just wrote in this same transaction, and it
+  // is already the exact value the tuple was decided from. Re-setting it would be a no-op write
+  // against a shipped row for no gain.
+  const [updated] = await exec
+    .update(shipments)
+    .set({
+      selectedRateJson: { ...original, ...frozen },
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(shipments.id, shipmentId),
+      eq(shipments.isReturn, false),
+      eq(shipments.voided, false),
+      // One-shot: never re-decide a shipment that already carries a versioned tuple.
+      sql`not (coalesce(${shipments.selectedRateJson}, '{}'::jsonb) ? 'customerShippingMoneyPolicyVersion')`,
+    ))
+    .returning({ selectedRateJson: shipments.selectedRateJson });
+
+  if (updated) {
+    return readFrozenCustomerShippingMoney(updated.selectedRateJson, {
+      accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
+    });
+  }
+
+  // Lost the one-shot race, or the row stopped qualifying between the read and the write.
+  // Either way the other writer's snapshot is the truth; never overwrite it.
+  const [concurrent] = await exec
+    .select({ selectedRateJson: shipments.selectedRateJson })
+    .from(shipments)
+    .where(eq(shipments.id, shipmentId))
+    .limit(1);
+  return readFrozenCustomerShippingMoney(concurrent?.selectedRateJson, {
+    accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
+  });
 }

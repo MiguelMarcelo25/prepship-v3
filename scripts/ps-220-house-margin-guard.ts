@@ -244,8 +244,21 @@ check('PS-220-D: NextBestNonHouseRateDto carries the optional competitorCount + 
 check('PS-220-D: the stamp owner stamps the resolver competitorCount onto the projected next-best',
   /competitorCount: nextBest\.competitorCount/.test(houseStamp));
 const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
+// PS-508: the two pure derivers moved to house-margin-derivation.ts so they could be imported
+// without executing db/client. The assertion below is re-anchored to their new home VERBATIM —
+// same expression, same strictness — because what it pins is the competitorCount fallback, not the
+// file it happened to live in. The delegation checks further down still read captureSrc, which is
+// what proves the IO shell did not quietly grow its own copy of the decision.
+const derivationSrc = readFileSync('src/services/shipping-workflow/house-margin-derivation.ts', 'utf8');
 check('PS-220-D: capture uses the threaded competitorCount (falls back to competitor?1:0 when absent)',
-  /competitorCount: competitor\?\.competitorCount \?\? \(competitor \? 1 : 0\)/.test(captureSrc));
+  /competitorCount: competitor\?\.competitorCount \?\? \(competitor \? 1 : 0\)/.test(derivationSrc));
+// PS-508: the derivation module must stay importable WITHOUT a database env — that is the whole
+// reason it was split out. A value import of db/client (directly or via the two modules it takes
+// types from) would put the env wall back in front of every offline prover of this gate.
+check('PS-508: the pure derivation module never value-imports db/client',
+  !/^\s*import\s+(?!type\b)[^;]*['"][^'"]*db\/client/m.test(derivationSrc)
+  && /^import type \{ ShippingMarginPolicy \}/m.test(derivationSrc)
+  && /^import type \{ OrderBestRateDto \}/m.test(derivationSrc));
 
 // ── realized-capture WRITER GATE (pure, offline-provable) ─────────────────────
 // The audit flagged that the IO shell's gate (cost + opt-in + stamp) had NO behavioral test — "green

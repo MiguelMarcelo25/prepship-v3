@@ -69,3 +69,19 @@ export const billingLineItemsHasReplacementIdColumn =
 /** `billing_credit_notes.replacement_id` — also 0097, and reached by the ORDER reconciler. */
 export const billingCreditNotesHasReplacementIdColumn =
   memoisedTruePresence('billing_credit_notes', 'replacement_id');
+
+/**
+ * `billing_config.house_account_enabled` — PS-508.
+ *
+ * This one is additively ensured at RUNTIME (`ensureHouseAccountColumn`) rather than by a numbered
+ * migration, so on a database where nothing has called that yet the column is simply absent. The
+ * outbound freeze needs it to know whether a client is opted in to house billing, and it reads it
+ * inside the label transaction — where calling the ensure helper would mean DDL under the ship
+ * lock. Probing instead keeps the freeze read-only.
+ *
+ * Absent column => treat as NOT opted in, which is the same DEFAULT-OFF answer
+ * `shippingMarginPolicyForClient` gives when its own read throws. A client cannot be opted in to a
+ * feature whose column does not exist, so this cannot under-bill anyone who was actually opted in.
+ */
+export const billingConfigHasHouseAccountEnabledColumn =
+  memoisedTruePresence('billing_config', 'house_account_enabled');

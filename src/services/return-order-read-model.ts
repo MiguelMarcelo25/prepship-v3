@@ -201,7 +201,13 @@ export async function loadReturnOrderSummaries(
           shippingMarginPct: frozenMoney.shippingMarginPct,
           customerRateSource: frozenMoney.customerRateSource,
           source: 'selected_rate' as const,
+          // PS-508: BOTH house provenances map to house_account. This branch is binary and its
+          // fallback is 'carrier_markup', so a provenance it does not name is not merely unhandled
+          // — it is actively MISLABELLED as carrier markup. `house_next_best_customer_rate` cannot
+          // reach here today (this reader accepts ps-437-v1 only, and no v1 writer emits it), but
+          // the entire point of the two-version staging is that someone widens this later.
           markupSource: frozenMoney.customerRateSource === 'hugrab_shipping_rate_override'
+            || frozenMoney.customerRateSource === 'house_next_best_customer_rate'
             ? 'house_account' as const
             : 'carrier_markup' as const,
         }

@@ -876,6 +876,7 @@
     "test:ps-501-canonical-billing-total": "tsx scripts/ps-501-canonical-billing-total-guard.ts",
     "test:ps-499-order-rate-display-contract": "tsx scripts/ps-499-order-rate-display-contract-guard.ts",
     "test:ps-502-replacement-contract": "tsx scripts/ps-502-replacement-contract-guard.ts",
+    "test:ps-508-outbound-freeze": "tsx scripts/ps-508-outbound-freeze-guard.ts",
     "test:ps-502-mutation-matrix": "tsx scripts/ps-502-mutation-matrix.ts",
     "test:ps-502-integration": "tsx scripts/ps-502-replacement-integration.ts",
     "test:ps-502-concurrency-pg17": "tsx scripts/ps-502-replacement-concurrency-pg17.ts",
