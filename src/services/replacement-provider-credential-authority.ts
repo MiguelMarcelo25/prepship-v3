@@ -50,6 +50,14 @@ export function selectReplacementProviderCredentialAuthority(input: {
   credentials: ClientCredentials;
   mainApiKeyV2: string | null | undefined;
 }): { apiKeyV2: string; authority: ReplacementProviderCredentialAuthority } | null {
+  // A replacement with no client of its own has NO purchasing authority, and the
+  // application-main key is not a substitute for one. This parameter was previously accepted
+  // and never read: a NULL client produced empty credentials, fell through to the main key,
+  // and froze scope 'main' as though an operator had deliberately chosen to buy that postage
+  // on the house account. Refuse before any credential is considered — the caller cannot tell
+  // an authorised main-account purchase from an unowned one after the fact.
+  if (clientScope(input.requestedClientId) === null) return null;
+
   const clientCredential = normalizedCredential(input.credentials.apiKeyV2);
   if (clientCredential) {
     const scope = clientScope(input.credentials.sourceClientId);

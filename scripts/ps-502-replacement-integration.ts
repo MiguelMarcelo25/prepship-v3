@@ -104,6 +104,8 @@ async function main(): Promise<void> {
   const {
     voidReplacementLabel, reconcileReplacementPurchaseIntent, ReplacementVoidError,
   } = await import('../src/services/replacement-label-void-command.js');
+  const { selectReplacementProviderCredentialAuthority } =
+    await import('../src/services/replacement-provider-credential-authority.js');
   const { shipReplacement, ReplacementShippedError } =
     await import('../src/services/replacement-shipped-command.js');
   const { writeReplacementBillingInTransaction } =
@@ -899,38 +901,69 @@ async function main(): Promise<void> {
     // tempting fallback is to bill and buy against the order's client — that would spend one
     // tenant's ShipStation credential on another tenant's postage. The replacement's own
     // client is the only authority, so a NULL one must stop before the provider.
-    await db.update(schema.replacements).set({ clientId: null })
-      .where(eq(schema.replacements.id, r.id));
-    await db.update(schema.shipments).set({ clientId: null })
-      .where(eq(schema.shipments.id, r.replacementShipmentId!));
+    //
+    // The APPLICATION-MAIN V2 key is configured here deliberately, and that is the whole
+    // point of this check. The first version of this test passed only because the harness
+    // never set it: a NULL client yields empty client credentials, selection fell through to
+    // the main key and froze scope 'main', and a real purchase was reachable. Asserting "zero
+    // provider calls" with the fallback switched OFF proved nothing about the fallback.
+    // Hermes reproduced the live purchase at this exact boundary on 2026-08-19. Switch the
+    // fallback on, then require zero calls anyway.
+    const mainKeyBefore = env.SHIPSTATION_API_KEY_V2;
+    (env as { SHIPSTATION_API_KEY_V2?: string }).SHIPSTATION_API_KEY_V2 = 'ps502-main-v2-fixture';
+    try {
+      await db.update(schema.replacements).set({ clientId: null })
+        .where(eq(schema.replacements.id, r.id));
+      await db.update(schema.shipments).set({ clientId: null })
+        .where(eq(schema.shipments.id, r.replacementShipmentId!));
 
-    // Raw SQL: the harness mirrors billing_line_items in full, but `orders` is deliberately a
-    // subset, and a drizzle select would emit every declared column and fail on the fixture.
-    const originalOrderRows = await db.execute(sql`
-      select client_id as "clientId" from orders where id = 1321
-    `);
-    assert.equal(
-      (originalOrderRows as unknown as { rows: { clientId: number }[] }).rows[0]!.clientId,
-      1,
-      'the original order still carries an authoritative client to be tempted by',
-    );
+      // Raw SQL: the harness mirrors billing_line_items in full, but `orders` is deliberately
+      // a subset, and a drizzle select would emit every declared column and fail on it.
+      const originalOrderRows = await db.execute(sql`
+        select client_id as "clientId" from orders where id = 1321
+      `);
+      assert.equal(
+        (originalOrderRows as unknown as { rows: { clientId: number }[] }).rows[0]!.clientId,
+        1,
+        'the original order still carries an authoritative client to be tempted by',
+      );
 
-    const callsBefore = providerCalls;
-    await assert.rejects(
-      () => purchaseReplacementLabel({
-        replacementId: r.id, actor,
-        purchaseInputs: PURCHASE_INPUTS,
-      }, fakeProvider, conn),
-      (e: unknown) => e instanceof ReplacementLabelError
-        && e.code === 'REPLACEMENT_PROVIDER_CREDENTIAL_UNAVAILABLE',
-      'a replacement with no client of its own has no credential authority to buy with',
-    );
-    assert.equal(providerCalls, callsBefore,
-      'ZERO provider calls — the refusal happens before anything is sent');
+      // Prove the fallback really is armed, so this test can never silently revert to the
+      // toothless version that asserted zero calls with no main key configured.
+      assert.ok(
+        typeof env.SHIPSTATION_API_KEY_V2 === 'string'
+          && env.SHIPSTATION_API_KEY_V2.length > 0,
+        'the application-main key must be configured or this check proves nothing',
+      );
+      assert.equal(
+        selectReplacementProviderCredentialAuthority({
+          requestedClientId: null,
+          credentials: { apiKeyV2: null, apiKey: null, apiSecret: null, sourceClientId: null },
+          mainApiKeyV2: env.SHIPSTATION_API_KEY_V2,
+        }),
+        null,
+        'a NULL client selects NO authority even while a usable main key exists',
+      );
 
-    const intents = await db.select().from(schema.replacementLabelPurchaseIntents)
-      .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
-    assert.equal(intents.length, 0, 'and no durable purchase intent was written');
+      const callsBefore = providerCalls;
+      await assert.rejects(
+        () => purchaseReplacementLabel({
+          replacementId: r.id, actor,
+          purchaseInputs: PURCHASE_INPUTS,
+        }, fakeProvider, conn),
+        (e: unknown) => e instanceof ReplacementLabelError
+          && e.code === 'REPLACEMENT_PROVIDER_CREDENTIAL_UNAVAILABLE',
+        'a replacement with no client of its own has no credential authority to buy with',
+      );
+      assert.equal(providerCalls, callsBefore,
+        'ZERO provider calls — the refusal happens before anything is sent');
+
+      const intents = await db.select().from(schema.replacementLabelPurchaseIntents)
+        .where(eq(schema.replacementLabelPurchaseIntents.replacementId, r.id));
+      assert.equal(intents.length, 0, 'and no durable purchase intent was written');
+    } finally {
+      (env as { SHIPSTATION_API_KEY_V2?: string }).SHIPSTATION_API_KEY_V2 = mainKeyBefore;
+    }
   });
 
   await check('a fresh request cannot replace an already-attached shipment snapshot', async () => {

@@ -56,6 +56,7 @@ const FINANCIAL_ACTION = 'src/services/replacement-financial-action.ts';
 const FINANCIAL_MIGRATION = 'drizzle/0103_ps502_replacement_financial_actions.sql';
 const MONEY_SNAPSHOT = 'src/services/customer-shipping-money-snapshot.ts';
 const PROVIDER_ADAPTER = 'src/services/replacement-label-provider.ts';
+const CREDENTIAL_AUTHORITY = 'src/services/replacement-provider-credential-authority.ts';
 const SCHEDULER = 'src/services/sync-scheduler.ts';
 
 const MUTATIONS: Mutation[] = [
@@ -1491,6 +1492,14 @@ const MUTATIONS: Mutation[] = [
     find: '        sourceId: `${replacement.replacementShipmentId}:${item.id}`,',
     replace: '        sourceId: String(replacement.replacementShipmentId),',
     expect: 'duplicate-SKU items keep distinct ledger source identities',
+  },
+  {
+    id: 'M180',
+    defect: 'a NULL-client replacement falls back to the application-main key and can buy postage',
+    file: CREDENTIAL_AUTHORITY,
+    find: '  if (clientScope(input.requestedClientId) === null) return null;',
+    replace: '',
+    expect: 'a NULL replacement client selects NO provider credential authority',
   },
 ];
 

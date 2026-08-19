@@ -201,10 +201,22 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
         where sx.order_id = billing_line_items.order_id
           and coalesce(sx.voided, false) = false
           and coalesce(sx.is_return, false) = false
+          and sx.source is distinct from 'replacement'
         order by sx.ship_date desc nulls last, sx.id desc
         limit 1
       ) fs on s.id is null and billing_line_items.order_id is not null
       where c.name = ${HUGRAB_BILLING_CLIENT_NAME}
+        -- This writer rewrites unit_cost/total_cost, so it must never price an ordinary line
+        -- from replacement postage. The line_type = 'shipping' term below already keeps
+        -- replace_postage/replace_pick_pack out at both the candidate query and the apply
+        -- UPDATE, so a replacement charge is not reachable today. This is defence in depth for
+        -- the remaining shape: an ORDINARY shipping line whose shipment_id points at a
+        -- replacement vessel would otherwise be priced from that vessel's cost.
+        --
+        -- Deliberately keyed on shipments.source, NOT billing_line_items.replacement_id: that
+        -- column arrives with 0097, this lane runs before migrations are applied, and an
+        -- unguarded reference would 500 HUGRAB billing over money that cannot exist yet.
+        and s.source is distinct from 'replacement'
         and billing_line_items.line_type = 'shipping'
         and coalesce(billing_line_items.invoiced, false) = false
         and ${billingOrderHasNoFinalizedLineSql(

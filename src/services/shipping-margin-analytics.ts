@@ -539,6 +539,11 @@ export async function shippingMarginAnalytics(
      and ${orderCompetitiveRate.isHouseOrder} = true
     where coalesce(${shipments.voided}, false) = false
       and coalesce(${shipments.isReturn}, false) = false
+      -- Ordinary outbound shipping margin only. A replacement vessel carries its own frozen
+      -- customer-money tuple and bills as replace_postage, so projecting it here reports a
+      -- re-ship as ordinary outbound economics against the original order. IS DISTINCT FROM,
+      -- so a legacy NULL source still reads as ordinary. (Hermes, 2026-08-19.)
+      and ${shipments.source} is distinct from 'replacement'
       and ${shippedAt} >= ${input.dateFrom}::timestamptz
       and ${shippedAt} < ${input.dateTo}::timestamptz
       ${selectedClientIds.length ? sql`and coalesce(bli.client_id, ${shipments.clientId}) = any(${intArraySql(selectedClientIds)})` : sql``}

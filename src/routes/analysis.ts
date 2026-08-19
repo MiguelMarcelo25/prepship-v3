@@ -274,7 +274,25 @@ function analysisSelectedOrderPredicate(q: AnalysisScopeInput & { clientId?: num
   return sql`(${sql.join(predicates, sql` and `)})`;
 }
 
+/**
+ * Dashboard analytics count ORDINARY outbound shipments.
+ *
+ * A replacement vessel is deliberately shaped like an orphan — `order_id IS NULL`,
+ * `source = 'replacement'`, `order_number` set to the replacement reference — so every one of
+ * these counters and cost sums silently absorbed it: shipped_today/week/month inflated, and
+ * ordinary shipping cost gained postage that belongs to a re-ship. `IS DISTINCT FROM` rather
+ * than `<>` because a legacy NULL source must still be counted as ordinary.
+ *
+ * Applied HERE, wrapped around the scope, rather than at each call site: the scope predicates
+ * below are OR-joined, so a term pushed in beside them would widen the query instead of
+ * narrowing it — and every one of the six shipment readers in this file would have needed its
+ * own copy. Hermes found this reader missing from the PS-502 sweep on 2026-08-19.
+ */
 function analysisShipmentScopePredicate(q: AnalysisScopeInput): SQL {
+  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;
+}
+
+function analysisShipmentScopeSelection(q: AnalysisScopeInput): SQL {
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(q.clientIds);
   const storeIds = normalizeScopeIds(q.storeIds);

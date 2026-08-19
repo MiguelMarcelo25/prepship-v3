@@ -2189,6 +2189,24 @@ console.log('\nlabel purchase (locked path)');
     && !/orderId/.test(code.slice(at('export function replacementProviderIdempotencyKey'), at('function createStableHash'))),
     'two replacements on one order must never share a purchase identity');
 
+  // Hermes, 2026-08-19: this fell through to the application-main key and a NULL-client
+  // replacement could reach the provider. `requestedClientId` was accepted and never read, so
+  // an empty credential set (exactly what a NULL client produces) selected scope 'main' and
+  // froze it as though an operator had chosen to buy that postage on the house account. The
+  // integration test missed it because the harness never configured the main key, so the
+  // fallback it was meant to disprove was switched off. Ordering matters as much as presence:
+  // the refusal must come BEFORE any credential is considered.
+  {
+    const authority = read('src/services/replacement-provider-credential-authority.ts');
+    check('a NULL replacement client selects NO provider credential authority',
+      authority.length > 0
+      && /if \(clientScope\(input\.requestedClientId\) === null\) return null;/.test(authority)
+      && occursBefore(authority,
+        'if (clientScope(input.requestedClientId) === null) return null;',
+        'normalizedCredential(input.mainApiKeyV2)'),
+      'the application-main key is not authority to buy postage for a replacement nobody owns');
+  }
+
   check('it never reuses createLabelV2 or the ordinary purchase intent API',
     !/createLabelV2|assertNoUnresolvedLabelPurchaseIntent|createLabelPurchaseIntent/.test(code));
 
@@ -2891,11 +2909,77 @@ console.log('\nordinary readers exclude source = replacement');
     'scripts/repair-billing-shipment-linkage.ts',
   ];
 
+  // ── The list above is NOT the authority; this sweep is ────────────────────
+  //
+  // A hand-picked list is green by construction the moment someone adds a reader to it — and
+  // that is exactly what happened. This guard asserted "13 readers exclude replacements",
+  // which was true and read like completeness, while src/routes/analysis.ts,
+  // src/services/shipping-margin-analytics.ts and src/services/hugrab-billing-shipping-floor.ts
+  // were never in the list at all. Hermes found all three on 2026-08-19. So: DISCOVER every
+  // production reader of the shipments table mechanically, and require each one to be
+  // classified. A new reader that is neither excluded nor consciously acknowledged fails here.
   // TWO null-safe spellings are in use and both are correct: `is distinct from 'replacement'`
   // and `coalesce(source, '') <> 'replacement'`. Accepting both is deliberate — demanding a
   // single spelling would make this guard a reason to rewrite correct SQL, which is how a
   // regex guard starts dictating production instead of defending it.
   const NULL_SAFE = /is distinct from\s+'replacement'|coalesce\([^)]*\)\s*<>\s*'replacement'/i;
+
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return walk(full);
+      return entry.isFile() && full.endsWith('.ts') ? [full] : [];
+    });
+
+  const READS_SHIPMENTS = /from\(shipments\)|join\(shipments|from shipments|join shipments|update\(shipments\)/;
+
+  // Acknowledged: these read shipments but cannot adopt a replacement vessel, or legitimately
+  // see one. A replacement vessel has order_id IS NULL, so any reader bound to an order — or
+  // to one shipment id — provably cannot reach it. Each entry states why, so a future reader
+  // cannot be waved through by adding a bare path.
+  const ACKNOWLEDGED_NO_EXCLUSION: Readonly<Record<string, string>> = {
+    'src/routes/admin.ts': 'order/id-bound diagnostics; an order-less vessel is unreachable',
+    'src/routes/billing.ts': 'order-bound billing reads',
+    'src/routes/clients.ts': 'client detail, shipment id-bound',
+    'src/routes/manifests.ts': 'manifest membership is order-bound',
+    'src/services/billing-coverage-gap.ts': 'order-bound coverage comparison',
+    'src/services/combo-package-defaults.ts': 'shipment id-bound package defaulting',
+    'src/services/fulfillment/sole-outbound-shipment.ts': 'order-bound by definition',
+    'src/services/order-lifecycle-command.ts': 'order-bound lifecycle writer',
+    'src/services/orders-read-model.ts': 'order detail payload, scoped to one order',
+    'src/services/print-queue.ts': 'print queue entries are order/shipment id-bound',
+    'src/services/print-queue/queue-send-preflight.ts': 'shipment id-bound preflight',
+    'src/services/print-queue/shipstation-operation-reconciler.ts': 'operation id-bound',
+    'src/services/ref-rates-fetch.ts': 'rate reference sampling, shipment id-bound',
+    'src/services/reporting-projection.ts': 'order-bound projection',
+    'src/services/return-order-read-model.ts': 'return-scoped, and returns are order-bound',
+    // The one genuine judgement call: client-scoped, NOT order-bound, so it DOES see
+    // replacement vessels. It gathers evidence of which package dimensions a client actually
+    // used, and a replacement really did consume that package — so including it is correct
+    // rather than a leak. Revisit if this ever feeds an order-count or per-order average.
+    'src/services/billing-client-package-pricing.ts':
+      'client-scoped package-dimension evidence; a replacement genuinely consumed that package',
+  };
+
+  // A THIRD legitimate spelling exists and this sweep found it the hard way: some owners
+  // exclude replacements in TypeScript rather than SQL — `row.source === 'replacement'` then
+  // return null (customer-shipping-money), `vessel.source !== 'replacement'` (shipment-sync).
+  // Those are real exclusions; a SQL-only classifier reported them as unreviewed readers.
+  const EXCLUDES_ANY = new RegExp(
+    `${NULL_SAFE.source}|source\\s*[!=]==\\s*'replacement'`,
+    'i',
+  );
+
+  const discovered = walk('src').filter((path) => READS_SHIPMENTS.test(read(path)));
+  const unclassified = discovered.filter((path) => {
+    if (/replacement/.test(path)) return false;            // replacement-owned by definition
+    if (EXCLUDES_ANY.test(read(path))) return false;        // excludes, in SQL or in code
+    return ACKNOWLEDGED_NO_EXCLUSION[path] === undefined;  // consciously acknowledged
+  });
+
+  check('every production shipments reader is excluded, replacement-owned, or acknowledged',
+    discovered.length > 0 && unclassified.length === 0,
+    `discovered ${discovered.length} readers; unclassified: ${unclassified.join(', ')}`);
 
   const unsafe: string[] = [];
   for (const path of GENERIC_FALLBACK_READERS) {
