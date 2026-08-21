@@ -1400,6 +1400,34 @@ const REQUIRED_GUARDS = [
   // suite keeps passing while no longer being evidence of anything — silent by
   // construction, which is exactly what this pack exists to catch.
   'test:ps-507-qa-harness',
+  // ── PS-509: sync-ingress customer shipping money ──
+  //
+  // ShipStation sync is the ONLY ingress still producing shipment rows (PS-508's
+  // production evidence), so these guard the one boundary that can move the parent
+  // symptom. The structural guard pins the reversed transaction rule (freeze failure
+  // ABORTS the eligible insert — no savepoint, no try/catch), the link+freeze
+  // transaction, the shipmentValues clobber guard, and the version-conditional strict
+  // reader. The integration guard is in-memory PGlite inside the pack's offline
+  // contract: it applies migration 0103 VERBATIM and executes first-ingestion, replay,
+  // late-link freeze-once, the abort + savepoint counterexample, receipt-revision
+  // detection, void exclusion, the durability triggers and the retry sweep. Both were
+  // verified green under this runner's OFFLINE_GUARD_ENV before admission (~1.6s and
+  // ~7s respectively).
+  'test:ps-509-sync-ingress-freeze',
+  'test:ps-509-sync-ingress-freeze-integration',
+  // ── PS-508: outbound customer-money freeze (writer side) ──
+  //
+  // The label-commit twin of the PS-509 ingress guards above. The structural guard pins
+  // the 7-writer inventory, the savepoint isolation rule (freeze failure must NOT make a
+  // purchased label repurchase-eligible), and the two cutover tripwires (billing still
+  // recomputes; billing does not yet read outbound tuples). The classification guard
+  // pins the closed skip-reason taxonomy; the integration guard executes the freeze
+  // against in-memory PGlite. They already ran in ci.yml but were absent from this pack,
+  // which is the file that defines the source-of-truth surface — an inconsistency PS-508's
+  // own audit flagged.
+  'test:ps-508-outbound-freeze',
+  'test:ps-508-outbound-freeze-integration',
+  'test:ps-508-classification',
 ];
 
 const npmCli = process.env.npm_execpath;

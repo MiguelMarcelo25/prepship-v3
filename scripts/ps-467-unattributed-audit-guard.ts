@@ -72,6 +72,8 @@ await client.exec(`
     order_id integer,
     order_number text,
     tracking_number text,
+    -- PS-502 merge 2026-08-21: the loader now excludes source='replacement' vessels.
+    source text,
     created_at timestamptz NOT NULL DEFAULT now()
   );
   INSERT INTO shipments (id, order_id, order_number, tracking_number, created_at) VALUES

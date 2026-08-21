@@ -28,3 +28,12 @@ export function normalizeScopeIds(values: number[] | undefined): number[] {
 export function intArraySql(values: number[]): SQL {
   return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
+
+/**
+ * PS-509: same primitive for `text[]`. The drizzle `sql` template expands a JS array
+ * parameter to a `($1, $2)` record — not an array — so `unnest(${list}::text[])` fails
+ * with "cannot cast type record to text[]" (the exact defect intArraySql exists for).
+ */
+export function textArraySql(values: readonly string[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::text[]`;
+}

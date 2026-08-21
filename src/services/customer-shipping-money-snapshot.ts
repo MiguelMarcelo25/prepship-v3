@@ -20,9 +20,23 @@ export const CUSTOMER_SHIPPING_MONEY_POLICY_VERSION = 'ps-437-v1';
  */
 export const CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND = 'ps-508-v1';
 
+/**
+ * PS-509 — the ShipStation SYNC-INGRESS version, a THIRD accepted version for the same
+ * staging reason ps-508-v1 was a second: a sync tuple stays invisible to every consumer
+ * until that consumer names this version explicitly. It is not a flavour of ps-508-v1
+ * because the two freeze at DIFFERENT moments from DIFFERENT evidence: ps-508-v1 freezes
+ * inside the purchase transaction from the label's final cost; ps-509-v1 freezes at sync
+ * ingestion from an authoritative-but-not-proven-final receipt, minutes after purchase
+ * (measured p50 138s / p99 ~13min), with no policy-history table able to prove the
+ * billing policy was stable across that gap. Collapsing them into one version would
+ * destroy exactly the distinction the reader needs to validate them differently.
+ */
+export const CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION = 'ps-509-v1';
+
 export const ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS = [
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION,
   CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
+  CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION,
 ] as const;
 
 export type CustomerShippingMoneyPolicyVersion =
@@ -41,7 +55,33 @@ export type CustomerShippingMoneyPolicyVersion =
 export type CustomerShippingRateSource =
   | 'realized_customer_shipping_rate'
   | 'hugrab_shipping_rate_override'
-  | 'house_next_best_customer_rate';
+  | 'house_next_best_customer_rate'
+  /**
+   * PS-509 — the carrier-markup FORMULA applied at sync ingestion. Deliberately not
+   * `realized_customer_shipping_rate`: that name is bound to money realized from a label's
+   * final purchase cost inside the purchase transaction. The sync formula is the same
+   * markup arithmetic applied to a sync RECEIPT — a different evidentiary basis — and
+   * provenance, not amount, is what tells two formulas apart after the fact.
+   */
+  | 'carrier_markup_customer_shipping_rate';
+
+/**
+ * PS-509 — timing/provenance is its OWN dimension, never smuggled into the formula field.
+ * `shipstation_sync_ingestion` is the honest name for when these facts were captured:
+ * policy facts existed at ingestion, but no policy-history table can prove they were
+ * stable across the purchase→ingestion gap, so the tuple must not claim purchase-time.
+ */
+export type CustomerShippingMoneyCaptureSource = 'shipstation_sync_ingestion';
+
+/**
+ * PS-509 — which observation the frozen selected cost came from. `label_final_cost` is a
+ * purchase-transaction fact. `shipstation_sync_receipt_cost` is an authoritative receipt
+ * observed at first sync ingestion — NOT proven immutable, because ShipStation may revise
+ * cost later (the receipt_revised_after_freeze review class exists for exactly that).
+ */
+export type CustomerShippingRateCostSource =
+  | 'label_final_cost'
+  | 'shipstation_sync_receipt_cost';
 
 export type FrozenCustomerShippingPricingAuthority = {
   policyOwner: 'billing_config';
@@ -83,8 +123,15 @@ export type FrozenCustomerShippingMoney = {
   shippingMarginAmount: number;
   shippingMarginPct: number | null;
   customerRateSource: CustomerShippingRateSource;
-  rateCostSource: 'label_final_cost';
+  rateCostSource: CustomerShippingRateCostSource;
   customerShippingMoneyPolicyVersion: CustomerShippingMoneyPolicyVersion;
+  /**
+   * PS-509 — REQUIRED for ps-509-v1, and required-ABSENT on ps-437-v1/ps-508-v1.
+   * Those versions never recorded a capture provenance; a historical tuple suddenly
+   * carrying one is an unknown combination and must classify as malformed rather than
+   * be silently normalized (the reader enforces this per version).
+   */
+  customerShippingMoneyCaptureSource?: CustomerShippingMoneyCaptureSource;
   /**
    * PS-508 — the EIGHTH field, and optional on purpose.
    *
@@ -123,7 +170,13 @@ function recordOrNull(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-const CUSTOMER_RATE_SOURCES: ReadonlySet<string> = new Set<CustomerShippingRateSource>([
+/**
+ * PS-509 — the formula unions are PER VERSION, not one shared set. A purchase-path
+ * tuple claiming the sync formula (or a sync tuple claiming house money, which this
+ * ingress can never produce — no `shipp` carrier exists in the sync population) is an
+ * unknown combination, and unknown combinations classify as malformed, never normalized.
+ */
+const PURCHASE_RATE_SOURCES: ReadonlySet<string> = new Set<CustomerShippingRateSource>([
   'realized_customer_shipping_rate',
   'hugrab_shipping_rate_override',
   'house_next_best_customer_rate',
@@ -279,6 +332,11 @@ function readPricingAuthority(value: unknown): FrozenCustomerShippingPricingAuth
   };
 }
 
+const SYNC_INGESTION_RATE_SOURCES: ReadonlySet<string> = new Set<CustomerShippingRateSource>([
+  'carrier_markup_customer_shipping_rate',
+  'hugrab_shipping_rate_override',
+]);
+
 /**
  * Strict reader for an already-frozen shared money snapshot. Unlike the legacy
  * rate normalizer, this never manufactures customer money from selected cost.
@@ -325,8 +383,7 @@ export function readFrozenCustomerShippingMoney(
     !hasShippingMarginPct ||
     (row.shippingMarginPct != null && shippingMarginPct == null) ||
     Math.abs(roundMoney(cShippingRateAmount - selectedRateCost) - roundMoney(shippingMarginAmount)) > 0.001 ||
-    typeof customerRateSource !== 'string' || !CUSTOMER_RATE_SOURCES.has(customerRateSource) ||
-    rateCostSource !== 'label_final_cost' ||
+    typeof customerRateSource !== 'string' ||
     typeof policyVersion !== 'string' ||
     !accept.includes(policyVersion as CustomerShippingMoneyPolicyVersion) ||
     (hasPricingAuthority && !pricingAuthority) ||
@@ -336,13 +393,46 @@ export function readFrozenCustomerShippingMoney(
   ) {
     return null;
   }
+
+  // PS-509 — validity is CONDITIONAL ON VERSION. ps-437-v1 keeps its historical
+  // optionality and ps-508-v1 keeps the purchase-path contract exactly as before:
+  // label-final cost basis, purchase formulas, and NO capture-source key (those
+  // versions never recorded one, so a tuple suddenly carrying it is an unknown
+  // combination — malformed, never silently normalized). ps-509-v1 REQUIRES the
+  // sync receipt-cost basis and the shipstation_sync_ingestion capture source, and
+  // admits only the formulas this ingress can actually produce (house is never).
+  const isSyncIngestion = policyVersion === CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION;
+  const captureSourcePresent =
+    Object.prototype.hasOwnProperty.call(row, 'customerShippingMoneyCaptureSource');
+  if (isSyncIngestion) {
+    if (
+      rateCostSource !== 'shipstation_sync_receipt_cost' ||
+      row.customerShippingMoneyCaptureSource !== 'shipstation_sync_ingestion' ||
+      !SYNC_INGESTION_RATE_SOURCES.has(customerRateSource)
+    ) {
+      return null;
+    }
+  } else if (
+    rateCostSource !== 'label_final_cost' ||
+    captureSourcePresent ||
+    !PURCHASE_RATE_SOURCES.has(customerRateSource)
+  ) {
+    return null;
+  }
   return {
     selectedRateCost: roundMoney(selectedRateCost),
     cShippingRateAmount: roundMoney(cShippingRateAmount),
     shippingMarginAmount: roundMoney(shippingMarginAmount),
     shippingMarginPct,
     customerRateSource: customerRateSource as CustomerShippingRateSource,
-    rateCostSource,
+    // Version-validated above: label_final_cost for the purchase versions,
+    // shipstation_sync_receipt_cost for ps-509-v1.
+    rateCostSource: rateCostSource as CustomerShippingRateCostSource,
+    // PS-509: present exactly when the version REQUIRES it, so a v437/v508 tuple
+    // round-trips without gaining a capture provenance it never recorded.
+    ...(isSyncIngestion
+      ? { customerShippingMoneyCaptureSource: 'shipstation_sync_ingestion' as const }
+      : {}),
     // PS-508: carried through only when the frozen tuple actually has it, so a v1 tuple round-trips
     // to exactly the seven fields it was written with rather than gaining an empty-string eighth
     // that would read as "no markup suffix" when the truth is "this version never recorded one".

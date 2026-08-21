@@ -51,8 +51,10 @@ export async function deriveOutboundHouseCustomerRate(input: {
   if (!Number.isFinite(input.selectedRateCost) || input.selectedRateCost <= 0) return null;
 
   const exec = input.exec ?? db;
-  // DEFAULT-OFF on an un-ensured database. `house_account_enabled` is added by the runtime
-  // `ensureHouseAccountColumn()` helper rather than a numbered migration, and calling that helper
+  // DEFAULT-OFF on a database that lacks the column. `house_account_enabled` IS owned by numbered
+  // migration 0050 (drizzle/0050_billing_config_house_account.sql) — an earlier comment here
+  // claimed it was runtime-ensured only, which was wrong. It is additionally ensured at runtime by
+  // `ensureHouseAccountColumn()`, and calling that helper
   // here would mean DDL under the ship lock. A client cannot be opted in to a column that does not
   // exist, so answering "not opted in" cannot under-bill anyone who genuinely was.
   if (!(await billingConfigHasHouseAccountEnabledColumn(exec))) return null;

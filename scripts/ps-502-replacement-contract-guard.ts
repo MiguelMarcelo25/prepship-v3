@@ -111,7 +111,11 @@ function occursBefore(haystack: string, a: string, b: string): boolean {
 }
 
 const read = (path: string) => {
-  try { return readFileSync(path, 'utf8'); } catch { return ''; }
+  // Normalize CRLF: Windows checkouts materialize \r\n (core.autocrlf) and every
+  // multi-line anchor and site signature below is LF-authored. Without this the guard
+  // cannot pass on a Windows working tree while passing in CI — a guard that cannot
+  // pass locally teaches people to stop running it.
+  try { return readFileSync(path, 'utf8').replace(/\r\n/g, '\n'); } catch { return ''; }
 };
 
 const replacementsSql = read('drizzle/0096_ps502_replacements.sql');
@@ -598,7 +602,8 @@ check('replacements:billing alone is not enough — financials:write is also req
 console.log('\ndrizzle schema mirrors the migration');
 
 {
-  const schemaSource = read('src/db/schema/replacements.ts');
+  // Windows checkouts materialize CRLF (core.autocrlf); every anchor below is LF-authored.
+  const schemaSource = read('src/db/schema/replacements.ts').replace(/\r\n/g, '\n');
 
   const snake = (camel: string) => camel.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
@@ -3458,6 +3463,16 @@ console.log('\nordinary readers exclude source = replacement');
     'src/services/fulfillment/outbox.ts': {
       sites: ['src/services/fulfillment/outbox.ts#3:6d1cd5223c40449c'],
       why: 'confirmation-repair read driven from fulfillment_outbox; only forward labels write shipment_id',
+    },
+    // PS-509 retry sweep (merged 2026-08-21). Driven FROM customer_shipping_money_sync_outcomes,
+    // joined on o.shipment_id — the FK-driven shape above. The filter admits only the retryable
+    // classes ('no_order', 'needs_retry', 'no_client'); a replacement vessel's ingress evaluation
+    // is skipped terminally by the sync-ingress writer and can never carry one of those outcomes,
+    // so this join cannot re-drive a replacement. Verified against
+    // customer-shipping-money-sync-ingress.ts's skip taxonomy on 2026-08-21.
+    'src/services/customer-shipping-money-sync-retry-sweep.ts': {
+      sites: ['src/services/customer-shipping-money-sync-retry-sweep.ts#0:759ba1569744b386'],
+      why: 'FK-driven from sync outcomes; retryable outcome classes exclude replacement skips',
     },
     // Driven from returns, joined on r.return_shipment_id. A return is an INBOUND RMA
     // shipment; a replacement is an outbound re-ship. Nothing in this repo writes

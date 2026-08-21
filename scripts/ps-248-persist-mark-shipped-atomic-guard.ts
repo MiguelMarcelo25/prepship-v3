@@ -19,9 +19,15 @@ function check(name: string, cond: boolean): void {
 
 const labels = readFileSync('src/services/labels.ts', 'utf8');
 
-check('persistCreatedLabel accepts a tx handle', /tx\?: DbTx;/.test(labels));
+// PS-508 hardening (2026-08-21): the handle is now REQUIRED — the old
+// `args.tx ?? db` fallback let a caller persist a label (and freeze customer
+// money) OUTSIDE its durable receipt transaction. Strictly stronger than the
+// original PS-248 property: every insert still runs on the tx executor, and now
+// a tx-less caller is a compile error instead of a silent bare-pool write.
+check('persistCreatedLabel REQUIRES a tx handle', /tx: DbTx;/.test(labels) && !/tx\?: DbTx;/.test(labels));
 check('persistCreatedLabel runs the shipment insert on the tx executor (not the bare pool)',
-  /const exec = \(args\.tx \?\? db\) as DbTx;/.test(labels) &&
+  /const exec = args\.tx;/.test(labels) &&
+  !/const exec = \(args\.tx \?\? db\)/.test(labels) &&
   /const \[row\] = await exec\s*\.insert\(shipments\)/.test(labels));
 // Repointed 2026-08-05 (same dead anchor already fixed in ps-285). PS-423 moved the
 // persist+lifecycle transaction under consumeFulfillmentOperation(operationId, async

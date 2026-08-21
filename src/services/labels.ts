@@ -1197,10 +1197,33 @@ export async function persistCreatedLabel(args: {
    */
   toCountry: string | null;
   selectedRateJsonExtra?: Record<string, unknown> | null;
-  tx?: DbTx;
+  /**
+   * PS-508 blocker 1 — the provider the label was ACTUALLY purchased through.
+   *
+   * House customer money is only ever billed for a SHIPP purchase: captureRealizedHouseMargin,
+   * sole writer of the order_competitive_rate row billing reads, is gated on
+   * `directProviderKey === 'shipp'`. The first cut of the outbound freeze derived the house rate
+   * from best_rate_json + client opt-in alone — a DIFFERENT eligibility boundary. An order
+   * carrying a stale SHIPP-winning stamp that was then shipped on a non-SHIPP direct or Shopify
+   * label would freeze house money while billing applied ordinary carrier markup, and the one-shot
+   * predicate means a retry could not repair it.
+   *
+   * Passed explicitly rather than inferred from `source` or the carrier code: `source` is a
+   * free-form provenance marker, and the stale stamp is precisely the thing that cannot be trusted
+   * to answer "what did we actually buy".
+   */
+  purchasedProviderKey?: string | null;
+  /**
+   * PS-508: REQUIRED. The customer-money freeze runs inside this transaction's
+   * savepoint; the old `args.tx ?? db` fallback let a caller silently persist a
+   * label (and freeze money) OUTSIDE its durable receipt transaction — a stated
+   * prerequisite gap for the fail-closed cutover step. Every live caller already
+   * passes its receipt transaction; new callers must too.
+   */
+  tx: DbTx;
 }): Promise<number> {
   const { created } = args;
-  const exec = (args.tx ?? db) as DbTx;
+  const exec = args.tx;
   const createdAt = new Date();
   const shipDate = created.shipDate ? new Date(created.shipDate) : createdAt;
   // PS-108: ShipStation bills the ParcelGuard premium separately (created.insuranceCost,
@@ -1366,18 +1389,50 @@ export async function persistCreatedLabel(args: {
   //
   // That reasoning expires at cutover. The moment billing reads ps-508-v1, a skipped freeze becomes
   // a shipment billing cannot price, and this must become fail-closed.
+  // PS-508 blocker 1: house money follows the PURCHASE, never the stamp. This mirrors the sidecar
+  // capture's own gate (labels.ts, `if (directProviderKey === 'shipp')`) so the freeze and billing
+  // share ONE eligibility boundary, not just one arithmetic owner. Any non-SHIPP purchase derives
+  // no house rate and takes the ordinary carrier-markup path, exactly as billing does today.
+  const housePurchaseEligible = args.purchasedProviderKey === 'shipp';
+  // PS-508 blocker 2: a SAVEPOINT, not a bare try/catch.
+  //
+  // A failed PostgreSQL statement aborts the ENTIRE transaction. Catching the JavaScript exception
+  // does not undo that — the enclosing ship transaction stays poisoned and the later
+  // operation-ledger 'consumed' flip fails, rolling back a label the carrier has already charged
+  // for. The first cut caught the exception and called itself non-fatal; it was not. tx.transaction
+  // issues a savepoint, so rolling back to it leaves the parent transaction usable — the same shape
+  // the replacement label purchase already uses for its freeze.
   try {
-    const houseCustomerRate = await deriveOutboundHouseCustomerRate({
+    await exec.transaction(async (sp) => {
+    const cShippingRateAmount = housePurchaseEligible
+      ? await deriveOutboundHouseCustomerRate({
       orderId: args.orderId,
       clientId: args.clientId,
       // The SAME basis the tuple is frozen against — postage + insurance, never bare postage.
       // Billing floors the house amount at resolveBillingSelectedRateCost, which prefers this
       // column; using created.cost would miss insurance on every insured shipment.
-      selectedRateCost: Number((created.cost + insuranceCost).toFixed(2)),
-      exec,
+          selectedRateCost: Number((created.cost + insuranceCost).toFixed(2)),
+          exec: sp,
+        })
+      : null;
+      const outcome = await freezeOutboundCustomerShippingMoney(
+        row.id, { cShippingRateAmount }, sp,
+      );
+      // `needs_review` is a FACT, not a failure: the row carries a tuple this build wrote wrong,
+      // or one written by a policy it cannot read. It must not fail a paid-for label, and it must
+      // not vanish either — before this it returned a bare null and looked exactly like an
+      // ordinary skip, so a shipment we mis-wrote was indistinguishable from one we correctly left
+      // alone. Repair is a separate operator-controlled action; this makes it findable.
+      if (outcome.status === 'needs_review') {
+        console.warn(
+          `[labels] PS-508 shipment ${row.id} needs review: ${outcome.reason} (${outcome.detail})`,
+        );
+      }
     });
-    await freezeOutboundCustomerShippingMoney(row.id, { houseCustomerRate }, exec);
   } catch (err) {
+    // Rolled back to the savepoint; the parent ship transaction is intact and commits without a
+    // tuple. Safe ONLY while nothing reads ps-508-v1 — at cutover a shipment billing cannot price
+    // must fail closed rather than warn.
     console.warn(
       '[labels] PS-508 outbound customer-money freeze skipped:',
       err instanceof Error ? err.message : err,
@@ -3198,6 +3253,10 @@ async function createLabelV2Impl(
       orderId: order.id,
       orderNumber: order.orderNumber ?? null,
       clientId: clientId ?? null,
+      // PS-508: the ONLY call site that can purchase through SHIPP. Every other caller (Shopify,
+      // the ShipStation forward-label recovery, the test/mock paths) omits this and is therefore
+      // house-ineligible by construction rather than by assumption.
+      purchasedProviderKey: directProviderKey,
       effectiveWeightOz,
       length,
       width,

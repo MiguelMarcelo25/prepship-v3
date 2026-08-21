@@ -1,0 +1,286 @@
+# PS-508 — read-only coverage + shadow comparison for the customer-money cutover.
+#
+# WHY A LANE AND NOT A LOCAL SCRIPT
+#
+# The audit needs production shipment data. Running it locally would mean putting a
+# production database credential on a workstation; this runs the script as a Render
+# one-off job inside the environment that already holds one, so no local secret exists
+# to leak or rotate. Same pattern as the BILL-DUP-OUTBOUND-CHARGE audit lane.
+#
+# It also fixes a weaker gate. The script refuses without PS508_AUDIT_OPERATOR, but an
+# env var set on a workstation is whatever its setter types — it records an assertion,
+# not a fact. Here the value is `github.actor`: an authenticated identity the dispatcher
+# cannot forge, stamped into the report header.
+#
+# STRICTLY READ-ONLY, TWO WAYS
+#
+# The script issues nothing but SELECT, and it pins the session READ ONLY at the server
+# so the database refuses a write regardless of what the code asks for. There is
+# therefore NO confirmation token: a token exists to gate a write, and this lane has no
+# write to gate. There is no --apply and no repair mode. The historical backfill the
+# plan review discussed is a SEPARATE, evidence-qualified job requiring DJ's explicit
+# approval — it must never be bolted onto this lane.
+#
+# WHAT IT ANSWERS
+#
+# Of the shipments that could carry an outbound ps-508-v1 tuple, how many do; and where
+# one exists, whether it agrees with what billing would charge today. Its numbers decide
+# whether the historical backfill is a footnote or the main event, and it exits non-zero
+# on any activation blocker (malformed/unknown snapshots, or a tuple billing cannot
+# reproduce).
+name: Render One-Off Read-Only Audit (PS-508 customer-money coverage)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Look-back window in days (start small: 1 to check the report shape)'
+        required: false
+        default: '1'
+        type: string
+      limit:
+        description: 'Maximum shipments to scan'
+        required: false
+        default: '50'
+        type: string
+      watermark:
+        description: 'ISO time the outbound freeze went live (rows at/after it SHOULD carry a tuple). Blank = no split.'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-one-off-ps-508-coverage-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      # Fail before dispatching if the script has grown a write. A read-only lane that
+      # silently starts writing is worse than no lane, and this is cheaper than trusting
+      # the header comment.
+      - name: Audit script contains no write statement
+        run: |
+          set -euo pipefail
+          if grep -nEi '\b(insert|update|delete|drop|alter|truncate|grant|create)\s' \
+               scripts/ps-508-coverage-audit.ts \
+             | grep -viE '^\s*[0-9]+:\s*(\*|//)' ; then
+            echo "::error::A write-shaped statement appeared in the audit script."
+            exit 1
+          fi
+          grep -q 'TRANSACTION READ ONLY' scripts/ps-508-coverage-audit.ts || {
+            echo '::error::The audit must pin the session READ ONLY.'
+            exit 1
+          }
+          echo "read-only contract holds"
+
+      # The offline half of the proof runs here, before any production connection: the
+      # classifier and coverage arithmetic are pure, so if they are wrong the lane should
+      # never reach the database at all.
+      - name: PS-508 classification + coverage guard
+        run: npm run test:ps-508-classification
+
+      - name: Run the audit as a Render one-off job
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          AUDIT_DAYS: ${{ inputs.days }}
+          AUDIT_LIMIT: ${{ inputs.limit }}
+          AUDIT_OPERATOR: ${{ github.actor }}
+          AUDIT_WATERMARK: ${{ inputs.watermark }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo '::error::RENDER_API_KEY and RENDER_SERVICE_ID are required.'
+            exit 1
+          fi
+
+          case "${AUDIT_DAYS:-1}" in ''|*[!0-9]*) echo '::error::days must be a positive integer.'; exit 1;; esac
+          case "${AUDIT_LIMIT:-50}" in ''|*[!0-9]*) echo '::error::limit must be a positive integer.'; exit 1;; esac
+
+          files=(
+            scripts/ps-508-coverage-audit.ts
+            src/services/customer-shipping-money-coverage.ts
+            src/services/customer-shipping-money-classification.ts
+          )
+          archive_b64=$(tar -czf - "${files[@]}" | base64 -w0)
+
+          # Reject anything that is not a plain ISO timestamp before it reaches a shell command.
+          wm_arg=""
+          if [ -n "${AUDIT_WATERMARK:-}" ]; then
+            case "${AUDIT_WATERMARK}" in
+              [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+              *) echo '::error::watermark must look like 2026-08-19T02:23:00Z'; exit 1;;
+            esac
+            wm_arg=" --watermark=${AUDIT_WATERMARK}"
+          fi
+          runner="PS508_AUDIT_OPERATOR='${AUDIT_OPERATOR}' npx tsx scripts/ps-508-coverage-audit.ts --days=${AUDIT_DAYS} --limit=${AUDIT_LIMIT}${wm_arg}"
+          start_command="printf '%s' '${archive_b64}' | base64 -d | tar -xzf - && ${runner}"
+
+          payload=$(START_COMMAND="$start_command" node -e \
+            'process.stdout.write(JSON.stringify({startCommand: process.env.START_COMMAND}))')
+          response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json' \
+            --data "$payload")
+          http_code=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+          if [ "$http_code" != '201' ]; then
+            echo "::error::Render one-off job creation failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+          job_id=$(BODY="$body" node -e \
+            'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.id||""))')
+          test -n "$job_id" || { echo '::error::Render returned no job id.'; exit 1; }
+          echo "PS-508 coverage audit job created: ${job_id}"
+          echo "operator: ${AUDIT_OPERATOR}   window: ${AUDIT_DAYS}d   limit: ${AUDIT_LIMIT}"
+
+          # Exported so the log-retrieval step below can run even when this step fails: the audit
+          # exits non-zero to REPORT activation blockers, and that is exactly the case where you
+          # most want to read its output.
+          {
+            echo "RENDER_JOB_ID=${job_id}"
+            echo "RENDER_JOB_STARTED=$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_ENV"
+
+          for attempt in $(seq 1 120); do
+            sleep 10
+            job=$(curl -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/jobs/${job_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H 'Accept: application/json')
+            status=$(BODY="$job" node -e \
+              'const body=JSON.parse(process.env.BODY||"{}"); process.stdout.write(String(body.status||""))')
+            echo "audit status=${status} (poll ${attempt})"
+            case "$status" in
+              succeeded)
+                echo 'Audit complete. Nothing was written.'
+                echo 'The coverage report is in the Render job log.'
+                exit 0
+                ;;
+              failed|canceled)
+                # A non-zero exit is ALSO how the audit reports activation blockers, so a
+                # failure here is not necessarily infrastructure. Read the Render job log
+                # before assuming the lane broke.
+                echo "::error::Audit job ended in ${status}. Check the Render job log — the audit"
+                echo "::error::exits non-zero when it finds activation blockers, which is a RESULT."
+                exit 1
+                ;;
+            esac
+          done
+
+          echo '::error::Audit job did not finish within the polling window.'
+          exit 1
+
+      # Bring the report back HERE, so results are read where the run was triggered rather than in
+      # a second dashboard. The first dispatch of this lane succeeded and still left the numbers
+      # only in Render's log, which made the run technically green and practically useless.
+      #
+      # BEST-EFFORT, BY CONSTRUCTION. No other lane in this repo fetches Render logs, so this API
+      # shape is unproven; `always()` plus `continue-on-error` mean a wrong guess prints a pointer
+      # instead of destroying the verdict. It must never turn a failing audit green or a passing
+      # one red — the audit's own exit status is the result, and this step only transcribes it.
+      - name: Retrieve the Render job log into this run
+        if: always() && env.RENDER_JOB_ID != ''
+        continue-on-error: true
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          set -uo pipefail   # deliberately NOT -e: a failed fetch must fall through to the pointer
+
+          echo "Render job: ${RENDER_JOB_ID}"
+
+          owner_id=$(curl -sS --max-time 30 \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" -H 'Accept: application/json' \
+            | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+                try{process.stdout.write(String(JSON.parse(d).ownerId||""))}catch{process.stdout.write("")}})')
+
+          if [ -n "${owner_id}" ]; then
+            # Try the JOB as the resource first, then the service. The previous attempt fetched 91
+            # lines scoped to the service and not one carried the tag: those were the API's own
+            # health checks. A one-off job's output does not land in the web service's stream — it
+            # is addressed separately, which is why every service-scoped attempt found real logs
+            # and never the report.
+            for resource in "${RENDER_JOB_ID}" "${RENDER_SERVICE_ID}"; do
+              response=$(curl -sS --max-time 60 -G -w $'\n%{http_code}' \
+                "https://api.render.com/v1/logs" \
+                -H "Authorization: Bearer ${RENDER_API_KEY}" -H 'Accept: application/json' \
+                --data-urlencode "ownerId=${owner_id}" \
+                --data-urlencode "resource=${resource}" \
+                --data-urlencode "startTime=${RENDER_JOB_STARTED}" \
+                --data-urlencode "limit=500")
+              http_code=$(printf '%s' "$response" | tail -n1)
+              body=$(printf '%s' "$response" | sed '$d')
+              if BODY="$body" node -e '
+                const p = JSON.parse(process.env.BODY || "{}");
+                const l = Array.isArray(p?.logs) ? p.logs : [];
+                process.exit(l.some((x) => String(x.message ?? "").includes("PS508RPT ")) ? 0 : 1);
+              ' 2>/dev/null; then
+                echo "report found under resource=${resource}"
+                break
+              fi
+            done
+
+            printed=$(BODY="$body" node -e '
+              const raw = process.env.BODY || "";
+              let parsed; try { parsed = JSON.parse(raw); } catch { process.exit(3); }
+              const lines = Array.isArray(parsed?.logs) ? parsed.logs
+                : Array.isArray(parsed) ? parsed : [];
+              if (!lines.length) process.exit(4);
+              // Keep only tagged lines and strip the tag. The service shares this log stream and
+              // emits a /health/ready line every few seconds; the server-side text filter should
+              // already have excluded them, but filtering again here costs nothing and means a
+              // looser-than-expected filter cannot pad the report with noise.
+              const report = lines
+                .map((l) => String(l.message ?? l.text ?? l.log ?? ""))
+                .filter((t) => t.includes("PS508RPT "))
+                .map((t) => t.slice(t.indexOf("PS508RPT ") + 9));
+              if (!report.length) process.exit(5);
+              for (const line of report) process.stdout.write(line + "\n");
+            ') && { echo "----- BEGIN PS-508 COVERAGE REPORT -----"; printf "%s\n" "$printed";
+                    echo "----- END PS-508 COVERAGE REPORT -----"; exit 0; }
+
+            # Self-diagnosing: report the HTTP status and the response SHAPE, never its contents.
+            # The first attempt failed and told me only that it failed, so the next guess would
+            # have been another guess. Keys and counts are enough to fix it; log text is data.
+            echo "logs API http=${http_code:-none}"
+            BODY="$body" node -e '
+              const raw = process.env.BODY || "";
+              try {
+                const p = JSON.parse(raw);
+                if (Array.isArray(p)) { console.log("shape: top-level array, length " + p.length); }
+                else {
+                  console.log("shape: object, keys = " + Object.keys(p).join(", "));
+                  if (p.logs) console.log("logs is " + (Array.isArray(p.logs) ? "array len " + p.logs.length : typeof p.logs));
+                  if (p.logs?.[0]) console.log("first entry keys = " + Object.keys(p.logs[0]).join(", "));
+                  if (p.message && !p.logs) console.log("api message present (likely an error envelope)");
+                }
+              } catch { console.log("shape: unparseable, " + raw.length + " bytes"); }
+            '
+          fi
+
+          # Every failure path lands here with something actionable, never a silent blank.
+          echo "::warning::Could not transcribe the Render log automatically (owner=${owner_id:-unresolved})."
+          echo "Read it directly: Render dashboard -> the API service -> Jobs -> ${RENDER_JOB_ID} -> Logs"

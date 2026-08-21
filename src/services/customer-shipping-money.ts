@@ -14,6 +14,7 @@ import {
 import { loadCarrierMarkups, SS_BASELINE_CARRIER_CODES } from './rates.js';
 import { resolveCanonicalMarkup } from './shipping-workflow/markup-resolver.js';
 import { resolvePerAccountMarkupRuleWithIdentity } from './shipping-workflow/per-account-markup-key.js';
+import { classifyCustomerShippingMoney } from './customer-shipping-money-classification.js';
 import type { RateAdjustmentKind } from './shipping-workflow/rate-money.js';
 import {
   ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
@@ -39,6 +40,47 @@ export {
   type FrozenCustomerShippingPricingAuthority,
   type FrozenReplacementCustomerShippingMoney,
 } from './customer-shipping-money-snapshot.js';
+
+/**
+ * PS-508 — what the outbound freeze actually did, discriminated.
+ *
+ * It used to return `FrozenCustomerShippingMoney | null`, and that null carried four unrelated
+ * meanings: not applicable, nothing to freeze, we wrote something invalid, and a policy this build
+ * cannot read. Billing after cutover has to treat those completely differently — only genuine
+ * absence may recompute — so the caller must be able to tell them apart.
+ *
+ * `needs_review` is deliberately NOT an error: it must not fail a paid-for label. It is a fact the
+ * caller records so the row is countable and repairable, not a reason to roll anything back.
+ */
+/**
+ * Why the freeze did not apply. A CLOSED union, not `string`.
+ *
+ * It was `reason: string`, which meant a new reason could be added and every consumer would keep
+ * compiling while silently failing to handle it. That is the same shape of defect as the null this
+ * type was introduced to remove — an open channel where the type system could have forced a
+ * decision. The first seven are ordinary applicability exclusions; the last two are operational
+ * states that a caller may want to treat differently.
+ */
+export type OutboundFreezeSkipReason =
+  | 'return'
+  | 'voided'
+  | 'replacement'
+  | 'test_offline'
+  | 'billing_inactive'
+  | 'no_client'
+  | 'no_billable_cost'
+  | 'shipment_not_found'
+  | 'update_matched_no_row';
+
+export type OutboundFreezeOutcome =
+  | { status: 'frozen'; frozen: FrozenCustomerShippingMoney }
+  | { status: 'already_frozen'; frozen: FrozenCustomerShippingMoney }
+  | { status: 'skipped'; reason: OutboundFreezeSkipReason }
+  | {
+      status: 'needs_review';
+      reason: 'malformed_known_version' | 'unknown_version';
+      detail: string;
+    };
 
 export type CustomerShippingMoneyDecision = FrozenCustomerShippingMoney & {
   billingSource: ShippingLineBillingResult['source'];
@@ -71,7 +113,9 @@ export type CustomerShippingMoneyInput = {
   policyVersion?: CustomerShippingMoneyPolicyVersion;
 };
 
-type CustomerShippingMoneyRow = {
+// PS-509: exported so the sync-ingress freeze reuses the ONE canonical policy row shape
+// instead of re-implementing the join and letting the two drift.
+export type CustomerShippingMoneyRow = {
   shipmentId: number;
   orderId: number | null;
   clientId: number | null;
@@ -80,6 +124,10 @@ type CustomerShippingMoneyRow = {
   voided: boolean;
   /** PS-508: free-form provenance marker ('replacement', 'test_offline', 'prepship_v2', …). */
   source: string | null;
+  /** PS-509: provider shipment identity, denormalized into the durable outcome record. */
+  labelShipmentId: number | null;
+  /** PS-509: sync ingress must never freeze (or bill) a test client's shipments. */
+  clientIsTest: boolean;
   selectedRateCost: string | number | null;
   selectedRateJson: unknown;
   carrierCode: string | null;
@@ -223,7 +271,9 @@ export function resolveCustomerShippingMoney(
   };
 }
 
-async function loadCustomerShippingMoneyRow(
+// PS-509: exported (unchanged in behaviour) so freezeSyncIngressCustomerShippingMoney reads
+// policy facts through the same query every other freeze uses — one owner, no drift.
+export async function loadCustomerShippingMoneyRow(
   shipmentId: number,
   /** PS-502: so a freeze can read the row inside the transaction that is about to write it. */
   exec: Pick<typeof db, 'execute'> = db,
@@ -237,6 +287,8 @@ async function loadCustomerShippingMoneyRow(
       coalesce(s.is_return, false) as "isReturn",
       coalesce(s.voided, false) as voided,
       s.source as "source",
+      s.label_shipment_id as "labelShipmentId",
+      coalesce(c.is_test, false) as "clientIsTest",
       s.selected_rate_cost as "selectedRateCost",
       s.selected_rate_json as "selectedRateJson",
       s.carrier_code as "carrierCode",
@@ -306,7 +358,11 @@ type CustomerShippingMoneyRowDecision = CustomerShippingMoneyDecision & {
   customerShippingPricingAuthority: FrozenCustomerShippingPricingAuthority;
 };
 
-async function decideCustomerShippingMoneyForRow(
+// PS-509: exported (unchanged in behaviour) so the sync-ingress freeze resolves customer
+// money through the one canonical policy owner rather than a parallel implementation.
+// PS-502 completion merge 2026-08-21: the return type gained the pricing-authority
+// provenance; the identity/version strictness lives in the body's policy gate below.
+export async function decideCustomerShippingMoneyForRow(
   row: CustomerShippingMoneyRow,
   options: {
     requireExplicitReturnPolicy?: boolean;
@@ -543,9 +599,9 @@ export async function freezeReplacementCustomerShippingMoney(
   shipmentId: number,
   /**
    * The transaction that just wrote the carrier receipt. Passing it matters: the tuple must
-  * become true in the same commit as the label, or a crash between them leaves a shipment
-  * whose cost says one thing and whose customer money says nothing.
-  */
+   * become true in the same commit as the label, or a crash between them leaves a shipment
+   * whose cost says one thing and whose customer money says nothing.
+   */
   exec: Pick<typeof db, 'execute' | 'update' | 'select'> = db,
 ): Promise<FrozenReplacementCustomerShippingMoney> {
   const row = await loadCustomerShippingMoneyRow(shipmentId, exec);
@@ -693,7 +749,7 @@ export async function freezeOutboundCustomerShippingMoney(
      * null when the client is not on house billing. Supplying it is what selects billing's house
      * branch; omitting it takes the ordinary carrier-markup path.
      */
-    houseCustomerRate?: number | null;
+    cShippingRateAmount?: number | null;
   } = {},
   /**
    * The transaction that just wrote the shipment row. The tuple must become true in the same
@@ -701,26 +757,65 @@ export async function freezeOutboundCustomerShippingMoney(
    * whose customer money says nothing.
    */
   exec: Pick<typeof db, 'execute' | 'update' | 'select'> = db,
-): Promise<FrozenCustomerShippingMoney | null> {
+): Promise<OutboundFreezeOutcome> {
   const row = await loadCustomerShippingMoneyRow(shipmentId, exec);
-  if (!row || row.isReturn || row.voided) return null;
-  if (row.source === 'replacement' || row.source === 'test_offline') return null;
-  if (
-    !row.billingActive || row.clientId == null ||
-    row.billingConfigClientId !== row.clientId ||
-    !timestampString(row.billingConfigUpdatedAt) ||
-    !row.billingMode
-  ) return null;
+  if (!row) return { status: 'skipped', reason: 'shipment_not_found' };
+  if (row.isReturn) return { status: 'skipped', reason: 'return' };
+  if (row.voided) return { status: 'skipped', reason: 'voided' };
+  if (row.source === 'replacement') return { status: 'skipped', reason: 'replacement' };
+  if (row.source === 'test_offline') return { status: 'skipped', reason: 'test_offline' };
+  if (!row.billingActive) return { status: 'skipped', reason: 'billing_inactive' };
+  if (row.clientId == null) return { status: 'skipped', reason: 'no_client' };
   const selectedRateCost = finiteNumber(row.selectedRateCost);
-  if (selectedRateCost == null || selectedRateCost <= 0) return null;
+  if (selectedRateCost == null || selectedRateCost <= 0) {
+    return { status: 'skipped', reason: 'no_billable_cost' };
+  }
 
-  const existing = readFrozenCustomerShippingMoney(row.selectedRateJson, {
-    accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
-  });
-  if (existing) return existing;
+  /**
+   * PS-509 prerequisite — classify, do not merely ask "is there a billable tuple".
+   *
+   * readFrozenCustomerShippingMoney returns null for FOUR different situations, and the previous
+   * shape collapsed them: a malformed tuple fell through to a decision, got blocked by the
+   * one-shot predicate, re-read to null, and returned null — byte-identical to "skipped, not
+   * applicable". A row we wrote WRONG was therefore indistinguishable from a row we had correctly
+   * left alone, and after cutover billing would have silently recomputed it as though it were
+   * ordinary legacy history. That is the masquerade the audit ruling names.
+   */
+  const classification = classifyCustomerShippingMoney(row.selectedRateJson);
 
+  if (classification.kind === 'valid_ps508' || classification.kind === 'valid_ps437'
+    || classification.kind === 'valid_ps509') {
+    // One-shot: money frozen once must not move because a markup changed afterwards.
+    // PS-509: a sync-frozen tuple counts — a shipstation-sourced row can never reach this
+    // writer today, but if one ever did, its frozen money must read as already frozen
+    // rather than fall through to the one-shot predicate and come back as a bare skip.
+    return { status: 'already_frozen', frozen: classification.frozen };
+  }
+
+  if (classification.kind === 'malformed_known_version') {
+    // Ours, and wrong. NOT repaired here: the ruling requires repair be operator-controlled and
+    // evidence-backed, and a writer that silently rewrites its own bad output would destroy the
+    // evidence of what it got wrong. Surfaced instead, so it is countable and fixable.
+    return {
+      status: 'needs_review',
+      reason: 'malformed_known_version',
+      detail: `${classification.policyVersion}: ${classification.reason}`,
+    };
+  }
+
+  if (classification.kind === 'unknown_version') {
+    // A policy this build cannot read — quite possibly NEWER than this build. Overwriting it
+    // would destroy a fact a later version owns, so this never writes, in any circumstance.
+    return {
+      status: 'needs_review',
+      reason: 'unknown_version',
+      detail: classification.rawVersion,
+    };
+  }
+
+  // Only `legacy_absent` reaches a write.
   const decision = await decideCustomerShippingMoneyForRow(row, {
-    cShippingRateAmount: input.houseCustomerRate ?? undefined,
+    cShippingRateAmount: input.cShippingRateAmount ?? undefined,
     policyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND,
     exec,
   });
@@ -760,19 +855,38 @@ export async function freezeOutboundCustomerShippingMoney(
     .returning({ selectedRateJson: shipments.selectedRateJson });
 
   if (updated) {
-    return readFrozenCustomerShippingMoney(updated.selectedRateJson, {
+    const written = readFrozenCustomerShippingMoney(updated.selectedRateJson, {
       accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
     });
+    // We just wrote it; if it does not read back, the writer produced something invalid. Loud,
+    // because this is the case that MAKES malformed rows, and it must never be a silent null.
+    return written
+      ? { status: 'frozen', frozen: written }
+      : { status: 'needs_review', reason: 'malformed_known_version', detail: 'write did not read back' };
   }
 
-  // Lost the one-shot race, or the row stopped qualifying between the read and the write.
-  // Either way the other writer's snapshot is the truth; never overwrite it.
+  // Lost the one-shot race, or the row stopped qualifying between the read and the write. The
+  // other writer's snapshot is the truth; never overwrite it — but classify it rather than
+  // returning a bare null, or a racing writer that produced a BAD tuple would look like a skip.
   const [concurrent] = await exec
     .select({ selectedRateJson: shipments.selectedRateJson })
     .from(shipments)
     .where(eq(shipments.id, shipmentId))
     .limit(1);
-  return readFrozenCustomerShippingMoney(concurrent?.selectedRateJson, {
-    accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
-  });
+  const raced = classifyCustomerShippingMoney(concurrent?.selectedRateJson);
+  if (raced.kind === 'valid_ps508' || raced.kind === 'valid_ps437'
+    || raced.kind === 'valid_ps509') {
+    return { status: 'already_frozen', frozen: raced.frozen };
+  }
+  if (raced.kind === 'malformed_known_version') {
+    return {
+      status: 'needs_review',
+      reason: 'malformed_known_version',
+      detail: `${raced.policyVersion}: ${raced.reason}`,
+    };
+  }
+  if (raced.kind === 'unknown_version') {
+    return { status: 'needs_review', reason: 'unknown_version', detail: raced.rawVersion };
+  }
+  return { status: 'skipped', reason: 'update_matched_no_row' };
 }

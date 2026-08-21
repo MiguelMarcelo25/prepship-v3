@@ -184,6 +184,18 @@ const migrationOwnership = [
     'drizzle/0077_ps462_billing_storage_month.sql',
     ['billing_li_storage_month_unq', 'PS462_STORAGE_MONTH_DUPLICATES'],
   ],
+  [
+    'drizzle/0103_ps509_customer_shipping_money_sync.sql',
+    [
+      'customer_shipping_money_sync_outcomes',
+      'customer_shipping_money_receipt_revisions',
+      'csm_sync_outcomes_mutation_guard',
+      'csm_sync_outcomes_no_truncate',
+      'csm_receipt_revisions_open_unq',
+      'csm_receipt_revisions_mutation_guard',
+      'csm_receipt_revisions_no_truncate',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -204,6 +216,17 @@ assert(
   !/\b(?:UPDATE|DELETE\s+FROM|DROP\s+(?:TABLE|COLUMN))\b/i.test(mergeJobMigration) &&
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(mergeJobMigration),
   '0064 is additive and never mutates or destructively alters orders/shipments',
+);
+// UPDATE/DELETE appear in 0103 only inside its mutation-guard trigger bodies
+// (TG_OP checks and BEFORE UPDATE OR DELETE clauses), so the mutation probe is
+// scoped to statements against real relations, matching the 0066/0067 shape.
+const ps509SyncMoneyMigration = read('drizzle/0103_ps509_customer_shipping_money_sync.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM)\s+(?:public\.)?\w+\s+(?:SET|WHERE)\b/i.test(ps509SyncMoneyMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(ps509SyncMoneyMigration) &&
+    !/\bINSERT\s+INTO\b/i.test(ps509SyncMoneyMigration) &&
+    !/ALTER\s+TABLE\b/i.test(ps509SyncMoneyMigration),
+  '0103 is additive-only sidecars and never mutates or alters any existing relation',
 );
 const billingCloseMigration = read('drizzle/0065_billing_close_workflow.sql');
 assert(
