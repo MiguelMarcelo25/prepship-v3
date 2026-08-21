@@ -71,6 +71,9 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'hugrab_shipping_rate_override_amount',
   ],
   billing_line_items: [
+    // PS-488 M1 / migration 0089: the relational return identity the return-line planner
+    // and the date-correction apply path both select.
+    'return_id',
     'billing_effective_date',
     'billing_policy_version',
     'source_finalization_id',
@@ -158,7 +161,16 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
     'cancel_requested_at',
     'cancel_acknowledged_at',
   ],
-  returns: ['return_customer_shipping_rate'],
+  // PS-487 AC-4: migration 0088's three additive override columns. The ensure helper
+  // (src/db/ensure-returns-billing-date-override.ts) delegates here CLAIMING they are
+  // guarded — until 2026-08-21 they were not listed, so a deploy that landed the Drizzle
+  // mapping ahead of 0088 would have 500'd every select on returns instead of failing closed.
+  returns: [
+    'return_customer_shipping_rate',
+    'billing_date_override',
+    'billing_date_override_by',
+    'billing_date_override_reason',
+  ],
   shipments: ['selected_rate_cost'],
 };
 

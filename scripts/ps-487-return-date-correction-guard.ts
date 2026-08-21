@@ -201,6 +201,22 @@ check('the decision owner computes no adjustment amount of its own', () => {
   assert.ok(RETURN_BILLING_DATE_CORRECTED_EVENT === 'billing_date_corrected');
 });
 
+// AC-4 readiness (added 2026-08-21). ensure-returns-billing-date-override.ts delegates to
+// assertRuntimeSchemaReady CLAIMING migration 0088's three columns are guarded. They were
+// not listed, so the fail-closed boot gate checked the wrong thing — a gate that cannot
+// fail. Pin the claim: the readiness list must name all three, plus the 0089 return_id
+// the planner and the apply path select.
+check('the boot readiness gate names every column the return-date owner selects', () => {
+  const readiness = readFileSync('src/services/runtime-schema-readiness.ts', 'utf8').replace(/\r\n/g, '\n');
+  const returnsList = readiness.match(/  returns: \[([\s\S]*?)\],/);
+  assert.ok(returnsList, 'REQUIRED_COLUMNS.returns must exist');
+  for (const column of ['billing_date_override', 'billing_date_override_by', 'billing_date_override_reason', 'return_customer_shipping_rate']) {
+    assert.ok(returnsList![1].includes(`'${column}'`), `returns readiness list must name ${column} (migration 0088)`);
+  }
+  const lineItems = readiness.match(/  billing_line_items: \[([\s\S]*?)\],/);
+  assert.ok(lineItems && lineItems[1].includes("'return_id'"), 'billing_line_items readiness list must name return_id (migration 0089)');
+});
+
 if (failures > 0) {
   console.error(`\nFAIL PS-487 return date correction guard (${failures} failing)`);
   process.exit(1);
