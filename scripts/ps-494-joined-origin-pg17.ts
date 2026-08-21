@@ -45,11 +45,22 @@
  *                               recognizes CUSTOMS_ORIGIN_UNDECLARABLE as provably
  *                               pre-purchase — the production fix this proof surfaced;
  *                               before it, the refusal was parked reconcile_required).
- *   5b. non-Shipp scoping    -> the same mixed-carton shape purchased through a direct
- *                               UPS account runs the REAL createDirectCarrierLabelForOrder
- *                               to the UPS wire WITHOUT refusal, the lazy origin closure
- *                               is never invoked, and no countryOfManufacture appears
- *                               anywhere in the transmitted UPS bodies.
+ *   5b. non-Shipp scoping    -> the same mixed carton purchased through the REAL
+ *                               createLabelV2 funnel with a production-minted UPS
+ *                               selectionRef COMPLETES: the browse quote on the mixed
+ *                               order is not refused (the origin gate is Shipp-scoped in
+ *                               rates.ts), the purchase persists exactly one shipment, the
+ *                               operation ledger reaches 'consumed', no
+ *                               countryOfManufacture appears in any transmitted UPS body,
+ *                               and the PS-508 customer-money freeze SKIPS non-fatally
+ *                               (no billing_config row -> 'billing_inactive',
+ *                               customer-shipping-money.ts:767 via the LEFT JOIN at :329).
+ *                               Driving the funnel — not createDirectCarrierLabelForOrder
+ *                               directly — is what closes Hermes's token-preserving
+ *                               eager-invocation blind spot: any mutation that evaluates
+ *                               the labels.ts origin closure for a non-Shipp provider
+ *                               turns this completed purchase into a 422 and fails the
+ *                               suite behaviorally, regardless of source text.
  *
  * Network boundary: every connector reaches HTTP through timedFetch -> fetchWithTimeout ->
  * global fetch, resolved at CALL time — so global fetch is stubbed BEFORE any src import.
@@ -116,6 +127,7 @@ const unexpectedUrls: string[] = [];
 const SHIPP_LOGIN_URL = 'https://shipp.to/api/supabase/login';
 const SHIPP_QUOTE_URL = 'https://shipp.to/api/shipping/quote';
 const UPS_TOKEN_URL = 'https://onlinetools.ups.com/security/v1/oauth/token';
+const UPS_RATES_URL = 'https://onlinetools.ups.com/api/rating/v2403/Shop';
 const UPS_SHIP_URL = 'https://onlinetools.ups.com/api/shipments/v2403/ship';
 const SHIPSTATION_CARRIERS_URL = 'https://api.shipstation.com/v2/carriers';
 
@@ -171,6 +183,17 @@ globalThis.fetch = (async (input: unknown, init?: { body?: unknown }) => {
   if (url === UPS_TOKEN_URL) {
     captured.push({ url, body: parsedBody(init) });
     return json(200, { access_token: 'ups-stub-token' });
+  }
+  if (url === UPS_RATES_URL) {
+    captured.push({ url, body: parsedBody(init) });
+    // Shaped from ratesFromUps' parser: RatedShipment[] with Service.Code + TotalCharges.
+    return json(200, {
+      RateResponse: {
+        RatedShipment: [
+          { Service: { Code: '03' }, TotalCharges: { MonetaryValue: '11.55', CurrencyCode: 'USD' }, GuaranteedDelivery: { BusinessDaysInTransit: '3' } },
+        ],
+      },
+    });
   }
   if (url === UPS_SHIP_URL) {
     captured.push({ url, body: parsedBody(init) });
@@ -327,6 +350,15 @@ type SeedOrder = {
   clientId: number;
   shipTo: Record<string, unknown>;
   customsItems: Array<Record<string, unknown>> | null;
+  /**
+   * Marketplace source identity. Default 'shipstation'. Order 106 is a MANUAL order:
+   * a completed funnel purchase enqueues a marketplace confirmation, and 'manual' is the
+   * production shape whose confirmation is 'not_required' (labels.ts
+   * isNoMarketplaceSource -> confirmationProviderForOrder null), so the completed UPS
+   * purchase terminates cleanly without a marketplace connector in play.
+   */
+  sourceProvider?: string;
+  externalOrderId?: string | null;
 };
 
 const SEED_ORDERS: SeedOrder[] = [
@@ -342,7 +374,9 @@ const SEED_ORDERS: SeedOrder[] = [
   // Scenario 5a starts DECLARABLE (KR-only) so the production browse mints a purchasable
   // selectionRef; the customs items then DRIFT to a mixed carton before purchase.
   { id: 105, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Drifting Label Buyer'), customsItems: [customsItem('KR', 'Korean electronics')] },
-  { id: 106, clientId: UPS_CLIENT, shipTo: { name: 'Mixed Buyer B', phone: '5555550102', street1: '9 Maple Ave', city: 'Springfield', state: 'IL', postalCode: '62704', country: 'US' }, customsItems: MIXED_ITEMS },
+  // Scenario 5b is mixed BEFORE the mint on purpose: the browse origin gate is Shipp-scoped
+  // (rates.ts:3081), so a UPS quote on a mixed carton must proceed — asserted explicitly.
+  { id: 106, clientId: UPS_CLIENT, shipTo: { name: 'Mixed Buyer B', phone: '5555550102', street1: '9 Maple Ave', city: 'Springfield', state: 'IL', postalCode: '62704', country: 'US' }, customsItems: MIXED_ITEMS, sourceProvider: 'manual', externalOrderId: null },
 ];
 
 function orderRawPayload(order: SeedOrder): Record<string, unknown> {
@@ -374,6 +408,8 @@ async function seed(raw: postgres.Sql): Promise<void> {
         ${JSON.stringify({ clientId: 'ups-oauth-id', clientSecret: 'ups-oauth-secret', accountNumber: 'A1B2C3' })}::jsonb, true)
   `;
   for (const order of SEED_ORDERS) {
+    const sourceProvider = order.sourceProvider ?? 'shipstation';
+    const externalOrderId = order.externalOrderId === undefined ? `ext-${order.id}` : order.externalOrderId;
     await raw`
       insert into orders (
         id, client_id, order_number, order_status, store_id, customer_email,
@@ -385,16 +421,17 @@ async function seed(raw: postgres.Sql): Promise<void> {
         ${String(order.shipTo.name ?? '')}, ${String(order.shipTo.city ?? '')},
         ${String(order.shipTo.state ?? '')}, ${String(order.shipTo.postalCode ?? '')},
         32, ${JSON.stringify(orderRawPayload(order))}::jsonb,
-        'shipstation', 'ss-joined', ${`sso-${order.id}`}, ${`ext-${order.id}`}
+        ${sourceProvider}, ${sourceProvider === 'shipstation' ? 'ss-joined' : null},
+        ${`sso-${order.id}`}, ${externalOrderId}
       )
     `;
   }
-  // Scenario 5a's purchase-side dimensions come from order_overrides.rate_dims_* — that is
-  // where the production purchase reads "current" dims (labels.ts:2512-2517), and the
-  // quote-time authorization context must match them exactly.
+  // The purchase-side dimensions come from order_overrides.rate_dims_* — that is where the
+  // production purchase reads "current" dims (labels.ts:2512-2517), and the quote-time
+  // authorization context must match them exactly. Both funnel orders need the row.
   await raw`
     insert into order_overrides (order_id, rate_dims_l, rate_dims_w, rate_dims_h)
-    values (105, 12, 10, 3)
+    values (105, 12, 10, 3), (106, 12, 10, 3)
   `;
 }
 
@@ -423,8 +460,10 @@ async function main(): Promise<void> {
   process.env.SHIPSTATION_API_KEY = '';
   process.env.SHIPSTATION_API_SECRET = '';
   process.env.SHIPSTATION_API_KEY_V2 = '';
-  // Defense in depth only — scenario 5b never persists a shipment, so no deduction path
-  // runs; pinned OFF anyway so a future extension cannot silently reach inventory.
+  // Scenario 5b COMPLETES a purchase, so the deduction kill switch is pinned OFF the same
+  // way the PS-507 QA stack pins it. Belt and braces: order 106 also carries no order
+  // items, so the lifecycle command records an 'unavailable' fulfillment receipt and
+  // enqueues no deduction either way.
   process.env.INVENTORY_AUTO_DEDUCT = 'off';
 
   const a = admin();
@@ -449,15 +488,9 @@ async function main(): Promise<void> {
     // ── Dynamic imports AFTER env binding ─────────────────────────────────────
     const { getDirectCarrierRatesForRateInput, resolveRateInput, rateCacheKey } =
       await import('../src/services/rates');
-    const { loadDirectAccountForLabel, createDirectCarrierLabelForOrder, DIRECT_CARRIER_PROVIDER_ID_OFFSET } =
-      await import('../src/services/labels-direct');
     const { createLabelV2 } = await import('../src/services/labels');
-    const { assertDeclarableOrigin, CustomsOriginUndeclarableError, resolveOrderCustomsOrigin } =
-      await import('../src/services/customs-origin');
-    const { classifyDestinationCountry } = await import('../src/services/billing-destination-international');
-    const { normalizeProviderKey } = await import('../src/lib/direct-carrier-scope');
+    const { CustomsOriginUndeclarableError } = await import('../src/services/customs-origin');
     const { normalizeShippingOptions } = await import('../src/lib/shipping-options');
-    const { getDefaultShipFrom } = await import('../src/lib/ship-from');
     const { getDefaultLocation } = await import('../src/services/locations');
     const { finalizeBestRateWithQuote } = await import('../src/services/shipping-workflow/rate-quote-snapshot-store');
     const { normalizeShippingQuoteAddress, parseShippingQuoteSelectionRef, shippingProviderIdFromAuthorizedRate } =
@@ -541,6 +574,115 @@ async function main(): Promise<void> {
         rawOrder: row.raw,
         includeVisibleDirectCarriers: true,
       };
+    };
+
+    /**
+     * Mint a purchasable selectionRef the way /rates/browse does, from a completed browse
+     * over one direct account — the same assembly rate-browse-response-producer.ts:489-604
+     * performs (locationRateAddress mirrored from :113-125). Every MATCHER that consumes
+     * this at purchase time (context, account, intent, rate-proof, automation currency) is
+     * production code; this only assembles the same inputs the producer assembles.
+     */
+    const mintSelectionRef = async (
+      row: OrderRow,
+      resolved: Awaited<ReturnType<typeof resolveRateInput>>,
+      browse: Awaited<ReturnType<typeof getDirectCarrierRatesForRateInput>>,
+    ): Promise<string | null> => {
+      // The cheapest lifted rate — the one-account universe makes min-by-charge equivalent
+      // to the combined ranking production applies (combineCarrierUniverses).
+      const cheapest = [...browse.rates].sort((left, right) =>
+        Number((left as Record<string, unknown>).cShippingRateAmount ?? Infinity)
+        - Number((right as Record<string, unknown>).cShippingRateAmount ?? Infinity))[0]! as Record<string, unknown>;
+      const defaultLocation = await getDefaultLocation();
+      if (!defaultLocation) throw new Error('seeded default location missing');
+      const authorizedOrigin = {
+        locationId: defaultLocation.id,
+        address: {
+          name: defaultLocation.name,
+          company_name: defaultLocation.company ?? undefined,
+          address_line1: defaultLocation.street1 ?? undefined,
+          address_line2: defaultLocation.street2 ?? undefined,
+          city_locality: defaultLocation.city ?? undefined,
+          state_province: defaultLocation.state ?? undefined,
+          postal_code: defaultLocation.postalCode ?? undefined,
+          country_code: defaultLocation.country,
+          phone: defaultLocation.phone ?? undefined,
+        },
+      };
+      const rawShipTo = ((row.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+      const canonicalShipTo = resolveRecipientForShipping({
+        override: null,
+        rawShipTo,
+        fallback: {
+          name: row.shipToName,
+          city: row.shipToCity,
+          state: row.shipToState,
+          postalCode: row.shipToPostalCode,
+        },
+      }).address;
+      const carrierRecipient = resolveCarrierRecipientName({
+        name: readText(canonicalShipTo.name),
+        company: readText(canonicalShipTo.company),
+        customerEmail: row.customerEmail,
+      });
+      const packageSelection = await resolveOutboundPackageSelection({
+        orderId: row.id,
+        selectedPackageId: null,
+        dimensions: { length: resolved.dimsL ?? null, width: resolved.dimsW ?? null, height: resolved.dimsH ?? null },
+      });
+      const packageId = packageSelection.status === 'matched' ? packageSelection.packageId : null;
+      const effectiveOptions = normalizeShippingOptions({
+        confirmation: resolved.confirmation,
+        insuranceProvider: resolved.effectiveInsuranceProvider ?? resolved.insuranceProvider,
+        insuredValue: resolved.effectiveInsuredValue ?? resolved.insuredValue,
+      });
+      const context = {
+        version: 1 as const,
+        order: {
+          orderId: row.id,
+          clientId: row.clientId,
+          storeId: row.storeId,
+          sourceProvider: row.sourceProvider,
+          sourceAccountId: row.sourceAccountId,
+          sourceOrderId: row.sourceOrderId,
+        },
+        shipment: {
+          shipFromLocationId: authorizedOrigin.locationId,
+          shipFrom: normalizeShippingQuoteAddress(authorizedOrigin.address),
+          shipTo: normalizeShippingQuoteAddress({
+            ...canonicalShipTo,
+            name: carrierRecipient.name,
+            company: carrierRecipient.company,
+          }),
+          package: { id: packageId, type: null, code: null },
+          weightOz: Number(resolved.weightOz),
+          dimensions: {
+            length: resolved.dimsL ?? null,
+            width: resolved.dimsW ?? null,
+            height: resolved.dimsH ?? null,
+          },
+          residential: resolved.residential === true,
+          confirmation: effectiveOptions.confirmation,
+          insuranceProvider: effectiveOptions.insuranceProvider,
+          insuredValue: Number(effectiveOptions.insuredValue ?? 0) || 0,
+        },
+      };
+      const presentProviderIds = new Set(
+        browse.rates.map(shippingProviderIdFromAuthorizedRate).filter((id): id is number => id != null),
+      );
+      const accounts = browse.authorizationAccounts.filter(
+        (account) => presentProviderIds.has(account.shippingProviderId),
+      );
+      const finalized = await finalizeBestRateWithQuote({
+        bestRate: cheapest,
+        rates: browse.rates as Array<Record<string, unknown>>,
+        cacheKey: rateCacheKey(resolved),
+        bestRateComplete: true,
+        fetchedAt: new Date().toISOString(),
+        purchaseProofEligible: true,
+        authorization: { context, accounts },
+      });
+      return (finalized.bestRate as { selectionRef?: string }).selectionRef ?? null;
     };
 
     // ── Scenario 1: single KR origin reaches the wire through the REAL browse ─
@@ -641,104 +783,7 @@ async function main(): Promise<void> {
       check('the mint browse lifted at least one purchasable rate', browse.rates.length >= 1,
         JSON.stringify(browse.errors));
 
-      // The cheapest lifted rate — the one-account universe makes min-by-charge equivalent
-      // to the combined ranking production applies (combineCarrierUniverses).
-      const cheapest = [...browse.rates].sort((left, right) =>
-        Number((left as Record<string, unknown>).cShippingRateAmount ?? Infinity)
-        - Number((right as Record<string, unknown>).cShippingRateAmount ?? Infinity))[0]! as Record<string, unknown>;
-
-      // The authorization CONTEXT, built exactly as rate-browse-response-producer.ts:489-586
-      // builds it (same production helpers; locationRateAddress mirrored from :113-125).
-      const defaultLocation = await getDefaultLocation();
-      if (!defaultLocation) throw new Error('seeded default location missing');
-      const authorizedOrigin = {
-        locationId: defaultLocation.id,
-        address: {
-          name: defaultLocation.name,
-          company_name: defaultLocation.company ?? undefined,
-          address_line1: defaultLocation.street1 ?? undefined,
-          address_line2: defaultLocation.street2 ?? undefined,
-          city_locality: defaultLocation.city ?? undefined,
-          state_province: defaultLocation.state ?? undefined,
-          postal_code: defaultLocation.postalCode ?? undefined,
-          country_code: defaultLocation.country,
-          phone: defaultLocation.phone ?? undefined,
-        },
-      };
-      const rawShipTo = ((mintRow.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
-      const canonicalShipTo = resolveRecipientForShipping({
-        override: null,
-        rawShipTo,
-        fallback: {
-          name: mintRow.shipToName,
-          city: mintRow.shipToCity,
-          state: mintRow.shipToState,
-          postalCode: mintRow.shipToPostalCode,
-        },
-      }).address;
-      const carrierRecipient = resolveCarrierRecipientName({
-        name: readText(canonicalShipTo.name),
-        company: readText(canonicalShipTo.company),
-        customerEmail: mintRow.customerEmail,
-      });
-      const packageSelection = await resolveOutboundPackageSelection({
-        orderId: mintRow.id,
-        selectedPackageId: null,
-        dimensions: { length: resolved.dimsL ?? null, width: resolved.dimsW ?? null, height: resolved.dimsH ?? null },
-      });
-      const packageId = packageSelection.status === 'matched' ? packageSelection.packageId : null;
-      const effectiveOptions = normalizeShippingOptions({
-        confirmation: resolved.confirmation,
-        insuranceProvider: resolved.effectiveInsuranceProvider ?? resolved.insuranceProvider,
-        insuredValue: resolved.effectiveInsuredValue ?? resolved.insuredValue,
-      });
-      const context = {
-        version: 1 as const,
-        order: {
-          orderId: mintRow.id,
-          clientId: mintRow.clientId,
-          storeId: mintRow.storeId,
-          sourceProvider: mintRow.sourceProvider,
-          sourceAccountId: mintRow.sourceAccountId,
-          sourceOrderId: mintRow.sourceOrderId,
-        },
-        shipment: {
-          shipFromLocationId: authorizedOrigin.locationId,
-          shipFrom: normalizeShippingQuoteAddress(authorizedOrigin.address),
-          shipTo: normalizeShippingQuoteAddress({
-            ...canonicalShipTo,
-            name: carrierRecipient.name,
-            company: carrierRecipient.company,
-          }),
-          package: { id: packageId, type: null, code: null },
-          weightOz: Number(resolved.weightOz),
-          dimensions: {
-            length: resolved.dimsL ?? null,
-            width: resolved.dimsW ?? null,
-            height: resolved.dimsH ?? null,
-          },
-          residential: resolved.residential === true,
-          confirmation: effectiveOptions.confirmation,
-          insuranceProvider: effectiveOptions.insuranceProvider,
-          insuredValue: Number(effectiveOptions.insuredValue ?? 0) || 0,
-        },
-      };
-      const presentProviderIds = new Set(
-        browse.rates.map(shippingProviderIdFromAuthorizedRate).filter((id): id is number => id != null),
-      );
-      const accounts = browse.authorizationAccounts.filter(
-        (account) => presentProviderIds.has(account.shippingProviderId),
-      );
-      const finalized = await finalizeBestRateWithQuote({
-        bestRate: cheapest,
-        rates: browse.rates as Array<Record<string, unknown>>,
-        cacheKey: rateCacheKey(resolved),
-        bestRateComplete: true,
-        fetchedAt: new Date().toISOString(),
-        purchaseProofEligible: true,
-        authorization: { context, accounts },
-      });
-      const selectionRef = (finalized.bestRate as { selectionRef?: string }).selectionRef ?? null;
+      const selectionRef = await mintSelectionRef(mintRow, resolved, browse);
       check('the production finalizer minted a parseable purchase selectionRef',
         !!selectionRef && parseShippingQuoteSelectionRef(selectionRef) != null, String(selectionRef));
 
@@ -788,86 +833,108 @@ async function main(): Promise<void> {
         /cannot declare more than one country/.test(operation?.last_error ?? ''), operation?.last_error ?? '');
     }
 
-    // ── Scenario 5b: non-Shipp scoping through the REAL direct-label boundary ─
-    console.log('\nscenario 5b — non-Shipp scoping: mixed carton purchases via direct UPS');
+    // ── Scenario 5b: the REAL funnel COMPLETES a non-Shipp purchase on a mixed carton ─
+    // Hermes's blind spot: the previous 5b reconstructed the labels.ts closure + ternary
+    // locally and called createDirectCarrierLabelForOrder directly, so a token-preserving
+    // mutation (`...(resolveDeclaredShippOrigin(), {}),` before the untouched ternary) could
+    // reintroduce the fleet-wide eager refusal while every check stayed green. Driving the
+    // SAME createLabelV2 funnel to a COMPLETED purchase closes it behaviorally: any eager
+    // evaluation of the origin closure on this mixed carton turns the completed purchase
+    // into a 422 and fails the checks below, regardless of what the source text looks like.
+    console.log('\nscenario 5b — the funnel COMPLETES a UPS purchase on the same mixed carton');
     {
+      // MINT — same production producers as 5a, against the UPS account's client. The order
+      // is ALREADY mixed here: the browse origin gate is Shipp-scoped (rates.ts:3081), so a
+      // UPS quote on a mixed carton must proceed — itself evidence of correct provider
+      // scoping at browse, asserted explicitly.
       resetCapture();
-      const upsAccount = await loadDirectAccountForLabel(
-        { sourceTable: 'carrier_accounts', accountId: UPS_ACCOUNT_ID },
-        { clientId: UPS_CLIENT, storeId: null, sourceProvider: 'shipstation', sourceAccountId: 'ss-joined' },
-      );
-      const upsProviderKey = normalizeProviderKey(upsAccount.provider);
-      const upsOrder = await loadOrderRow(106);
-      const upsOrderShipTo = ((upsOrder.raw as { shipTo?: Record<string, unknown> })?.shipTo) ?? {};
-      let upsClosureCalls = 0;
-      // labels.ts:2658-2661 verbatim shape — the decision itself is NOT re-implemented here.
-      const resolveDeclaredUpsSideOrigin = (): string | null => {
-        upsClosureCalls += 1;
-        return assertDeclarableOrigin({
-          resolution: resolveOrderCustomsOrigin(upsOrder),
-          destination: classifyDestinationCountry(String(upsOrderShipTo.country ?? '')).destination,
-        });
-      };
-      // labels.ts:3043 — the lazy closure is consumed only when the provider is Shipp.
-      const upsOriginArg = upsProviderKey === 'shipp' ? resolveDeclaredUpsSideOrigin() : null;
-      check('the non-Shipp provider never consumes the origin closure', upsClosureCalls === 0, String(upsClosureCalls));
-
-      // labels.ts builds the connector ship-from from getDefaultShipFrom exactly like this
-      // (labels.ts:2547-2558); the ship-to mirrors the sealed carrierShipTo record shape.
-      const fromLoc = await getDefaultShipFrom();
-      const labelShipFrom = {
-        name: fromLoc.name,
-        company: fromLoc.company_name,
-        street1: fromLoc.address_line1,
-        street2: fromLoc.address_line2,
-        city: fromLoc.city_locality,
-        state: fromLoc.state_province,
-        postalCode: fromLoc.postal_code,
-        country: fromLoc.country_code,
-        phone: fromLoc.phone,
-      };
-      const purchase = await createDirectCarrierLabelForOrder({
-        account: upsAccount,
-        providerAccountId: DIRECT_CARRIER_PROVIDER_ID_OFFSET + UPS_ACCOUNT_ID,
-        orderId: upsOrder.id,
-        orderNumber: upsOrder.orderNumber,
-        externalOrderId: `ext-${upsOrder.id}`,
-        clientId: upsOrder.clientId,
-        storeId: upsOrder.storeId,
-        serviceCode: '03',
-        serviceName: 'UPS Ground',
-        weightOz: Number(upsOrder.weightOz ?? 32),
-        length: 12,
-        width: 10,
-        height: 3,
-        shipTo: {
-          name: String(upsOrderShipTo.name ?? ''),
-          phone: String(upsOrderShipTo.phone ?? ''),
-          street1: String(upsOrderShipTo.street1 ?? ''),
-          street2: null,
-          city: String(upsOrderShipTo.city ?? ''),
-          state: String(upsOrderShipTo.state ?? ''),
-          zip: String(upsOrderShipTo.postalCode ?? ''),
-          postalCode: String(upsOrderShipTo.postalCode ?? ''),
-          country: String(upsOrderShipTo.country ?? 'US'),
-          residential: true,
-        },
-        shipFrom: labelShipFrom,
-        shippingOptions: normalizeShippingOptions({}),
-        rawOrder: upsOrder.raw,
-        countryOfManufacture: upsOriginArg,
+      const upsRow = await loadOrderRow(106);
+      const upsResolved = await resolveRateInput(rateInputFromOrderRow(upsRow));
+      const upsBrowse = await getDirectCarrierRatesForRateInput({
+        ...upsResolved,
+        includeVisibleDirectCarriers: true,
+        orderId: upsRow.id,
+        orderNumber: upsRow.orderNumber ?? undefined,
       });
-      check('the UPS purchase COMPLETED for the same mixed carton — no fleet-wide refusal',
-        purchase.created.trackingNumber === '1Z999PS494JOINED', JSON.stringify(purchase.created.trackingNumber));
-      check('the UPS purchase performed its real provider calls (OAuth + ship)',
+      check('the Shipp-scoped browse gate does NOT refuse a UPS quote on the mixed carton',
+        upsBrowse.errors.length === 0 && upsBrowse.providerFetches === 1 && upsBrowse.rates.length >= 1,
+        JSON.stringify({ errors: upsBrowse.errors, fetches: upsBrowse.providerFetches, rates: upsBrowse.rates.length }));
+      check('the mixed-carton UPS rating request carried no countryOfManufacture',
+        callsTo(UPS_RATES_URL).length === 1
+        && !JSON.stringify(callsTo(UPS_RATES_URL).map((c) => c.body)).includes('countryOfManufacture'),
+        JSON.stringify(callsTo(UPS_RATES_URL).map((c) => c.body)).slice(0, 300));
+      const upsSelectionRef = await mintSelectionRef(upsRow, upsResolved, upsBrowse);
+      check('the production finalizer minted a parseable UPS purchase selectionRef',
+        !!upsSelectionRef && parseShippingQuoteSelectionRef(upsSelectionRef) != null, String(upsSelectionRef));
+
+      // PURCHASE — the real funnel, from the top, and it must COMPLETE. Caught rather than
+      // awaited bare so an eager-origin mutation produces a NAMED failing check (the 422
+      // this carton would earn) instead of an uncaught crash.
+      resetCapture();
+      let result: Awaited<ReturnType<typeof createLabelV2>> | null = null;
+      let purchaseError: unknown = null;
+      try {
+        result = await createLabelV2(
+          { orderId: 106, selectionRef: upsSelectionRef } as Parameters<typeof createLabelV2>[0],
+          GLOBAL_SCOPE,
+        );
+      } catch (error) {
+        purchaseError = error;
+      }
+      check('createLabelV2 COMPLETED the UPS purchase on the mixed carton — no fleet-wide refusal',
+        purchaseError == null
+        && result?.trackingNumber === '1Z999PS494JOINED'
+        && result?.orderStatus === 'shipped'
+        && Number(result?.shipmentId) > 0,
+        purchaseError
+          ? String(purchaseError)
+          : JSON.stringify({ trackingNumber: result?.trackingNumber, orderStatus: result?.orderStatus, shipmentId: result?.shipmentId }));
+      check('the purchase performed its real provider calls (UPS OAuth + ship)',
         callsTo(UPS_TOKEN_URL).length === 1 && callsTo(UPS_SHIP_URL).length === 1,
         providerCalls().map((c) => c.url).join(', '));
-      const upsBodies = JSON.stringify(callsTo(UPS_SHIP_URL).map((c) => c.body));
+      const upsPurchaseBodies = JSON.stringify(
+        captured.filter((c) => c.url.startsWith('https://onlinetools.ups.com/')).map((c) => c.body),
+      );
       check('no countryOfManufacture appears anywhere in the transmitted UPS bodies',
-        !upsBodies.includes('countryOfManufacture'), upsBodies.slice(0, 300));
+        !upsPurchaseBodies.includes('countryOfManufacture'), upsPurchaseBodies.slice(0, 300));
       check('the UPS purchase touched no Shipp endpoint',
         captured.every((c) => !c.url.startsWith('https://shipp.to/')),
         captured.map((c) => c.url).join(', '));
+
+      const [upsOperation] = await raw<Array<{ state: string; kind: string; provider: string; provider_result_id: string | null }>>`
+        select state, kind, provider, provider_result_id
+        from external_operations
+        where subject_type = 'order' and subject_id = '106'
+        order by id desc limit 1
+      `;
+      check("the UPS fulfillment operation reached its terminal 'consumed' state",
+        upsOperation?.kind === 'forward_label' && upsOperation?.provider === 'ups'
+        && upsOperation?.state === 'consumed' && upsOperation?.provider_result_id === '1Z999PS494JOINED',
+        JSON.stringify(upsOperation));
+      const [upsShipment] = await raw<Array<{
+        order_id: number; source: string | null; label_tracking: string | null;
+        carrier_code: string | null; policy_version: string | null;
+      }>>`
+        select order_id, source, label_tracking, carrier_code,
+               selected_rate_json->>'customerShippingMoneyPolicyVersion' as policy_version
+        from shipments where order_id = 106
+      `;
+      check("the persisted shipment carries the direct-provider attribution (source 'ups') and the stubbed tracking",
+        upsShipment?.source === 'ups' && upsShipment?.label_tracking === '1Z999PS494JOINED',
+        JSON.stringify(upsShipment));
+      // PS-508 bonus proof, chosen over seeding a billing_config row: client 88 has NO
+      // billing_config, so loadCustomerShippingMoneyRow's LEFT JOIN (customer-shipping-
+      // money.ts:329) leaves billingActive NULL and the freeze returns
+      // { status: 'skipped', reason: 'billing_inactive' } at customer-shipping-money.ts:767
+      // BEFORE any markup math — and the labels.ts:1405 savepoint means even a freeze
+      // failure could not fail the paid-for purchase. No ps-508 tuple, completed label.
+      check('the PS-508 customer-money freeze SKIPPED non-fatally (no billing_config -> no tuple, purchase completed)',
+        upsShipment?.policy_version == null, String(upsShipment?.policy_version));
+      const [shippedOrder] = await raw<Array<{ order_status: string }>>`
+        select order_status from orders where id = 106
+      `;
+      check("the order lifecycle committed atomically with the shipment (order 106 is 'shipped')",
+        shippedOrder?.order_status === 'shipped', shippedOrder?.order_status);
     }
 
     // ── Cross-cutting: the boundary held ──────────────────────────────────────
@@ -877,9 +944,15 @@ async function main(): Promise<void> {
       const [cacheCount] = await raw`select count(*)::int as c from direct_carrier_rate_cache`;
       check('the PS-271 rate cache stayed EMPTY (flag pinned OFF — its OFF path is a true no-op)',
         Number((cacheCount as { c?: number } | undefined)?.c ?? -1) === 0, JSON.stringify(cacheCount));
-      const [shipmentCount] = await raw`select count(*)::int as c from shipments`;
-      check('no shipment row was ever persisted — both label scenarios stop before persistence',
-        Number((shipmentCount as { c?: number } | undefined)?.c ?? -1) === 0, JSON.stringify(shipmentCount));
+      const shipmentRows = await raw<Array<{ order_id: number | null; source: string | null }>>`
+        select order_id, source from shipments order by id
+      `;
+      check('exactly ONE shipment row exists — the completed UPS funnel purchase, and only it',
+        shipmentRows.length === 1 && shipmentRows[0]?.order_id === 106 && shipmentRows[0]?.source === 'ups',
+        JSON.stringify(shipmentRows));
+      const [refusedShipments] = await raw`select count(*)::int as c from shipments where order_id = 105`;
+      check('the Shipp funnel refusal persisted NO shipment for its order',
+        Number((refusedShipments as { c?: number } | undefined)?.c ?? -1) === 0, JSON.stringify(refusedShipments));
     }
 
     console.log(`\nPS-494 joined origin proof: ${passed} checks against the REAL browse and label boundaries.`);
