@@ -1200,10 +1200,17 @@ export async function persistCreatedLabel(args: {
    * to answer "what did we actually buy".
    */
   purchasedProviderKey?: string | null;
-  tx?: DbTx;
+  /**
+   * PS-508: REQUIRED. The customer-money freeze runs inside this transaction's
+   * savepoint; the old `args.tx ?? db` fallback let a caller silently persist a
+   * label (and freeze money) OUTSIDE its durable receipt transaction — a stated
+   * prerequisite gap for the fail-closed cutover step. Every live caller already
+   * passes its receipt transaction; new callers must too.
+   */
+  tx: DbTx;
 }): Promise<number> {
   const { created } = args;
-  const exec = (args.tx ?? db) as DbTx;
+  const exec = args.tx;
   const createdAt = new Date();
   const shipDate = created.shipDate ? new Date(created.shipDate) : createdAt;
   // PS-108: ShipStation bills the ParcelGuard premium separately (created.insuranceCost,

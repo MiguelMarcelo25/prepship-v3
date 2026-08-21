@@ -113,7 +113,8 @@ check('PS-248 lock guard pins purchase lock mechanism',
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockGuard) &&
     /createLabelV2 acquires the per-order purchase lock/.test(lockGuard));
 check('PS-248 atomic guard pins transaction mechanism',
-  /persistCreatedLabel accepts a tx handle/.test(atomicGuard) &&
+  // PS-508 hardening: the handle became REQUIRED (was "accepts a tx handle").
+  /persistCreatedLabel REQUIRES a tx handle/.test(atomicGuard) &&
     /label flow persists \+ applies lifecycle inside ONE db\.transaction/.test(atomicGuard));
 
 check('phase 4 is complete in checklist and matrix',

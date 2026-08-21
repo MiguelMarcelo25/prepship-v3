@@ -1415,6 +1415,19 @@ const REQUIRED_GUARDS = [
   // ~7s respectively).
   'test:ps-509-sync-ingress-freeze',
   'test:ps-509-sync-ingress-freeze-integration',
+  // ── PS-508: outbound customer-money freeze (writer side) ──
+  //
+  // The label-commit twin of the PS-509 ingress guards above. The structural guard pins
+  // the 7-writer inventory, the savepoint isolation rule (freeze failure must NOT make a
+  // purchased label repurchase-eligible), and the two cutover tripwires (billing still
+  // recomputes; billing does not yet read outbound tuples). The classification guard
+  // pins the closed skip-reason taxonomy; the integration guard executes the freeze
+  // against in-memory PGlite. They already ran in ci.yml but were absent from this pack,
+  // which is the file that defines the source-of-truth surface — an inconsistency PS-508's
+  // own audit flagged.
+  'test:ps-508-outbound-freeze',
+  'test:ps-508-outbound-freeze-integration',
+  'test:ps-508-classification',
 ];
 
 const npmCli = process.env.npm_execpath;
