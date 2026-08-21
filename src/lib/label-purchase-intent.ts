@@ -142,6 +142,14 @@ export function classifyBuyErrorForIntent(err: unknown): 'failed_pre_purchase' |
   const e = err as { name?: unknown; status?: unknown; code?: unknown } | null | undefined;
   // Circuit open: the request never left the process.
   if (!!e && String(e.code) === 'SHIPSTATION_CIRCUIT_OPEN') return 'failed_pre_purchase';
+  // PS-494: the customs-origin refusal is thrown while the connector ARGUMENTS are being
+  // built (labels.ts evaluates the lazy origin closure inside the dispatch execute), so the
+  // provider was provably never contacted — no postage can exist. Before this branch the
+  // generic fallback below parked the operation as reconcile_required, which demanded
+  // operator provider-verification for a purchase that never dispatched and hid the
+  // actionable 422 reason behind a hold. Surfaced by the PS-494 joined end-to-end proof
+  // (scripts/ps-494-joined-origin-pg17.ts scenario 5a), which executes the real funnel.
+  if (!!e && String(e.code) === 'CUSTOMS_ORIGIN_UNDECLARABLE') return 'failed_pre_purchase';
   if (!!e && e.name === 'ShipStationError') {
     const status = Number(e.status);
     // 4xx (including 429): ShipStation rejected the request without creating a

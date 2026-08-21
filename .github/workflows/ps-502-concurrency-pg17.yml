@@ -117,6 +117,14 @@ jobs:
           PS502_STATE_VERBOSE: '1'
         run: npm run test:ps-502-migration-state-pg17
 
+      # PS-494 Hermes finding 5: the JOINED end-to-end origin proof. Runs the REAL browse
+      # entrypoint (getDirectCarrierRatesForRateInput) and the real direct-label boundary
+      # against a throwaway database it creates and drops on this same PG17 service, with
+      # the network stubbed at global fetch. Reuses this job's admin URL; the script
+      # hard-FAILs when that URL is absent, so this step cannot skip to green.
+      - name: PS-494 joined origin end-to-end proof
+        run: npm run test:ps-494-joined-origin-pg17
+
       # The fast lanes, so a change that satisfies concurrency by weakening a contract is
       # still caught in the same run.
       - name: PS-502 contract guard and PGlite integration

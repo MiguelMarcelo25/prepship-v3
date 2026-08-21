@@ -18,6 +18,7 @@ import { normalizeProviderKey } from '../lib/direct-carrier-scope';
 import { resolveWalmartPurchaseOrder } from './walmart-po-resolution';
 import { getDefaultShipFrom } from '../lib/ship-from';
 import { normalizeShippingPostalCode } from './shipping-workflow/postal-code';
+import { decideDeclaredOrigin } from './customs-origin';
 
 export type CarrierRatesProbeInput = {
   carrierAccountId?: number | null;
@@ -126,6 +127,21 @@ export async function probeCarrierAccountRates(
       input.fromZip ??
       ((defaultOrigin as any)?.postal_code ?? (defaultOrigin as any)?.postalCode ?? null);
 
+    // PS-494 (Hermes gap 1): the probe has NO order and therefore no customs items, and
+    // its demo shipment is always US-domestic — but it must still route through the ONE
+    // named decision branch instead of falling to the connector's silent credential/'US'
+    // default. unknown + Domestic is precisely the branch where a default is allowed
+    // EXPLICITLY; anything else the owner returns would be a bug worth throwing on.
+    const originDecision = decideDeclaredOrigin({
+      resolution: { kind: 'unknown' },
+      destination: 'Domestic',
+      configuredDefault: (account.credentials as { packageOriginCountry?: string | null } | null)
+        ?.packageOriginCountry ?? null,
+    });
+    if (originDecision.kind !== 'declare') {
+      throw new Error(`carrier probe origin decision unexpectedly refused: ${originDecision.reason}`);
+    }
+
     const quoted = await quoteCarrierRates(provider, {
       credentials: account.credentials,
       weightOz: Number(input.weightOz ?? 32),
@@ -136,6 +152,7 @@ export async function probeCarrierAccountRates(
       dimsL: input.dimsL ?? 12,
       dimsW: input.dimsW ?? 10,
       dimsH: input.dimsH ?? 6,
+      countryOfManufacture: originDecision.country,
       ...(walmartPo?.purchaseOrderId ? { purchaseOrderId: walmartPo.purchaseOrderId } : {}),
       ...(walmartPo?.rawOrder != null ? { rawOrder: walmartPo.rawOrder } : {}),
     } as Parameters<typeof quoteCarrierRates>[1]);

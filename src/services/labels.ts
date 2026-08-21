@@ -2642,14 +2642,20 @@ async function createLabelV2Impl(
   // domestic. See international-origination-policy.ts.
   assertInternationalOriginationSupported({ toCountry: carrierShipTo.country });
 
-  // PS-494 correction: rule on the declarable origin BEFORE any provider call, in the same
-  // place the destination gate sits, and against the same sealed address. A mixed carton
-  // cannot be declared truthfully through one synthetic package line item, and an unknown
-  // origin must not be guessed onto a non-domestic declaration — both refuse here rather
-  // than reaching the broker with a fabricated country.
-  // `null` on the domestic-inert branch: the connector may apply its configured default
-  // there, and only there. Anything undeclarable throws a 422 carrying the reason.
-  const declaredShippOrigin = assertDeclarableOrigin({
+  // PS-494 correction (provider-scoped per Hermes 2026-08-21 gap 2): rule on the
+  // declarable origin BEFORE the provider call, against the same sealed address the
+  // destination gate uses. A mixed carton cannot be declared truthfully through one
+  // synthetic package line item, and an unknown origin must not be guessed onto a
+  // non-domestic declaration — both refuse rather than reaching the broker with a
+  // fabricated country.
+  //
+  // Evaluated LAZILY at the direct-purchase site, and only for the provider that
+  // actually transmits the field (Shipp's one-line-item quote shape). The eager form
+  // blocked EVERY label purchase on a mixed carton — including carriers that never
+  // send a countryOfManufacture at all, which turned Shipp's shape limitation into a
+  // fleet-wide refusal. `null` on the domestic-inert branch: the connector may apply
+  // its configured default there, and only there. Undeclarable throws a 422.
+  const resolveDeclaredShippOrigin = (): string | null => assertDeclarableOrigin({
     resolution: resolveOrderCustomsOrigin(order),
     destination: classifyDestinationCountry(carrierShipTo.country).destination,
   });
@@ -3027,13 +3033,14 @@ async function createLabelV2Impl(
               shipFrom,
               shippingOptions: options,
               rawOrder: order.raw ?? null,
-              // PS-494 correction: a RESOLVED origin only. The ruling is made above by the
-              // canonical owner and refuses outright on a mixed carton or an unknown origin
-              // bound anywhere non-domestic, so by here the only remaining cases are a real
-              // fact or the domestic-inert one, where `null` lets the connector apply its
-              // configured default. Previously `mixed` and `unknown` both silently became
-              // that default — which is the guess this card exists to remove.
-              countryOfManufacture: declaredShippOrigin,
+              // PS-494 correction: a RESOLVED origin only, ruled by the canonical owner —
+              // refuses outright (422) on a mixed carton or an unknown origin bound anywhere
+              // non-domestic, so what reaches here is a real fact or the domestic-inert
+              // `null`, where the connector may apply its configured default. Scoped to the
+              // provider that transmits the field (Hermes 2026-08-21 gap 2): other direct
+              // carriers never send a declaration, so a Shipp shape limitation must not
+              // refuse their purchases.
+              countryOfManufacture: directProviderKey === 'shipp' ? resolveDeclaredShippOrigin() : null,
               signal,
               idempotencyKey,
               carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,

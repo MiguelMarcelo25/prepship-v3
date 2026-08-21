@@ -16,15 +16,21 @@
 //   4. unknown + international -> REFUSED before any HTTP
 //   5. label-purchase pre-quote uses the same decision as browsing
 //
-// KNOWN LIMIT, stated rather than hidden. No single assertion here executes
+// KNOWN LIMIT, stated rather than hidden. No single assertion HERE executes
 // `getDirectCarrierRatesForRateInput` end to end into the connector. That entry point reads
 // carrier accounts and the order row from the database and can WRITE the direct-rate cache,
-// which a guard must not do. The path is therefore covered in two halves that meet in the
-// middle: layer 3 proves behaviourally that a threaded origin reaches the wire, and layer 4
-// proves by source that `rates.ts` does the threading and refuses without a provider fetch.
+// which this offline guard must not do. This file covers the path in two halves that meet in
+// the middle: layer 3 proves behaviourally that a threaded origin reaches the wire, and layer
+// 4 proves by source that `rates.ts` does the threading and refuses without a provider fetch.
 // Mutation testing confirms each half fails independently — cutting the thread in rates.ts
-// trips layer 4, and making the connector ignore it trips layer 3. A reviewer wanting a
-// single end-to-end execution needs a seeded throwaway database, not this guard.
+// trips layer 4, and making the connector ignore it trips layer 3.
+//
+// The single end-to-end execution EXISTS: scripts/ps-494-joined-origin-pg17.ts (npm run
+// test:ps-494-joined-origin-pg17, wired into .github/workflows/ps-502-concurrency-pg17.yml)
+// seeds a throwaway PostgreSQL 17 database, invokes the real browse entrypoint and the real
+// direct-label boundary, and asserts the captured request bodies for all five scenarios.
+// This guard remains the offline fast lane; the joined suite is the closure of the audit's
+// finding 5.
 
 import {
   assertDeclarableOrigin,
