@@ -959,6 +959,7 @@
     "test:ps-495-billing-coverage-gap": "tsx scripts/ps-495-billing-coverage-gap-guard.ts",
     "test:ps-494-customs-origin": "tsx scripts/ps-494-customs-origin-guard.ts",
     "test:ps-494-shipp-origin-request-body": "tsx scripts/ps-494-shipp-origin-request-body-guard.ts",
+    "test:ps-494-joined-origin-pg17": "tsx scripts/ps-494-joined-origin-pg17.ts",
     "test:ps-497-inventory-claim-review-visibility": "tsx scripts/ps-497-inventory-claim-review-visibility-guard.ts",
     "test:ps-497-inventory-claim-review-integration": "tsx scripts/ps-497-inventory-claim-review-integration.ts",
     "test:ps-497-inventory-claim-alarm": "tsx scripts/ps-497-inventory-claim-alarm-guard.ts",
