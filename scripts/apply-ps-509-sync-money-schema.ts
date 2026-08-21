@@ -71,7 +71,13 @@ async function main(): Promise<void> {
     throw new Error(`STOP: --apply requires --confirm=${CONFIRM_TOKEN}`);
   }
 
-  const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+  // prepare: false — production reaches Postgres through Supavisor's TRANSACTION pooler
+  // (aws-1-*.pooler.supabase.com:6543), which cannot carry a prepared statement across
+  // statements: the 2026-08-21 PS-502 apply died on 'prepared statement "..." does not
+  // exist' when the state() probes ran again inside the apply transaction. Every postgres()
+  // call in src/ already sets this (db/client.ts:13, routes/health.ts:24,
+  // lib/advisory-session-lock.ts:9); the operator lane was the one place that did not.
+  const sql = postgres(databaseUrl, { max: 1, prepare: false, onnotice: () => {} });
   try {
     console.log(`     target host: ${new URL(databaseUrl).hostname}`);
     console.log(`     mode       : ${APPLY ? 'APPLY' : 'INSPECT (read-only)'}\n`);
