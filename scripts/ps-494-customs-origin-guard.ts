@@ -136,9 +136,19 @@ check('the connector no longer hardcodes an origin',
   'a constant cannot state a per-item customs fact');
 check('the connector applies the resolved value',
   /countryOfManufacture: shippCountryOfManufacture\(input, creds\)/.test(shippCode));
+// Re-anchored 2026-08-21 (Hermes gap 2): the ruling is now LAZY and provider-scoped.
+// The closure still delegates to the canonical owner, and the consumption site invokes
+// it ONLY for the provider that transmits the field — a Shipp shape limitation must not
+// refuse other carriers' purchases. Both halves are pinned so neither can quietly vanish.
 check('the backend resolves the origin and threads it through the direct-label args',
-  /const declaredShippOrigin = assertDeclarableOrigin\(\{/.test(labels)
-  && /countryOfManufacture: declaredShippOrigin/.test(labels));
+  /const resolveDeclaredShippOrigin = \(\): string \| null => assertDeclarableOrigin\(\{/.test(labels)
+  && /countryOfManufacture: directProviderKey === 'shipp' \? resolveDeclaredShippOrigin\(\) : null/.test(labels));
+// Hermes gap 1: the Settings test-rate probe must route through the SAME named decision
+// branch instead of falling to the connector's silent credential/'US' default.
+const probe = readFileSync('src/services/carrier-rates-probe.ts', 'utf8').replace(/\r\n/g, '\n');
+check('the settings probe routes through the explicit decision owner',
+  /decideDeclaredOrigin\(\{/.test(probe)
+  && /countryOfManufacture: originDecision\.country/.test(probe));
 // PS-494 correction: the label path must REFUSE an undeclarable origin before the provider
 // call, not hand the connector an absence and let it default.
 check('the label path refuses an undeclarable origin before any provider call',
