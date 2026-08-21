@@ -1,74 +1,79 @@
 /**
- * PS-494 — the JOINED end-to-end request-body proof Hermes's audit demanded (finding 5).
+ * PS-494 — the JOINED end-to-end request-body proof Hermes's audit demanded (finding 5),
+ * re-audited 2026-08-21 (FAIL 82%) and closed here on all three remaining gaps:
  *
- * ps-494-shipp-origin-request-body-guard.ts proves the halves separately and says so in its
- * header: nothing there executes `getDirectCarrierRatesForRateInput` end to end, because that
- * entry point reads carrier accounts and the order row from a database. This file closes that
- * gap the way the audit asked: "invoke the real browse entrypoint with a disposable seeded
- * order/account store, stub only the network boundary."
+ *   gap 1  scenario 3 now proves a CONFIGURED operator default: the Shipp account's
+ *          credentials carry packageOriginCountry 'CA', and the captured quote body must
+ *          say exactly 'CA' — not the bare 'US' terminal fallback. Scenario 1 (single-KR)
+ *          runs against the SAME account, so KR on the wire while the account default is
+ *          CA is the STRONGER proof: a resolved origin beats the credential default.
+ *   gap 2  scenario 5a no longer reconstructs the labels.ts selection locally. It drives
+ *          the REAL purchase funnel — createLabelV2 -> createLabelV2Impl -> the fulfillment
+ *          operation ledger -> the dispatch execute callback — until labels.ts:3043 itself
+ *          evaluates `directProviderKey === 'shipp' ? resolveDeclaredShippOrigin() : null`
+ *          and the lazy closure (labels.ts:2658) throws CustomsOriginUndeclarableError.
+ *          The selectionRef it purchases with is minted by the PRODUCTION producers
+ *          (resolveRateInput -> getDirectCarrierRatesForRateInput ->
+ *          finalizeBestRateWithQuote), then the order's customs items drift to a mixed
+ *          carton BEFORE purchase — the exact production race the label-side re-check
+ *          exists for (rate proof seals rate identity, not customs items).
+ *   gap 3  this file is enrolled in ps-032-connector-boundary-guard.mjs as a stubbed
+ *          joined-proof harness: provider URLs below exist only in the fetch stub's
+ *          allow-list, and any unexpected outbound URL throws.
  *
- * Every scenario is a REAL call into the production code path — no re-implementation of the
- * decision, no source-text assertions:
+ * The five scenarios:
  *
  *   1. single-KR order       -> real browse -> exactly ONE Shipp /quote POST, body
- *                               packageLineItems[0].countryOfManufacture === 'KR'
+ *                               packageLineItems[0].countryOfManufacture === 'KR' even
+ *                               though the account's configured default is 'CA'
  *   2. mixed US/KR order     -> real browse -> ZERO provider HTTP, providerFetches === 0,
  *                               the refusal reason on the error + diagnostic
  *   3. unknown + domestic    -> real browse -> ONE /quote POST, body countryOfManufacture
- *                               === 'US' (the domestic-inert lane: rates.ts:3116 passes null,
- *                               the connector applies creds.packageOriginCountry ?? 'US' —
- *                               shipp.ts shippCountryOfManufacture; no default is seeded here,
- *                               so the asserted value is 'US')
+ *                               === 'CA' (the CONFIGURED operator default: rates.ts:3116
+ *                               passes null on the domestic-inert lane and the connector
+ *                               applies creds.packageOriginCountry — shipp.ts:226-239)
  *   4. unknown + international -> real browse -> ZERO provider HTTP + the stated refusal.
- *                               NOTE: the browse path has NO earlier international gate — the
+ *                               The browse path has NO earlier international gate — the
  *                               PS-492 assertInternationalOriginationSupported gate is
- *                               labels-side only (labels.ts:2643); on browse the customs-origin
- *                               refusal at rates.ts:3081-3117 is the first and only Shipp gate,
- *                               so the honest asserted outcome is that refusal.
- *   5. label parity          -> the REAL direct-label boundary. (a) a mixed order with the
- *                               Shipp account refuses with a 422 CustomsOriginUndeclarableError
- *                               BEFORE any HTTP, produced by the SAME assertDeclarableOrigin
- *                               call labels.ts makes (labels.ts:2658-2661, consumed lazily at
- *                               :3043) — not re-implemented. (b) non-Shipp scoping: the same
- *                               mixed carton purchased through a direct UPS account runs the
- *                               REAL createDirectCarrierLabelForOrder to the UPS wire without
- *                               refusal, the lazy origin closure is NEVER invoked, and no
- *                               countryOfManufacture appears anywhere in the UPS bodies.
+ *                               labels-side only (labels.ts:2643); on browse the
+ *                               customs-origin refusal at rates.ts:3081-3117 fires first.
+ *   5a. label funnel parity  -> the REAL createLabelV2 on a production-minted selectionRef
+ *                               refuses the drifted mixed carton with a 422
+ *                               CustomsOriginUndeclarableError, ZERO provider HTTP, and
+ *                               the external_operations row lands 'failed_pre_dispatch'
+ *                               carrying the refusal reason (classifyBuyErrorForIntent
+ *                               recognizes CUSTOMS_ORIGIN_UNDECLARABLE as provably
+ *                               pre-purchase — the production fix this proof surfaced;
+ *                               before it, the refusal was parked reconcile_required).
+ *   5b. non-Shipp scoping    -> the same mixed-carton shape purchased through a direct
+ *                               UPS account runs the REAL createDirectCarrierLabelForOrder
+ *                               to the UPS wire WITHOUT refusal, the lazy origin closure
+ *                               is never invoked, and no countryOfManufacture appears
+ *                               anywhere in the transmitted UPS bodies.
  *
  * Network boundary: every connector reaches HTTP through timedFetch -> fetchWithTimeout ->
  * global fetch, resolved at CALL time — so global fetch is stubbed BEFORE any src import.
- * The stub answers only the allow-listed Shipp/UPS/zippopotam URLs, counts every provider
- * call, captures every JSON body, and throws loudly on anything else (and records it, since
- * connector catch blocks can swallow the throw). Nothing real is ever contacted; no postage.
+ * The stub answers only the allow-listed URLs (Shipp login/quote, UPS OAuth/ship, the
+ * ShipStation /v2/carriers discovery with an EMPTY carrier list, and the zippopotam zip
+ * helper), counts every provider call, captures every JSON body, and throws loudly on any
+ * unexpected outbound URL — recording it too, since connector layers catch thrown errors.
  *
- * Database: a THROWAWAY database created per run on the loopback PG17 admin URL, dropped at
- * the end. process.env.DATABASE_URL is pointed at it BEFORE any dynamic src import, because
- * src/db/client.ts binds at import. Tables are ONLY what the joined path actually touches,
- * with column lists extracted from the real drizzle migrations:
+ * Database: a THROWAWAY database created per run on the loopback PG17 admin URL and
+ * dropped at the end. process.env.DATABASE_URL points at it BEFORE any dynamic src import
+ * (src/db/client.ts binds at import). The schema is the REAL migration chain: every
+ * drizzle/*.sql applied verbatim in filename order — the same procedure (and tolerated-
+ * failure discipline) as scripts/ps-507-qa-stack.mjs applyAllMigrations, with the expected
+ * failure reasons adjusted for a real PostgreSQL 17 server. That is what lets the funnel's
+ * schema-readiness gates (assertRuntimeSchemaReady's ~55 relations,
+ * assertFulfillmentSchemaReady, the automation engine's tables) pass without hand-built
+ * DDL that could drift from production.
  *
- *   orders                       drizzle/0000 + external_order_id (0001) + source_provider/
- *                                source_account_id/source_order_id (0020) — the resolver reads
- *                                orders.raw (rates.ts:2850); the input builder reads the same
- *                                columns /rates/browse + rates-backfill read.
- *   clients                      minimal FK target (automation_shipping_controls references it).
- *   settings                     drizzle/0000 — loadCarrierMarkups reads markup.* rows.
- *   locations                    drizzle/0003 — getDefaultShipFrom -> getDefaultLocation reads
- *                                the default row (full-column drizzle select).
- *   carrier_accounts             drizzle/0015 — loadVisibleDirectCarrierAccounts +
- *                                loadDirectAccountForLabel.
- *   store_accounts,
- *   carrier_account_clients      drizzle/0027 — both queried unconditionally on the browse path.
- *   automation_shipping_controls drizzle/0081 — createCarrierLabel -> loadShippingAutomationControls
- *                                (full-column drizzle select) on the scenario-5b UPS purchase.
- *   direct_carrier_rate_cache    drizzle/0062 — the table writeDirectRatesToCache targets
- *                                (rates.ts:3195) when the PS-271 flag is ON. The flag is
- *                                env-gated DEFAULT OFF and pinned OFF here for determinism;
- *                                the table exists so a flipped default can never break this
- *                                proof, and a final check asserts it stayed EMPTY.
- *
- * No writes happen outside the throwaway database.
+ * No writes happen outside the throwaway database. No postage. Nothing real is contacted.
  */
+import { readFileSync, readdirSync } from 'node:fs';
 import postgres from 'postgres';
+// Exported by the PS-507 QA stack; executes nothing at import (its CLI gate checks argv).
+import { bootstrapForeignOwnedTables } from './ps-507-qa-stack.mjs';
 
 // ── Admin URL: unskippable, loopback-only (PS-502 harness conventions) ────────
 const ADMIN_URL =
@@ -104,9 +109,6 @@ const check = (name: string, condition: boolean, detail?: string): void => {
 };
 
 // ── The network boundary, stubbed GLOBALLY before any src import ──────────────
-// timedFetch (src/lib/http/timing.ts) -> fetchWithTimeout (src/lib/fetch-timeout.ts) -> bare
-// `fetch(...)`, resolved from globalThis at call time. Installing the stub before the dynamic
-// imports below guarantees no module can capture the real fetch first.
 type CapturedCall = { url: string; body: unknown };
 const captured: CapturedCall[] = [];
 const unexpectedUrls: string[] = [];
@@ -115,6 +117,7 @@ const SHIPP_LOGIN_URL = 'https://shipp.to/api/supabase/login';
 const SHIPP_QUOTE_URL = 'https://shipp.to/api/shipping/quote';
 const UPS_TOKEN_URL = 'https://onlinetools.ups.com/security/v1/oauth/token';
 const UPS_SHIP_URL = 'https://onlinetools.ups.com/api/shipments/v2403/ship';
+const SHIPSTATION_CARRIERS_URL = 'https://api.shipstation.com/v2/carriers';
 
 function parsedBody(init?: { body?: unknown }): unknown {
   try {
@@ -139,6 +142,13 @@ globalThis.fetch = (async (input: unknown, init?: { body?: unknown }) => {
   // Expected traffic, answered locally, never counted as a provider call.
   if (url.startsWith('https://api.zippopotam.us/us/')) {
     return json(200, { places: [{ 'place name': 'Gardena', 'state abbreviation': 'CA' }] });
+  }
+  // resolveRateInput's ShipStation carrier discovery (rates.ts getAllCarriers). Answered
+  // with an EMPTY carrier list so the ShipStation universe stays empty — the same result
+  // as an environment with no ShipStation credentials. Discovery traffic, not a quote.
+  if (url === SHIPSTATION_CARRIERS_URL || url.startsWith(`${SHIPSTATION_CARRIERS_URL}?`)) {
+    captured.push({ url, body: parsedBody(init) });
+    return json(200, { carriers: [] });
   }
   if (url === SHIPP_LOGIN_URL) {
     captured.push({ url, body: parsedBody(init) });
@@ -202,158 +212,93 @@ async function assertPostgres17(a: postgres.Sql): Promise<void> {
 const DB_NAME = `ps494_joined_${process.pid}`;
 
 /**
- * Column lists extracted from the real migrations — see the header table for the citation of
- * each block. Only what the joined path reads/writes; nothing else.
+ * The REAL migration chain, applied the way scripts/ps-507-qa-stack.mjs applyAllMigrations
+ * does (every drizzle/*.sql in filename order, `--> statement-breakpoint` replaced with
+ * `;`), with the tolerated-failure allowlist adjusted for a REAL PostgreSQL 17 server:
+ * the postgres:17 image ships contrib, so 0058 gets past CREATE EXTENSION pg_trgm and then
+ * fails on its CONCURRENTLY index instead (PGlite fails one step earlier). Same discipline
+ * as the original: a tolerated file failing for a DIFFERENT reason than the one on record
+ * is fatal, so a migration that starts failing a new way cannot be silently absorbed.
  */
-const DDL = `
-  -- minimal FK target (automation_shipping_controls references clients.id)
-  CREATE TABLE clients (
-    id serial PRIMARY KEY,
-    name text
-  );
-  -- drizzle/0000_nebulous_union_jack.sql "orders" + 0001 external_order_id
-  -- + 0020_fulfillment_outbox.sql source identity columns
-  CREATE TABLE orders (
-    id serial PRIMARY KEY,
-    client_id integer,
-    order_number text NOT NULL,
-    order_status text DEFAULT 'awaiting_shipment' NOT NULL,
-    order_date timestamptz,
-    store_id integer,
-    customer_email text,
-    ship_to_name text,
-    ship_to_city text,
-    ship_to_state text,
-    ship_to_postal_code text,
-    carrier_code text,
-    service_code text,
-    weight_oz real,
-    order_total numeric(10,2) DEFAULT '0' NOT NULL,
-    shipping_amount numeric(10,2) DEFAULT '0' NOT NULL,
-    items jsonb DEFAULT '[]'::jsonb NOT NULL,
-    raw jsonb DEFAULT '{}'::jsonb NOT NULL,
-    externally_shipped boolean DEFAULT false NOT NULL,
-    externally_fulfilled_verified boolean DEFAULT false NOT NULL,
-    external_order_id text,
-    source_provider text,
-    source_account_id text,
-    source_order_id text,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL
-  );
-  -- drizzle/0000_nebulous_union_jack.sql "settings"
-  CREATE TABLE settings (
-    key text PRIMARY KEY,
-    value text
-  );
-  -- drizzle/0003_outgoing_young_avengers.sql "locations" (verbatim)
-  CREATE TABLE locations (
-    id serial PRIMARY KEY,
-    name text NOT NULL,
-    company text,
-    street1 text,
-    street2 text,
-    city text,
-    state text,
-    postal_code text,
-    country text DEFAULT 'US' NOT NULL,
-    phone text,
-    is_default boolean DEFAULT false NOT NULL,
-    active boolean DEFAULT true NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL
-  );
-  -- drizzle/0015_amusing_namorita.sql "carrier_accounts" (verbatim, incl. identity index)
-  CREATE TABLE carrier_accounts (
-    id serial PRIMARY KEY,
-    client_id integer,
-    provider text NOT NULL,
-    label text,
-    account_identifier text,
-    credentials jsonb DEFAULT '{}'::jsonb NOT NULL,
-    source text DEFAULT 'admin' NOT NULL,
-    active boolean DEFAULT true NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL
-  );
-  CREATE UNIQUE INDEX carrier_accounts_client_provider_account_idx
-    ON carrier_accounts (COALESCE(client_id, -1), provider, COALESCE(account_identifier, ''));
-  -- drizzle/0027_credential_accounts_source_of_truth.sql (verbatim)
-  CREATE TABLE store_accounts (
-    id serial PRIMARY KEY,
-    client_id integer,
-    provider text NOT NULL,
-    label text,
-    account_identifier text,
-    credentials jsonb DEFAULT '{}'::jsonb NOT NULL,
-    source text DEFAULT 'admin' NOT NULL,
-    active boolean DEFAULT true NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL
-  );
-  CREATE TABLE carrier_account_clients (
-    carrier_account_id integer NOT NULL,
-    client_id integer NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    CONSTRAINT carrier_account_clients_pkey PRIMARY KEY (carrier_account_id, client_id),
-    CONSTRAINT carrier_account_clients_account_fk
-      FOREIGN KEY (carrier_account_id) REFERENCES carrier_accounts(id) ON DELETE CASCADE
-  );
-  -- drizzle/0081_ps466_automation_shipping_controls.sql (CREATE TABLE + scope index; the
-  -- one-time legacy-import DML is a data migration and has nothing to import here)
-  CREATE TABLE automation_shipping_controls (
-    id bigserial PRIMARY KEY,
-    control_key text NOT NULL,
-    control_type text NOT NULL CHECK (control_type IN ('carrier', 'service')),
-    client_id integer REFERENCES clients(id) ON DELETE RESTRICT,
-    store_id integer,
-    carrier_id text,
-    carrier_code text,
-    service_code text,
-    service_name text,
-    disabled boolean NOT NULL DEFAULT true CHECK (disabled = true),
-    reason text,
-    system_locked boolean NOT NULL DEFAULT false,
-    provenance text NOT NULL DEFAULT 'operator'
-      CHECK (provenance IN ('operator', 'legacy_import', 'system')),
-    source text,
-    position bigint NOT NULL CHECK (position >= 0),
-    source_updated_at text,
-    updated_by text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT automation_shipping_controls_key_unq UNIQUE (control_key),
-    CONSTRAINT automation_shipping_controls_scope_chk
-      CHECK (client_id IS NOT NULL OR store_id IS NOT NULL),
-    CONSTRAINT automation_shipping_controls_identity_chk CHECK (
-      control_type = 'service' OR carrier_id IS NOT NULL OR carrier_code IS NOT NULL
-    ),
-    CONSTRAINT automation_shipping_controls_service_identity_chk CHECK (
-      control_type <> 'service' OR service_code IS NOT NULL OR service_name IS NOT NULL
-    )
-  );
-  CREATE INDEX automation_shipping_controls_scope_idx
-    ON automation_shipping_controls (client_id, store_id, control_type, position, id);
-  -- drizzle/0062_runtime_schema_ownership.sql direct_carrier_rate_cache (verbatim)
-  CREATE TABLE direct_carrier_rate_cache (
-    account_id integer NOT NULL,
-    source_table text NOT NULL,
-    carrier_code text NOT NULL,
-    service_code text NOT NULL,
-    request_key text NOT NULL,
-    amount numeric,
-    rate_json jsonb,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (account_id, source_table, carrier_code, service_code, request_key)
-  );
-  CREATE INDEX direct_carrier_rate_cache_lookup_idx
-    ON direct_carrier_rate_cache (account_id, source_table, request_key, updated_at DESC);
-`;
+const TOLERATED_MIGRATION_FAILURES = new Map<string, { reason: string; expect: RegExp }>([
+  ['0018e_indexes.sql', {
+    reason: 'CREATE INDEX CONCURRENTLY cannot run in a multi-statement implicit transaction; indexes are performance, not correctness',
+    expect: /CONCURRENTLY cannot run inside a transaction block/i,
+  }],
+  ['0039_fk_covering_indexes.sql', {
+    reason: 'same CONCURRENTLY constraint',
+    expect: /CONCURRENTLY cannot run inside a transaction block/i,
+  }],
+  ['0037_rls_reporting_metrics_inbound.sql', {
+    reason: 'RLS over inbound_shipments, a table this repo does not own',
+    expect: /relation "(?:public\.)?inbound_shipments" does not exist/i,
+  }],
+  ['0045_revoke_public_api_grants.sql', {
+    reason: 'revokes from the Supabase `anon` role, which does not exist on a vanilla server',
+    expect: /role "anon" does not exist/i,
+  }],
+  ['0069_public_billing_rls_hardening.sql', {
+    reason: 'same Supabase-only role',
+    expect: /role "anon" does not exist/i,
+  }],
+  ['0057_perf_indexes_api_audit.sql', {
+    reason: 'same CONCURRENTLY constraint (perf indexes only)',
+    expect: /CONCURRENTLY cannot run inside a transaction block/i,
+  }],
+  ['0058_search_trgm_indexes.sql', {
+    reason: 'CONCURRENTLY trgm indexes; on PG17-with-contrib the extension creates and the CONCURRENTLY index then fails, on PGlite the extension itself is unavailable',
+    expect: /CONCURRENTLY cannot run inside a transaction block|could not open extension control file|extension "pg_trgm" is not available/i,
+  }],
+  ['0094_pin_function_search_path.sql', {
+    reason: 'pgboss schema is created by the pg-boss library at runtime; this harness never starts the worker',
+    expect: /schema "pgboss" does not exist/i,
+  }],
+]);
 
-// Client 77 owns the Shipp account and the browse-scenario orders; client 88 owns the direct
-// UPS account and the scenario-5b order. The split matters: getDirectCarrierRatesForRateInput
-// quotes EVERY account visible to the order's client, so with UPS assigned to 77 the mixed
-// refusal case could never assert providerFetches === 0 — UPS would still legitimately quote.
+async function applyAllMigrationsPg17(throwawayUrl: string): Promise<{ applied: number; tolerated: string[] }> {
+  // ONE dedicated session (max: 1), like a real migration runner: some hand-written files
+  // (apply-test-client-purge.sql) open their own BEGIN/COMMIT, which postgres.js refuses to
+  // pass through a pooled connection (UNSAFE_TRANSACTION).
+  const migrator = postgres(throwawayUrl, { max: 1, prepare: false, onnotice: () => {} });
+  const applied: string[] = [];
+  const tolerated: string[] = [];
+  try {
+    // The Client-Portal-owned tables migrations 0088/0089/0092 extend (ps-507 exports this).
+    await bootstrapForeignOwnedTables({ exec: (sql: string) => migrator.unsafe(sql) }, () => {});
+    const files = readdirSync('drizzle').filter((f) => f.endsWith('.sql')).sort();
+    for (const file of files) {
+      const sql = readFileSync(`drizzle/${file}`, 'utf8');
+      try {
+        await migrator.unsafe(sql.replace(/-->\s*statement-breakpoint/g, ';'));
+        applied.push(file);
+      } catch (error) {
+        const entry = TOLERATED_MIGRATION_FAILURES.get(file);
+        const message = String((error as Error | null)?.message ?? error).split('\n')[0]!;
+        if (!entry) {
+          throw new Error(`STOP: migration ${file} failed for an untolerated reason:\n  ${message}`);
+        }
+        if (!entry.expect.test(message)) {
+          throw new Error(
+            `STOP: migration ${file} is tolerated, but failed for a DIFFERENT reason than the one on record.\n`
+            + `  expected: ${entry.expect}\n  actual  : ${message}`,
+          );
+        }
+        tolerated.push(`${file} — ${entry.reason}`);
+      }
+    }
+  } finally {
+    await migrator.end({ timeout: 5 }).catch(() => {});
+  }
+  console.log(`ok   migration chain applied verbatim (${applied.length} applied, ${tolerated.length} tolerated)`);
+  for (const entry of tolerated) console.log(`     skipped ${entry}`);
+  return { applied: applied.length, tolerated };
+}
+
+// Client 77 owns the Shipp account and the browse-scenario orders; client 88 owns the
+// direct UPS account and the scenario-5b order. The split matters:
+// getDirectCarrierRatesForRateInput quotes EVERY account visible to the order's client, so
+// with UPS assigned to 77 the mixed refusal cases could never assert providerFetches === 0
+// — UPS would still legitimately quote.
 const SHIPP_ACCOUNT_ID = 501;
 const UPS_ACCOUNT_ID = 502;
 const SHIPP_CLIENT = 77;
@@ -375,6 +320,7 @@ const customsItem = (countryOfOrigin: string | null, description: string) => ({
   countryOfOrigin,
   harmonizedTariffCode: null,
 });
+const MIXED_ITEMS = [customsItem('US', 'Domestic snack'), customsItem('KR', 'Korean cosmetics')];
 
 type SeedOrder = {
   id: number;
@@ -385,7 +331,7 @@ type SeedOrder = {
 
 const SEED_ORDERS: SeedOrder[] = [
   { id: 101, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Single KR Buyer'), customsItems: [customsItem('KR', 'Korean cosmetics'), customsItem('KR', 'Korean ramen')] },
-  { id: 102, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Mixed Buyer'), customsItems: [customsItem('US', 'Domestic snack'), customsItem('KR', 'Korean cosmetics')] },
+  { id: 102, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Mixed Buyer'), customsItems: MIXED_ITEMS },
   { id: 103, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Unknown Origin Buyer'), customsItems: null },
   {
     id: 104,
@@ -393,48 +339,63 @@ const SEED_ORDERS: SeedOrder[] = [
     shipTo: { name: 'International Buyer', phone: '5555550101', street1: '800 Robson St', city: 'Vancouver', state: 'BC', postalCode: 'V6Z 2E7', country: 'CA' },
     customsItems: null,
   },
-  { id: 105, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Mixed Label Buyer'), customsItems: [customsItem('US', 'Domestic snack'), customsItem('KR', 'Korean electronics')] },
-  { id: 106, clientId: UPS_CLIENT, shipTo: { name: 'Mixed Buyer B', phone: '5555550102', street1: '9 Maple Ave', city: 'Springfield', state: 'IL', postalCode: '62704', country: 'US' }, customsItems: [customsItem('US', 'Domestic snack'), customsItem('KR', 'Korean cosmetics')] },
+  // Scenario 5a starts DECLARABLE (KR-only) so the production browse mints a purchasable
+  // selectionRef; the customs items then DRIFT to a mixed carton before purchase.
+  { id: 105, clientId: SHIPP_CLIENT, shipTo: domesticShipTo('Drifting Label Buyer'), customsItems: [customsItem('KR', 'Korean electronics')] },
+  { id: 106, clientId: UPS_CLIENT, shipTo: { name: 'Mixed Buyer B', phone: '5555550102', street1: '9 Maple Ave', city: 'Springfield', state: 'IL', postalCode: '62704', country: 'US' }, customsItems: MIXED_ITEMS },
 ];
+
+function orderRawPayload(order: SeedOrder): Record<string, unknown> {
+  return {
+    shipTo: order.shipTo,
+    ...(order.customsItems ? { internationalOptions: { customsItems: order.customsItems } } : {}),
+  };
+}
 
 async function seed(raw: postgres.Sql): Promise<void> {
   await raw`insert into clients (id, name) values (${SHIPP_CLIENT}, 'Joined Proof Client'), (${UPS_CLIENT}, 'Joined Proof Client B')`;
-  // The canonical default origin the browse path resolves through getDefaultShipFrom ->
-  // getDefaultLocation. Deliberately a DB row, not SHIP_FROM_* env — the joined proof must
-  // exercise the database lane production uses.
+  // The canonical default origin the browse and label paths resolve through
+  // getDefaultShipFrom / resolveAuthorizedQuoteOrigin -> getDefaultLocation. Deliberately a
+  // DB row, not SHIP_FROM_* env — the joined proof must exercise the database lane.
   await raw`
     insert into locations (name, company, street1, city, state, postal_code, country, phone, is_default, active)
     values ('Carson Warehouse', 'DR Prepper', '345 W Gardena Blvd', 'Carson', 'CA', '90248', 'US', '3103295555', true, true)
   `;
-  // Shipp credentials carry NO packageOriginCountry, so scenario 3 asserts the connector's
-  // documented domestic-inert fallback 'US' (shipp.ts shippCountryOfManufacture step 3).
+  // Hermes gap 1: the Shipp credentials carry a CONFIGURED, non-US operator default
+  // (packageOriginCountry 'CA'). Scenario 3 must transmit exactly this configured value on
+  // the domestic-inert lane, and scenario 1 must transmit the RESOLVED 'KR' anyway —
+  // proving a recorded fact beats the operator default, not merely the terminal 'US'.
   await raw`
     insert into carrier_accounts (id, client_id, provider, label, account_identifier, credentials, active)
     values
       (${SHIPP_ACCOUNT_ID}, ${SHIPP_CLIENT}, 'shipp', 'Shipp (joined proof)', 'shipp-joined',
-        ${JSON.stringify({ apiKey: 'stub-key', email: 'ops@example.test', password: 'stub-pass' })}::jsonb, true),
+        ${JSON.stringify({ apiKey: 'stub-key', email: 'ops@example.test', password: 'stub-pass', packageOriginCountry: 'CA' })}::jsonb, true),
       (${UPS_ACCOUNT_ID}, ${UPS_CLIENT}, 'ups', 'Direct UPS (joined proof)', 'ups-joined',
         ${JSON.stringify({ clientId: 'ups-oauth-id', clientSecret: 'ups-oauth-secret', accountNumber: 'A1B2C3' })}::jsonb, true)
   `;
   for (const order of SEED_ORDERS) {
-    const rawPayload = {
-      shipTo: order.shipTo,
-      ...(order.customsItems ? { internationalOptions: { customsItems: order.customsItems } } : {}),
-    };
     await raw`
       insert into orders (
         id, client_id, order_number, order_status, store_id, customer_email,
         ship_to_name, ship_to_city, ship_to_state, ship_to_postal_code,
-        weight_oz, raw, source_provider, source_account_id, external_order_id
+        weight_oz, raw, source_provider, source_account_id, source_order_id, external_order_id
       ) values (
         ${order.id}, ${order.clientId}, ${`JOINED-${order.id}`}, 'awaiting_shipment', null,
         'buyer@example.test',
         ${String(order.shipTo.name ?? '')}, ${String(order.shipTo.city ?? '')},
         ${String(order.shipTo.state ?? '')}, ${String(order.shipTo.postalCode ?? '')},
-        32, ${JSON.stringify(rawPayload)}::jsonb, 'shipstation', 'ss-joined', ${`ext-${order.id}`}
+        32, ${JSON.stringify(orderRawPayload(order))}::jsonb,
+        'shipstation', 'ss-joined', ${`sso-${order.id}`}, ${`ext-${order.id}`}
       )
     `;
   }
+  // Scenario 5a's purchase-side dimensions come from order_overrides.rate_dims_* — that is
+  // where the production purchase reads "current" dims (labels.ts:2512-2517), and the
+  // quote-time authorization context must match them exactly.
+  await raw`
+    insert into order_overrides (order_id, rate_dims_l, rate_dims_w, rate_dims_h)
+    values (105, 12, 10, 3)
+  `;
 }
 
 function readText(value: unknown): string | undefined {
@@ -452,11 +413,19 @@ async function main(): Promise<void> {
   process.env.NODE_ENV = 'test';
   // Pin the PS-271 union cache at its production default (OFF) even if a local .env arms it:
   // the joined assertions count EXACT provider calls, and a warm cache would legitimately
-  // change them. The cache table still exists (created above) and is asserted EMPTY below.
+  // change them. The table exists (real migration chain) and is asserted EMPTY below.
   process.env.DIRECT_CARRIER_RATE_CACHE = 'false';
-  // The orchestrator's replay seam must stay dark so the REAL production branch runs
-  // (isCarrierTestMode is double-gated; no per-call flag is ever passed here either).
+  // The orchestrator's replay seam must stay dark so the REAL production branch runs.
   delete process.env.CARRIER_TEST_MODE;
+  // A developer .env may carry live ShipStation keys; pin them empty so carrier discovery
+  // in resolveRateInput cannot depend on ambient credentials (the stub answers it empty
+  // either way, but the run must be deterministic on a clean machine AND a developer one).
+  process.env.SHIPSTATION_API_KEY = '';
+  process.env.SHIPSTATION_API_SECRET = '';
+  process.env.SHIPSTATION_API_KEY_V2 = '';
+  // Defense in depth only — scenario 5b never persists a shipment, so no deduction path
+  // runs; pinned OFF anyway so a future extension cannot silently reach inventory.
+  process.env.INVENTORY_AUTO_DEDUCT = 'off';
 
   const a = admin();
   try {
@@ -471,22 +440,32 @@ async function main(): Promise<void> {
   const throwawayUrl = url.toString();
   process.env.DATABASE_URL = throwawayUrl;
 
-  const raw = postgres(throwawayUrl, { max: 2, prepare: false, onnotice: () => {} });
+  const raw = postgres(throwawayUrl, { max: 4, prepare: false, onnotice: () => {} });
   let appSqlEnd: (() => Promise<void>) | null = null;
   try {
-    await raw.unsafe(DDL);
+    await applyAllMigrationsPg17(throwawayUrl);
     await seed(raw);
 
     // ── Dynamic imports AFTER env binding ─────────────────────────────────────
-    const { getDirectCarrierRatesForRateInput } = await import('../src/services/rates');
+    const { getDirectCarrierRatesForRateInput, resolveRateInput, rateCacheKey } =
+      await import('../src/services/rates');
     const { loadDirectAccountForLabel, createDirectCarrierLabelForOrder, DIRECT_CARRIER_PROVIDER_ID_OFFSET } =
       await import('../src/services/labels-direct');
+    const { createLabelV2 } = await import('../src/services/labels');
     const { assertDeclarableOrigin, CustomsOriginUndeclarableError, resolveOrderCustomsOrigin } =
       await import('../src/services/customs-origin');
     const { classifyDestinationCountry } = await import('../src/services/billing-destination-international');
     const { normalizeProviderKey } = await import('../src/lib/direct-carrier-scope');
     const { normalizeShippingOptions } = await import('../src/lib/shipping-options');
     const { getDefaultShipFrom } = await import('../src/lib/ship-from');
+    const { getDefaultLocation } = await import('../src/services/locations');
+    const { finalizeBestRateWithQuote } = await import('../src/services/shipping-workflow/rate-quote-snapshot-store');
+    const { normalizeShippingQuoteAddress, parseShippingQuoteSelectionRef, shippingProviderIdFromAuthorizedRate } =
+      await import('../src/services/shipping-workflow/shipping-quote-authorization');
+    const { resolveOutboundPackageSelection } = await import('../src/services/package-consumption');
+    const { resolveRecipientForShipping } = await import('../src/services/order-recipient-override');
+    const { resolveCarrierRecipientName } = await import('../src/services/carrier-recipient-name');
+    const { GLOBAL_SCOPE } = await import('../src/lib/client-store-scope');
     const { db, sql: appSql } = await import('../src/db/client');
     const { orders } = await import('../src/db/schema/orders');
     const { eq } = await import('drizzle-orm');
@@ -498,11 +477,14 @@ async function main(): Promise<void> {
       storeId: number | null;
       orderNumber: string | null;
       weightOz: number | null;
+      customerEmail: string | null;
+      shipToName: string | null;
       shipToCity: string | null;
       shipToState: string | null;
       shipToPostalCode: string | null;
       sourceProvider: string | null;
       sourceAccountId: string | null;
+      sourceOrderId: string | null;
       raw: unknown;
     };
     const loadOrderRow = async (orderId: number): Promise<OrderRow> => {
@@ -513,11 +495,14 @@ async function main(): Promise<void> {
           storeId: orders.storeId,
           orderNumber: orders.orderNumber,
           weightOz: orders.weightOz,
+          customerEmail: orders.customerEmail,
+          shipToName: orders.shipToName,
           shipToCity: orders.shipToCity,
           shipToState: orders.shipToState,
           shipToPostalCode: orders.shipToPostalCode,
           sourceProvider: orders.sourceProvider,
           sourceAccountId: orders.sourceAccountId,
+          sourceOrderId: orders.sourceOrderId,
           raw: orders.raw,
         })
         .from(orders)
@@ -532,8 +517,7 @@ async function main(): Promise<void> {
      * mapping rates-backfill.ts:1231-1251 and rate-browse-response-producer.ts:273-314 use
      * (to* from raw.shipTo with column fallbacks, weight from the order, marketplace context
      * from the source columns, rawOrder = the retained payload, includeVisibleDirectCarriers
-     * like rates-backfill:1298). Dims ride the request like the FE `rest.dims*` lane — this
-     * order has no order_overrides dims, so the producer would take the request's.
+     * like rates-backfill:1298). Dims ride the request like the FE `rest.dims*` lane.
      */
     const rateInputFromOrderRow = (row: OrderRow) => {
       const shipTo = ((row.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
@@ -567,7 +551,10 @@ async function main(): Promise<void> {
       const quotes = callsTo(SHIPP_QUOTE_URL);
       check('exactly ONE Shipp /quote POST left the process', quotes.length === 1, `saw ${quotes.length}`);
       const line = (quotes[0]?.body as { packageLineItems?: Array<Record<string, unknown>> } | undefined)?.packageLineItems;
-      check('the request body declares the RESOLVED origin KR on packageLineItems[0]',
+      // STRONGER than the original assertion (Hermes gap 1): the account's configured
+      // default is 'CA', so 'KR' here proves the RESOLVED origin beats the operator
+      // default — not merely that some origin was transmitted.
+      check("the request body declares the RESOLVED origin KR — beating the account's configured 'CA' default",
         line?.[0]?.countryOfManufacture === 'KR', JSON.stringify(line?.[0]));
       check('the body carries the single synthetic line item the refusal rationale rests on',
         Array.isArray(line) && line.length === 1, `lines=${line?.length}`);
@@ -593,18 +580,19 @@ async function main(): Promise<void> {
       check('no rate was fabricated for the refused account', result.rates.length === 0, String(result.rates.length));
     }
 
-    // ── Scenario 3: unknown + domestic declares the operator default explicitly ─
-    console.log('\nscenario 3 — unknown origin + domestic destination sends the default');
+    // ── Scenario 3: unknown + domestic declares the CONFIGURED operator default ─
+    console.log('\nscenario 3 — unknown origin + domestic destination sends the configured default');
     {
       resetCapture();
       const result = await getDirectCarrierRatesForRateInput(rateInputFromOrderRow(await loadOrderRow(103)));
       const quotes = callsTo(SHIPP_QUOTE_URL);
       check('exactly ONE Shipp /quote POST left the process', quotes.length === 1, `saw ${quotes.length}`);
       const line = (quotes[0]?.body as { packageLineItems?: Array<Record<string, unknown>> } | undefined)?.packageLineItems;
-      // No packageOriginCountry is seeded on the account, so the domestic-inert lane resolves
-      // to the connector's documented 'US' default — the one guess decideDeclaredOrigin allows.
-      check("the domestic-inert lane transmits the default 'US' (no configured default seeded)",
-        line?.[0]?.countryOfManufacture === 'US', JSON.stringify(line?.[0]));
+      // Hermes gap 1: the seeded credentials configure packageOriginCountry 'CA', so the
+      // domestic-inert lane must transmit exactly the CONFIGURED default — proving the
+      // operator's setting reaches the wire, not the connector's terminal 'US' fallback.
+      check("the domestic-inert lane transmits the CONFIGURED operator default 'CA'",
+        line?.[0]?.countryOfManufacture === 'CA', JSON.stringify(line?.[0]));
       check('the result reports exactly one provider fetch', result.providerFetches === 1, String(result.providerFetches));
     }
 
@@ -624,58 +612,185 @@ async function main(): Promise<void> {
         /not domestic/.test(message) && /International/.test(message), message);
     }
 
-    // ── Scenario 5: label-path parity through the REAL direct-label boundary ──
-    console.log('\nscenario 5 — label pre-quote parity and non-Shipp scoping');
+    // ── Scenario 5a: the REAL purchase funnel refuses the drifted mixed carton ─
+    console.log('\nscenario 5a — createLabelV2 funnel refusal at the production ternary');
     {
-      // (a) Mixed order + Shipp account: the origin argument labels.ts:3043 builds for
-      // createDirectCarrierLabelForOrder is produced by the SAME lazy closure labels.ts
-      // makes (labels.ts:2658-2661) — assertDeclarableOrigin over the order row and the
-      // canonical destination classification. It throws 422 while the argument is being
-      // evaluated, BEFORE the purchase boundary or any HTTP.
+      // MINT — every artifact is produced by the PRODUCTION owners:
+      //   resolveRateInput           runs the PS-466 automation preflight and stamps the
+      //                              prefixed automationRulesVersion the purchase-side
+      //                              assertAutomationRateProofCurrent requires
+      //   getDirectCarrierRates...   quotes the REAL Shipp connector (order 105 is KR-only
+      //                              at this point, so the mint is itself another
+      //                              single-origin wire proof)
+      //   finalizeBestRateWithQuote  seals the snapshot + authorization and mints the
+      //                              selectionRef exactly as /rates/browse does
       resetCapture();
-      const shippAccount = await loadDirectAccountForLabel(
-        { sourceTable: 'carrier_accounts', accountId: SHIPP_ACCOUNT_ID },
-        { clientId: SHIPP_CLIENT, storeId: null, sourceProvider: 'shipstation', sourceAccountId: 'ss-joined' },
-      );
-      const shippProviderKey = normalizeProviderKey(shippAccount.provider);
-      check("the loaded account resolves to provider 'shipp' through the real authorization boundary",
-        shippProviderKey === 'shipp', shippProviderKey);
+      const mintRow = await loadOrderRow(105);
+      const resolved = await resolveRateInput(rateInputFromOrderRow(mintRow));
+      const browse = await getDirectCarrierRatesForRateInput({
+        ...resolved,
+        includeVisibleDirectCarriers: true,
+        orderId: mintRow.id,
+        orderNumber: mintRow.orderNumber ?? undefined,
+      });
+      const mintQuotes = callsTo(SHIPP_QUOTE_URL);
+      const mintLine = (mintQuotes[0]?.body as { packageLineItems?: Array<Record<string, unknown>> } | undefined)?.packageLineItems;
+      check('the mint browse quoted Shipp once and transmitted the declarable KR origin',
+        mintQuotes.length === 1 && mintLine?.[0]?.countryOfManufacture === 'KR',
+        JSON.stringify({ quotes: mintQuotes.length, line: mintLine?.[0] }));
+      check('the mint browse lifted at least one purchasable rate', browse.rates.length >= 1,
+        JSON.stringify(browse.errors));
 
-      const mixedOrder = await loadOrderRow(105);
-      const mixedShipToCountry = String(((mixedOrder.raw as { shipTo?: { country?: unknown } })?.shipTo?.country) ?? '');
-      let shippClosureCalls = 0;
-      // labels.ts:2658-2661 verbatim shape — the decision itself is NOT re-implemented here.
-      const resolveDeclaredShippOrigin = (): string | null => {
-        shippClosureCalls += 1;
-        return assertDeclarableOrigin({
-          resolution: resolveOrderCustomsOrigin(mixedOrder),
-          destination: classifyDestinationCountry(mixedShipToCountry).destination,
-        });
+      // The cheapest lifted rate — the one-account universe makes min-by-charge equivalent
+      // to the combined ranking production applies (combineCarrierUniverses).
+      const cheapest = [...browse.rates].sort((left, right) =>
+        Number((left as Record<string, unknown>).cShippingRateAmount ?? Infinity)
+        - Number((right as Record<string, unknown>).cShippingRateAmount ?? Infinity))[0]! as Record<string, unknown>;
+
+      // The authorization CONTEXT, built exactly as rate-browse-response-producer.ts:489-586
+      // builds it (same production helpers; locationRateAddress mirrored from :113-125).
+      const defaultLocation = await getDefaultLocation();
+      if (!defaultLocation) throw new Error('seeded default location missing');
+      const authorizedOrigin = {
+        locationId: defaultLocation.id,
+        address: {
+          name: defaultLocation.name,
+          company_name: defaultLocation.company ?? undefined,
+          address_line1: defaultLocation.street1 ?? undefined,
+          address_line2: defaultLocation.street2 ?? undefined,
+          city_locality: defaultLocation.city ?? undefined,
+          state_province: defaultLocation.state ?? undefined,
+          postal_code: defaultLocation.postalCode ?? undefined,
+          country_code: defaultLocation.country,
+          phone: defaultLocation.phone ?? undefined,
+        },
       };
-      let thrown: unknown = null;
-      let reachedPurchase = false;
-      try {
-        // labels.ts:3043 — the lazy closure is consumed only when the provider is Shipp.
-        const countryOfManufacture = shippProviderKey === 'shipp' ? resolveDeclaredShippOrigin() : null;
-        reachedPurchase = true;
-        void countryOfManufacture;
-      } catch (err) {
-        thrown = err;
-      }
-      check('the mixed carton REFUSES while the origin argument is built — the purchase is never reached',
-        thrown != null && !reachedPurchase, String(thrown));
-      check('the refusal is CustomsOriginUndeclarableError with status 422',
-        thrown instanceof CustomsOriginUndeclarableError && thrown.status === 422,
-        `${(thrown as { name?: string } | null)?.name} status=${(thrown as { status?: number } | null)?.status}`);
-      check('the 422 reason names both recorded origins', /US/.test(String(thrown)) && /KR/.test(String(thrown)), String(thrown));
-      check('the Shipp label refusal made ZERO HTTP calls', providerCalls().length === 0,
-        providerCalls().map((c) => c.url).join(', '));
-      check('the lazy origin closure ran exactly once for the Shipp purchase', shippClosureCalls === 1, String(shippClosureCalls));
+      const rawShipTo = ((mintRow.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+      const canonicalShipTo = resolveRecipientForShipping({
+        override: null,
+        rawShipTo,
+        fallback: {
+          name: mintRow.shipToName,
+          city: mintRow.shipToCity,
+          state: mintRow.shipToState,
+          postalCode: mintRow.shipToPostalCode,
+        },
+      }).address;
+      const carrierRecipient = resolveCarrierRecipientName({
+        name: readText(canonicalShipTo.name),
+        company: readText(canonicalShipTo.company),
+        customerEmail: mintRow.customerEmail,
+      });
+      const packageSelection = await resolveOutboundPackageSelection({
+        orderId: mintRow.id,
+        selectedPackageId: null,
+        dimensions: { length: resolved.dimsL ?? null, width: resolved.dimsW ?? null, height: resolved.dimsH ?? null },
+      });
+      const packageId = packageSelection.status === 'matched' ? packageSelection.packageId : null;
+      const effectiveOptions = normalizeShippingOptions({
+        confirmation: resolved.confirmation,
+        insuranceProvider: resolved.effectiveInsuranceProvider ?? resolved.insuranceProvider,
+        insuredValue: resolved.effectiveInsuredValue ?? resolved.insuredValue,
+      });
+      const context = {
+        version: 1 as const,
+        order: {
+          orderId: mintRow.id,
+          clientId: mintRow.clientId,
+          storeId: mintRow.storeId,
+          sourceProvider: mintRow.sourceProvider,
+          sourceAccountId: mintRow.sourceAccountId,
+          sourceOrderId: mintRow.sourceOrderId,
+        },
+        shipment: {
+          shipFromLocationId: authorizedOrigin.locationId,
+          shipFrom: normalizeShippingQuoteAddress(authorizedOrigin.address),
+          shipTo: normalizeShippingQuoteAddress({
+            ...canonicalShipTo,
+            name: carrierRecipient.name,
+            company: carrierRecipient.company,
+          }),
+          package: { id: packageId, type: null, code: null },
+          weightOz: Number(resolved.weightOz),
+          dimensions: {
+            length: resolved.dimsL ?? null,
+            width: resolved.dimsW ?? null,
+            height: resolved.dimsH ?? null,
+          },
+          residential: resolved.residential === true,
+          confirmation: effectiveOptions.confirmation,
+          insuranceProvider: effectiveOptions.insuranceProvider,
+          insuredValue: Number(effectiveOptions.insuredValue ?? 0) || 0,
+        },
+      };
+      const presentProviderIds = new Set(
+        browse.rates.map(shippingProviderIdFromAuthorizedRate).filter((id): id is number => id != null),
+      );
+      const accounts = browse.authorizationAccounts.filter(
+        (account) => presentProviderIds.has(account.shippingProviderId),
+      );
+      const finalized = await finalizeBestRateWithQuote({
+        bestRate: cheapest,
+        rates: browse.rates as Array<Record<string, unknown>>,
+        cacheKey: rateCacheKey(resolved),
+        bestRateComplete: true,
+        fetchedAt: new Date().toISOString(),
+        purchaseProofEligible: true,
+        authorization: { context, accounts },
+      });
+      const selectionRef = (finalized.bestRate as { selectionRef?: string }).selectionRef ?? null;
+      check('the production finalizer minted a parseable purchase selectionRef',
+        !!selectionRef && parseShippingQuoteSelectionRef(selectionRef) != null, String(selectionRef));
 
-      // (b) Non-Shipp scoping: the SAME mixed-carton shape through a direct UPS account
-      // purchases for real (to the stubbed wire) — no refusal, the lazy closure is never
-      // consumed (labels.ts:3043 gates it on directProviderKey === 'shipp'), and no
-      // countryOfManufacture is transmitted anywhere.
+      // THE DRIFT. The customs items change AFTER the quote was sealed — the rate proof
+      // seals rate identity, not customs items, so the purchase-time re-check at
+      // labels.ts:3043 is the only thing standing between this carton and the broker.
+      await raw`
+        update orders
+        set raw = ${JSON.stringify(orderRawPayload({ ...SEED_ORDERS.find((o) => o.id === 105)!, customsItems: MIXED_ITEMS }))}::jsonb
+        where id = 105
+      `;
+
+      // PURCHASE — the real funnel, from the top.
+      resetCapture();
+      let thrown: unknown = null;
+      try {
+        await createLabelV2(
+          { orderId: 105, selectionRef } as Parameters<typeof createLabelV2>[0],
+          GLOBAL_SCOPE,
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      check('createLabelV2 REFUSED the drifted mixed carton', thrown != null, 'purchase unexpectedly succeeded');
+      check('the refusal is CustomsOriginUndeclarableError with status 422 — thrown by the production ternary',
+        thrown instanceof CustomsOriginUndeclarableError && thrown.status === 422,
+        `${(thrown as { name?: string } | null)?.name} status=${(thrown as { status?: number } | null)?.status} :: ${String(thrown)}`);
+      check('the 422 reason names both recorded origins',
+        /US/.test(String(thrown)) && /KR/.test(String(thrown)), String(thrown));
+      check('the funnel refusal made ZERO provider HTTP calls', providerCalls().length === 0,
+        providerCalls().map((c) => c.url).join(', '));
+      // The ledger proves WHERE the refusal happened: the operation was claimed for
+      // dispatch, the execute callback threw while building the connector arguments, and
+      // classifyBuyErrorForIntent (with the PS-494 CUSTOMS_ORIGIN_UNDECLARABLE branch)
+      // classified it provably-pre-purchase — failed_pre_dispatch, not a reconcile hold.
+      const [operation] = await raw<Array<{ state: string; kind: string; provider: string; subject_id: string; last_error: string | null }>>`
+        select state, kind, provider, subject_id, last_error
+        from external_operations
+        where subject_type = 'order' and subject_id = '105'
+        order by id desc limit 1
+      `;
+      check('the fulfillment operation exists for the refused purchase (the funnel reached dispatch)',
+        operation?.kind === 'forward_label' && operation?.provider === 'shipp', JSON.stringify(operation));
+      check("the operation landed 'failed_pre_dispatch' — no provider contact, no reconcile hold",
+        operation?.state === 'failed_pre_dispatch', operation?.state);
+      check('the ledger carries the actionable refusal reason',
+        /cannot declare more than one country/.test(operation?.last_error ?? ''), operation?.last_error ?? '');
+    }
+
+    // ── Scenario 5b: non-Shipp scoping through the REAL direct-label boundary ─
+    console.log('\nscenario 5b — non-Shipp scoping: mixed carton purchases via direct UPS');
+    {
       resetCapture();
       const upsAccount = await loadDirectAccountForLabel(
         { sourceTable: 'carrier_accounts', accountId: UPS_ACCOUNT_ID },
@@ -685,6 +800,7 @@ async function main(): Promise<void> {
       const upsOrder = await loadOrderRow(106);
       const upsOrderShipTo = ((upsOrder.raw as { shipTo?: Record<string, unknown> })?.shipTo) ?? {};
       let upsClosureCalls = 0;
+      // labels.ts:2658-2661 verbatim shape — the decision itself is NOT re-implemented here.
       const resolveDeclaredUpsSideOrigin = (): string | null => {
         upsClosureCalls += 1;
         return assertDeclarableOrigin({
@@ -692,6 +808,7 @@ async function main(): Promise<void> {
           destination: classifyDestinationCountry(String(upsOrderShipTo.country ?? '')).destination,
         });
       };
+      // labels.ts:3043 — the lazy closure is consumed only when the provider is Shipp.
       const upsOriginArg = upsProviderKey === 'shipp' ? resolveDeclaredUpsSideOrigin() : null;
       check('the non-Shipp provider never consumes the origin closure', upsClosureCalls === 0, String(upsClosureCalls));
 
@@ -760,6 +877,9 @@ async function main(): Promise<void> {
       const [cacheCount] = await raw`select count(*)::int as c from direct_carrier_rate_cache`;
       check('the PS-271 rate cache stayed EMPTY (flag pinned OFF — its OFF path is a true no-op)',
         Number((cacheCount as { c?: number } | undefined)?.c ?? -1) === 0, JSON.stringify(cacheCount));
+      const [shipmentCount] = await raw`select count(*)::int as c from shipments`;
+      check('no shipment row was ever persisted — both label scenarios stop before persistence',
+        Number((shipmentCount as { c?: number } | undefined)?.c ?? -1) === 0, JSON.stringify(shipmentCount));
     }
 
     console.log(`\nPS-494 joined origin proof: ${passed} checks against the REAL browse and label boundaries.`);

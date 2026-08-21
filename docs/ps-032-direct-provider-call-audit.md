@@ -311,6 +311,17 @@ Phase 5: Tighten guards.
 - Keep `scripts/ps-032-connector-boundary-guard.mjs` failing on any direct provider call outside connector-owned files or approved low-level wrappers.
 - Keep targeted tests proving routes/services/schedulers use StoreConnector/CarrierConnector orchestration.
 
+Stubbed joined-proof harness classified on 2026-08-21 (PS-494 Hermes finding 5):
+
+- `scripts/ps-494-joined-origin-pg17.ts` executes the REAL browse and label entrypoints
+  (`getDirectCarrierRatesForRateInput`, `createLabelV2`, `createDirectCarrierLabelForOrder`)
+  against a throwaway PostgreSQL 17 database with `globalThis.fetch` replaced before any
+  src import. Provider URLs appear only inside its stub allow-list and captured-request
+  assertions; any outbound URL outside the allow-list throws and fails the run, so no
+  provider can ever be contacted. The guard enforces those markers (`stubbedJoinedProofFiles`),
+  mirroring the PS-440 mocked-certification discipline; removal condition: the joined suite
+  is retired or its network boundary moves behind a shared harness owner.
+
 ## Guard Purpose
 
 `scripts/ps-032-connector-boundary-guard.mjs` is the closeout regression guard for direct provider calls. It allows connector-owned implementations and approved low-level wrappers, and it fails if provider API markers appear in core routes, services, schedulers, UI-facing workflow code, or any unapproved file.

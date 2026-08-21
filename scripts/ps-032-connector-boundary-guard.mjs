@@ -91,6 +91,16 @@ const mockedProviderCertificationFiles = new Set([
   'scripts/ps-440-connection-safety-guard.ts',
 ]);
 
+const stubbedJoinedProofFiles = new Set([
+  // PS-494 joined end-to-end proof (Hermes finding 5): executes the real browse and label
+  // entrypoints against a throwaway database with globalThis.fetch REPLACED before any src
+  // import. Provider URLs appear only in its stub allow-list and captured-body assertions;
+  // any outbound URL outside that allow-list throws and fails the run. Enforced below with
+  // the same marker discipline as the PS-440 class, so the file cannot silently lose its
+  // offline boundary while keeping this classification.
+  'scripts/ps-494-joined-origin-pg17.ts',
+]);
+
 const ignoredFiles = new Set([
   'scripts/api-contracts-guard.mjs',
   'scripts/ebay-confirmation-mocked-guard.ts',
@@ -108,6 +118,7 @@ const ignoredFiles = new Set([
   // verify their connector remains the owner. These files make no API calls.
   ...sourcePinOnlyFiles,
   ...mockedProviderCertificationFiles,
+  ...stubbedJoinedProofFiles,
 ]);
 
 function normalize(filePath) {
@@ -165,6 +176,16 @@ for (const file of mockedProviderCertificationFiles) {
       /ssV1Request\('\/offline'/.test(source),
     `PS-032 mocked provider certification lost its offline fetch boundary: ${file}`,
   );
+}
+for (const file of stubbedJoinedProofFiles) {
+  const source = readFileSync(file, 'utf8');
+  assert(
+    source.includes('globalThis.fetch = (') &&
+      source.includes('unexpected outbound URL') &&
+      source.includes('No provider contacted. No postage.'),
+    `PS-032 stubbed joined-proof file lost its offline fetch boundary: ${file}`,
+  );
+  assert(audit.includes(file), `PS-032 audit must document stubbed joined-proof file: ${file}`);
 }
 
 const scannedFiles = ['src', 'api', 'scripts'].flatMap((root) => walk(root));
