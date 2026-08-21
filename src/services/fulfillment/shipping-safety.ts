@@ -190,6 +190,7 @@ export type ShippingSafetyOrderInput = {
   canonicalStatus?: string | null;
   externallyShipped?: boolean | null;
   sourceProvider?: string | null;
+  sourceAccountId?: string | null;
   sourceOrderId?: string | null;
   sourceOrderNumber?: string | null;
   orderNumber?: string | null;

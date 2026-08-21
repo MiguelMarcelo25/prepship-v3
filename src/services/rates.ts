@@ -170,11 +170,25 @@ export function clearCarrierMarkupsCache(): void {
   carrierMarkupsCache = null;
 }
 
-export async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
-  if (carrierMarkupsCache && Date.now() - carrierMarkupsCache.at < CARRIER_MARKUPS_TTL_MS) {
+export type CarrierMarkupReadConnection = Pick<typeof db, 'select'>;
+
+export async function loadCarrierMarkups(
+  conn: CarrierMarkupReadConnection = db,
+  options: { useCache?: boolean } = {},
+): Promise<Map<string, Markup>> {
+  // The process cache belongs only to the imported singleton database. Reusing it for an injected
+  // transaction can combine shipment facts from database A with settings read earlier from
+  // database B, and it also escapes the transaction's visibility boundary. Explicit transactional
+  // money freezes therefore pass useCache:false and read through their supplied connection.
+  const useProcessCache = conn === db && options.useCache !== false;
+  if (
+    useProcessCache &&
+    carrierMarkupsCache &&
+    Date.now() - carrierMarkupsCache.at < CARRIER_MARKUPS_TTL_MS
+  ) {
     return carrierMarkupsCache.value;
   }
-  const rows = await db
+  const rows = await conn
     .select()
     .from(settings)
     .where(like(settings.key, 'markup.%'));
@@ -183,7 +197,7 @@ export async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
     const rule = parseMarkupSettingValue(row.value);
     if (rule) m.set(row.key.slice('markup.'.length), rule);
   }
-  carrierMarkupsCache = { at: Date.now(), value: m };
+  if (useProcessCache) carrierMarkupsCache = { at: Date.now(), value: m };
   return m;
 }
 

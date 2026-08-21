@@ -83,6 +83,40 @@ export type CustomerShippingRateCostSource =
   | 'label_final_cost'
   | 'shipstation_sync_receipt_cost';
 
+export type FrozenCustomerShippingPricingAuthority = {
+  policyOwner: 'billing_config';
+  policyId: string;
+  /** The exact billing_config.updated_at value read with the shipment. */
+  policyRowVersion: string;
+  policyActive: true;
+  clientId: number;
+  billingMode: string;
+  perAccountMarkupEnabled: boolean;
+  markupAuthority:
+    | 'per_account_override'
+    | 'client_billing_config'
+    | 'explicit_zero_markup';
+  markupRuleKey: string;
+  markupPct: number;
+  markupFlat: number;
+  markupAdjustmentKind: 'customer_profit_markup' | 'true_cost_uplift';
+  providerAccountId: number | null;
+  selectedOverrideIdentity: {
+    authority: 'settings';
+    settingKey: string;
+    providerAccountId: number;
+    ruleType: 'amount' | 'percent';
+    ruleValue: number;
+    adjustmentKind: 'customer_profit_markup' | 'true_cost_uplift';
+  } | null;
+  appliedHugrabOverrideIdentity: {
+    ruleKey: 'billing_config.hugrab_shipping_rate_override';
+    threshold: number;
+    amount: number;
+  } | null;
+  billingSource: 'c_shipping_rate' | 'reference_rate' | 'label_cost';
+};
+
 export type FrozenCustomerShippingMoney = {
   selectedRateCost: number;
   cShippingRateAmount: number;
@@ -112,6 +146,16 @@ export type FrozenCustomerShippingMoney = {
    * would return null, and money that is frozen and correct would read as absent.
    */
   billingDescriptionSuffix?: string;
+  /**
+   * AC-10 pricing authority. Optional for historical return tuples and PS-508's staged rollout;
+   * the replacement-specific reader below requires it before a tuple can become billable.
+   */
+  customerShippingPricingAuthority?: FrozenCustomerShippingPricingAuthority;
+};
+
+export type FrozenReplacementCustomerShippingMoney = FrozenCustomerShippingMoney & {
+  customerShippingMoneyPolicyVersion: typeof CUSTOMER_SHIPPING_MONEY_POLICY_VERSION;
+  customerShippingPricingAuthority: FrozenCustomerShippingPricingAuthority;
 };
 
 function finiteNumber(value: unknown): number | null {
@@ -137,6 +181,156 @@ const PURCHASE_RATE_SOURCES: ReadonlySet<string> = new Set<CustomerShippingRateS
   'hugrab_shipping_rate_override',
   'house_next_best_customer_rate',
 ]);
+
+const MARKUP_AUTHORITIES: ReadonlySet<string> = new Set([
+  'per_account_override',
+  'client_billing_config',
+  'explicit_zero_markup',
+] as const);
+
+const ADJUSTMENT_KINDS: ReadonlySet<string> = new Set([
+  'customer_profit_markup',
+  'true_cost_uplift',
+] as const);
+
+function readPricingAuthority(value: unknown): FrozenCustomerShippingPricingAuthority | null {
+  const row = recordOrNull(value);
+  if (!row) return null;
+  const clientId = finiteNumber(row.clientId);
+  const markupPct = finiteNumber(row.markupPct);
+  const markupFlat = finiteNumber(row.markupFlat);
+  const providerAccountId = row.providerAccountId == null
+    ? null
+    : finiteNumber(row.providerAccountId);
+  const policyId = row.policyId;
+  const policyRowVersion = row.policyRowVersion;
+  const billingMode = row.billingMode;
+  const markupAuthority = row.markupAuthority;
+  const markupRuleKey = row.markupRuleKey;
+  const markupAdjustmentKind = row.markupAdjustmentKind;
+  const billingSource = row.billingSource;
+  if (
+    row.policyOwner !== 'billing_config' ||
+    clientId == null || !Number.isInteger(clientId) || clientId <= 0 ||
+    policyId !== `billing_config:${clientId}` ||
+    typeof policyRowVersion !== 'string' || !policyRowVersion ||
+    Number.isNaN(Date.parse(policyRowVersion)) ||
+    row.policyActive !== true ||
+    typeof billingMode !== 'string' || !billingMode ||
+    typeof row.perAccountMarkupEnabled !== 'boolean' ||
+    typeof markupAuthority !== 'string' ||
+    !MARKUP_AUTHORITIES.has(markupAuthority) ||
+    typeof markupRuleKey !== 'string' || !markupRuleKey ||
+    markupPct == null || markupFlat == null ||
+    typeof markupAdjustmentKind !== 'string' ||
+    !ADJUSTMENT_KINDS.has(markupAdjustmentKind) ||
+    (providerAccountId != null && (!Number.isInteger(providerAccountId) || providerAccountId <= 0)) ||
+    (billingSource !== 'c_shipping_rate' &&
+      billingSource !== 'reference_rate' &&
+      billingSource !== 'label_cost')
+  ) {
+    return null;
+  }
+
+  const selectedRaw = row.selectedOverrideIdentity;
+  const selected = selectedRaw == null ? null : recordOrNull(selectedRaw);
+  let selectedOverrideIdentity: FrozenCustomerShippingPricingAuthority['selectedOverrideIdentity'] = null;
+  if (selected) {
+    const selectedProviderAccountId = finiteNumber(selected.providerAccountId);
+    const ruleValue = finiteNumber(selected.ruleValue);
+    if (
+      selected.authority !== 'settings' ||
+      typeof selected.settingKey !== 'string' || !selected.settingKey.startsWith('markup.') ||
+      selectedProviderAccountId == null || !Number.isInteger(selectedProviderAccountId) ||
+      selectedProviderAccountId <= 0 ||
+      (selected.settingKey !== `markup.se-${selectedProviderAccountId}` &&
+        selected.settingKey !== `markup.${selectedProviderAccountId}`) ||
+      (selected.ruleType !== 'amount' && selected.ruleType !== 'percent') ||
+      ruleValue == null || ruleValue === 0 ||
+      (selected.adjustmentKind !== 'customer_profit_markup' &&
+        selected.adjustmentKind !== 'true_cost_uplift')
+    ) {
+      return null;
+    }
+    selectedOverrideIdentity = {
+      authority: 'settings',
+      settingKey: selected.settingKey,
+      providerAccountId: selectedProviderAccountId,
+      ruleType: selected.ruleType,
+      ruleValue,
+      adjustmentKind: selected.adjustmentKind,
+    };
+  } else if (selectedRaw !== null) {
+    return null;
+  }
+
+  if (markupAuthority === 'per_account_override') {
+    if (
+      row.perAccountMarkupEnabled !== true ||
+      !selectedOverrideIdentity ||
+      providerAccountId !== selectedOverrideIdentity.providerAccountId ||
+      markupRuleKey !== selectedOverrideIdentity.settingKey ||
+      markupAdjustmentKind !== selectedOverrideIdentity.adjustmentKind ||
+      (selectedOverrideIdentity.ruleType === 'percent' &&
+        (markupPct !== selectedOverrideIdentity.ruleValue || markupFlat !== 0)) ||
+      (selectedOverrideIdentity.ruleType === 'amount' &&
+        (markupPct !== 0 || markupFlat !== selectedOverrideIdentity.ruleValue))
+    ) {
+      return null;
+    }
+  } else if (
+    selectedOverrideIdentity != null ||
+    markupRuleKey !== 'billing_config.shipping_markup_pct+shipping_markup_flat' ||
+    markupAdjustmentKind !== 'customer_profit_markup' ||
+    (markupAuthority === 'explicit_zero_markup' && (markupPct !== 0 || markupFlat !== 0)) ||
+    (markupAuthority === 'client_billing_config' && markupPct === 0 && markupFlat === 0)
+  ) {
+    return null;
+  }
+
+  const hugrabRaw = row.appliedHugrabOverrideIdentity;
+  const hugrab = hugrabRaw == null ? null : recordOrNull(hugrabRaw);
+  let appliedHugrabOverrideIdentity:
+    FrozenCustomerShippingPricingAuthority['appliedHugrabOverrideIdentity'] = null;
+  if (hugrab) {
+    const threshold = finiteNumber(hugrab.threshold);
+    const amount = finiteNumber(hugrab.amount);
+    if (
+      hugrab.ruleKey !== 'billing_config.hugrab_shipping_rate_override' ||
+      threshold == null || threshold <= 0 ||
+      amount == null || amount <= 0
+    ) {
+      return null;
+    }
+    appliedHugrabOverrideIdentity = {
+      ruleKey: 'billing_config.hugrab_shipping_rate_override',
+      threshold,
+      amount,
+    };
+  } else if (hugrabRaw !== null) {
+    return null;
+  }
+
+  return {
+    policyOwner: 'billing_config',
+    policyId,
+    policyRowVersion,
+    policyActive: true,
+    clientId,
+    billingMode,
+    perAccountMarkupEnabled: row.perAccountMarkupEnabled,
+    markupAuthority: markupAuthority as FrozenCustomerShippingPricingAuthority['markupAuthority'],
+    markupRuleKey,
+    markupPct,
+    markupFlat,
+    markupAdjustmentKind:
+      markupAdjustmentKind as FrozenCustomerShippingPricingAuthority['markupAdjustmentKind'],
+    providerAccountId,
+    selectedOverrideIdentity,
+    appliedHugrabOverrideIdentity,
+    billingSource,
+  };
+}
 
 const SYNC_INGESTION_RATE_SOURCES: ReadonlySet<string> = new Set<CustomerShippingRateSource>([
   'carrier_markup_customer_shipping_rate',
@@ -175,6 +369,13 @@ export function readFrozenCustomerShippingMoney(
   const customerRateSource = row.customerRateSource;
   const rateCostSource = row.rateCostSource;
   const policyVersion = row.customerShippingMoneyPolicyVersion;
+  const hasPricingAuthority = Object.prototype.hasOwnProperty.call(
+    row,
+    'customerShippingPricingAuthority',
+  );
+  const pricingAuthority = hasPricingAuthority
+    ? readPricingAuthority(row.customerShippingPricingAuthority)
+    : null;
   if (
     selectedRateCost == null || selectedRateCost <= 0 ||
     cShippingRateAmount == null || cShippingRateAmount <= 0 ||
@@ -184,7 +385,11 @@ export function readFrozenCustomerShippingMoney(
     Math.abs(roundMoney(cShippingRateAmount - selectedRateCost) - roundMoney(shippingMarginAmount)) > 0.001 ||
     typeof customerRateSource !== 'string' ||
     typeof policyVersion !== 'string' ||
-    !accept.includes(policyVersion as CustomerShippingMoneyPolicyVersion)
+    !accept.includes(policyVersion as CustomerShippingMoneyPolicyVersion) ||
+    (hasPricingAuthority && !pricingAuthority) ||
+    (hasPricingAuthority &&
+      (customerRateSource === 'hugrab_shipping_rate_override') !==
+        (pricingAuthority?.appliedHugrabOverrideIdentity != null))
   ) {
     return null;
   }
@@ -234,6 +439,9 @@ export function readFrozenCustomerShippingMoney(
     ...(typeof row.billingDescriptionSuffix === 'string'
       ? { billingDescriptionSuffix: row.billingDescriptionSuffix }
       : {}),
+    ...(pricingAuthority
+      ? { customerShippingPricingAuthority: pricingAuthority }
+      : {}),
     // PS-508: return the version that was READ, never the constant.
     //
     // This line used to hardcode CUSTOMER_SHIPPING_MONEY_POLICY_VERSION. That was invisible while
@@ -243,4 +451,19 @@ export function readFrozenCustomerShippingMoney(
     // the number it is about to bill, and the staged rollout above would be undone by its own reader.
     customerShippingMoneyPolicyVersion: policyVersion as CustomerShippingMoneyPolicyVersion,
   };
+}
+
+/** Replacement billing accepts only a tuple carrying exact active pricing authority. */
+export function readFrozenReplacementCustomerShippingMoney(
+  value: unknown,
+): FrozenReplacementCustomerShippingMoney | null {
+  const frozen = readFrozenCustomerShippingMoney(value);
+  if (
+    !frozen ||
+    frozen.customerShippingMoneyPolicyVersion !== CUSTOMER_SHIPPING_MONEY_POLICY_VERSION ||
+    !frozen.customerShippingPricingAuthority
+  ) {
+    return null;
+  }
+  return frozen as FrozenReplacementCustomerShippingMoney;
 }

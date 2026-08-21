@@ -328,7 +328,11 @@ async function upsertMissingShippedOrdersBatch(
       .where(
         and(
           isNull(shipments.orderId),
-          eq(shipments.orderNumber, row.orderNumber)
+          eq(shipments.orderNumber, row.orderNumber),
+          // Replacement vessels deliberately keep order_id NULL and are owned only through
+          // replacements.replacement_shipment_id. Visible order-number text can collide; the
+          // generic orphan hydrator may never relink that dedicated vessel to an ordinary order.
+          sql`coalesce(${shipments.source}, '') <> 'replacement'`,
         )
       );
     if (!candidates.length) continue;
@@ -340,7 +344,11 @@ async function upsertMissingShippedOrdersBatch(
           .where(
             and(
               isNull(shipments.orderId),
-              eq(shipments.orderNumber, row.orderNumber)
+              eq(shipments.orderNumber, row.orderNumber),
+              // PS-502 merge 2026-08-21: the candidate SELECT above excludes replacement
+              // vessels, but this UPDATE is the authority — without the same predicate a
+              // replacement vessel sharing the visible order number could be linked here.
+              sql`coalesce(${shipments.source}, '') <> 'replacement'`,
             )
           )
           .returning({ id: shipments.id });

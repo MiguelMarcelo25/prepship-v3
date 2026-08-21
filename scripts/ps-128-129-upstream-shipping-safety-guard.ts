@@ -117,8 +117,14 @@ function check(name: string, got: unknown, want: unknown) {
   check('shopify orders/cancelled -> cancelled', [cancel.canonicalStatus, cancel.sourceOrderNumber], ['cancelled', 'A1']);
   const ship = normalizeWebhookEvent({ provider: 'shopify', headers: { 'x-shopify-topic': 'fulfillments/create' }, body: { order_number: 'A2' } });
   check('shopify fulfillments/create -> shipped', ship.canonicalStatus, 'shipped');
-  const genCancel = normalizeWebhookEvent({ provider: 'walmart', headers: {}, body: { status: 'Cancelled', purchaseOrderId: 'PO1' } });
+  const genCancel = normalizeWebhookEvent({
+    provider: 'walmart',
+    headers: {},
+    body: { status: 'Cancelled', purchaseOrderId: 'PO1', orderId: 'source-1', sourceAccountId: 'acct-1' },
+  });
   check('generic cancelled status -> cancelled', [genCancel.canonicalStatus, genCancel.sourceOrderNumber], ['cancelled', 'PO1']);
+  check('generic event preserves account-scoped source identity',
+    [genCancel.sourceAccountId, genCancel.sourceOrderId], ['acct-1', 'source-1']);
   const genShip = normalizeWebhookEvent({ provider: 'ebay', headers: {}, body: { orderStatus: 'shipped', orderNumber: 'E1' } });
   check('generic shipped status -> shipped', genShip.canonicalStatus, 'shipped');
   // Redaction: metadata must carry only identifiers/flags, never PII.
@@ -150,9 +156,22 @@ function check(name: string, got: unknown, want: unknown) {
   check('webhook route records ledger', /recordWebhookEvent\(/.test(route), true);
   check('webhook route rejects invalid signature (401)', /Invalid signature.*401|401\)/.test(route) && /verifyWebhookSignature/.test(route), true);
   check('webhook route rejects unconfigured provider secret (503)', /503/.test(route), true);
+  check('terminal reconcile completes before ACK and deduped retries recover the receipt',
+    /await reconcileOrderFromUpstreamEvent\(normalized, \{ webhookEventId \}\)/.test(route)
+      && /findWebhookEventIdByDedupeKey\(dedupeKey\)/.test(route)
+      && !/!result\.deduped[\s\S]{0,300}reconcileOrderFromUpstreamEvent/.test(route), true);
 
   const reconcile = readFileSync('src/services/fulfillment/upstream-reconcile.ts', 'utf8');
-  check('reconcile is forward-only (awaiting only)', /order_status = 'awaiting_shipment'/.test(reconcile), true);
+  check('reconcile is forward-only (awaiting only)',
+    /candidate\.orderStatus !== 'awaiting_shipment'/.test(reconcile)
+      && /requireAwaitingOrderStatus: true/.test(reconcile), true);
+  check('reconcile binds provider + account + source-order identity and refuses ambiguity',
+    /source_provider = \$\{provider\}/.test(reconcile)
+      && /source_account_id = \$\{hinted\?\.sourceAccountId/.test(reconcile)
+      && /source_order_id = \$\{sourceOrderId\}/.test(reconcile)
+      && /UPSTREAM_WEBHOOK_IDENTITY_AMBIGUOUS/.test(reconcile)
+      && !/order_number = \$\{orderNumber/.test(reconcile)
+      && !/external_order_id = \$\{sourceId/.test(reconcile), true);
   check('reconcile terminal facts delegate to the atomic lifecycle owner',
     /applyOrderLifecycleCommand\(\{/.test(reconcile) &&
       /transition: 'cancelled'/.test(reconcile) &&
@@ -166,6 +185,12 @@ function check(name: string, got: unknown, want: unknown) {
     /CREATE TABLE IF NOT EXISTS webhook_events/.test(ledgerMigration) &&
       /assertRuntimeSchemaReady/.test(ledger) &&
       !/CREATE TABLE IF NOT EXISTS/.test(ledger), true);
+  check('shipping-safety ledger lookup requires the composite source identity',
+    /buildOrderSourceIdentity\(order\)/.test(ledger)
+      && /event\.provider = \$\{identity\.sourceProvider\}/.test(ledger)
+      && /sourceAccountId/.test(ledger)
+      && /nullif\(metadata ->> 'sourceAccountId', ''\) IS NULL[\s\S]{0,120}metadata ->> 'sourceAccountId' = \$\{input\.sourceAccountId\}/.test(ledger)
+      && !/source_order_number = ANY/.test(ledger), true);
 
   const env = readFileSync('src/lib/env.ts', 'utf8');
   check('env exposes webhook signing secret', /WEBHOOK_SIGNING_SECRET/.test(env), true);

@@ -10,10 +10,19 @@ import {
   replacementOriginalOrderHolds,
 } from '../db/schema/replacements';
 import { env } from '../lib/env';
-import { requireInternalPermission, type AuthVars } from '../middleware/auth';
+import {
+  APP_PERMISSIONS,
+  hasAppPermission,
+  requireInternalPermission,
+  type AuthVars,
+} from '../middleware/auth';
 import { isOrderRowInScope, orderScopePredicate, scopeFromContext } from '../lib/order-scope';
 import { createReplacement } from '../services/replacement-create-command';
-import { cancelReplacementCharges } from '../services/replacement-charge-cancellation';
+import {
+  processReplacementFinancialAction,
+  readReplacementFinancialAction,
+  requestReplacementFinancialReversal,
+} from '../services/replacement-financial-action';
 import {
   approveReplacement,
   cancelReplacement,
@@ -21,9 +30,31 @@ import {
   resolveReplacementReview,
 } from '../services/replacement-lifecycle-command';
 import {
+  REPLACEMENT_HOLD_RESOLUTIONS,
   raiseReplacementOriginalOrderHoldsInTransaction,
+  resolveReplacementOriginalOrderHold,
 } from '../services/replacement-original-order-hold';
 import { collectReplacementDiagnostics } from '../services/replacement-diagnostics';
+import {
+  assertReplacementLabelEnabled,
+  purchaseReplacementLabel,
+  retryFailedReplacementLabel,
+  type ReplacementLabelProvider,
+} from '../services/replacement-label-purchase-command';
+import { reconcileReplacementLabelPricing } from '../services/replacement-label-pricing-reconcile';
+import {
+  reconcileReplacementPurchaseIntent,
+  reconcileReplacementVoidOutcome,
+  voidReplacementLabel,
+  type ReplacementLabelVoidProvider,
+} from '../services/replacement-label-void-command';
+import { insertReplacementShipment } from '../services/replacement-shipment-command';
+import { shipReplacement } from '../services/replacement-shipped-command';
+import {
+  consumeReplacementPackage,
+  writeReplacementBilling,
+} from '../services/replacement-shipping-execution';
+import { replacementLabelProviderFor } from '../services/replacement-label-provider';
 
 /**
  * PS-502 item 13 — the operator HTTP surface for replacements.
@@ -60,10 +91,9 @@ import { collectReplacementDiagnostics } from '../services/replacement-diagnosti
  *
  * ── WHAT IS DELIBERATELY NOT HERE ───────────────────────────────────────────────────────
  *
- * Label purchase, label void and ship. They depend on the customer-money freeze site, which
- * does not exist yet: `purchaseReplacementLabel` writes only the carrier receipt, so nothing
- * currently produces the frozen tuple AC-10's fence requires. Exposing them now would mean
- * shipping a route whose billing path can only refuse.
+ * Per user override `unlock shipped data` on 2026-08-19: the shipped-data routes below stay
+ * behind this router's default-off gate and their command-owned permissions. Mounting the
+ * code does not enable replacements, purchase postage, or run a live canary.
  */
 
 const app = new Hono<{ Variables: AuthVars }>();
@@ -88,16 +118,24 @@ type ReplacementActor = {
 /**
  * The actor the COMMANDS expect — email, type and permissions.
  *
- * Permissions are passed through rather than pre-checked here: `replacements:override` and
- * `replacements:label` are enforced INSIDE their commands, where the decision that needs them
- * is actually made. Checking them again at the route would create a second authority that can
- * disagree, and the command is the one that must not be bypassable.
+ * Effective permissions (role grants, explicit claims and admin identity) are passed through:
+ * `replacements:override`, `replacements:label`, and the two financial permissions are still
+ * enforced INSIDE their commands, where the decision that needs them is made. The route gates
+ * exposure; the command remains the non-bypassable mutation authority.
  */
 function replacementActor(c: { get: (k: never) => unknown }): ReplacementActor {
+  const auth = {
+    email: (c.get('email' as never) as string | undefined),
+    role: (c.get('role' as never) as string | undefined),
+    permissions: (c.get('permissions' as never) as string[] | undefined),
+  };
   return {
-    email: (c.get('email' as never) as string | undefined) ?? null,
-    type: (c.get('role' as never) as string | undefined) ?? 'operator',
-    permissions: (c.get('permissions' as never) as string[] | undefined) ?? [],
+    email: auth.email ?? null,
+    type: auth.role ?? 'operator',
+    // Commands are security boundaries too. Give them the same EFFECTIVE permission view as
+    // route middleware (role grants + explicit claims + admin email), rather than only the raw
+    // JWT list; otherwise an admin passes the route and is then falsely denied by the command.
+    permissions: APP_PERMISSIONS.filter((permission) => hasAppPermission(auth, permission)),
   };
 }
 
@@ -182,16 +220,61 @@ app.get('/holds/open', requireInternalPermission('replacements:read'), async (c)
   return c.json({ holds: rows.map((r) => r.hold) });
 });
 
+const resolveHoldBody = z.object({
+  replacementId: z.coerce.number().int().positive(),
+  expectedStateVersion: z.coerce.number().int().min(0),
+  resolution: z.enum(REPLACEMENT_HOLD_RESOLUTIONS),
+  reason: z.string().trim().min(1).max(2000),
+}).strict();
+
+/** Close an AC-16 question only after the command owner verifies its prerequisite receipt. */
+app.post(
+  '/holds/:holdId{[0-9]+}/resolve',
+  requireInternalPermission('replacements:hold'),
+  zValidator('json', resolveHoldBody),
+  async (c) => {
+    const holdId = Number(c.req.param('holdId'));
+    const body = c.req.valid('json');
+    const scope = scopeFromContext(c);
+    const [scoped] = await db
+      .select({ id: replacementOriginalOrderHolds.id })
+      .from(replacementOriginalOrderHolds)
+      .innerJoin(orders, eq(orders.id, replacementOriginalOrderHolds.orderId))
+      .where(and(
+        eq(replacementOriginalOrderHolds.id, holdId),
+        eq(replacementOriginalOrderHolds.replacementId, body.replacementId),
+        orderScopePredicate(scope),
+      ))
+      .limit(1);
+    if (!scoped) return c.json({ error: 'Not found' }, 404);
+
+    try {
+      return c.json(await resolveReplacementOriginalOrderHold({
+        holdId,
+        replacementId: body.replacementId,
+        expectedStateVersion: body.expectedStateVersion,
+        resolution: body.resolution,
+        reason: body.reason,
+        actor: replacementActor(c),
+      }));
+    } catch (error) {
+      return respondToCommandError(c, error);
+    }
+  },
+);
+
 /**
  * Item 14 — the states nothing downstream will notice on its own.
  *
- * Read only, and deliberately NOT client-scoped: it reports counts and sample ids across the
- * whole installation because it exists for the operator diagnosing the SYSTEM, and it is
- * already behind requireInternalPermission, which refuses every portal session outright.
+ * Read only and installation-wide, so it requires the explicit global-scope capability in
+ * addition to replacement read. Internal principals may still be client/store-scoped.
  */
-app.get('/diagnostics', requireInternalPermission('replacements:read'), async (c) => {
-  return c.json(await collectReplacementDiagnostics());
-});
+app.get(
+  '/diagnostics',
+  requireInternalPermission('replacements:read'),
+  requireInternalPermission('scope:global'),
+  async (c) => c.json(await collectReplacementDiagnostics()),
+);
 
 // ── Create ──────────────────────────────────────────────────────────────────────────────
 
@@ -202,7 +285,7 @@ const createBody = z.object({
   items: z.array(z.object({
     orderLineIndex: z.coerce.number().int().min(0),
     quantity: z.coerce.number().int().positive(),
-  })).min(1),
+  }).strict()).min(1),
   requestIdempotencyKey: z.string().trim().min(1).max(200),
   requestedBillable: z.boolean().optional(),
   billabilityReason: z.string().trim().max(2000).optional(),
@@ -264,13 +347,6 @@ const reasonBody = z.object({ reason: z.string().trim().min(1).max(2000) }).stri
 function transitionRoute(
   path: string,
   run: (replacementId: number, actor: ReplacementActor, reason: string) => Promise<unknown>,
-  /**
-   * Runs only after the transition COMMITTED. Cancelling a replacement's charge takes the
-   * client advisory lock, and the lifecycle command holds the order one — nesting them in
-   * that order deadlocks against the billing generator.
-   */
-  afterCommit?: (replacement: { id: number; clientId: number | null }, actor: ReplacementActor, reason: string)
-    => Promise<unknown>,
 ) {
   app.post(
     path,
@@ -283,8 +359,7 @@ function transitionRoute(
       const reason = c.req.valid('json').reason;
       try {
         const result = await run(replacement.id, actor, reason);
-        const settled = afterCommit ? await afterCommit(replacement, actor, reason) : null;
-        return c.json({ replacement: result, ...(settled ? { billing: settled } : {}) });
+        return c.json({ replacement: result });
       } catch (error) {
         return respondToCommandError(c, error);
       }
@@ -305,16 +380,7 @@ transitionRoute('/:id{[0-9]+}/reject', (replacementId, actor, reason) =>
  * something that was called off.
  */
 transitionRoute('/:id{[0-9]+}/cancel', (replacementId, actor, reason) =>
-  cancelReplacement({ replacementId, actor, reason }),
-  (replacement, actor, reason) => cancelReplacementCharges({
-    replacementId: replacement.id,
-    clientId: replacement.clientId ?? 0,
-    actor,
-    reason,
-    // Stable for this replacement's cancellation, so a retried request settles to the same
-    // key and the reconciler refuses a second credit for the same finalization.
-    idempotencySeed: `route-cancel:${replacement.id}`,
-  }));
+  cancelReplacement({ replacementId, actor, reason }));
 
 const resolveBody = reasonBody.extend({
   to: z.enum(['requested', 'approved', 'label_created', 'rejected', 'cancelled']),
@@ -336,19 +402,7 @@ app.post(
         actor,
         reason: body.reason,
       });
-      // Resolving a review INTO cancelled is a cancellation, and owes the same money
-      // treatment as the cancel route. Reaching cancelled by a different door does not make
-      // it a different decision.
-      const billing = body.to === 'cancelled'
-        ? await cancelReplacementCharges({
-          replacementId: replacement.id,
-          clientId: replacement.clientId ?? 0,
-          actor,
-          reason: body.reason,
-          idempotencySeed: `route-review-cancel:${replacement.id}`,
-        })
-        : null;
-      return c.json({ replacement: result, ...(billing ? { billing } : {}) });
+      return c.json({ replacement: result });
     } catch (error) {
       return respondToCommandError(c, error);
     }
@@ -413,5 +467,359 @@ app.post(
     }
   },
 );
+
+// ── Side-effect handoff: purchase, void, ship, and AC-13 financial reversal ─────────────
+
+const purchaseLabelBody = z.object({
+  overrideReason: z.string().trim().min(1).max(2000),
+  address: z.object({
+    name: z.string().trim().min(1),
+    line1: z.string().trim().min(1),
+    line2: z.string().trim().nullable().optional(),
+    city: z.string().trim().min(1),
+    state: z.string().trim().min(1),
+    postalCode: z.string().trim().min(1),
+    country: z.string().trim().min(2),
+    residential: z.boolean().nullable().optional(),
+  }).strict(),
+  carrier: z.object({
+    carrierCode: z.string().trim().min(1),
+    serviceCode: z.string().trim().min(1),
+    providerAccountId: z.coerce.number().int().positive(),
+  }).strict(),
+  package: z.object({
+    packageId: z.string().trim().min(1),
+    weightOz: z.coerce.number().positive(),
+    dimsL: z.coerce.number().positive(),
+    dimsW: z.coerce.number().positive(),
+    dimsH: z.coerce.number().positive(),
+  }).strict(),
+}).strict();
+
+const voidLabelBody = z.object({
+  reason: z.string().trim().min(1).max(2000),
+  expectedStatus: z.string().trim().min(1).optional(),
+  expectedStateVersion: z.coerce.number().int().min(0).optional(),
+}).strict();
+
+const retryLabelBody = purchaseLabelBody.extend({
+  retryReason: z.string().trim().min(1).max(2000),
+  expectedPurchaseAttempt: z.coerce.number().int().positive(),
+}).strict();
+
+const reconcileLabelBody = z.object({
+  reason: z.string().trim().min(1).max(2000),
+}).strict();
+
+const shipBody = z.object({
+  inventoryLines: z.array(z.object({
+    replacementItemId: z.coerce.number().int().positive(),
+    inventoryId: z.coerce.number().int().positive(),
+  }).strict()).min(1),
+}).strict();
+
+const financialReversalBody = z.object({
+  reason: z.string().trim().min(1).max(500),
+  idempotencyKey: z.string().trim().min(1).max(200),
+}).strict();
+
+type ScopedReplacementLoader = typeof loadInScope;
+type CombinedReplacementLabelProvider = ReplacementLabelProvider & ReplacementLabelVoidProvider;
+
+export type ReplacementSideEffectRouteDependencies = {
+  loadScopedReplacement: ScopedReplacementLoader;
+  assertLabelEnabled: typeof assertReplacementLabelEnabled;
+  insertShipment: typeof insertReplacementShipment;
+  purchaseLabel: typeof purchaseReplacementLabel;
+  retryLabel: typeof retryFailedReplacementLabel;
+  reconcileLabelPricing: typeof reconcileReplacementLabelPricing;
+  voidLabel: typeof voidReplacementLabel;
+  reconcilePurchaseIntent: typeof reconcileReplacementPurchaseIntent;
+  reconcileVoidOutcome: typeof reconcileReplacementVoidOutcome;
+  ship: typeof shipReplacement;
+  providerFor: (replacementId: number) => CombinedReplacementLabelProvider;
+  consumePackage: typeof consumeReplacementPackage;
+  writeBilling: typeof writeReplacementBilling;
+  requestFinancialReversal: typeof requestReplacementFinancialReversal;
+  processFinancialAction: typeof processReplacementFinancialAction;
+  readFinancialAction: typeof readReplacementFinancialAction;
+};
+
+const defaultSideEffectDependencies: ReplacementSideEffectRouteDependencies = {
+  loadScopedReplacement: loadInScope,
+  assertLabelEnabled: assertReplacementLabelEnabled,
+  insertShipment: insertReplacementShipment,
+  purchaseLabel: purchaseReplacementLabel,
+  retryLabel: retryFailedReplacementLabel,
+  reconcileLabelPricing: reconcileReplacementLabelPricing,
+  voidLabel: voidReplacementLabel,
+  reconcilePurchaseIntent: reconcileReplacementPurchaseIntent,
+  reconcileVoidOutcome: reconcileReplacementVoidOutcome,
+  ship: shipReplacement,
+  providerFor: replacementLabelProviderFor,
+  consumePackage: consumeReplacementPackage,
+  writeBilling: writeReplacementBilling,
+  requestFinancialReversal: requestReplacementFinancialReversal,
+  processFinancialAction: processReplacementFinancialAction,
+  readFinancialAction: readReplacementFinancialAction,
+};
+
+/**
+ * Exported factory so request-boundary tests can prove auth/scope/provider isolation with fakes.
+ * Production mounts the same handlers below with the canonical dependencies above.
+ */
+export function createReplacementSideEffectRouter(
+  overrides: Partial<ReplacementSideEffectRouteDependencies> = {},
+) {
+  const deps = { ...defaultSideEffectDependencies, ...overrides };
+  const routes = new Hono<{ Variables: AuthVars }>();
+
+  const requireLabelFeature = async (c: any, next: () => Promise<void>) => {
+    try {
+      deps.assertLabelEnabled();
+      await next();
+    } catch (error) {
+      return respondToCommandError(c, error);
+    }
+  };
+
+  routes.post(
+    '/:id{[0-9]+}/label/purchase',
+    requireInternalPermission('replacements:label'),
+    requireLabelFeature,
+    zValidator('json', purchaseLabelBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      const actor = replacementActor(c);
+      const body = c.req.valid('json');
+      try {
+        // Per user override `unlock shipped data` on 2026-08-19: attach only a dedicated
+        // replacement shipment. A failure after this point leaves an idempotently reusable
+        // empty vessel, never a second shipment on retry.
+        await deps.insertShipment({
+          replacementId: replacement.id,
+          actor,
+          shipment: {
+            carrierCode: body.carrier.carrierCode,
+            serviceCode: body.carrier.serviceCode,
+            weightOz: body.package.weightOz,
+            dimsL: body.package.dimsL,
+            dimsW: body.package.dimsW,
+            dimsH: body.package.dimsH,
+            providerAccountId: body.carrier.providerAccountId,
+            selectedPackageId: body.package.packageId,
+          },
+        });
+        const provenance = {
+          source: 'operator_override' as const,
+          chosenBy: actor.email,
+          reason: body.overrideReason,
+        };
+        const result = await deps.purchaseLabel({
+          replacementId: replacement.id,
+          actor,
+          purchaseInputs: {
+            address: { value: body.address, ...provenance },
+            carrier: { value: body.carrier, ...provenance },
+            package: { value: body.package, ...provenance },
+          },
+        }, deps.providerFor(replacement.id));
+        return c.json(result, result.purchased ? 201 : 200);
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  routes.post(
+    '/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/retry',
+    requireInternalPermission('replacements:label'),
+    requireLabelFeature,
+    zValidator('json', retryLabelBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      const actor = replacementActor(c);
+      const body = c.req.valid('json');
+      try {
+        const provenance = {
+          source: 'operator_override' as const,
+          chosenBy: actor.email,
+          reason: body.overrideReason,
+        };
+        const result = await deps.retryLabel({
+          replacementId: replacement.id,
+          expectedFailedIntentId: Number(c.req.param('intentId')),
+          expectedPurchaseAttempt: body.expectedPurchaseAttempt,
+          retryReason: body.retryReason,
+          actor,
+          purchaseInputs: {
+            address: { value: body.address, ...provenance },
+            carrier: { value: body.carrier, ...provenance },
+            package: { value: body.package, ...provenance },
+          },
+        }, deps.providerFor(replacement.id));
+        return c.json(result, result.purchased ? 201 : 200);
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  routes.post(
+    '/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/reconcile',
+    requireInternalPermission('replacements:label'),
+    requireLabelFeature,
+    zValidator('json', reconcileLabelBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      try {
+        const result = await deps.reconcilePurchaseIntent({
+          replacementId: replacement.id,
+          intentId: Number(c.req.param('intentId')),
+          actor: replacementActor(c),
+          reason: c.req.valid('json').reason,
+        }, deps.providerFor(replacement.id));
+        return c.json(result, result.outcome === 'still_unknown' ? 202 : 200);
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  routes.post(
+    '/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/pricing-reconcile',
+    requireInternalPermission('replacements:label'),
+    requireLabelFeature,
+    zValidator('json', reconcileLabelBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      try {
+        return c.json(await deps.reconcileLabelPricing({
+          replacementId: replacement.id,
+          intentId: Number(c.req.param('intentId')),
+          actor: replacementActor(c),
+          reason: c.req.valid('json').reason,
+        }));
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  routes.post(
+    '/:id{[0-9]+}/label/purchase-intents/:intentId{[0-9]+}/void/reconcile',
+    requireInternalPermission('replacements:label'),
+    requireLabelFeature,
+    zValidator('json', reconcileLabelBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      try {
+        const result = await deps.reconcileVoidOutcome({
+          replacementId: replacement.id,
+          intentId: Number(c.req.param('intentId')),
+          actor: replacementActor(c),
+          reason: c.req.valid('json').reason,
+        }, deps.providerFor(replacement.id));
+        return c.json(result, result.outcome === 'still_unknown' ? 202 : 200);
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  routes.post(
+    '/:id{[0-9]+}/label/void',
+    requireInternalPermission('replacements:label'),
+    requireLabelFeature,
+    zValidator('json', voidLabelBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      const body = c.req.valid('json');
+      try {
+        const result = await deps.voidLabel({
+          replacementId: replacement.id,
+          actor: replacementActor(c),
+          reason: body.reason,
+          expectedStatus: body.expectedStatus,
+          expectedStateVersion: body.expectedStateVersion,
+        }, deps.providerFor(replacement.id));
+        return c.json(result);
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  routes.post(
+    '/:id{[0-9]+}/ship',
+    requireInternalPermission('replacements:write'),
+    requireInternalPermission('inventory:write'),
+    requireLabelFeature,
+    zValidator('json', shipBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      try {
+        const result = await deps.ship({
+          replacementId: replacement.id,
+          actor: replacementActor(c),
+          inventoryLines: c.req.valid('json').inventoryLines,
+          consumePackage: deps.consumePackage,
+          writeBilling: deps.writeBilling,
+        });
+        return c.json(result);
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  // AC-13: post-ship financial reversal, never a lifecycle cancellation.
+  routes.post(
+    '/:id{[0-9]+}/financial-reversal',
+    requireInternalPermission('replacements:billing'),
+    zValidator('json', financialReversalBody),
+    async (c) => {
+      const replacement = await deps.loadScopedReplacement(c, Number(c.req.param('id')));
+      if (!replacement) return c.json({ error: 'Not found' }, 404);
+      const body = c.req.valid('json');
+      try {
+        const requested = await deps.requestFinancialReversal({
+          replacementId: replacement.id,
+          actor: replacementActor(c),
+          reason: body.reason,
+          idempotencyKey: body.idempotencyKey,
+        });
+
+        // Best-effort immediate drain for operator feedback. The request already committed to
+        // the durable ledger, so a disconnect or process death leaves the worker an obligation.
+        let action = requested.action;
+        if (action.status !== 'completed' && action.status !== 'review_required') {
+          try {
+            action = (await deps.processFinancialAction(Number(action.id))) ?? action;
+          } catch {
+            action = (await deps.readFinancialAction(Number(action.id))) ?? action;
+          }
+        }
+        return c.json(
+          { action, alreadyRequested: requested.alreadyRequested },
+          (action.status === 'completed' ? 200 : 202) as 200 | 202,
+        );
+      } catch (error) {
+        return respondToCommandError(c, error);
+      }
+    },
+  );
+
+  return routes;
+}
+
+app.route('/', createReplacementSideEffectRouter());
 
 export default app;

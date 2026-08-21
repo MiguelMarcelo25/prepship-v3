@@ -11,6 +11,7 @@ import { readInventoryClaimReviewHealth } from '../services/inventory-claim-revi
 // sockets, so it cannot observe this one dying.
 import { sql as mainSql } from '../db/client';
 import { createMainPoolHealthTracker } from '../services/main-pool-health';
+import { runtimeVersionIdentity } from '../lib/runtime-version';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
@@ -403,6 +404,7 @@ async function checkDeepReadiness() {
 function readinessResponseBody(readiness: { ok: boolean; components: ReadinessComponent[] }) {
   return {
     status: readiness.ok ? 'ready' : 'degraded',
+    runtime: runtimeVersionIdentity,
     components: readiness.components,
     // PS-215: the external-shipped classifier flags are operational state the
     // Shipped-table invariant depends on (rows resting on "Shipment sync
@@ -424,6 +426,7 @@ function readinessResponseBody(readiness: { ok: boolean; components: ReadinessCo
 app.get('/', (c) =>
   c.json({
     status: 'ok',
+    runtime: runtimeVersionIdentity,
     ts: new Date().toISOString(),
   })
 );

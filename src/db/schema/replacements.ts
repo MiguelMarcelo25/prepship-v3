@@ -1,8 +1,10 @@
 import {
+  bigint,
   boolean,
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   serial,
   text,
@@ -319,6 +321,52 @@ export const replacementOriginalOrderHolds = pgTable(
 );
 
 export type ReplacementOriginalOrderHoldRow = typeof replacementOriginalOrderHolds.$inferSelect;
+
+/**
+ * PS-502 AC-13 (migration 0103) — a durable financial decision, separate from lifecycle.
+ *
+ * Per user override `unlock shipped data` on 2026-08-19: shipped replacements keep their
+ * lifecycle history. This row is the retry authority for removing only replacement-scoped
+ * editable lines and creating replacement-attributed append-only credits.
+ */
+export const replacementFinancialActions = pgTable(
+  'replacement_financial_actions',
+  {
+    id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    replacementId: integer('replacement_id')
+      .notNull()
+      .references(() => replacements.id, { onDelete: 'restrict' }),
+    clientId: integer('client_id')
+      .notNull()
+      .references(() => clients.id, { onDelete: 'restrict' }),
+    actionType: text('action_type').notNull(),
+    reason: text().notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestedByType: text('requested_by_type').notNull(),
+    requestedByEmail: text('requested_by_email'),
+    status: text().notNull().default('pending'),
+    attempts: integer().notNull().default(0),
+    editableRemoved: integer('editable_removed').notNull().default(0),
+    creditsSettled: integer('credits_settled').notNull().default(0),
+    creditedAmount: numeric('credited_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    lastError: text('last_error'),
+    nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull().defaultNow(),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('replacement_financial_actions_idempotency_unq').on(t.idempotencyKey),
+    index('replacement_financial_actions_replacement_idx').on(t.replacementId, t.createdAt),
+    index('replacement_financial_actions_client_idx').on(t.clientId, t.createdAt),
+    index('replacement_financial_actions_due_idx')
+      .on(t.nextRunAt, t.id)
+      .where(sql`${t.status} in ('pending', 'retry', 'processing')`),
+  ],
+);
+
+export type ReplacementFinancialActionRow = typeof replacementFinancialActions.$inferSelect;
 
 export type ReplacementLabelPurchaseIntentRow = typeof replacementLabelPurchaseIntents.$inferSelect;
 export type ReplacementItemRemapRow = typeof replacementItemRemaps.$inferSelect;

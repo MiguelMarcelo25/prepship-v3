@@ -44,7 +44,8 @@ create table billing_config (
   house_account_enabled boolean default false,
   hugrab_shipping_rate_override_enabled boolean default false,
   hugrab_shipping_rate_override_threshold numeric,
-  hugrab_shipping_rate_override_amount numeric
+  hugrab_shipping_rate_override_amount numeric,
+  updated_at timestamptz not null default now()
 );
 create table order_overrides (
   order_id integer primary key,

@@ -251,6 +251,11 @@ const LABEL_RATE_LIMIT = Number(process.env.LABEL_RATE_LIMIT ?? 0);
 const LABEL_RATE_WINDOW_MS = 60_000;
 const labelRateLimitMap = new Map<number, { count: number; windowStart: number }>();
 
+// Per user override unlock shipped data on 2026-08-19: replacement labels have their own
+// permissioned purchase/print/void workflow. Generic label lookup by a numeric shipment id must
+// not bypass that owner, even when the caller can guess a replacement vessel id.
+const ordinaryShipmentSourcePredicate = sql`${shipments.source} is distinct from 'replacement'`;
+
 export class LabelRateLimitError extends Error {
   rateLimited = true;
   retryAfterMs: number;
@@ -911,9 +916,12 @@ export async function lookupLabel(lookup: string, scope: ClientStoreScope) {
     .select()
     .from(shipments)
     .where(
-      Number.isFinite(asNum)
-        ? or(eq(shipments.orderId, asNum), eq(shipments.id, asNum))
-        : eq(shipments.trackingNumber, lookup)
+      and(
+        ordinaryShipmentSourcePredicate,
+        Number.isFinite(asNum)
+          ? or(eq(shipments.orderId, asNum), eq(shipments.id, asNum))
+          : eq(shipments.trackingNumber, lookup),
+      )
     )
     .orderBy(desc(shipments.createdAt))
     .limit(10);
@@ -946,7 +954,12 @@ async function findActiveLabelForOrder(orderId: number) {
   const [row] = await db
     .select()
     .from(shipments)
-    .where(and(eq(shipments.orderId, orderId), eq(shipments.voided, false), eq(shipments.isReturn, false)))
+    .where(and(
+      ordinaryShipmentSourcePredicate,
+      eq(shipments.orderId, orderId),
+      eq(shipments.voided, false),
+      eq(shipments.isReturn, false),
+    ))
     .orderBy(desc(shipments.createdAt))
     .limit(1);
   return row ?? null;
@@ -3787,7 +3800,10 @@ export async function voidLabelV2(
   const [row] = await db
     .select()
     .from(shipments)
-    .where(or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)))
+    .where(and(
+      ordinaryShipmentSourcePredicate,
+      or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)),
+    ))
     .limit(1);
   if (!row) throw new Error('Shipment not found');
   // PS-233: a restricted caller may not void another tenant's label.
@@ -4003,7 +4019,10 @@ export async function createReturnLabelV2(
   const [row] = await db
     .select()
     .from(shipments)
-    .where(or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)))
+    .where(and(
+      ordinaryShipmentSourcePredicate,
+      or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)),
+    ))
     .limit(1);
   if (!row) throw new Error('Shipment not found');
   // PS-233: a restricted caller may not create a return on another tenant's shipment.
@@ -4159,6 +4178,7 @@ export async function retrieveLabelV2(
     .from(shipments)
     .where(
       and(
+        ordinaryShipmentSourcePredicate,
         eq(shipments.voided, false),
         isNumeric
           ? or(
@@ -4319,7 +4339,12 @@ export async function resolveCarrierNickname(
       const [row] = await db
         .select({ nickname: shipments.providerAccountNickname })
         .from(shipments)
-        .where(eq(shipments.providerAccountId, providerAccountId))
+        // Same defect Hermes found in shipping-margin's provider_account_names subquery, in a
+        // second place: this resolves a DISPLAY nickname for a provider account across all
+        // shipments, so a nickname carried only by a replacement vessel was returned for an
+        // ordinary label sharing that account. Excluding replacement money does not exclude
+        // replacement metadata, and every other read in this file already uses this predicate.
+        .where(and(ordinaryShipmentSourcePredicate, eq(shipments.providerAccountId, providerAccountId)))
         .limit(1);
       if (row?.nickname) return row.nickname;
     } catch {

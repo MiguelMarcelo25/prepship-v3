@@ -1281,6 +1281,7 @@ async function ordersListResponse(
                  or oi.name ilike ${searchPattern}
             union all select s.order_id from shipments s
               where s.order_id is not null
+                and s.source is distinct from 'replacement'
                 and coalesce(s.voided, false) = false
                 and (
                   s.tracking_number ilike ${searchPattern}
@@ -1290,7 +1291,8 @@ async function ordersListResponse(
               inner join shipments s2
                 on s2.order_number is not null
                and s2.order_number = o2.order_number
-              where coalesce(s2.voided, false) = false
+              where s2.source is distinct from 'replacement'
+                and coalesce(s2.voided, false) = false
                 and (
                   s2.tracking_number ilike ${searchPattern}
                   or s2.label_tracking ilike ${searchPattern}
@@ -1504,6 +1506,7 @@ async function ordersListResponse(
           coalesce(voided, false) as voided
         from shipments
         where order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})
+          and source is distinct from 'replacement'
           -- PS-309: SHIPPED also surfaces voided shipments (as a fallback) so a voided-only
           -- order is classified honestly; awaiting still excludes voided (unchanged).
           ${q.status === 'cancelled' || q.status === 'shipped' ? sql`` : sql`and coalesce(voided, false) = false`}
@@ -1544,6 +1547,7 @@ async function ordersListResponse(
           coalesce(voided, false) as voided
         from shipments
         where order_id is null
+          and source is distinct from 'replacement'
           and order_number in (${sql.join(pageOrderNumbers.map((n) => sql`${n}`), sql`, `)})
           ${q.status === 'cancelled' || q.status === 'shipped' ? sql`` : sql`and coalesce(voided, false) = false`}
         order by order_number, ${q.status === 'shipped' ? sql`coalesce(voided, false) asc, ` : sql``}id desc
@@ -1575,6 +1579,7 @@ async function ordersListResponse(
         select order_id, order_number, tracking_number
         from shipments
         where coalesce(voided, false) = false
+          and source is distinct from 'replacement'
           and upper(coalesce(tracking_number, '')) in (${sql.join(overrideTrackingKeys.map((tracking) => sql`${tracking}`), sql`, `)})
       `),
     );
@@ -3099,7 +3104,10 @@ app.get('/:id{[0-9]+}', async (c) => {
     db
       .select()
       .from(shipments)
-      .where(or(eq(shipments.orderId, id), eq(shipments.orderNumber, order.orderNumber)))
+      .where(and(
+        sql`${shipments.source} is distinct from 'replacement'`,
+        or(eq(shipments.orderId, id), eq(shipments.orderNumber, order.orderNumber)),
+      ))
       .orderBy(desc(shipments.id)),
   ]);
 
@@ -3163,7 +3171,10 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     db
       .select()
       .from(shipments)
-      .where(or(eq(shipments.orderId, id), eq(shipments.orderNumber, order.orderNumber)))
+      .where(and(
+        sql`${shipments.source} is distinct from 'replacement'`,
+        or(eq(shipments.orderId, id), eq(shipments.orderNumber, order.orderNumber)),
+      ))
       .orderBy(desc(shipments.id)),
   ]);
 
@@ -4102,6 +4113,7 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
           selected_rate_json
         from shipments
         where (${sql.join(shipmentPredicates, sql` or `)})
+          and source is distinct from 'replacement'
           and coalesce(voided, false) = false
         order by id desc
       `);

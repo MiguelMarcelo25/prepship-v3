@@ -58,6 +58,10 @@ export async function cancelReplacementCharges(
   const settled = await settleReplacementCancellationCredits(
     [{ replacementId: input.replacementId, clientId: input.clientId }],
     { reason: input.reason, actor: input.actor, idempotencySeed: input.idempotencySeed },
+    // Per user override `unlock shipped data` on 2026-08-19: never escape an injected
+    // database while settling replacement money. The durable AC-13 owner now supersedes
+    // this compatibility surface, but older internal callers still receive one authority.
+    conn,
   );
 
   return {

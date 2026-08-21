@@ -6,9 +6,9 @@
  * which a check quietly stops defending anything. Each mutation reintroduces a defect the
  * card names and requires the guard to go red AT THE CHECK THAT OWNS IT.
  *
- * Scope matches the guard's: the unlocked slice only. Nothing here touches shipped data, a
- * label, inventory or billing rows — the mutations edit pure modules and one migration-free
- * lifecycle table.
+ * DJ supplied `unlock shipped data` for PS-502 on 2026-08-19. These mutations exercise the
+ * resulting static safety checks only: files are restored after every case, no command calls a
+ * provider, and no shipment, inventory, billing or production row is touched.
  *
  * Run on a clean tree. Files are restored in a finally block.
  */
@@ -52,6 +52,19 @@ const ORDER_LIFECYCLE = 'src/services/order-lifecycle-command.ts';
 const UPSTREAM = 'src/services/fulfillment/upstream-reconcile.ts';
 const ENV = 'src/lib/env.ts';
 const PG17 = 'scripts/ps-502-replacement-concurrency-pg17.ts';
+const FINANCIAL_ACTION = 'src/services/replacement-financial-action.ts';
+const FINANCIAL_MIGRATION = 'drizzle/0103_ps502_replacement_financial_actions.sql';
+const MONEY_SNAPSHOT = 'src/services/customer-shipping-money-snapshot.ts';
+const PROVIDER_ADAPTER = 'src/services/replacement-label-provider.ts';
+const CREDENTIAL_AUTHORITY = 'src/services/replacement-provider-credential-authority.ts';
+const ANALYSIS = 'src/routes/analysis.ts';
+const ADMIN = 'src/routes/admin.ts';
+const SNAPSHOTS = 'src/services/shipstation-carrier-account-snapshots.ts';
+const LIFECYCLE_ORDER = 'src/services/order-lifecycle-command.ts';
+const OUTBOX = 'src/services/fulfillment/outbox.ts';
+const LABELS = 'src/services/labels.ts';
+const SYNC = 'src/services/shipment-sync.ts';
+const SCHEDULER = 'src/services/sync-scheduler.ts';
 
 const MUTATIONS: Mutation[] = [
   {
@@ -230,7 +243,7 @@ const MUTATIONS: Mutation[] = [
     file: CREATE,
     find: /await tx\.execute\(sql`select pg_advisory_xact_lock[^`]*`\);/,
     replace: '',
-    expect: 'an order-scoped advisory lock is taken FIRST',
+    expect: 'a create after durable cancellation/refund evidence is refused under the order lock',
   },
   {
     id: 'M23',
@@ -503,7 +516,7 @@ const MUTATIONS: Mutation[] = [
     file: ENV,
     find: '  REPLACEMENTS_LABEL_ENABLED: booleanFlag(false),',
     replace: '  REPLACEMENTS_LABEL_ENABLED: booleanFlag(true),',
-    expect: 'the feature flag is server-authoritative and DEFAULT OFF',
+    expect: 'both replacement feature flags remain DEFAULT OFF',
   },
   {
     id: 'M56',
@@ -550,7 +563,7 @@ const MUTATIONS: Mutation[] = [
     file: LABEL_VOID,
     find: '  if (!input.actor.permissions.includes(REPLACEMENT_LABEL_PERMISSION)) {',
     replace: '  if (false) {',
-    expect: 'BOTH provider-reaching commands require the label capability and a reason',
+    expect: 'ALL THREE provider-reaching void/reconcile commands require the label capability and a reason',
   },  {
     id: 'M62',
     defect: 'the inventory kill switch stops blocking, so stock moves with no ledger entry',
@@ -734,8 +747,8 @@ const MUTATIONS: Mutation[] = [
     id: 'M85',
     defect: 'the upstream producer stops looking for shipped originals, so AC-16 never fires',
     file: UPSTREAM,
-    find: "      WHERE o.order_status = 'shipped'",
-    replace: "      WHERE o.order_status = 'awaiting_shipment'",
+    find: "    && candidate.orderStatus === 'shipped'",
+    replace: "    && candidate.orderStatus === 'awaiting_shipment'",
     expect: 'the upstream producer raises holds WITHOUT moving the order',
   },
   // ── PS-502 item 11 — the three hand-rolled review writers routed through one ──────────────
@@ -756,8 +769,8 @@ const MUTATIONS: Mutation[] = [
     id: 'M87',
     defect: 'the label-purchase command hand-rolls its post-dispatch review again, on id alone',
     file: LABEL_BUY,
-    find: '      await enterReplacementReview(tx, replacement!, {',
-    replace: "      await tx.update(replacements).set({ status: 'review' })\n        .where(eq(replacements.id, replacement!.id));\n      await inlinedReview({",
+    find: '    await enterReplacementReview(tx, before.replacement, {',
+    replace: "    await tx.update(replacements).set({ status: 'review' })\n      .where(eq(replacements.id, before.replacement.id));\n    await inlinedReview({",
     expect: 'the post-dispatch review delegates to the ONE guarded review writer',
   },
   {
@@ -852,7 +865,7 @@ const MUTATIONS: Mutation[] = [
     file: ORDER_LIFECYCLE,
     find: '    if (await replacementSchemaPresent(tx)) {',
     replace: '    if (true) {',
-    expect: 'every PRE-EXISTING path that names a replacement relation is probe-guarded',
+    expect: 'every PRE-EXISTING path probes only the replacement dependency it reads',
   },
   {
     id: 'M100',
@@ -881,8 +894,8 @@ const MUTATIONS: Mutation[] = [
     id: 'M103',
     defect: 'the deduction goes back to the caller\'s array, so an extra line moves unfrozen stock',
     file: SHIPPED,
-    find: '    for (const item of items) {',
-    replace: '    for (const line2 of input.inventoryLines) { const item = items[0]!;',
+    find: '    for (const item of items) {\n      const stock = validatedInventoryByItem.get(item.id)!;',
+    replace: '    for (const line of input.inventoryLines) { const item = items[0]!;\n      const stock = validatedInventoryByItem.get(item.id)!;',
     expect: 'the deduction iterates the FROZEN items, not the caller\'s lines',
   },
   {
@@ -934,32 +947,32 @@ const MUTATIONS: Mutation[] = [
     id: 'M110',
     defect: 'recovery goes back to resolving the intent and never records the label',
     file: LABEL_VOID,
-    find: '      const outcome = await recordPurchasedReplacementLabelInTransaction(tx, {',
-    replace: '      const outcome = await Promise.resolve(\'label_created\' as const); if (false) await recordPurchasedReplacementLabelInTransactionUnused({',
+    find: '      const recorded = await recordPurchasedReplacementLabelInTransaction(tx, {',
+    replace: '      const recorded = await Promise.resolve(null as never); if (false) await recordPurchasedReplacementLabelInTransactionUnused({',
     expect: 'BOTH callers use it — the purchase and the recovery',
   },
   {
     id: 'M111',
     defect: 'the recorder stops re-checking drift that appeared while the purchase was in flight',
     file: LABEL_BUY,
-    find: '  const drift = await findFrozenLineDrift(tx, replacement!);',
+    find: '  const drift = await findFrozenLineDrift(tx, before.replacement);',
     replace: '  const drift = null;',
     expect: 'it does every part of what the label MEANS',
   },  {
     id: 'M112',
     defect: 'cancelling a replacement stops cancelling its charge, leaving money for a called-off re-ship',
-    file: ROUTE,
-    find: '  (replacement, actor, reason) => cancelReplacementCharges({',
-    replace: '  undefined && ((replacement, actor, reason) => cancelReplacementCharges({',
-    expect: 'cancelling a replacement cancels its CHARGE',
+    file: LIFECYCLE,
+    find: '    await completePreShipCancellationCleanupInTransaction(tx, {',
+    replace: '    if (false) await completePreShipCancellationCleanupInTransaction(tx, {',
+    expect: 'pre-ship cancellation cleans its charge BEFORE the lifecycle move in ONE transaction',
   },
   {
     id: 'M113',
     defect: 'resolving a review into cancelled skips the money, so the door taken changes the outcome',
-    file: ROUTE,
-    find: "      const billing = body.to === 'cancelled'",
-    replace: "      const billing = false",
-    expect: 'resolving a review INTO cancelled settles the same way',
+    file: LIFECYCLE,
+    find: /(if \(input\.to === 'cancelled'\) \{[\s\S]{0,220})      await completePreShipCancellationCleanupInTransaction\(tx, \{/,
+    replace: '$1      if (false) await completePreShipCancellationCleanupInTransaction(tx, {',
+    expect: 'resolving a review INTO cancelled uses the SAME atomic cleanup boundary',
   },
   {
     id: 'M114',
@@ -967,13 +980,13 @@ const MUTATIONS: Mutation[] = [
     file: CHARGE_CANCEL,
     find: '  if (removal.invoicedRetained === 0) {',
     replace: '  if (removal.invoicedRetained >= 0) {',
-    expect: 'it removes editable lines, then settles invoiced ones AFTER the commit',
+    expect: 'the compatibility owner removes editable lines, then settles invoiced ones AFTER the commit',
   },  {
     id: 'M115',
     defect: 'the purchase stops freezing customer money, so the fence has nothing to accept again',
     file: LABEL_BUY,
-    find: '        freezeReplacementCustomerShippingMoney(input.shipmentId, sp));',
-    replace: '        Promise.resolve(null as never));',
+    find: '      freezeReplacementCustomerShippingMoney(input.shipmentId, sp));',
+    replace: '      Promise.resolve(null as never));',
     expect: 'the purchase freezes customer money in the same commit as the label',
   },
   {
@@ -990,6 +1003,668 @@ const MUTATIONS: Mutation[] = [
     find: '  const withReplacementId = await billingCreditNotesHasReplacementIdColumn(conn);',
     replace: '  const withReplacementId = true;',
     expect: 'the credit CARRIES replacement_id through the projection',
+  },
+  {
+    id: 'M118',
+    defect: 'the replacement fence falls back to the generic historical snapshot reader',
+    file: FENCE,
+    find: '  const frozen = readFrozenReplacementCustomerShippingMoney(input.frozenCustomerShippingMoney);',
+    replace: '  const frozen = readFrozenCustomerShippingMoney(input.frozenCustomerShippingMoney);',
+    expect: 'the fence accepts only a tuple with customer-money PROVENANCE',
+  },
+  {
+    id: 'M119',
+    defect: 'the replacement reader accepts a tuple with no exact pricing-authority receipt',
+    file: MONEY_SNAPSHOT,
+    find: '    !frozen.customerShippingPricingAuthority',
+    replace: '    false',
+    expect: 'the replacement-specific reader requires exact active pricing authority',
+  },
+  {
+    id: 'M120',
+    defect: 'the replacement freeze escapes its receipt transaction to re-read cached policy',
+    file: MONEY_OWNER,
+    find: '  const decision = await decideCustomerShippingMoneyForRow(row, { exec });',
+    replace: '  const decision = await decideCustomerShippingMoneyForRow(row);',
+    expect: 'the replacement freeze records exact pricing authority from the receipt transaction',
+  },
+  {
+    id: 'M121',
+    defect: 'Phase 3 drops the intent-derived order lock before locking the intent row',
+    file: LABEL_BUY,
+    find: /  await tx\.execute\(sql`\r?\n    select pg_advisory_xact_lock\([^`]*join replacements r on r\.id = i\.replacement_id[^`]*`\);\r?\n/,
+    replace: '',
+    expect: 'intent-derived order locking precedes the intent row lock and every receipt mutation',
+  },
+  {
+    id: 'M122',
+    defect: 'the intent chain stops proving that the shipment source is replacement-owned',
+    file: LABEL_BUY,
+    find: "    && shipment.source === 'replacement';",
+    replace: '    && true;',
+    expect: 'the intent, replacement and shipment must form one replacement-owned chain',
+  },
+  {
+    id: 'M123',
+    defect: 'a purchased recorder replay writes the receipt and event again',
+    file: LABEL_BUY,
+    find: "  if (before.intent.state === 'purchased') {",
+    replace: '  if (false) {',
+    expect: 'a purchased replay returns the complete durable receipt without another write or event',
+  },
+  {
+    id: 'M124',
+    defect: 'the recorder can claim an intent after it has left the unresolved states',
+    file: LABEL_BUY,
+    find: /(eq\(replacementLabelPurchaseIntents\.replacementShipmentId, input\.shipmentId\),\r?\n)      sql`\$\{replacementLabelPurchaseIntents\.state\} in \('provider_pending', 'reconcile_required'\)`,/,
+    replace: '$1      sql`true`,',
+    expect: 'the recorder claims only unresolved intents and a stale loser returns the purchased winner',
+  },
+  {
+    id: 'M125',
+    defect: 'provider-confirmed recovery pre-mutates the intent before the shared recorder',
+    file: LABEL_VOID,
+    find: '      const recorded = await recordPurchasedReplacementLabelInTransaction(tx, {',
+    replace: '      await tx.update(replacementLabelPurchaseIntents).set({ state: \'purchased\' });\n      const recorded = await recordPurchasedReplacementLabelInTransaction(tx, {',
+    expect: 'provider-confirmed recovery delegates directly to the recorder in ONE transaction',
+  },
+  {
+    id: 'M126',
+    defect: 'purchase drops the shared replacements:label capability check before money can move',
+    file: LABEL_BUY,
+    find: '  if (!input.actor.permissions?.includes(REPLACEMENT_LABEL_PERMISSION)) {',
+    replace: '  if (false) {',
+    expect: 'the gate runs BEFORE any transaction or provider access',
+  },
+  {
+    id: 'M127',
+    defect: 'finalized billing waits for unrelated hold tables instead of probing only replacement_id',
+    file: FOLD,
+    find: '  if (!(await billingLineItemsHasReplacementIdColumn(conn))) {',
+    replace: '  if (!(await replacementSchemaPresent(conn))) {',
+    expect: 'every PRE-EXISTING path probes only the replacement dependency it reads',
+  },
+  {
+    id: 'M128',
+    defect: 'the main replacement surface defaults ON despite the requested dark deployment',
+    file: ENV,
+    find: '  REPLACEMENTS_ENABLED: booleanFlag(false),',
+    replace: '  REPLACEMENTS_ENABLED: booleanFlag(true),',
+    expect: 'both replacement feature flags remain DEFAULT OFF',
+  },
+  {
+    id: 'M129',
+    defect: 'AC-16 trusts lifecycle text instead of authoritative shipped_at dispatch evidence',
+    file: HOLD,
+    find: '  if (before.shippedAt != null) {',
+    replace: "  if (before.status === 'shipped' || before.status === 'completed') {",
+    expect: 'shipped_at is authoritative even when lifecycle text disagrees',
+  },
+  {
+    id: 'M130',
+    defect: 'AC-16 ignores editable billing and auto-cancels an undispatched replacement with money',
+    file: HOLD,
+    find: '    .where(eq(billingLineItems.replacementId, before.id))',
+    replace: '    .where(and(eq(billingLineItems.replacementId, before.id), eq(billingLineItems.invoiced, true)))',
+    expect: 'ANY replacement billing row blocks automatic cancellation',
+  },
+  {
+    id: 'M131',
+    defect: 'a clean automatic cancellation leaves an open operator hold with no question',
+    file: HOLD,
+    find: "outcome.disposition === 'no_action' || outcome.disposition === 'cancelled'",
+    replace: "outcome.disposition === 'no_action'",
+    expect: 'a clean pre-dispatch cancel closes its hold in the same transaction',
+  },
+  {
+    id: 'M132',
+    defect: 'post-ship reversal accepts replacements:billing without financials:write',
+    file: FINANCIAL_ACTION,
+    find: '[REPLACEMENT_BILLING_PERMISSION, FINANCIALS_WRITE_PERMISSION]',
+    replace: '[REPLACEMENT_BILLING_PERMISSION]',
+    expect: 'financial reversal requires BOTH permissions before schema or database access',
+  },
+  {
+    id: 'M133',
+    defect: 'the route attempts cleanup before committing the durable financial obligation',
+    file: ROUTE,
+    find: '        const requested = await deps.requestFinancialReversal({',
+    replace: '        await deps.processFinancialAction(-1);\n        const requested = await deps.requestFinancialReversal({',
+    expect: 'the route commits the durable obligation before best-effort processing',
+  },
+  {
+    id: 'M134',
+    defect: 'a reused financial idempotency key is accepted without matching the full decision',
+    file: FINANCIAL_ACTION,
+    find: '      assertReplayMatches(existing as ReplacementFinancialActionRow, expected);',
+    replace: '      void existing; void expected;',
+    expect: 'the post-ship decision requires written reason + stable key and replays by full signature',
+  },
+  {
+    id: 'M135',
+    defect: 'the financial action starts rewriting replacement lifecycle status',
+    file: FINANCIAL_ACTION,
+    find: '    const removal = await conn.transaction(async (tx) => {',
+    replace: '    await conn.transaction(async (tx) => tx.update(replacements).set({ status: \'cancelled\' }));\n    const removal = await conn.transaction(async (tx) => {',
+    expect: 'financial reversal preserves lifecycle and touches no provider, stock, package or marketplace',
+  },
+  {
+    id: 'M136',
+    defect: 'the durable worker loses SKIP LOCKED and can double-claim concurrent work',
+    file: FINANCIAL_ACTION,
+    find: '        for update skip locked',
+    replace: '        for update',
+    expect: 'the durable worker claims with a lease and SKIP LOCKED',
+  },
+  {
+    id: 'M137',
+    defect: 'the worker removes editable lines from a sibling replacement',
+    file: FINANCIAL_ACTION,
+    find: /(const removed = await cancelReplacementBillingInTransaction\(tx, \{\r?\n)        replacementId: action\.replacement_id,/,
+    replace: '$1        replacementId: action.replacement_id + 1,',
+    expect: 'the worker removes and credits ONLY the action replacement on the supplied database',
+  },
+  {
+    id: 'M138',
+    defect: 'a repeated worker appends the financial-completion event again',
+    file: FINANCIAL_ACTION,
+    find: '        .onConflictDoNothing({ target: replacementActivityEvents.idempotencyKey });',
+    replace: ';',
+    expect: 'completion is append-only and replay-safe',
+  },
+  {
+    id: 'M139',
+    defect: 'the repair scanner starts enqueuing dispatched cancelled replacements',
+    file: FINANCIAL_ACTION,
+    find: '        and replacement.shipped_at is null',
+    replace: '',
+    expect: 'the repair scanner targets only stranded pre-ship cancelled replacement money',
+  },
+  {
+    id: 'M140',
+    defect: '0103 leaves the financial-action ledger exposed through the public Data API',
+    file: FINANCIAL_MIGRATION,
+    find: 'alter table replacement_financial_actions enable row level security;',
+    replace: '',
+    expect: '0103 exposes no public Data-API write surface',
+  },
+  {
+    id: 'M141',
+    defect: '0103 allows completed actions without a completion timestamp',
+    file: FINANCIAL_MIGRATION,
+    find: "    check ((status = 'completed') = (completed_at is not null))",
+    replace: '    check (true)',
+    expect: '0103 is an append-only retry authority with strict identity and completion shape',
+  },
+  {
+    id: 'M142',
+    defect: 'Drizzle omits 0103 credited_amount, making the durable result invisible',
+    file: SCHEMA,
+    find: "    creditedAmount: numeric('credited_amount', { precision: 12, scale: 2 }).notNull().default('0'),",
+    replace: '',
+    expect: 'replacement_financial_actions: every migration column is declared in Drizzle',
+  },
+  {
+    id: 'M143',
+    defect: '0103 drops out of the Render archive while its digest prose remains',
+    file: MIGRATION_WORKFLOW,
+    find: /\r?\n            drizzle\/0103_ps502_replacement_financial_actions\.sql/,
+    replace: '',
+    expect: 'the workflow SHIPS and pins 0103_ps502_replacement_financial_actions.sql',
+  },
+  {
+    id: 'M144',
+    defect: 'the Render job stops supplying the mandatory 0103 digest',
+    file: MIGRATION_WORKFLOW,
+    find: ' --digest103=${d103}',
+    replace: '',
+    expect: 'the workflow SHIPS and pins 0103_ps502_replacement_financial_actions.sql',
+  },
+  {
+    id: 'M145',
+    defect: '0103 is read and pinned but no longer applied inside the one transaction',
+    file: APPLIER,
+    find: '      for (const migration of pendingMigrations) {',
+    replace: '      for (const migration of pendingMigrations.filter((m) => m.stage !== 8)) {',
+    expect: 'the migrations apply in ONE transaction',
+  },
+  {
+    id: 'M146',
+    defect: 'the operator read-back stops verifying the 0103 client foreign key',
+    file: APPLIER,
+    find: "      ['clients', 'replacement_financial_actions_client_id_fkey'],",
+    replace: "      ['clients', 'replacement_financial_actions_client_id_fkey_unchecked'],",
+    expect: 'the runner reads back 0103 columns, indexes, constraints, FKs and RLS',
+  },
+  {
+    id: 'M147',
+    defect: '0103 readiness serves an injected connection from the production memo',
+    file: FINANCIAL_ACTION,
+    find: '  if (conn !== db) return probeFinancialActionSchema(conn);',
+    replace: '',
+    expect: '0103 readiness is positive-only and explicit connections are never memoized',
+  },
+  {
+    id: 'M148',
+    defect: 'the finalized replacement credit escapes the worker\'s supplied database',
+    file: FINANCIAL_ACTION,
+    find: '      }, conn, async () => undefined)',
+    replace: '      })',
+    expect: 'the worker removes and credits ONLY the action replacement on the supplied database',
+  },
+  {
+    id: 'M149',
+    defect: '0102 reporting totals drop out of the archive even though PS-502 reads them',
+    file: MIGRATION_WORKFLOW,
+    find: /\r?\n            drizzle\/0102_billing_summary_metrics_replacement_totals\.sql/,
+    replace: '',
+    expect: 'the workflow SHIPS and pins 0102_billing_summary_metrics_replacement_totals.sql',
+  },
+  {
+    id: 'M150',
+    defect: 'the Render job stops supplying the mandatory 0102 digest',
+    file: MIGRATION_WORKFLOW,
+    find: ' --digest102=${d102}',
+    replace: '',
+    expect: 'the workflow SHIPS and pins 0102_billing_summary_metrics_replacement_totals.sql',
+  },
+  {
+    id: 'M151',
+    defect: 'lifecycle dispatch text without shipped_at is mislabeled as a live-label review',
+    file: HOLD,
+    find: "      reviewReason: 'original_order_cancelled_dispatch_inconsistent',",
+    replace: "      reviewReason: 'original_order_cancelled_label_live',",
+    expect: 'lifecycle dispatch text without shipped_at enters its dedicated review',
+  },
+  {
+    id: 'M152',
+    defect: 'the financial endpoint loses its replacements:billing exposure gate',
+    file: ROUTE,
+    find: "    requireInternalPermission('replacements:billing'),",
+    replace: '',
+    expect: 'AC-13 is a strict, scoped financial-reversal route — never lifecycle cancellation',
+  },
+  {
+    id: 'M153',
+    defect: 'the financial endpoint substitutes financials:write for its replacements:billing exposure gate',
+    file: ROUTE,
+    find: "    requireInternalPermission('replacements:billing'),",
+    replace: "    requireInternalPermission('financials:write'),",
+    expect: 'AC-13 is a strict, scoped financial-reversal route — never lifecycle cancellation',
+  },
+  {
+    id: 'M154',
+    defect: 'label purchase reaches validation and the handler without the separate label feature refusal',
+    file: ROUTE,
+    find: /(    requireInternalPermission\('replacements:label'\),\r?\n)    requireLabelFeature,(\r?\n    zValidator\('json', purchaseLabelBody\),)/,
+    replace: '$1$2',
+    expect: 'every label purchase/retry/recovery/void route stays behind label RBAC and the DEFAULT-OFF label flag',
+  },
+  {
+    id: 'M155',
+    defect: 'label purchase loads tenant data without its narrow RBAC refusal',
+    file: ROUTE,
+    find: /    requireInternalPermission\('replacements:label'\),\r?\n(    requireLabelFeature,\r?\n    zValidator\('json', purchaseLabelBody\),)/,
+    replace: '$1',
+    expect: 'every label purchase/retry/recovery/void route stays behind label RBAC and the DEFAULT-OFF label flag',
+  },
+  {
+    id: 'M156',
+    defect: 'shipping mutates inventory without inventory:write at the request boundary',
+    file: ROUTE,
+    find: /    requireInternalPermission\('inventory:write'\),\r?\n(    requireLabelFeature,\r?\n    zValidator\('json', shipBody\),)/,
+    replace: '$1',
+    expect: 'ship requires replacement + inventory capabilities and the label feature gate',
+  },
+  {
+    id: 'M157',
+    defect: 'purchase chooses a provider before the replacement is tenant-scoped',
+    file: ROUTE,
+    find: /(    '\/:id\{\[0-9\]\+\}\/label\/purchase',[\s\S]*?    async \(c\) => \{\r?\n)(      const replacement = await deps\.loadScopedReplacement\(c, Number\(c\.req\.param\('id'\)\)\);)/,
+    replace: "$1      deps.providerFor(Number(c.req.param('id')));\n$2",
+    expect: 'every side-effect route resolves tenant scope before its command or provider factory',
+  },
+  {
+    id: 'M158',
+    defect: 'the router-level replacement flag is registered after side-effect handlers',
+    file: ROUTE,
+    find: "app.use('*', async (c, next) => {",
+    replace: "app.route('/', createReplacementSideEffectRouter());\napp.use('*', async (c, next) => {",
+    expect: 'all pre-handler refusals run before scope loading, provider selection or commands',
+  },
+  {
+    id: 'M159',
+    defect: 'void_pending and void_reconcile_required are treated as permission to call the destructive provider again',
+    file: LABEL_VOID,
+    find: '    if (intent.voidState != null) {',
+    replace: '    if (false) {',
+    expect: 'an unresolved void attempt is a hard stop before a second destructive call',
+  },
+  {
+    id: 'M160',
+    defect: 'constructing the route provider starts a database read before any request gate runs',
+    file: PROVIDER_ADAPTER,
+    find: /(\): ReplacementLabelProvider & ReplacementLabelVoidProvider \{\r?\n)(  return \{)/,
+    replace: '$1  void loadReplacementProviderContext(replacementId);\n$2',
+    expect: 'constructing the replacement provider is lazy and performs no I/O',
+  },
+  {
+    id: 'M161',
+    defect: 'a direct or store-scoped synthetic account reaches replacement postage without authoritative recovery',
+    file: PROVIDER_ADAPTER,
+    find: '      if (directLabelAccountRefFromProviderId(request.carrier.providerAccountId)) {',
+    replace: '      if (false && directLabelAccountRefFromProviderId(request.carrier.providerAccountId)) {',
+    expect: 'direct, store-scoped and ambiguous account paths fail closed before postage',
+  },
+  {
+    id: 'M162',
+    defect: 'two matching ShipStation accounts are accepted as one unambiguous authority',
+    file: PROVIDER_ADAPTER,
+    find: '  if (matchingCarriers.length !== 1) {',
+    replace: '  if (matchingCarriers.length === 0) {',
+    expect: 'direct, store-scoped and ambiguous account paths fail closed before postage',
+  },
+  {
+    id: 'M163',
+    defect: 'provider recovery looks up an idempotency key without scoping it to the replacement',
+    file: PROVIDER_ADAPTER,
+    find: /(async function findIntentForLookup[\s\S]*?\.where\(and\(\r?\n)      eq\(replacementLabelPurchaseIntents\.replacementId, replacementId\),\r?\n/,
+    replace: '$1',
+    expect: 'purchase recovery reloads one scoped frozen intent and the current exact credential',
+  },
+  {
+    id: 'M164',
+    defect: 'provider void accepts a caller key that does not match the purchased intent',
+    file: PROVIDER_ADAPTER,
+    find: 'input.idempotencyKey !== replacementVoidIdempotencyKey(intent)',
+    replace: 'false',
+    expect: 'void reloads one purchased intent, its frozen request and its exact owning credential',
+  },
+  {
+    id: 'M165',
+    defect: 'replacement purchase sends the original order id as provider shipment identity',
+    file: PROVIDER_ADAPTER,
+    find: '      ssOrderId: null,',
+    replace: '      ssOrderId: context.orderId,',
+    expect: 'the adapter writes no local lifecycle and carries no original-order marketplace identity',
+  },
+  {
+    id: 'M166',
+    defect: 'the migration certification lane stops proving the separately running API/worker SHA',
+    file: MIGRATION_WORKFLOW,
+    find: /\r?\n          npm run test:ps-502-runtime-version/,
+    replace: '',
+    expect: 'API and persisted worker identities are separate and certified in both PS-502 lanes',
+  },
+  {
+    id: 'M167',
+    defect: 'provider recovery reuses no current ShipStation credential/account authority before lookup',
+    file: PROVIDER_ADAPTER,
+    find: /(async function lookupShipStationPurchase[\s\S]*?try \{\r?\n)    authority = await resolveShipStationAccountAuthority\(context, request\);/,
+    replace: '$1    authority = {} as ShipStationAccountAuthority;',
+    expect: 'purchase recovery reloads one scoped frozen intent and the current exact credential',
+  },
+  {
+    id: 'M168',
+    defect: 'the flags-off scheduler still scans historical replacements for new cleanup work',
+    file: SCHEDULER,
+    find: '      const replacementCleanupRecovered = env.REPLACEMENTS_ENABLED',
+    replace: '      const replacementCleanupRecovered = true',
+    expect: 'the DEFAULT-OFF replacement flag blocks historical replacement discovery',
+  },
+  {
+    id: 'M169',
+    defect: 'the scheduler strands already-authorized durable money when the HTTP feature rolls back',
+    file: SCHEDULER,
+    find: '        replacementFinancials = await processReplacementFinancialActionsOnce({ limit: 5 });',
+    replace: '        replacementFinancials = env.REPLACEMENTS_ENABLED\n          ? await processReplacementFinancialActionsOnce({ limit: 5 })\n          : { schemaReady: false, processed: 0, succeeded: 0, failed: 0 };',
+    expect: 'already-authorized durable financial obligations drain even while flags are off',
+  },
+  {
+    id: 'M170',
+    defect: 'a retry sees its committed credit but reports zero credits and zero amount on the action',
+    file: POLICY,
+    find: /        adjustedCount \+= 1;\r?\n        creditedCents \+= moneyCents\(existingActionCredit\.amount\);/,
+    replace: '        void existingActionCredit.amount;',
+    expect: 'a retry recovers its already-committed credit into the durable action result',
+  },
+  {
+    id: 'M171',
+    defect: 'AC-16 treats a confirmed-void purchased intent as live postage because lifecycle still says label_created',
+    file: HOLD,
+    find: /      sql`\(\$\{replacementLabelPurchaseIntents\.voidState\} is null or \$\{replacementLabelPurchaseIntents\.voidState\} <> 'voided'\)`,/,
+    replace: '      sql`true`,',
+    expect: 'a purchased but CONFIRMED-VOID intent is no longer a live label',
+  },
+  {
+    id: 'M172',
+    defect: 'shipping blocks only confirmed voids and treats pending, reconciliation and unknown states as active labels',
+    file: SHIPPED,
+    find: '      && intent.voidState === null',
+    replace: "      && intent.voidState !== 'voided'",
+    expect: 'ONLY an explicit active/null void state can ship',
+  },
+  {
+    id: 'M173',
+    defect: 'a caller-selected inactive inventory row can be deducted',
+    file: SHIPPED,
+    find: '          eq(inventory.active, true),',
+    replace: '',
+    expect: 'inventory ids stay candidates until remapped SKU, client and active authority all agree',
+  },
+  {
+    id: 'M174',
+    defect: 'a caller-selected inventory row belonging to another client can be deducted',
+    file: SHIPPED,
+    find: '          eq(inventory.clientId, Number(replacement.clientId)),',
+    replace: '',
+    expect: 'inventory ids stay candidates until remapped SKU, client and active authority all agree',
+  },
+  {
+    id: 'M175',
+    defect: 'a caller-selected inventory row for the wrong SKU can be deducted',
+    file: SHIPPED,
+    find: '          sql`lower(btrim(${inventory.sku})) = lower(btrim(${expectedSku}))`,',
+    replace: '',
+    expect: 'inventory ids stay candidates until remapped SKU, client and active authority all agree',
+  },
+  {
+    id: 'M176',
+    defect: 'inventory validation ignores the latest audited remap and compares the stale requested line',
+    file: SHIPPED,
+    find: '      const effectiveLineIndex = latestRemap?.resolvedOrderLineIndex ?? item.orderLineIndex;',
+    replace: '      const effectiveLineIndex = item.orderLineIndex;',
+    expect: 'inventory ids stay candidates until remapped SKU, client and active authority all agree',
+  },
+  {
+    id: 'M177',
+    defect: 'the ship HTTP body lets the caller supply a display name beside the inventory candidate',
+    file: ROUTE,
+    find: '    inventoryId: z.coerce.number().int().positive(),',
+    replace: "    inventoryId: z.coerce.number().int().positive(),\n    name: z.string().optional(),",
+    expect: 'ship accepts inventory candidates only, never caller display or quantity data',
+  },
+  {
+    id: 'M178',
+    defect: 'a provisional ShipStation external-id miss is treated as proof that postage was never bought',
+    file: PROVIDER_ADAPTER,
+    find: /    throw lookupUnavailable\(\r?\n      'ShipStation',\r?\n      replacementId,\r?\n      'external_shipment_not_found_without_no_effect_proof',\r?\n    \);/,
+    replace: '    return null;',
+    expect: 'a bare ShipStation lookup miss stays indeterminate without durable no-effect proof',
+  },
+  {
+    id: 'M179',
+    defect: 'two frozen duplicate-SKU items share one shipment-level ledger source identity',
+    file: SHIPPED,
+    find: '        sourceId: `${replacement.replacementShipmentId}:${item.id}`,',
+    replace: '        sourceId: String(replacement.replacementShipmentId),',
+    expect: 'duplicate-SKU items keep distinct ledger source identities',
+  },
+  {
+    id: 'M180',
+    defect: 'a NULL-client replacement falls back to the application-main key and can buy postage',
+    file: CREDENTIAL_AUTHORITY,
+    find: '  if (clientScope(input.requestedClientId) === null) return null;',
+    replace: '',
+    expect: 'a NULL replacement client selects NO provider credential authority',
+  },
+  {
+    id: 'M181',
+    defect: "the analysis scope helper stops excluding replacements, so every dashboard reader counts them",
+    file: ANALYSIS,
+    find: "  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;",
+    replace: "  return analysisShipmentScopeSelection(q);",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M182',
+    defect: "a reader becomes unbound and merely GROUPS BY order_id, which is not a constraint",
+    file: OUTBOX,
+    find: "    FROM shipments WHERE id = ${shipmentId} LIMIT 1",
+    replace: "    FROM shipments GROUP BY order_id, source LIMIT 1",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M183',
+    defect: "one reader loses its exclusion while the same file keeps it in other statements",
+    file: LABELS,
+    find: "        .where(and(ordinaryShipmentSourcePredicate, eq(shipments.providerAccountId, providerAccountId)))",
+    replace: "        .where(eq(shipments.providerAccountId, providerAccountId))",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M184',
+    defect: "a bare ordinary read is added inside a replacement-owned file, inheriting its exemption",
+    file: LIFECYCLE,
+    find: "export async function enterReplacementReview(",
+    replace: "export async function ps502BareReadProbe() {\n  return db.select({ id: shipments.id }).from(shipments).limit(1);\n}\n\nexport async function enterReplacementReview(",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M185',
+    defect: "an acknowledged site is exchanged for a different unexcluded one while the count stays the same",
+    file: SYNC,
+    find: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments);",
+    replace: "    .select({ count: sql<number>`count(*)::int` })\n    .from(shipments)\n    .where(sql`true`);",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M186',
+    defect: "a semicolon-free bare read is blessed by the exclusion in the NEXT statement",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(orders, eq(orders.id, shipments.orderId))\n// eslint-disable-next-line\nconst ps502AsiProbe = db.select({ id: shipments.id }).from(shipments)",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M187',
+    defect: "an unrelated table id is accepted as a shipments binding",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(clients, eq(clients.id, shipments.clientId))",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M188',
+    defect: "a predicate-shaped helper absorbs the following statement and passes as exclusion-carrying",
+    file: ANALYSIS,
+    find: "  return sql`(${analysisShipmentScopeSelection(q)}) and s.source is distinct from 'replacement'`;",
+    replace: "  return analysisShipmentScopeSelection(q);\n}\nconst ps502MovedExclusion = sql`s.source is distinct from 'replacement'`;\nfunction ps502Unused(): SQL {",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // The statement lexer must read `'{'` as a STRING, not as an opening bracket. Without
+    // that, this bare read's depth never returns to zero at its own semicolon: the scanner
+    // runs on into the order-bound query that follows and credits ITS
+    // `eq(orders.id, shipments.orderId)` to this read, which binds nothing at all.
+    //
+    // Hermes verified the behaviour at 9ebe379d but found no committed mutation owning it —
+    // the row that used to sit at M189 went out with the ownership escape hatch. This is the
+    // regression proof put back, aimed at the lexer rather than at the deleted rule.
+    //
+    // The brace must sit in a plain single-quoted string, NOT inside a sql`` template. A
+    // template is already bounded by templateRanges, so a braced template would prove only
+    // that BACKTICK tracking works — the first draft of this row did exactly that and was
+    // still caught with single-quote tracking disabled, which is to say it proved nothing.
+    // This spelling was checked the other way on 2026-08-19: disabling single-quote tracking
+    // in statementAt lets it survive.
+    id: 'M189',
+    defect: "a brace inside a quoted string extends a bare read into the next statement's binding",
+    file: ADMIN,
+    find: "      const rows = await db\n        .select({\n          ssShipmentId: shipments.labelShipmentId,",
+    replace: "      const ps502BraceProbe = await db.select({ id: shipments.id }).from(shipments).where(eq(shipments.orderNumber, '{'));\n      const rows = await db\n        .select({\n          ssShipmentId: shipments.labelShipmentId,",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    id: 'M190',
+    defect: "an acknowledged site is changed only BEYOND its first 64 characters",
+    file: LIFECYCLE_ORDER,
+    find: "        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId),\r",
+    replace: "        input.shipmentId == null ? undefined : ne(shipments.id, input.shipmentId ?? 0),\r",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // Hermes's executed counterexample at 9ebe379d. M187 above swaps in the WRONG shipments
+    // column; this one keeps the RIGHT column and swaps the counterpart, which is the harder
+    // case: `shipments.id` is present, so any rule that merely looks for it passes. The join
+    // constrains nothing — it reaches every replacement vessel whose id equals a client id.
+    id: 'M191',
+    defect: "an arbitrary table-to-table join on shipments.id is credited as a shipment-ID constraint",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(clients, eq(clients.id, shipments.id))",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // M191's rule can only REJECT a join if it knows the counterpart is a table, and this file
+    // reaches returnLabels through `const { returnLabels } = await import(...)` rather than a
+    // static import. Found while reviewing the M191 fix rather than reported: a table the
+    // parser misses is a table whose join is credited as a binding, so the same false green
+    // walks back in through a different import spelling.
+    //
+    // labels.ts is the honest home for it — that dynamic import already sits eighty lines
+    // above this read, so the mutation is a plausible edit rather than a contrivance.
+    id: 'M192',
+    defect: "a join to a DYNAMICALLY imported schema table is credited as a shipment-ID constraint",
+    file: LABELS,
+    find: "await db.update(shipments).set({ labelUrl: freshUrl, updatedAt: new Date() }).where(eq(shipments.id, row.id));",
+    replace: "await db.update(shipments).set({ labelUrl: freshUrl, updatedAt: new Date() }).where(eq(returnLabels.returnShipmentId, shipments.id));",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // Hermes's executed counterexample at 6b26efae, and the third spelling of one defect.
+    // M191 rejects the bare join and M192 the dynamically imported table, but both rules read
+    // only the operand's LEADING identifier — so wrapping the same column hid it again:
+    //
+    //     eq(shipments.id, sql`${clients.id}`)
+    //
+    // begins with `sql`, not with a table, so it passed as a bound parameter while comparing
+    // one table's id to another's. The operand is now scanned WHOLE, which is what makes the
+    // rule about reach rather than about spelling.
+    id: 'M193',
+    defect: "a table column WRAPPED in sql`` is credited as a requested shipment-ID constraint",
+    file: ADMIN,
+    find: "        .innerJoin(orders, eq(orders.id, shipments.orderId))",
+    replace: "        .innerJoin(clients, eq(shipments.id, sql`${clients.id}`))",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
+  },
+  {
+    // The fourth import spelling, and the reason the rule stopped reading imports at all.
+    // shipstation-carrier-account-snapshots.ts reaches `clients` by destructuring
+    // `await Promise.all([... import(...) ...])`, which neither the static nor the dynamic
+    // form recognised. The file reads no shipments today, so this was never a live defect —
+    // but a future shipment read there would have walked straight back into the original
+    // false green, which is why Hermes required an owning mutation rather than a note.
+    //
+    // Table symbols now come from what src/db/schema EXPORTS, so this mutation is caught for
+    // a reason that has nothing to do with how `clients` arrived. That is the difference
+    // between closing a form and closing the class.
+    id: 'M194',
+    defect: "a schema table reached through Promise.all destructuring is not known as a table",
+    file: SNAPSHOTS,
+    find: "    const [{ db }, { clients }, { and, eq, isNotNull }] = await Promise.all([\n      import('../db/client.js'),\n      import('../db/schema/clients.js'),\n      import('drizzle-orm'),\n    ]);",
+    replace: "    const [{ db }, { clients }, { shipments }, { and, eq, isNotNull }] = await Promise.all([\n      import('../db/client.js'),\n      import('../db/schema/clients.js'),\n      import('../db/schema/shipments.js'),\n      import('drizzle-orm'),\n    ]);\n    const ps502SnapshotProbe = await db.select({ id: shipments.id }).from(shipments).where(eq(shipments.id, clients.id));",
+    expect: "every shipments READ SITE is excluded, bound, or acknowledged BY SITE",
   },
 ];
 

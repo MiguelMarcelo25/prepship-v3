@@ -1,8 +1,12 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
+import {
+  replacementLabelPurchaseIntents,
+  replacements,
+} from '../db/schema/replacements';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { clients } from '../db/schema/clients';
 import { listShipStationShipments } from '../connectors/store/shipstation';
@@ -45,6 +49,22 @@ import {
   reportUnattributedShipments,
   type UnattributedShipmentSample,
 } from './shipment-sync-unattributed';
+import { logStructured } from '../lib/structured-log';
+import { replacementExternalShipmentId } from './replacement-label-provider';
+import { replacementProviderIdempotencyKey } from './replacement-label-purchase-command';
+import {
+  fingerprintPurchaseRequest,
+  type ResolvedPurchaseRequest,
+} from './replacement-purchase-request';
+import { replacementShipmentSyncSchemaPresent } from './replacement-schema-readiness';
+import {
+  isReplacementProviderCredentialAuthority,
+  replacementProviderCredentialAuthority,
+  sameReplacementProviderCredentialAuthority,
+  type ReplacementProviderCredentialAuthority,
+  type ReplacementProviderCredentialScope,
+} from './replacement-provider-credential-authority';
+
 // PS-509: the ONE canonical sync-ingress customer-money writer, called from the INSERT
 // transaction below (driven off insertedRows); receipt-revision detection on the UPDATE
 // path; the retry sweep that re-drives non-terminal outcomes once per run; and the
@@ -67,6 +87,7 @@ const DEFAULT_SHIPMENT_SYNC_PAGE_SIZE = 100;
 // page should fail this tick and retry shortly, not hold the shared lane for 10m.
 const BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS = 25_000;
 const SHIPMENT_ENRICHMENT_MIN_REMAINING_MS = 90_000;
+const REPLACEMENT_ORDER_LOCK_CLASS = 36423;
 
 function throwIfShipmentSyncAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
@@ -179,6 +200,484 @@ function shipmentValues(
   };
 }
 
+type ReplacementShipmentSyncDeferralReason =
+  | 'replacement_external_identity_unmatched'
+  | 'replacement_chain_missing'
+  | 'replacement_intent_identity_mismatch'
+  | 'replacement_request_shape_mismatch'
+  | 'replacement_provider_facts_mismatch'
+  | 'replacement_sync_account_mismatch'
+  | 'provider_shipment_identity_mismatch'
+  | 'replacement_vessel_ownership_mismatch'
+  | 'provider_shipment_identity_collision'
+  | 'replacement_vessel_update_conflict'
+  | 'existing_replacement_identity_mismatch';
+
+type ReplacementShipmentSyncRouting = {
+  remaining: SSShipment[];
+  reconciled: number;
+  deferred: Array<{
+    shipmentId: number;
+    orderNumber: string | null;
+    reason: ReplacementShipmentSyncDeferralReason;
+  }>;
+};
+
+function nonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function finitePositive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function nullableText(value: unknown): value is string | null | undefined {
+  return value == null || typeof value === 'string';
+}
+
+function resolvedRequestForReplacement(
+  value: unknown,
+  intent: Pick<
+    typeof replacementLabelPurchaseIntents.$inferSelect,
+    'providerIdempotencyKey' | 'requestFingerprint' | 'purchaseAttempt'
+  >,
+  input: { replacementId: number; shipmentId: number; reference: string },
+): ResolvedPurchaseRequest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const request = value as Record<string, unknown>;
+  if (
+    request.replacementId !== input.replacementId
+    || request.replacementShipmentId !== input.shipmentId
+    || request.replacementReference !== input.reference
+    || !nonEmptyText(request.fingerprint)
+  ) return null;
+
+  const address = request.address;
+  const carrier = request.carrier;
+  const pkg = request.package;
+  const provenance = request.provenance;
+  if (
+    !address || typeof address !== 'object' || Array.isArray(address)
+    || !carrier || typeof carrier !== 'object' || Array.isArray(carrier)
+    || !pkg || typeof pkg !== 'object' || Array.isArray(pkg)
+    || !provenance || typeof provenance !== 'object' || Array.isArray(provenance)
+    || !isReplacementProviderCredentialAuthority(request.providerCredentialAuthority)
+  ) return null;
+  const addressRecord = address as Record<string, unknown>;
+  const carrierRecord = carrier as Record<string, unknown>;
+  const packageRecord = pkg as Record<string, unknown>;
+  if (
+    !nonEmptyText(addressRecord.name)
+    || !nonEmptyText(addressRecord.line1)
+    || !nullableText(addressRecord.line2)
+    || !nonEmptyText(addressRecord.city)
+    || !nonEmptyText(addressRecord.state)
+    || !nonEmptyText(addressRecord.postalCode)
+    || !nonEmptyText(addressRecord.country)
+    || !(addressRecord.residential == null || typeof addressRecord.residential === 'boolean')
+    || !nonEmptyText(carrierRecord.carrierCode)
+    || !nonEmptyText(carrierRecord.serviceCode)
+    || !Number.isSafeInteger(carrierRecord.providerAccountId)
+    || Number(carrierRecord.providerAccountId) <= 0
+    || !nonEmptyText(packageRecord.packageId)
+    || !finitePositive(packageRecord.weightOz)
+    || !finitePositive(packageRecord.dimsL)
+    || !finitePositive(packageRecord.dimsW)
+    || !finitePositive(packageRecord.dimsH)
+  ) return null;
+
+  const provenanceRecord = provenance as Record<string, unknown>;
+  for (const field of ['address', 'carrier', 'package'] as const) {
+    const entry = provenanceRecord[field];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const detail = entry as Record<string, unknown>;
+    if (
+      (detail.source !== 'operator_override' && detail.source !== 'policy_default')
+      || !nullableText(detail.chosenBy)
+      || !nullableText(detail.reason)
+    ) return null;
+  }
+
+  const parsed = request as unknown as ResolvedPurchaseRequest;
+  let computedFingerprint: string;
+  try {
+    computedFingerprint = fingerprintPurchaseRequest(parsed);
+  } catch {
+    return null;
+  }
+  if (
+    computedFingerprint !== parsed.fingerprint
+    || parsed.fingerprint !== intent.requestFingerprint
+    || replacementProviderIdempotencyKey({
+      replacementId: input.replacementId,
+      replacementShipmentId: input.shipmentId,
+      requestFingerprint: parsed.fingerprint,
+      purchaseAttempt: intent.purchaseAttempt,
+    }) !== intent.providerIdempotencyKey
+  ) return null;
+  return parsed;
+}
+
+/**
+ * Compare a PERSISTED vessel value against the frozen request.
+ *
+ * float32 is the right rule here and only here: these columns are Postgres REAL, so the
+ * database has already collapsed the value to float32 on write. Comparing in float64 would
+ * report a mismatch that exists only because we widened the stored value on read.
+ */
+function frozenRealMatches(value: number | null, expected: number): boolean {
+  return value != null
+    && Number.isFinite(value)
+    && Math.fround(value) === Math.fround(expected);
+}
+
+/**
+ * The provider's own quoted precision for a dimension or weight. Carriers quote these to at
+ * most three decimals; anything beyond that is representation noise from unit conversion.
+ */
+const PROVIDER_FACT_DECIMALS = 1000;
+
+const normalizeProviderReal = (value: number): number =>
+  Math.round(value * PROVIDER_FACT_DECIMALS) / PROVIDER_FACT_DECIMALS;
+
+/**
+ * Compare a FRESH provider fact against the frozen request.
+ *
+ * This used to be byte-identical to frozenRealMatches, and that was wrong: a value straight
+ * off the provider payload has NOT passed through a REAL column, so float32 there is not
+ * canonicalisation — it is a silent widening whose size depends on magnitude. At a weight of
+ * 16 it hides ~2e-6; at 100000 it hides ~0.008. Hermes flagged it on 2026-08-19 as accepting
+ * a provider fact the fingerprinted request never named.
+ *
+ * Exact equality is not the answer either: toOunces() converts pounds and grams, and 453.592 g
+ * does not land exactly on 16 oz in binary floating point. So normalise BOTH sides by an
+ * explicit, documented rule — the provider's own three-decimal quoting precision — and require
+ * exact equality after it. That is bounded and magnitude-independent, unlike float32 collapse.
+ */
+function sourceRealMatches(value: number | null | undefined, expected: number): boolean {
+  return value != null
+    && Number.isFinite(value)
+    && normalizeProviderReal(value) === normalizeProviderReal(expected);
+}
+
+/**
+ * Exported for the PS-502 integration suite so the fresh-provider comparison is tested at the
+ * REAL boundary rather than against a copied helper. Hermes reverted sourceRealMatches to
+ * Math.fround on 2026-08-19 and the contract guard, all 124 integration checks and all 180
+ * mutations stayed green — the normalisation could have vanished with nothing noticing.
+ */
+export function providerFactsMatchFrozenRequest(
+  source: SSShipment,
+  vessel: Pick<
+    typeof shipments.$inferSelect,
+    | 'carrierCode'
+    | 'serviceCode'
+    | 'providerAccountId'
+    | 'selectedPackageId'
+    | 'weightOz'
+    | 'dimsL'
+    | 'dimsW'
+    | 'dimsH'
+  >,
+  request: ResolvedPurchaseRequest,
+): boolean {
+  const sourceWeightOz = toOunces(source.weight);
+  return source.isReturnLabel !== true
+    && source.carrierCode === request.carrier.carrierCode
+    && source.serviceCode === request.carrier.serviceCode
+    && vessel.carrierCode === request.carrier.carrierCode
+    && vessel.serviceCode === request.carrier.serviceCode
+    && vessel.providerAccountId === request.carrier.providerAccountId
+    && vessel.selectedPackageId === request.package.packageId
+    && frozenRealMatches(vessel.weightOz, request.package.weightOz)
+    && frozenRealMatches(vessel.dimsL, request.package.dimsL)
+    && frozenRealMatches(vessel.dimsW, request.package.dimsW)
+    && frozenRealMatches(vessel.dimsH, request.package.dimsH)
+    && sourceRealMatches(sourceWeightOz, request.package.weightOz)
+    && sourceRealMatches(source.dimensions?.length, request.package.dimsL)
+    && sourceRealMatches(source.dimensions?.width, request.package.dimsW)
+    && sourceRealMatches(source.dimensions?.height, request.package.dimsH);
+}
+
+/**
+ * Reconcile one ShipStation shipment into its already-created replacement vessel.
+ *
+ * Per user override unlock shipped data on 2026-08-19: this path is deliberately isolated
+ * from generic shipment sync. It takes the replacement order lock, proves the exact frozen
+ * intent identity (`orderKey`) plus replacement reference (`orderNumber`), and updates only
+ * the relationally owned vessel. It never consumes packaging, changes the original order
+ * lifecycle, creates marketplace work, or treats ShipStation's ship date as local dispatch.
+ */
+async function reconcileReplacementShipmentFromSync(
+  source: SSShipment,
+  sourceAccountId: string,
+  sourceCredentialAuthority: ReplacementProviderCredentialAuthority | null,
+): Promise<{ kind: 'reconciled' } | { kind: 'deferred'; reason: ReplacementShipmentSyncDeferralReason }> {
+  const reference = source.orderNumber;
+  if (typeof reference !== 'string' || reference.length === 0) {
+    return { kind: 'deferred', reason: 'replacement_chain_missing' };
+  }
+  if (!Number.isSafeInteger(source.shipmentId) || source.shipmentId <= 0) {
+    return { kind: 'deferred', reason: 'provider_shipment_identity_mismatch' };
+  }
+
+  return db.transaction(async (tx) => {
+    // Every replacement command uses this same order-scoped lock. A provider response may land
+    // while Phase 3 is recording its receipt; serializing here makes either writer an idempotent
+    // winner on the SAME vessel instead of competitors for the unique provider shipment id.
+    await tx.execute(sql`
+      select pg_advisory_xact_lock(${REPLACEMENT_ORDER_LOCK_CLASS}, order_id)
+      from replacements
+      where reference = ${reference}
+    `);
+
+    const replacementRows = await tx
+      .select({
+        id: replacements.id,
+        orderId: replacements.orderId,
+        clientId: replacements.clientId,
+        reference: replacements.reference,
+        replacementShipmentId: replacements.replacementShipmentId,
+      })
+      .from(replacements)
+      .where(eq(replacements.reference, reference))
+      .limit(2)
+      .for('update');
+    if (replacementRows.length !== 1 || replacementRows[0]!.replacementShipmentId == null) {
+      return { kind: 'deferred' as const, reason: 'replacement_chain_missing' as const };
+    }
+    const replacement = replacementRows[0]!;
+    const shipmentId = replacement.replacementShipmentId!;
+
+    const intents = await tx
+      .select({
+        providerIdempotencyKey: replacementLabelPurchaseIntents.providerIdempotencyKey,
+        requestFingerprint: replacementLabelPurchaseIntents.requestFingerprint,
+        purchaseAttempt: replacementLabelPurchaseIntents.purchaseAttempt,
+        providerShipmentId: replacementLabelPurchaseIntents.providerShipmentId,
+        resolvedRequest: replacementLabelPurchaseIntents.resolvedRequest,
+      })
+      .from(replacementLabelPurchaseIntents)
+      .where(and(
+        eq(replacementLabelPurchaseIntents.replacementId, replacement.id),
+        eq(replacementLabelPurchaseIntents.replacementShipmentId, shipmentId),
+        sql`${replacementLabelPurchaseIntents.state} in ('provider_pending', 'reconcile_required', 'purchased')`,
+      ))
+      .for('update');
+
+    const identityIntents = intents.filter((intent) => {
+      try {
+        return source.orderKey === replacementExternalShipmentId({
+          replacementId: replacement.id,
+          replacementShipmentId: shipmentId,
+        }, intent.providerIdempotencyKey);
+      } catch {
+        return false;
+      }
+    });
+    if (identityIntents.length !== 1) {
+      return { kind: 'deferred' as const, reason: 'replacement_intent_identity_mismatch' as const };
+    }
+    const intent = identityIntents[0]!;
+    const request = resolvedRequestForReplacement(intent.resolvedRequest, intent, {
+      replacementId: replacement.id,
+      shipmentId,
+      reference: replacement.reference,
+    });
+    if (!request) {
+      return { kind: 'deferred' as const, reason: 'replacement_request_shape_mismatch' as const };
+    }
+    // Purchase freezes the exact V2 credential scope + one-way key fingerprint before any
+    // provider call. V1-only and V2-only client configurations are not interchangeable: the
+    // row is accepted only when this polling account carries that same V2 authority too.
+    if (
+      !sourceCredentialAuthority
+      || !request.providerCredentialAuthority
+      || sourceCredentialAuthority.scope !== sourceAccountId
+      || !sameReplacementProviderCredentialAuthority(
+        request.providerCredentialAuthority,
+        sourceCredentialAuthority,
+      )
+    ) {
+      return { kind: 'deferred' as const, reason: 'replacement_sync_account_mismatch' as const };
+    }
+    if (
+      intent.providerShipmentId != null
+      && intent.providerShipmentId !== String(source.shipmentId)
+    ) {
+      return { kind: 'deferred' as const, reason: 'provider_shipment_identity_mismatch' as const };
+    }
+
+    const [vessel] = await tx
+      .select({
+        id: shipments.id,
+        orderId: shipments.orderId,
+        clientId: shipments.clientId,
+        orderNumber: shipments.orderNumber,
+        source: shipments.source,
+        labelShipmentId: shipments.labelShipmentId,
+        carrierCode: shipments.carrierCode,
+        serviceCode: shipments.serviceCode,
+        providerAccountId: shipments.providerAccountId,
+        selectedPackageId: shipments.selectedPackageId,
+        weightOz: shipments.weightOz,
+        dimsL: shipments.dimsL,
+        dimsW: shipments.dimsW,
+        dimsH: shipments.dimsH,
+      })
+      .from(shipments)
+      .where(eq(shipments.id, shipmentId))
+      .limit(1)
+      .for('update');
+    if (
+      !vessel
+      || vessel.orderId !== null
+      || vessel.clientId !== replacement.clientId
+      || vessel.orderNumber !== replacement.reference
+      || vessel.source !== 'replacement'
+      || (vessel.labelShipmentId != null && vessel.labelShipmentId !== source.shipmentId)
+    ) {
+      return { kind: 'deferred' as const, reason: 'replacement_vessel_ownership_mismatch' as const };
+    }
+    if (!providerFactsMatchFrozenRequest(source, vessel, request)) {
+      return { kind: 'deferred' as const, reason: 'replacement_provider_facts_mismatch' as const };
+    }
+
+    const providerIdentityRows = await tx
+      .select({ id: shipments.id })
+      .from(shipments)
+      .where(eq(shipments.labelShipmentId, source.shipmentId))
+      .limit(2)
+      .for('update');
+    if (providerIdentityRows.some((row) => row.id !== vessel.id)) {
+      return { kind: 'deferred' as const, reason: 'provider_shipment_identity_collision' as const };
+    }
+
+    const [updated] = await tx
+      .update(shipments)
+      .set({
+        labelShipmentId: source.shipmentId,
+        // Receipt recording remains the canonical carrier/money snapshot. These fields are
+        // recovery hints only and never replace a value already frozen by that owner.
+        trackingNumber: sql`coalesce(${shipments.trackingNumber}, ${source.trackingNumber ?? null})`,
+        labelTracking: sql`coalesce(${shipments.labelTracking}, ${source.trackingNumber ?? null})`,
+        labelCarrier: sql`coalesce(${shipments.labelCarrier}, ${source.carrierCode ?? null})`,
+        labelService: sql`coalesce(${shipments.labelService}, ${source.serviceCode ?? null})`,
+        labelShipDate: sql`coalesce(
+          ${shipments.labelShipDate},
+          ${parseShipStationV1Date(source.shipDate)}
+        )`,
+        // Provider void evidence is monotonic. A stale later page may never resurrect a vessel.
+        voided: sql`${shipments.voided} or ${Boolean(source.voided)}`,
+        // Intentionally omit shipDate: only the explicit replacement shipped command may set it.
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(shipments.id, vessel.id),
+        isNull(shipments.orderId),
+        replacement.clientId == null
+          ? isNull(shipments.clientId)
+          : eq(shipments.clientId, replacement.clientId),
+        eq(shipments.orderNumber, replacement.reference),
+        eq(shipments.source, 'replacement'),
+        or(isNull(shipments.labelShipmentId), eq(shipments.labelShipmentId, source.shipmentId)),
+      ))
+      .returning({ id: shipments.id });
+    if (!updated) {
+      return { kind: 'deferred' as const, reason: 'replacement_vessel_update_conflict' as const };
+    }
+    return { kind: 'reconciled' as const };
+  });
+}
+
+/**
+ * Remove every replacement-shaped provider row from generic sync before it can insert/update.
+ * An exact identity updates the existing vessel; a mismatch stays deferred and loudly visible.
+ */
+async function routeReplacementShipmentsBeforeGenericSync(
+  pageShipments: SSShipment[],
+  sourceAccountId: string,
+  sourceCredentialAuthority: ReplacementProviderCredentialAuthority | null,
+  signal?: AbortSignal,
+): Promise<ReplacementShipmentSyncRouting> {
+  if (!(await replacementShipmentSyncSchemaPresent())) {
+    return { remaining: pageShipments, reconciled: 0, deferred: [] };
+  }
+  throwIfShipmentSyncAborted(signal);
+
+  // `order_number` is operator-visible text, not a globally reserved identity. An unrelated
+  // marketplace order can legitimately have the same text as a replacement reference. Only
+  // our deterministic ShipStation external-id namespace is evidence that generic sync must
+  // not process the row.
+  const hasReplacementExternalIdentity = (shipment: SSShipment): boolean =>
+    typeof shipment.orderKey === 'string'
+    && /^ps-rpl-[1-9]\d*-[1-9]\d*-[a-f0-9]{16}$/.test(shipment.orderKey.trim());
+  const reservedRows = pageShipments.filter(hasReplacementExternalIdentity);
+  if (reservedRows.length === 0) {
+    return { remaining: pageShipments, reconciled: 0, deferred: [] };
+  }
+  const references = [...new Set(
+    reservedRows
+      .map((shipment) => shipment.orderNumber)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  )];
+  const replacementReferences = references.length === 0
+    ? new Set<string>()
+    : new Set(
+      (await db
+        .select({ reference: replacements.reference })
+        .from(replacements)
+        .where(inArray(replacements.reference, references)))
+        .map((row) => row.reference),
+    );
+  throwIfShipmentSyncAborted(signal);
+
+  const remaining: SSShipment[] = [];
+  const deferred: ReplacementShipmentSyncRouting['deferred'] = [];
+  let reconciled = 0;
+  for (const shipment of pageShipments) {
+    throwIfShipmentSyncAborted(signal);
+    if (!hasReplacementExternalIdentity(shipment)) {
+      remaining.push(shipment);
+      continue;
+    }
+    if (!shipment.orderNumber || !replacementReferences.has(shipment.orderNumber)) {
+      deferred.push({
+        shipmentId: shipment.shipmentId,
+        orderNumber: shipment.orderNumber ?? null,
+        reason: 'replacement_external_identity_unmatched',
+      });
+      continue;
+    }
+    const result = await reconcileReplacementShipmentFromSync(
+      shipment,
+      sourceAccountId,
+      sourceCredentialAuthority,
+    );
+    if (result.kind === 'reconciled') {
+      reconciled += 1;
+    } else {
+      deferred.push({
+        shipmentId: shipment.shipmentId,
+        orderNumber: shipment.orderNumber,
+        reason: result.reason,
+      });
+    }
+  }
+
+  if (deferred.length > 0) {
+    logStructured('warn', 'shipment_sync.replacement_deferred', {
+      account: sourceAccountId,
+      count: deferred.length,
+      reasons: deferred.map((item) => item.reason).join(','),
+      sampleShipmentIds: deferred.slice(0, 5).map((item) => item.shipmentId).join(','),
+      sampleReplacementReferences: deferred.slice(0, 5).map((item) => item.orderNumber).join(','),
+    });
+  }
+
+  return { remaining, reconciled, deferred };
+}
+
 function shipStationShipmentSourceIdentity(s: SSShipment): OrderSourceIdentity | null {
   return buildOrderSourceIdentity({
     sourceProvider: 'shipstation',
@@ -200,6 +699,7 @@ function shipStationShipmentSourceIdentity(s: SSShipment): OrderSourceIdentity |
 async function upsertShipmentsBatch(
   pageShipments: SSShipment[],
   sourceAccountId: string,
+  sourceCredentialAuthority: ReplacementProviderCredentialAuthority | null,
   sourceAccountIsTest: boolean,
   signal?: AbortSignal,
 ): Promise<{
@@ -230,6 +730,22 @@ async function upsertShipmentsBatch(
   pageShipments = storeScope.inScope;
   if (!pageShipments.length) {
     return { inserted: 0, updated: 0, matched: 0, ordersMarkedShipped: 0 };
+  }
+
+  const replacementRouting = await routeReplacementShipmentsBeforeGenericSync(
+    pageShipments,
+    sourceAccountId,
+    sourceCredentialAuthority,
+    signal,
+  );
+  pageShipments = replacementRouting.remaining;
+  if (!pageShipments.length) {
+    return {
+      inserted: 0,
+      updated: replacementRouting.reconciled,
+      matched: 0,
+      ordersMarkedShipped: 0,
+    };
   }
 
   const sourceIdentities = pageShipments
@@ -391,6 +907,7 @@ async function upsertShipmentsBatch(
   // but it must no longer be persisted SILENTLY. Collected here, reported once
   // per batch below.
   const unattributed: UnattributedShipmentSample[] = [];
+  const deferredExistingReplacements: ReplacementShipmentSyncRouting['deferred'] = [];
   let matched = 0;
   let ordersMarkedShipped = 0;
 
@@ -425,6 +942,18 @@ async function upsertShipmentsBatch(
     const values = shipmentValues(s, ord?.id ?? null, ord?.clientId ?? null);
     const existing = existingByLabel.get(s.shipmentId);
     if (existing !== undefined) {
+      // An exact replacement row was already removed by the locked router above. Reaching
+      // this branch means ShipStation's orderKey/orderNumber no longer proves that identity.
+      // Never let the generic updater overwrite its local shipDate, regress voided=true, link
+      // it to the original order, or enqueue that order's lifecycle/marketplace behavior.
+      if (existing.source === 'replacement') {
+        deferredExistingReplacements.push({
+          shipmentId: s.shipmentId,
+          orderNumber: s.orderNumber ?? null,
+          reason: 'existing_replacement_identity_mismatch',
+        });
+        continue;
+      }
       // v2-parity preservation: keep existing providerAccountId/createDate
       // when the SS payload doesn't provide them (COALESCE behavior).
       if (values.providerAccountId == null && existing.providerAccountId != null) {
@@ -503,6 +1032,17 @@ async function upsertShipmentsBatch(
   // PS-467: one summary line per batch, not per row -- a backlog batch can carry
   // ~130 of these and per-row logging would bury the signal it exists to raise.
   reportUnattributedShipments(unattributed, { account: sourceAccountId });
+  if (deferredExistingReplacements.length > 0) {
+    logStructured('warn', 'shipment_sync.replacement_deferred', {
+      account: sourceAccountId,
+      count: deferredExistingReplacements.length,
+      reasons: 'existing_replacement_identity_mismatch',
+      sampleShipmentIds: deferredExistingReplacements
+        .slice(0, 5)
+        .map((item) => item.shipmentId)
+        .join(','),
+    });
+  }
 
   // 4a. Single INSERT for all new rows (chunk to 500 to stay below pg param limits)
   // PS-370: ensure the additive selected_rate_cost column exists before the new-row
@@ -655,7 +1195,7 @@ async function upsertShipmentsBatch(
   // Supabase's default pgbouncer pool tops out at 15 shared connections —
   // 3-at-a-time leaves headroom for other API traffic + the 3-min scheduler.
   const updateConcurrency = 3;
-  let updated = 0;
+  let updated = replacementRouting.reconciled;
   for (let i = 0; i < toUpdate.length; i += updateConcurrency) {
     throwIfShipmentSyncAborted(signal);
     const batch = toUpdate.slice(i, i + updateConcurrency);
@@ -765,6 +1305,19 @@ type ShipmentSyncAccount = {
   // enrichment skips that account. Main account uses env.SHIPSTATION_API_KEY_V2.
   apiKeyV2: string | null;
 };
+
+function shipmentSyncCredentialAuthority(
+  account: ShipmentSyncAccount,
+): ReplacementProviderCredentialAuthority | null {
+  const apiKeyV2 = account.apiKeyV2?.trim();
+  const sourceScope: ReplacementProviderCredentialScope | null = account.sourceAccountId === 'main'
+    ? 'main'
+    : /^client:[1-9]\d*$/.test(account.sourceAccountId)
+      ? account.sourceAccountId as ReplacementProviderCredentialScope
+      : null;
+  if (!apiKeyV2 || !sourceScope) return null;
+  return replacementProviderCredentialAuthority(sourceScope, apiKeyV2);
+}
 
 async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
   // Main account's V2 key comes from env; the connector-owned ShipStation client falls back to
@@ -935,6 +1488,7 @@ export async function syncShipments(
         const batch = await upsertShipmentsBatch(
           res.shipments,
           acct.sourceAccountId,
+          shipmentSyncCredentialAuthority(acct),
           acct.isTest,
           opts.signal,
         );
@@ -1163,6 +1717,12 @@ async function enrichProviderAccountIds(
         and(
           inArray(shipments.trackingNumber, pairs.map((p) => p.tracking)),
           sql`${shipments.providerAccountId} is null`,
+          // A replacement vessel owns a FROZEN provider identity chosen at purchase, and this
+          // is the generic V2 backfill: it infers an account from whatever ShipStation reports
+          // for a tracking number. A vessel whose provider_account_id has not been stamped yet
+          // matches both predicates above, so without this it would be handed an ordinary
+          // account it never bought against.
+          sql`${shipments.source} is distinct from 'replacement'`,
         ),
       );
     throwIfShipmentSyncAborted(signal);
@@ -1178,7 +1738,13 @@ async function enrichProviderAccountIds(
         .update(shipments)
         .set({ providerAccountId: pair.providerId, updatedAt: new Date() })
         .where(
-          sql`${shipments.trackingNumber} = ${pair.tracking} and ${shipments.providerAccountId} is null`,
+          // The write carries the same exclusion as the read above, not because the read is
+          // untrusted but because this predicate is the race-safety backstop: the row is
+          // re-checked at UPDATE time, and a backstop that omits the replacement term would
+          // let a vessel created between the two statements be stamped anyway.
+          sql`${shipments.trackingNumber} = ${pair.tracking}
+            and ${shipments.providerAccountId} is null
+            and ${shipments.source} is distinct from 'replacement'`,
         )
         .returning({ id: shipments.id });
       updated += result.length;

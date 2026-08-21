@@ -13,6 +13,7 @@
 import { sql as pg } from '../../db/client.js';
 import { assertRuntimeSchemaReady } from '../runtime-schema-readiness.js';
 import { createHash } from 'node:crypto';
+import { buildOrderSourceIdentity } from '../order-source-identity.js';
 
 export type CanonicalWebhookStatus = 'shipped' | 'cancelled' | 'other';
 
@@ -95,6 +96,62 @@ export async function recordWebhookEvent(
   return { recorded: false, deduped: true, id: null };
 }
 
+/**
+ * Recover the durable row behind a deduped delivery.
+ *
+ * A duplicate insert intentionally returns no id, but the duplicate is exactly the delivery
+ * that must retry unfinished reconciliation after a process death. The route therefore reads
+ * the existing receipt by the same unique key rather than treating `deduped` as `processed`.
+ */
+export async function findWebhookEventIdByDedupeKey(dedupeKey: string): Promise<number | null> {
+  await ensureWebhookEventsSchema();
+  const [row] = await pg<{ id: number }[]>`
+    SELECT id
+    FROM webhook_events
+    WHERE dedupe_key = ${dedupeKey}
+    LIMIT 1
+  `;
+  return row?.id ?? null;
+}
+
+/**
+ * Bind a receipt to the exact local source identity that reconciliation resolved.
+ *
+ * `source_account_id` predates the webhook ledger and is not a ledger column, so the
+ * redacted metadata stores the canonical account component. The update refuses to move an
+ * already-bound receipt to another order. This is a local evidence link only; it performs no
+ * provider call and changes no order/shipments row.
+ */
+export async function bindWebhookEventToOrderIdentity(input: {
+  webhookEventId: number;
+  orderId: number;
+  sourceProvider: string;
+  sourceAccountId: string;
+  sourceOrderId: string;
+}): Promise<void> {
+  await ensureWebhookEventsSchema();
+  const rows = await pg<{ id: number }[]>`
+    UPDATE webhook_events
+    SET related_order_id = ${input.orderId},
+        metadata = metadata || jsonb_build_object(
+          'sourceAccountId', ${input.sourceAccountId},
+          'sourceIdentityBound', true
+        )
+    WHERE id = ${input.webhookEventId}
+      AND provider = ${input.sourceProvider}
+      AND source_order_id = ${input.sourceOrderId}
+      AND (
+        nullif(metadata ->> 'sourceAccountId', '') IS NULL
+        OR metadata ->> 'sourceAccountId' = ${input.sourceAccountId}
+      )
+      AND (related_order_id IS NULL OR related_order_id = ${input.orderId})
+    RETURNING id
+  `;
+  if (!rows[0]) {
+    throw new Error('Webhook receipt does not match the resolved order source identity');
+  }
+}
+
 export async function markWebhookEventStatus(
   id: number,
   status: 'ignored' | 'processed' | 'failed',
@@ -113,33 +170,42 @@ export async function markWebhookEventStatus(
 export type UpstreamTerminalStatus = { shipped: boolean; cancelled: boolean };
 
 /**
- * Does the ledger hold a trusted shipped/cancelled event for this order? Matched by local
- * order id, or by source order number / source order id (covers events that arrived before
- * the local order was linked). Ignored events don't count.
+ * Does the ledger hold a trusted shipped/cancelled event for this exact source order?
+ *
+ * Provider ids are account-scoped, so an order number, external-id fallback, or bare source
+ * id is never enough. A receipt with no account hint is accepted only while the local
+ * provider/source-id candidate is unique; as soon as a second account shares that id the
+ * lookup fails closed instead of holding the wrong tenant's order.
  */
 export async function findUpstreamTerminalStatusForOrder(order: {
   id: number;
-  orderNumber?: string | null;
-  sourceOrderNumber?: string | null;
+  sourceProvider?: string | null;
+  sourceAccountId?: string | null;
   sourceOrderId?: string | null;
-  externalOrderId?: string | null;
 }): Promise<UpstreamTerminalStatus> {
   await ensureWebhookEventsSchema();
-  const orderNumbers = [order.orderNumber, order.sourceOrderNumber].filter(
-    (v): v is string => typeof v === 'string' && v.trim() !== '',
-  );
-  const sourceIds = [order.sourceOrderId, order.externalOrderId].filter(
-    (v): v is string => typeof v === 'string' && v.trim() !== '',
-  );
+  const identity = buildOrderSourceIdentity(order);
+  if (!identity) return { shipped: false, cancelled: false };
+
   const rows = await pg<{ canonical_status: string }[]>`
     SELECT DISTINCT canonical_status
-    FROM webhook_events
-    WHERE status <> 'ignored'
-      AND canonical_status IN ('shipped', 'cancelled')
+    FROM webhook_events event
+    WHERE event.status <> 'ignored'
+      AND event.canonical_status IN ('shipped', 'cancelled')
+      AND event.provider = ${identity.sourceProvider}
+      AND event.source_order_id = ${identity.sourceOrderId}
       AND (
-        related_order_id = ${order.id}
-        OR (${orderNumbers.length > 0} AND source_order_number = ANY(${orderNumbers}))
-        OR (${sourceIds.length > 0} AND source_order_id = ANY(${sourceIds}))
+        event.metadata ->> 'sourceAccountId' = ${identity.sourceAccountId}
+        OR (
+          nullif(event.metadata ->> 'sourceAccountId', '') IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM orders competing
+            WHERE competing.source_provider = ${identity.sourceProvider}
+              AND competing.source_order_id = ${identity.sourceOrderId}
+              AND competing.source_account_id IS DISTINCT FROM ${identity.sourceAccountId}
+          )
+        )
       )
   `;
   return {

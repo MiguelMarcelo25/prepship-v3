@@ -29,9 +29,11 @@ import { orderItems } from '../db/schema/order-items';
 import {
   replacementActivityEvents,
   replacementItems,
+  replacementOriginalOrderHolds,
   replacements,
   type ReplacementRow,
 } from '../db/schema/replacements';
+import { orderLifecycleEvents } from '../db/schema/order-lifecycle';
 import { buildReplacementSourceLineFingerprint } from './replacement-source-line-fingerprint';
 import { nextReplacementReference } from './replacement-reference';
 import {
@@ -61,6 +63,8 @@ export type ReplacementCreateErrorCode =
   | 'REPLACEMENT_ORDER_NOT_FOUND'
   | 'REPLACEMENT_ORDER_NOT_SHIPPED'
   | 'REPLACEMENT_ORDER_CANCELLED'
+  | 'REPLACEMENT_ORIGINAL_ORDER_HELD'
+  | 'REPLACEMENT_ORIGINAL_ORDER_EVIDENCE_AMBIGUOUS'
   | 'REPLACEMENT_NO_ITEMS'
   | 'REPLACEMENT_REASON_INVALID'
   | 'REPLACEMENT_ITEM_INVALID'
@@ -121,6 +125,14 @@ export type CreateReplacementResult = {
 function normalizeReason(value: string | null | undefined): string | null {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   return trimmed === '' ? null : trimmed;
+}
+
+function resultRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows)) {
+    return (result as { rows: T[] }).rows;
+  }
+  return [];
 }
 
 /**
@@ -225,6 +237,10 @@ export async function createReplacement(
   }
 
   const requestSignature = canonicalRequestSignature(input);
+  // Caller keys are scoped to the order the route already authorized. Persisting the raw key
+  // in a globally-unique column lets one tenant reserve another tenant's common key and makes
+  // a collision disclose the other replacement. The namespace is deterministic for replay.
+  const persistedRequestKey = `replacement:order:${input.orderId}:request:${input.requestIdempotencyKey}`;
 
   return conn.transaction(async (tx) => {
     // Everything below is a read-modify-write against this order: the allowance, the
@@ -238,7 +254,7 @@ export async function createReplacement(
     const [existing] = await tx
       .select()
       .from(replacements)
-      .where(eq(replacements.requestIdempotencyKey, input.requestIdempotencyKey))
+      .where(eq(replacements.requestIdempotencyKey, persistedRequestKey))
       .limit(1);
     if (existing) {
       // PAYLOAD-BOUND. Returning any replacement that merely shares the key would hand back
@@ -248,10 +264,8 @@ export async function createReplacement(
       if (existing.orderId !== input.orderId) {
         throw new ReplacementCreateError(
           'REPLACEMENT_IDEMPOTENCY_MISMATCH',
-          `idempotency key already belongs to replacement ${existing.reference} on order ` +
-            `${existing.orderId}, not order ${input.orderId}`,
+          'the scoped idempotency key resolved outside the authorized order',
           409,
-          { existingReplacementId: existing.id },
         );
       }
       // The WHOLE request must match, not merely its items. A NULL stored signature is a
@@ -260,10 +274,8 @@ export async function createReplacement(
       if (existing.requestSignature !== requestSignature) {
         throw new ReplacementCreateError(
           'REPLACEMENT_IDEMPOTENCY_MISMATCH',
-          `idempotency key already belongs to replacement ${existing.reference}, whose request ` +
-            'differs from this one',
+          'the scoped idempotency key belongs to a request with a different payload',
           409,
-          { existingReplacementId: existing.id },
         );
       }
       return { replacement: existing, created: false };
@@ -275,6 +287,9 @@ export async function createReplacement(
         orderNumber: orders.orderNumber,
         clientId: orders.clientId,
         orderStatus: orders.orderStatus,
+        sourceProvider: orders.sourceProvider,
+        sourceAccountId: orders.sourceAccountId,
+        sourceOrderId: orders.sourceOrderId,
       })
       .from(orders)
       .where(eq(orders.id, input.orderId))
@@ -305,6 +320,92 @@ export async function createReplacement(
           'already went out; an unshipped order is corrected by editing it, not re-shipping it.',
         409,
         { orderStatus: order.orderStatus },
+      );
+    }
+
+    // AC-16 create-after-sweep fence. The order lock makes the evidence read and replacement
+    // insert one decision: a cancellation/refund sweep cannot commit between them. A prior
+    // hold remains evidence even when its original replacement was cleanly cancelled and the
+    // hold auto-resolved; allowing a fresh replacement afterward would undo the sweep.
+    const [priorHold] = await tx
+      .select({ id: replacementOriginalOrderHolds.id })
+      .from(replacementOriginalOrderHolds)
+      .where(eq(replacementOriginalOrderHolds.orderId, order.id))
+      .limit(1);
+    const [priorLifecycleCancellation] = await tx
+      .select({ id: orderLifecycleEvents.id })
+      .from(orderLifecycleEvents)
+      .where(and(
+        eq(orderLifecycleEvents.orderId, order.id),
+        eq(orderLifecycleEvents.transition, 'cancelled'),
+      ))
+      .limit(1);
+
+    // A webhook may have been durably recorded just before the process died or before a
+    // replacement existed, so there may be no hold row yet. Match only the canonical
+    // provider/account/order tuple. An unbound account-less event counts when unique and
+    // blocks every candidate as ambiguous when multiple accounts later import the same id;
+    // it is never silently discarded or allowed to cross tenants.
+    let priorWebhookCancellation = false;
+    if (order.sourceProvider && order.sourceAccountId && order.sourceOrderId) {
+      const [webhookEvidence] = resultRows<{
+        exactAccount: boolean;
+        boundOrder: boolean;
+        unboundAccountless: boolean;
+        competingAccount: boolean;
+      }>(await tx.execute(sql`
+        SELECT
+          coalesce(bool_or(
+            event.metadata ->> 'sourceAccountId' = ${order.sourceAccountId}
+          ), false) AS "exactAccount",
+          coalesce(bool_or(
+            nullif(event.metadata ->> 'sourceAccountId', '') IS NULL
+            AND event.related_order_id = ${order.id}
+          ), false) AS "boundOrder",
+          coalesce(bool_or(
+            nullif(event.metadata ->> 'sourceAccountId', '') IS NULL
+            AND event.related_order_id IS NULL
+          ), false) AS "unboundAccountless",
+          EXISTS (
+            SELECT 1
+            FROM orders competing
+            WHERE competing.source_provider = ${order.sourceProvider}
+              AND competing.source_order_id = ${order.sourceOrderId}
+              AND competing.source_account_id IS DISTINCT FROM ${order.sourceAccountId}
+          ) AS "competingAccount"
+        FROM webhook_events event
+        WHERE event.status <> 'ignored'
+          AND event.canonical_status = 'cancelled'
+          AND event.provider = ${order.sourceProvider}
+          AND event.source_order_id = ${order.sourceOrderId}
+      `));
+      if (webhookEvidence?.unboundAccountless && webhookEvidence.competingAccount) {
+        throw new ReplacementCreateError(
+          'REPLACEMENT_ORIGINAL_ORDER_EVIDENCE_AMBIGUOUS',
+          `order ${order.orderNumber} shares its provider order id with another account while `
+            + 'an unbound signed cancellation receipt is waiting for explicit association; '
+            + 'replacement creation is blocked for every candidate',
+          409,
+          {
+            sourceProvider: order.sourceProvider,
+            sourceOrderId: order.sourceOrderId,
+          },
+        );
+      }
+      priorWebhookCancellation = Boolean(
+        webhookEvidence?.exactAccount
+        || webhookEvidence?.boundOrder
+        || webhookEvidence?.unboundAccountless,
+      );
+    }
+
+    if (priorHold || priorLifecycleCancellation || priorWebhookCancellation) {
+      throw new ReplacementCreateError(
+        'REPLACEMENT_ORIGINAL_ORDER_HELD',
+        `order ${order.orderNumber} has durable cancellation/refund evidence; creating a new ` +
+          'replacement is refused until that original-order decision is resolved outside the ' +
+          'replacement create path',
+        409,
       );
     }
 
@@ -420,7 +521,7 @@ export async function createReplacement(
         reason: input.reason,
         billable: billability.billable,
         liabilityOwner: input.liabilityOwner,
-        requestIdempotencyKey: input.requestIdempotencyKey,
+        requestIdempotencyKey: persistedRequestKey,
         requestSignature,
         initiatedBy: input.actor.email,
         adminOverride: usedOverride,
@@ -464,7 +565,7 @@ export async function createReplacement(
       actorEmail: input.actor.email,
       // The override reason belongs on the record, not only in the refusal it bypassed.
       detail: usedOverride ? (input.override?.reason ?? null) : null,
-      idempotencyKey: `replacement:create:${input.requestIdempotencyKey}`,
+      idempotencyKey: `replacement:create:${persistedRequestKey}`,
     });
 
     // Decision 7 requires a written reason AND an activity event whenever billability is
@@ -485,7 +586,7 @@ export async function createReplacement(
         actorType: input.actor.type,
         actorEmail: input.actor.email,
         detail: input.billabilityReason ?? null,
-        idempotencyKey: `replacement:billability:${input.requestIdempotencyKey}`,
+        idempotencyKey: `replacement:billability:${persistedRequestKey}`,
       });
     }
 

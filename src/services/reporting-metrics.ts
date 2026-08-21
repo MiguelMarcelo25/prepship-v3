@@ -160,8 +160,9 @@ async function optionalReportingRead<T>(
  * through billingSummary, and out of GET /billing/summary as a 500. That is the Billing
  * dashboard down, for a purely additive change.
  *
- * Memoised on the promise so the probe costs one query per process, and reset on failure so
- * a transient error does not pin the answer for the process lifetime.
+ * Only TRUE is memoised. A false answer is transient because 0095 can land while this process
+ * is running; retaining it would keep the return bucket disabled until restart. Errors likewise
+ * clear the memo so a transient catalogue failure does not pin the answer.
  */
 let returnTotalColumnPromise: Promise<boolean> | null = null;
 
@@ -177,7 +178,11 @@ export function billingMetricsHasReturnTotalColumn(): Promise<boolean> {
                and column_name = 'return_total'
            ) as present
       `)
-      .then((rows) => rows[0]?.present === true)
+      .then((rows) => {
+        const found = rows[0]?.present === true;
+        if (!found) returnTotalColumnPromise = null;
+        return found;
+      })
       .catch((err) => {
         returnTotalColumnPromise = null;
         throw err;
@@ -198,7 +203,8 @@ export function billingMetricsHasReturnTotalColumn(): Promise<boolean> {
  * here would let the upsert write two of three and leave the third to fail mid-transaction,
  * which is the 500 this probe exists to prevent.
  *
- * Memoised on the promise and reset on failure on the same terms as the probe above.
+ * Positive-only memoisation follows the return probe above: 0102 may land in-process, so a
+ * negative answer must be forgotten immediately and rechecked on the next call.
  */
 let replacementColumnsPromise: Promise<boolean> | null = null;
 
@@ -218,7 +224,11 @@ export function billingMetricsHasReplacementColumns(): Promise<boolean> {
                )
            ) = 3 as present
       `)
-      .then((rows) => rows[0]?.present === true)
+      .then((rows) => {
+        const found = rows[0]?.present === true;
+        if (!found) replacementColumnsPromise = null;
+        return found;
+      })
       .catch((err) => {
         replacementColumnsPromise = null;
         throw err;

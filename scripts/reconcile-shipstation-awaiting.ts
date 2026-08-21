@@ -315,13 +315,15 @@ async function loadLocalRows(sql: Sql, options: {
         SELECT 1
         FROM shipments s
         WHERE (s.order_id = o.id OR (s.order_id IS NULL AND s.order_number = o.order_number))
+          AND s.source IS DISTINCT FROM 'replacement'
           AND coalesce(s.voided, false) = false
           AND coalesce(s.is_return, false) = false
       ) AS "hasNonVoidedShipment",
       (
         SELECT coalesce(s.voided, false)
         FROM shipments s
-        WHERE s.order_id = o.id OR (s.order_id IS NULL AND s.order_number = o.order_number)
+        WHERE (s.order_id = o.id OR (s.order_id IS NULL AND s.order_number = o.order_number))
+          AND s.source IS DISTINCT FROM 'replacement'
         ORDER BY s.id DESC
         LIMIT 1
       ) AS "latestShipmentVoided",

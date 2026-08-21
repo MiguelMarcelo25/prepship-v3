@@ -19,6 +19,10 @@ import { refreshReportingMetrics } from './reporting-metrics';
 import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
 import { runShipmentTrackingPollOnce } from './shipment-tracking';
 import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';
+import {
+  enqueueStrandedReplacementCancellationCleanup,
+  processReplacementFinancialActionsOnce,
+} from './replacement-financial-action';
 
 // Audit 3.2: handler-only module. Durable cadence and cross-process admission
 // live in sync-job-queue.ts/pg-boss; this file must not start process-local work timers.
@@ -214,6 +218,18 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
   fulfillmentOutboxRunning = true;
   try {
     const result = await runSchedulerJob('fulfillment outbox', async () => {
+      // Drain already-authorized AC-13 obligations first and isolate the lane. A persistent
+      // confirmation/inventory/outbox failure must not prevent this owner from running on
+      // every tick, and a financial-lane infrastructure error must not starve those owners.
+      let replacementFinancials = { schemaReady: false, processed: 0, succeeded: 0, failed: 0 };
+      try {
+        replacementFinancials = await processReplacementFinancialActionsOnce({ limit: 5 });
+      } catch (error) {
+        console.error(
+          '[scheduler] replacement financial action drain failed:',
+          error instanceof Error ? error.message : error,
+        );
+      }
       const recoveryResult = await enqueueMissingShipmentConfirmations({ limit: 25 });
       // Per user override unlock shipped data on 2026-07-14: repair missing
       // deduction intent only; execution remains in the kill-switched owner.
@@ -221,14 +237,37 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
       const outboxResult = await processFulfillmentOutboxOnce({
         limit: FULFILLMENT_OUTBOX_BATCH_LIMIT,
       });
-      return { ...outboxResult, autoRecovered: recoveryResult, inventoryRecovered };
+      // Per user override `unlock shipped data` on 2026-08-19: flags-off must never discover
+      // and mutate historical replacement money implicitly. Already-durable actions are
+      // different: each was explicitly authorized and committed before its side effects, so
+      // the retry guarantee survives an HTTP-surface rollback instead of abandoning money
+      // halfway through. REPLACEMENTS_LABEL_ENABLED remains the separate provider fence.
+      const replacementCleanupRecovered = env.REPLACEMENTS_ENABLED
+        ? await enqueueStrandedReplacementCancellationCleanup({ limit: 25 })
+        : { schemaReady: false, enqueued: 0 };
+      return {
+        ...outboxResult,
+        autoRecovered: recoveryResult,
+        inventoryRecovered,
+        replacementCleanupRecovered,
+        replacementFinancials,
+      };
     });
     if (!result) return;
-    if (result.autoRecovered.enqueued > 0 || result.inventoryRecovered > 0 || result.processed > 0) {
+    if (
+      result.autoRecovered.enqueued > 0
+      || result.inventoryRecovered > 0
+      || result.processed > 0
+      || result.replacementCleanupRecovered.enqueued > 0
+      || result.replacementFinancials.processed > 0
+    ) {
       console.log(
         `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ` +
         `${result.processed} processed, ${result.autoRecovered.enqueued} confirmations recovered, ` +
-        `${result.inventoryRecovered} inventory events recovered`
+        `${result.inventoryRecovered} inventory events recovered, ` +
+        `${result.replacementCleanupRecovered.enqueued} replacement cleanups recovered, ` +
+        `${result.replacementFinancials.succeeded}/${result.replacementFinancials.processed} ` +
+        'replacement financial actions completed'
       );
     }
   } catch (err) {

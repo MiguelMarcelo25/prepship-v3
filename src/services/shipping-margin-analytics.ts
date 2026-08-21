@@ -520,6 +520,13 @@ export async function shippingMarginAnalytics(
       from shipments
       where provider_account_id is not null
         and nullif(btrim(provider_account_nickname), '') is not null
+        -- The outer query excluding replacement vessels is NOT enough: this subquery resolves
+        -- a display nickname per provider account across ALL shipments, so a nickname carried
+        -- only by a replacement vessel was still projected onto an ORDINARY margin row sharing
+        -- that account. Hermes reproduced it at 7e14a095 — an ordinary row on 'acct-42' with a
+        -- null nickname rendered as "Replacement House Account". Excluding the financial row
+        -- does not exclude its metadata.
+        and source is distinct from 'replacement'
       group by provider_account_id
     ) provider_account_names
       on provider_account_names.provider_account_id = ${shipments.providerAccountId}
@@ -539,6 +546,11 @@ export async function shippingMarginAnalytics(
      and ${orderCompetitiveRate.isHouseOrder} = true
     where coalesce(${shipments.voided}, false) = false
       and coalesce(${shipments.isReturn}, false) = false
+      -- Ordinary outbound shipping margin only. A replacement vessel carries its own frozen
+      -- customer-money tuple and bills as replace_postage, so projecting it here reports a
+      -- re-ship as ordinary outbound economics against the original order. IS DISTINCT FROM,
+      -- so a legacy NULL source still reads as ordinary. (Hermes, 2026-08-19.)
+      and ${shipments.source} is distinct from 'replacement'
       and ${shippedAt} >= ${input.dateFrom}::timestamptz
       and ${shippedAt} < ${input.dateTo}::timestamptz
       ${selectedClientIds.length ? sql`and coalesce(bli.client_id, ${shipments.clientId}) = any(${intArraySql(selectedClientIds)})` : sql``}
