@@ -2,7 +2,14 @@
  * v2 (PS-491): retain the ShipStation fields that identify an order across a re-ingest
  * and distinguish a split/merge from a duplicate. See ORDER_IDENTITY_EVIDENCE_KEYS.
  */
-export const ORDER_RAW_PAYLOAD_POLICY_VERSION = 2;
+/**
+ * v3 (PS-489, 2026-08-22): adds `shipmentCost` and `shippingAmount` to the retained
+ * ShipStation projection. The bump is load-bearing, not cosmetic — it is the only way
+ * to tell "ingested before the retention fix, so cost evidence was discarded" from
+ * "ingested after, and the provider genuinely sent none". A recovery that cannot make
+ * that distinction would read a v2 row's absent cost as a provider fact.
+ */
+export const ORDER_RAW_PAYLOAD_POLICY_VERSION = 3;
 
 const SHIPSTATION_RETAINED_KEYS = [
   // Operational address/package evidence not yet normalized into complete columns.
@@ -40,6 +47,27 @@ const SHIPSTATION_RETAINED_KEYS = [
   'customerOrderId',
   'purchaseOrderId',
   'storeId',
+
+  // PS-489 — provider shipping-money evidence. Both are RETAINED; they are NOT
+  // interchangeable and must never be treated as one number:
+  //
+  //   shipmentCost   — the provider's own shipment cost field. CANDIDATE carrier-cost
+  //                    evidence, subject to verified provider semantics. This is the
+  //                    only field the tier-1 authority query reads
+  //                    (scripts/ps-489-external-fulfillment-preview.ts).
+  //   shippingAmount — what the buyer/marketplace paid for shipping on the ORDER.
+  //                    CUSTOMER money, not carrier cost. Retained as bounded
+  //                    contextual evidence only. Sourcing a billable carrier cost
+  //                    from it would silently adopt the order-cost model DJ has not
+  //                    ruled for.
+  //
+  // Why they must be retained: an externally fulfilled order never gets a PrepShip
+  // label, so the provider payload is the ONLY place its cost evidence can come
+  // from. Measured 2026-08-22: 0 of 143 shipment-less international orders retain
+  // either field, so history is unrecoverable — but every order ingested from here
+  // on is. Forward-only by construction; no backfill is implied or possible.
+  'shipmentCost',
+  'shippingAmount',
 
   // Provider/fixture provenance fallbacks used when normalized source columns are absent.
   'source',
