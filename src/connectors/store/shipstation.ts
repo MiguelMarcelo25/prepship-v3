@@ -136,12 +136,28 @@ function toNumericString(n?: number | null): string {
   return Number.isFinite(n as number) ? (n as number).toFixed(2) : '0';
 }
 
+/**
+ * Does the PROVIDER say somebody else fulfilled this order?
+ *
+ * PS-489: `advancedOptions.nonMachinable` used to be ORed in here. It is a USPS
+ * PARCEL-SHAPE flag — it says the parcel is irregular (odd dimensions, rigidity,
+ * aspect ratio), not that the order was fulfilled outside PrepShip. Conflating a
+ * packaging attribute with fulfilment ownership inflated `orders.externally_shipped`,
+ * which is the exact population PS-489 is scoped by and the population billing's
+ * `shipping_missing` branch keys on.
+ *
+ * Model-independent: this correction holds whichever canonical representation DJ
+ * rules for, so it lands ahead of that decision (v2-parity note: the legacy import
+ * carried the same conflation, so this is a deliberate divergence from it).
+ *
+ * Blast radius measured 2026-08-22, read-only: of 73,541 orders, ZERO carry
+ * `nonMachinable: true` in retained raw, so no stored row changes classification.
+ * Note the retention policy strips `advancedOptions` sub-keys, so that zero cannot
+ * by itself prove the flag never fired historically — it proves only that nothing
+ * recoverable depends on it now.
+ */
 function externallyShippedFromRaw(o: SSOrder): boolean {
-  return Boolean(
-    o.externallyFulfilled === true ||
-      o.externally_shipped === true ||
-      o.advancedOptions?.nonMachinable === true
-  );
+  return Boolean(o.externallyFulfilled === true || o.externally_shipped === true);
 }
 
 export async function listShipStationStores(
