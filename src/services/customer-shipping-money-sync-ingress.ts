@@ -287,8 +287,19 @@ export async function freezeSyncIngressCustomerShippingMoney(
   // Policy resolution through the ONE canonical owner. House is by construction never for
   // this ingress (no cShippingRateAmount is supplied, and no 'shipp' carrier exists in the
   // sync population), so the house input stays null always.
+  //
+  // Hermes 2026-08-22: `exec` MUST be threaded. Under BILLING_PER_ACCOUNT_MARKUP=on the
+  // decision loads the per-account markup settings rows, and without `exec` that load falls
+  // back to the module-singleton database and its 60s process cache (rates.ts
+  // loadCarrierMarkups) — reading the markup that prices this money from a different
+  // connection, outside the transaction that is freezing it. Passing `exec` puts the markup
+  // read on the same executor as the row load and the tuple write, exactly as the outbound
+  // and replacement freezes already do (customer-shipping-money.ts:616 and :817-821). This
+  // changes only WHERE the markup fact is read from — no money math, eligibility rule,
+  // outcome vocabulary or version string moves.
   const decision = await decideCustomerShippingMoneyForRow(row, {
     policyVersion: CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_SYNC_INGESTION,
+    exec,
   });
 
   // Provenance mapping is version-owned here, not in the shared resolver: the resolver's

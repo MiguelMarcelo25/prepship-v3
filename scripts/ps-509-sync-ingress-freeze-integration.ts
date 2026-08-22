@@ -9,7 +9,9 @@
  * ineligibility class, late-link freeze-once in the link transaction, the
  * unexpected-freeze-failure ABORT (and the savepoint counterexample showing exactly the
  * permanent tuple-less gap the accepted contract forbids), receipt-revision detection,
- * void exclusion, outcome/revision durability triggers, and the retry sweep.
+ * void exclusion, outcome/revision durability triggers, the retry sweep, and — with
+ * BILLING_PER_ACCOUNT_MARKUP=on — that the per-account markup is read through the SAME
+ * transaction the freeze runs in (fixture 13, Hermes 2026-08-22).
  *
  * WHAT THIS DOES NOT PROVE. PGlite is a single backend: the one-shot race between two
  * concurrent freezes stays unproven (same limitation PS-508 recorded). It also does not
@@ -483,6 +485,101 @@ async function main(): Promise<void> {
   check('a prepship-created row is not_sync_ingress: no freeze, no sync outcome row',
     foreign.outcome === 'not_sync_ingress' && foreignOutcome.rows[0]?.n === 0,
     JSON.stringify({ foreign, n: foreignOutcome.rows[0]?.n }));
+
+  // ── 13. BILLING_PER_ACCOUNT_MARKUP=on: the markup is read through the SUPPLIED tx ────────
+  //
+  // Hermes 2026-08-22. Every fixture above runs with the flag DELETED (see the top of main),
+  // so the branch that loads per-account markups had never executed here — and that branch is
+  // exactly where the freeze can read the markup that PRICES the money from the module
+  // singleton database and its 60s process cache (rates.ts loadCarrierMarkups) instead of the
+  // transaction that is freezing it.
+  //
+  // The proof is two-sided and still touches no network. (a) The markup row exists ONLY in
+  // this PGlite database, which is reachable ONLY through the executor handed to the freeze,
+  // so if the applied markup is that row's, the read resolved through the supplied executor.
+  // (b) The executor is wrapped so its `select` is counted: a fresh eligible freeze issues
+  // EXACTLY ONE select — the row load uses `execute`, the tuple write `update`, the outcome
+  // `insert` — so a count of 1 is the direct statement "the decision's markup read went
+  // through the supplied transaction". Drop `exec` from the decision call and the count is 0
+  // while the markup load leaves this database entirely.
+
+  process.env.BILLING_PER_ACCOUNT_MARKUP = 'on';
+  await client.exec(`
+    create table settings (key text primary key, value text);
+    insert into settings (key, value) values ('markup.se-5150', '{"type":"percent","value":50}');
+    insert into shipments (id, order_id, client_id, order_number, label_shipment_id, source, cost, selected_rate_cost, provider_account_id)
+      values (960, 100, 1, 'ON-960', 77960, 'shipstation', 10.00, 10.00, 5150);
+    insert into shipments (id, order_id, client_id, order_number, label_shipment_id, source, cost, selected_rate_cost, provider_account_id)
+      values (961, 100, 1, 'ON-961', 77961, 'shipstation', 10.00, 10.00, 9999);
+  `);
+
+  type FreezeShape = {
+    outcome: string;
+    alreadyFrozen?: boolean;
+    frozen?: {
+      cShippingRateAmount: number;
+      customerRateSource: string;
+      rateCostSource: string;
+      customerShippingMoneyPolicyVersion: string;
+      customerShippingMoneyCaptureSource: string;
+    };
+  };
+  let markupSelects = 0;
+  let perAccountError: unknown = null;
+  let perAccount: FreezeShape | null = null;
+  try {
+    perAccount = await (dbx as unknown as {
+      transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
+    }).transaction(async (tx) => {
+      const t = tx as Record<string, (...args: never[]) => unknown>;
+      // Same object shape the freeze's SyncIngressExec asks for, with the markup read counted.
+      const tracked = {
+        execute: (...args: never[]) => t.execute(...args),
+        update: (...args: never[]) => t.update(...args),
+        insert: (...args: never[]) => t.insert(...args),
+        select: (...args: never[]) => { markupSelects += 1; return t.select(...args); },
+      };
+      return freeze(960, 'sync_insert', tracked);
+    }) as FreezeShape;
+  } catch (error) {
+    perAccountError = error;
+  }
+  check('PER-ACCOUNT MARKUP: the decision reads the markup through the SUPPLIED transaction executor (exactly one select, counted on it)',
+    perAccountError == null && markupSelects === 1,
+    `selects=${markupSelects} error=${String(perAccountError).slice(0, 200)}`);
+  check('the markup visible ONLY inside that transaction is the one applied (10.00 + 50% override, NOT the client default 20%)',
+    perAccount?.outcome === 'frozen' && perAccount.alreadyFrozen === false
+    && perAccount.frozen?.cShippingRateAmount === 15
+    && perAccount.frozen?.customerRateSource === 'carrier_markup_customer_shipping_rate',
+    JSON.stringify(perAccount));
+  check('the flag changes only WHERE the markup was read — version, cost basis and capture source are unchanged',
+    perAccount?.frozen?.customerShippingMoneyPolicyVersion === 'ps-509-v1'
+    && perAccount.frozen?.rateCostSource === 'shipstation_sync_receipt_cost'
+    && perAccount.frozen?.customerShippingMoneyCaptureSource === 'shipstation_sync_ingestion',
+    JSON.stringify(perAccount?.frozen));
+  const stored960 = await client.query<{ amount: string | null; outcome: string | null }>(`
+    select (select selected_rate_json->>'cShippingRateAmount' from shipments where id = 960) as amount,
+           (select outcome from customer_shipping_money_sync_outcomes where shipment_id = 960) as outcome`);
+  check('the transaction-read markup is what COMMITTED (tuple 15.00 and a durable frozen outcome)',
+    stored960.rows[0]?.amount === '15' && stored960.rows[0]?.outcome === 'frozen',
+    JSON.stringify(stored960.rows));
+
+  // The flag ON with no settings row for the account: the client default still prices it.
+  // Caught, not thrown: with the markup read escaping the transaction this call reaches for a
+  // database that is not there, and an uncaught reject would replace every remaining fixture
+  // line with a stack trace instead of a readable FAIL.
+  let noOverride: FreezeShape | null = null;
+  let noOverrideError: unknown = null;
+  try {
+    noOverride = await freeze(961, 'sync_insert') as unknown as FreezeShape;
+  } catch (error) {
+    noOverrideError = error;
+  }
+  check('with the flag ON and no per-account row, the client billing_config default still prices (10.00 + 20% = 12.00)',
+    noOverrideError == null && noOverride?.outcome === 'frozen'
+    && noOverride.frozen?.cShippingRateAmount === 12,
+    `${JSON.stringify(noOverride)} error=${String(noOverrideError).slice(0, 200)}`);
+  delete process.env.BILLING_PER_ACCOUNT_MARKUP;
 
   if (failures > 0) {
     console.log(`\nFAIL PS-509 behavioural fixtures (${failures} failing)`);
