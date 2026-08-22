@@ -1,29 +1,41 @@
-# PS-489 Phase 0 — classification investigation of shipped orders with no active outbound shipment
+# PS-489 Phase 0 — classification evidence appendix
 
 **Status:** read-only classification evidence. No decision, no recommendation, no code change.
+No chargeability, representation, remediation, or red-contract completion is claimed.
 
-**Snapshot:** 2026-08-22, production, read-only. Application SHA `1bd67581` (`prepshipv4-stable`).
+## Snapshot identity
 
-This document **replaces** the first version of this file in full. That version contained claims
-that are now withdrawn; they are listed first so the withdrawal is part of the record rather than
-a silent edit.
+| | |
+|---|---|
+| Query window | **2026-08-22 05:11:23 UTC** |
+| Database | `postgres`, PostgreSQL **17.6** |
+| Application SHA | `87b2e11d` (`prepshipv4-stable`) |
+| Executable SQL | [`scripts/ps-489-phase0-evidence.sql`](../../scripts/ps-489-phase0-evidence.sql) — SELECT-only, no DDL, no DML |
+| Row grain | one `orders` row = one order. **Never** a billing line, never a shipment. |
+
+Every table below is verbatim output of the correspondingly numbered query in that file.
 
 ---
 
-## Withdrawn claims from the previous version
+## Withdrawn claims
 
-| Withdrawn claim | Why it was wrong |
+Recorded rather than silently edited.
+
+| Withdrawn | Why it was wrong |
 |---|---|
-| "Neither writer of `order_status='shipped'` ever creates a shipment row" | The grep behind it covered **two files**. Eight shipment writers exist. Callers create the shipment first, then invoke the lifecycle command. |
-| "They are the same problem" (of the 2,185 / 14,541) | Never established. `shipped with no shipment row` identifies an evidence gap, not a fulfilment type. |
-| Population `18,250` | Used only `shipments.order_id`. Missed orphan `order_number` links and counted void/return/replacement rows as shipments. |
-| "PS-489's scope reaches 20%" | Rests on the withdrawn equivalence above. |
-| Canonical owner should key on "shipped with no PrepShip shipment record" | Withdrawn. `externally_shipped=true` was too narrow; this is too broad. |
+| "Neither writer of `order_status='shipped'` ever creates a shipment row" | The grep behind it covered **two files**. Eight writers exist. Callers create the shipment first, then invoke the lifecycle command. |
+| "They are the same problem" (of the unflagged cohort) | Never established. No active outbound shipment identifies an evidence gap, not a fulfilment type. |
+| Population `18,250` | Used only `shipments.order_id`; missed orphan links and counted inactive rows as shipments. |
+| "PS-489's scope reaches 20%" | Rests on the withdrawn equivalence. |
+| Canonical owner keyed on "shipped with no PrepShip shipment record" | Withdrawn. `externally_shipped=true` too narrow; this too broad. |
 | "12,173 become exceptions on regeneration" | Unexecuted forecast stated as outcome. |
-| "859 carry affirmative evidence of external fulfilment" | Wrong twice: the classifier is absence-based, and the underlying transition was status-only. See below. |
-| "95% have no provenance" | Correct statement is **no lifecycle-event receipt**. Other provenance may exist in raw payloads, receipts, tracking, print queue, source identities. |
+| "859 carry affirmative evidence of external fulfilment" | The classifier is absence-based, and 857 of the 859 originate from a status-only transition. |
+| "95% have no provenance" | Correct term is **no lifecycle-event receipt**. Other provenance may exist in raw payloads, webhooks, overrides, label receipts, tracking, print queue, source identities, historical shipment rows. |
+| **"Rescued by orphan `order_number`: 21"** | **Measured value is 20.** The 21 came from a looser predicate and caused an off-by-one in the reconciliation. |
+| **Six-category taxonomy totalling 18,437** | Double-counted 102 orders. Shipment history is an **orthogonal attribute**, not a provenance class. Replaced by two independent dimensions below. |
+| **"Zero post-cutover terminal transitions bypassed the lifecycle owner"** | Stronger than a mutable `updated_at` proxy can support. See Q6. |
 
-The corrected writer inventory:
+Corrected writer inventory:
 
 ```
 $ grep -rn "insert(shipments)" src/ scripts/ --include=*.ts
@@ -33,53 +45,77 @@ src/services/shipment-sync.ts:1075
 scripts/backfill-shipstation-fulfillments.ts:250
 ```
 
-The repository already draws the distinction the withdrawn key would have erased:
-`shipment-sync-watchdog.ts:637-676` monitors `order_status='shipped' AND externally_shipped=false`
-with no active outbound shipment and names the result **`missing_active_shipments`** — a
-synchronization-health condition, not external fulfilment.
+`shipment-sync-watchdog.ts:637-676` already monitors this exact condition under
+`externally_shipped=false` and names it **`missing_active_shipments`** — a synchronization-health
+condition, not external fulfilment.
 
-## Lane A — population under the repository's own active-outbound predicate
+## Q1 — predicate transition matrix
 
-Adopted from `shipment-sync-watchdog.ts:654-670`: linked by `order_id` **or** orphan
-`order_number`, excluding `source='replacement'`, voided, and return rows.
+Reconciles **both** totals exactly.
 
-```sql
-with base as (
-  select o.id, o.order_number, coalesce(o.externally_shipped,false) as flagged
-  from orders o where o.order_status='shipped'
-),
-noactive as (
-  select b.* from base b
-  where not exists (select 1 from shipments s where s.order_id=b.id
-      and s.source is distinct from 'replacement'
-      and coalesce(s.voided,false)=false and coalesce(s.is_return,false)=false)
-    and not exists (select 1 from shipments s where s.order_id is null and s.order_number=b.order_number
-      and s.source is distinct from 'replacement'
-      and coalesce(s.voided,false)=false and coalesce(s.is_return,false)=false)
-)
-select ... ;
-```
+| naive_missing | correct_missing | orders | meaning |
+|---|---|---:|---|
+| true | true | 18,230 | unchanged missing |
+| true | false | **20** | rescued by active orphan `order_number` |
+| false | true | 105 | inactive-only history now recognised missing |
+| false | false | 25,060 | unaffected |
+
+18,230 + 20 = **18,250** (naive). 18,230 + 105 = **18,335** (correct). Sum 43,415.
+
+## Q2 — population
 
 | | orders |
 |---|---:|
 | Lifecycle-shipped, all time | 43,415 |
-| Naive "no row by `order_id`" (withdrawn figure) | 18,250 |
 | **No active ordinary outbound shipment** | **18,335** |
 | …flagged `externally_shipped` | 3,749 |
 | …unflagged | 14,586 |
-| Rescued by orphan `order_number` match | 21 |
-| Had **only** void/return/replacement rows | 105 |
 
-The withdrawn 18,250 was wrong in both directions and approximately right by coincidence.
+Predicate adopted from `shipment-sync-watchdog.ts:654-670`: linked by `order_id` **or** orphan
+`order_number`, excluding `source='replacement'`, voided, and return rows.
 
 **The only valid statement about this set:** *18,335 lifecycle-shipped orders have no active
 ordinary outbound shipment.* They are **not** established to be externally fulfilled, lacking all
 shipment evidence, billable, or certain to emit `shipping_missing`.
 
-## Lane B — lifecycle provenance, full ordered history
+## Q3 — Dimension 1: lifecycle/provenance partition
 
-Ordered by `effective_at`, then `created_at`, then `id`. Latest-event-only attribution is
-insufficient and is not used: it concealed the origin transition for 857 of 859 orders.
+Mutually exclusive. Sums to exactly 18,335.
+
+| provenance class | orders | also has inactive shipment history |
+|---|---:|---:|
+| 1. classifier-declared external | 859 | 2 |
+| 2. void lifecycle history | 3 | 3 |
+| 3. status-only shipped | 6 | 0 |
+| 4. other event pattern | 0 | 0 |
+| 5. flagged, no lifecycle receipt | 2,890 | 38 |
+| 6. unflagged, no lifecycle receipt | 14,577 | 62 |
+| **total** | **18,335** | 105 |
+
+**Source-verified external occurrence: 0 established.** That class is deliberately absent from
+this partition because no order currently qualifies. It is *not* a claim that zero exist.
+
+## Q4 — Dimension 2: shipment-history attribute
+
+**Orthogonal to Q3. Never add these to Q3.** The 105 distributes across Q3's classes
+(2 + 3 + 0 + 38 + 62 = 105); adding the dimensions double-counted 102 orders in the prior version.
+
+| shipment-history attribute | orders |
+|---|---:|
+| a. no shipment history | 18,230 |
+| b. **voided-only** | **105** |
+| c. return-only | 0 |
+| d. replacement-only | 0 |
+| e. mixed inactive history | 0 |
+| **total** | **18,335** |
+
+All 105 are voided-only. No return-only, replacement-only, or mixed-history orders exist in this
+population.
+
+## Q5 — full ordered lifecycle history
+
+Ordered `effective_at`, `created_at`, `id`. Latest-event-only attribution is insufficient: it
+conceals the establishing event.
 
 | flagged | events | first transition | first source | last transition | orders |
 |---|---:|---|---|---|---:|
@@ -89,17 +125,15 @@ insufficient and is not used: it concealed the origin transition for 857 of 859 
 | false | 1 | `shipped` | `order_sync_status` | `shipped` | 6 |
 | false | 1 | `void` | `label_void:shipstation` | `void` | 2 |
 | false | 2 | `shipped` | `prepship_v2` | `void` | 1 |
-| — | 0 | *(no lifecycle-event receipt)* | — | — | **17,467** |
 
-**857 of the 859 classifier-declared orders first became `shipped` through
-`order_sync_status`** — the order-level status catch-up whose own source comments call it
-review-only, not shipment-line proof (`order-sync.ts:699-750`). The external classification was
-applied afterwards. Reading only the latest event would report these as straightforwardly
-external and hide that their origin carries no shipment-scoped evidence at all.
+**857 of the 859 first became `shipped` through `order_sync_status`** — the order-level catch-up
+whose own source comments call it review-only, not shipment-line proof (`order-sync.ts:699-750`)
+— and were classified external afterwards. Only 2 originate from `shipment_sync`. Reading the
+latest event alone reports all 859 as plainly external and hides that origin.
 
 ### The 859 are classifier-declared, not source-verified
 
-`scripts/reconcile-external-shipped-orders.ts` concludes external by **absence**:
+`scripts/reconcile-external-shipped-orders.ts:121-165,278-327` concludes external by **absence**:
 
 ```ts
 if (input.upstream.hasShipment || input.upstream.hasFulfillment) {
@@ -108,94 +142,81 @@ if (input.upstream.hasShipment || input.upstream.hasFulfillment) {
 return 'external';
 ```
 
-written with `source: 'external_shipped_classifier'`,
-`provenance: { classification: 'marketplace_fulfilled' }`.
+persisted as `source: 'external_shipped_classifier'`,
+`provenance: { classification: 'marketplace_fulfilled' }`. It records the conclusion — not the
+provider response, account queried, query timestamp, upstream identity, response hash,
+negative-result completeness, or any marketplace fulfilment receipt.
 
-That is a durable decision receipt. It records the conclusion, not the provider response, account
-queried, query timestamp, upstream identity, response hash, negative-result completeness, or any
-marketplace fulfilment receipt.
+**Short label:** *locally classifier-marked external-shipped cohort — not independently
+fulfilment-verified.*
 
-**Correct wording, used throughout:** *859 orders carry a durable `external_shipped_classifier`
-decision receipt based on successful upstream negative lookups under the classifier's
-then-current rules. The underlying external-fulfilment fact still requires source-evidence
-validation.*
+**Governing limit on all lifecycle evidence here:** an external lifecycle event proves a local
+workflow/classification action. It does **not** prove physical fulfilment, cost authority, or
+customer chargeability. Append-only immutability does not imply historical completeness — it
+guarantees nothing about what was never written.
 
-**Short label, to be used wherever the cohort is named in one line:** *locally classifier-marked
-external-shipped cohort — not independently fulfilment-verified.*
+## Q6 — lifecycle-SOT coverage partition (proxy measurement)
 
-The governing limit on all lifecycle evidence in this document: **an external lifecycle event
-proves a local workflow/classification action. It does not prove physical fulfilment, cost
-authority, or customer chargeability.** Event immutability likewise does not imply historical
-completeness — append-only guarantees nothing about what was never written.
+`drizzle/0070_order_lifecycle_commands.sql` (PS-424, `f568bc5f`, committed 2026-07-16), additive
+only, history not backfilled. Events append-only (`:26-39`); deletion only via the bounded
+test-data purge (`0082_test_data_purge_guards.sql:107-120`).
 
-## Lane B2 — lifecycle-SOT cutover partition
-
-`drizzle/0070_order_lifecycle_commands.sql` (PS-424) landed **2026-07-16** (`f568bc5f`) and states
-it is additive only, not a historical rewrite — history was not backfilled. Events are append-only
-(`0070_order_lifecycle_commands.sql:26-39`); deletion exists only via the bounded test-data purge
-(`0082_test_data_purge_guards.sql:107-120`). So absence of an event before the cutover is expected
-debt; absence after it would be an invariant leak.
-
-Partitioned on `orders.updated_at` against that boundary:
-
-| cohort | flagged | orders | earliest updated | latest updated |
+| flagged | cohort | orders | earliest | latest |
 |---|---|---:|---|---|
-| pre-cutover legacy debt | false | 14,577 | 2026-04-24 | **2026-07-15** |
-| pre-cutover legacy debt | true | 2,890 | 2026-05-29 | **2026-07-15** |
-| **post-cutover invariant leak** | — | **0** | — | — |
+| false | `updated_at` before proposed boundary | 14,577 | 2026-04-24 | 2026-07-15 |
+| true | `updated_at` before proposed boundary | 2,890 | 2026-05-29 | 2026-07-15 |
+| — | `updated_at` on or after proposed boundary | **0** | — | — |
 
-**All 17,467 predate the cutover. The latest is 2026-07-15 — the day before the migration.
-Zero post-cutover terminal transitions bypassed the lifecycle owner.**
+**Correct conclusion, and the limit of it:**
 
-Per the standing rule that a fourth ticket is warranted only if a post-cutover leak exists:
-**no lifecycle-invariant ticket is required.** This is historical provenance debt, not a live
-engineering defect.
+> No no-receipt order in the measured cohort has `orders.updated_at` on or after the proposed
+> 2026-07-16 boundary; the latest is 2026-07-15. This is **consistent with** legacy provenance
+> debt. But `orders.updated_at` is mutable row metadata, not terminal-transition provenance, and
+> the boundary is a **commit** date, not a proven production migration or deployment timestamp.
+> **Zero post-cutover bypasses are therefore not proven.**
 
-Stated limit: `updated_at` is a proxy for the terminal transition time and can be moved by any
-later write. A stricter partition using source import/sync timestamps is still owed before this
-is treated as conclusive.
+Closing the invariant requires the later of the production migration-application timestamp for
+`0070` and the production deployment timestamp for the lifecycle-owner code, then inspection of
+source import/sync timestamps, webhook occurrence times, terminal status observation times,
+lifecycle effective times, durable command receipts, and deployment/account/store boundaries.
 
-## Evidence taxonomy
+Until then **"no fourth ticket required" is provisional, not closed.**
 
-| category | definition | count |
-|---|---|---:|
-| 1. Source-verified external occurrence | Provider/marketplace fulfilment receipt, retained `externallyFulfilled=true` with valid source identity, or verified operator declaration | **0 established** |
-| 2. Classifier-declared external | Durable `external_shipped_classifier` receipt from negative upstream lookup | 859 |
-| 3. Flagged but provenance-unattributed | `externally_shipped=true`, no lifecycle-event receipt | 2,890 |
-| 4. Status-only shipped | `order_sync_status` transition, no shipment-scoped evidence | 6 |
-| 5. Void/return/replacement-only history | — | 105 |
-| 6. Unknown provenance | No lifecycle-event receipt, unflagged | 14,577 |
+## Q7 — reconciliation assertions
 
-Categories 1 and 2 are deliberately **not** merged. Only category 1 enters the PS-489
-architecture discussion, and it is currently empty pending source-evidence validation.
+Fail if totals differ.
+
+| assertion | result | detail |
+|---|---|---|
+| provenance partition sums to population | **PASS** | 18335 vs 18335 |
+| naive + inactive-only − rescued = correct | **PASS** | 18250 − 20 + 105 = 18335 vs 18335 |
+
+## Evidence confidence and observation time
+
+Evidence kind, source, observed-at, source event timestamp, account/store identity, completeness
+status, confidence, and whether evidence is affirmative / negative / operator-declared / inferred
+are **not yet captured in this document, and are required in the next evidence artifact.**
+
+What can be said now: all figures derive from local database state at the snapshot above.
+Upstream negative results carry the classifier's **original** observation window, not this one.
+Provider absence is time-sensitive; a historical "no shipment found" is not re-verified here and
+cannot prove what occurred historically.
 
 ## What this does not license
 
-- **No representation recommendation.** Not for the 859, not for the 14,586.
-- **The 2,890 must be classified** before entering any historical impact population, revenue
-  exposure figure, remediation, or backfill. They may inform forward policy design.
-- **The 12,173 remain a candidate cohort.** "They become exceptions on regeneration" is an
-  **unexecuted forecast**, not an outcome.
-- **The billing generator cannot preview this.** `generateLineItems` is a money mutation by its
-  own declaration — `billing.ts:886` reads "Regeneration is a money mutation" — and
-  `billing.ts:1712-1793` locks candidates, deletes editable lines and inserts replacements. There
-  is no `dryRun`. A surrounding rollback is insufficient because the function opens multiple
-  transactions on the shared pool. Any preview requires either read-only extraction into a pure
-  offline planner with parity fixtures, or an isolated discarded snapshot — each needing its own
-  safety review first.
-- **`shipmentCost` remains candidate evidence** pending provider-semantics proof.
-- **No claim that the red contract term is satisfied.**
-
-## Evidence confidence
-
-Every classification above is derived from local database state observed **2026-08-22**. Upstream
-negative results carry the classifier's original observation window, not this one; provider
-absence is time-sensitive and a "no shipment found" from an earlier lookup is not re-verified
-here. Confidence, observed-at, source event time, account identity and completeness are recorded
-per lane in the tables above; where they are absent it is stated rather than implied.
+- No representation recommendation, for any cohort.
+- The 2,890 must be classified before entering any historical impact population, revenue exposure
+  figure, remediation, or backfill. They may inform forward policy design.
+- The 17,467 are set aside from PS-489's current impact and recommendation — **not permanently.**
+  They belong to the classification successor unless affirmative external evidence is found.
+- The billing generator cannot preview anything: `billing.ts:886` declares regeneration a money
+  mutation and `billing.ts:1712-1793` deletes and inserts. No `dryRun` exists. A surrounding
+  rollback is insufficient — multiple transactions on the shared pool.
+- `shipmentCost` remains candidate evidence pending provider-semantics proof.
+- No claim that the red contract term is satisfied.
 
 ## What was not done
 
-No writes of any kind. No billing regeneration. No reclassification of any order. No provider
-lookups. No postage, labels, or purchases. No locked surface modified — this document adds no
-code.
+No writes of any kind. No billing regeneration. No reclassification. No provider lookups. No
+postage, labels, or purchases. No locked surface modified — this adds one SELECT-only SQL file
+and this document.
