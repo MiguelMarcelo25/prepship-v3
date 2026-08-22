@@ -994,7 +994,8 @@
     "test:ps-507-m3": "node scripts/ps-507-qa-stack.mjs --seed-ps488-m3 -- npx playwright test -c playwright.ps507.config.js web/e2e/ps-507-ps488-m3-return-identity.spec.js",
     "test:ps-507": "node scripts/ps-507-qa-stack.mjs --seed-ps499-step12 --seed-ps488-m3 -- npx playwright test -c playwright.ps507.config.js",
     "test:ps-507-qa-harness": "tsx scripts/ps-507-qa-harness-guard.ts",
-    "test:ps-489-external-fulfillment-contract": "tsx scripts/ps-489-external-fulfillment-contract.ts"
+    "test:ps-489-external-fulfillment-contract": "tsx scripts/ps-489-external-fulfillment-contract.ts",
+    "ps-497:manifest": "tsx scripts/ps-497-recovery-manifest-generator.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
