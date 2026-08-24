@@ -307,7 +307,12 @@ check('billing: the captured customer_rate is loaded by shipment id + fed to the
   /resolveCustomerShippingMoney\(\{[\s\S]*?cShippingRateAmount,/.test(billingSrc));
 check('billing: the sidecar (orderCompetitiveRate / isHouseOrder) supplies the house rate; markup suppression remains delegated to the shipping-line owner',
   billingSrc.includes('orderCompetitiveRate') && /isHouseOrder/.test(billingSrc) &&
-  /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
+  // Repointed (guard rot): PS-508 W5 put the frozen-tuple decision in front of the legacy
+  // calculation, so billedShippingAmount is a ternary rather than a bare assignment from
+  // shippingDecision.cShippingRateAmount. The delegation this check protects is unchanged — the
+  // legacy branch still takes its value from the canonical resolver. Matching across the branch
+  // keeps the intent pinned without re-pinning a literal the next refactor breaks again.
+  /billedShippingAmount[\s\S]{0,200}shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
   /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc));
 
 // ── slice 4 (P7 money tuple): house mapping + carrier-markup suppression ──────
@@ -512,7 +517,8 @@ check('portal serializer: redaction extracted to the pure owner + BOTH detail ro
 const billingDelegateSrc = readFileSync('src/services/billing.ts', 'utf8');
 check('billing.ts delegates the shipping-line amount to the canonical customer shipping money owner',
   /import \{ resolveCustomerShippingMoney \}/.test(billingDelegateSrc) &&
-  /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingDelegateSrc) &&
+  // Repointed (guard rot): see the PS-508 W5 note above — same literal, same reasoning.
+  /billedShippingAmount[\s\S]{0,200}shippingDecision\.cShippingRateAmount/.test(billingDelegateSrc) &&
   /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingDelegateSrc));
 
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');

@@ -222,7 +222,15 @@ check(
     /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
     /cShippingRateAmount,/.test(billingSrc) &&
     /resolveCustomerShippingMoney\(\{/.test(billingSrc) &&
-    /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
+    // Repointed (guard rot): PS-508 W5 put the frozen-tuple decision in front of the legacy
+    // calculation, so billedShippingAmount is no longer a bare assignment from
+    // shippingDecision.cShippingRateAmount — it is that value on the legacy branch and the
+    // frozen tuple's amount otherwise. The house-sidecar intent this check exists to protect is
+    // unchanged and still asserted above (the sidecar is loaded, keyed by shipment id, and
+    // passed into the resolver); what moved is only the shape of the final assignment. Matching
+    // across the branch keeps the intent pinned without re-pinning a literal line that any
+    // future refactor breaks again — the failure mode PS-508 removed from the ps-437 guard.
+    /billedShippingAmount[\s\S]{0,200}shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
     /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc) &&
     /totalCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc),
 );

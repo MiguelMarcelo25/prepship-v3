@@ -208,7 +208,11 @@ check('billing generator reads customer_rate by shipment id and persists it as t
   /cShippingRateByShipmentId/.test(billingSrc) &&
     /cShippingRateAmount,/.test(billingSrc) &&
     /resolveCustomerShippingMoney\(\{/.test(billingSrc) &&
-    /const billedShippingAmount = shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
+    // Repointed (guard rot): PS-508 W5 put the frozen-tuple decision in front of the legacy
+    // calculation, so billedShippingAmount is a ternary rather than a bare assignment from
+    // shippingDecision.cShippingRateAmount. The legacy branch still takes its value from the
+    // canonical resolver, so the intent is unchanged; only the shape of the assignment moved.
+    /billedShippingAmount[\s\S]{0,200}shippingDecision\.cShippingRateAmount/.test(billingSrc) &&
     /unitCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc) &&
     /totalCost: roundMoney\(billedShippingAmount\)\.toFixed\(2\)/.test(billingSrc));
 check('invoice renderers consume generated shipping_amt instead of provider cost',
