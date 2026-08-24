@@ -47,6 +47,14 @@ jobs:
       # Loopback service container only. No production database is reachable here and no deploy
       # secret is exposed to this job.
       PS508_PG17_ADMIN_URL: postgres://ps508:ps508@127.0.0.1:5432/postgres
+      # The generator test imports billing.ts -> env.ts, which requires the Supabase vars at
+      # parse time. Locally the repo's .env supplies them; CI has none. Inert dummies — nothing
+      # in this job talks to Supabase, and the test overrides DATABASE_URL to the loopback
+      # container before any src/ import.
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: offline-dummy
+      SUPABASE_SERVICE_ROLE_KEY: offline-dummy
+      SUPABASE_JWT_SECRET: offline-dummy
 
     steps:
       - uses: actions/checkout@v4
