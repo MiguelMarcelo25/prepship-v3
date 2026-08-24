@@ -114,8 +114,11 @@ jobs:
           npx tsc --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride --skipLibCheck
           --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
           scripts/ps-508-canary-evidence-packet.ts scripts/ps-508-canary-packet-smoke-pg17.ts
+          scripts/ps-508-canary-portal-identity.ts scripts/ps-508-canary-worker-identity.ts
 
-      # Round-7: the smoke drives an in-process GitHub-API stub — no Portal clone, no token,
-      # no network — so the auth-flaky portal-clone checkout is gone.
+      # Round-8: Portal provenance is proven at the OWNER boundary — the smoke calls the
+      # exported verifyPortalViaApi/worktreeIdentity directly against an in-process stub, and
+      # asserts the packet source reads no env override and gates on a clean worktree. No
+      # Portal clone, no token, no network.
       - name: PS-508 canary packet smoke
         run: npm run -s test:ps-508-canary-packet-smoke-pg17

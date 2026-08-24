@@ -17,6 +17,12 @@ import os from 'node:os';
 import path from 'node:path';
 import postgres from 'postgres';
 import { decideWorkerIdentity, WORKER_HEARTBEAT_MAX_AGE_MS } from './ps-508-canary-worker-identity';
+import http from 'node:http';
+import {
+  PORTAL_OFFICIAL_API,
+  verifyPortalViaApi,
+  worktreeIdentity,
+} from './ps-508-canary-portal-identity';
 
 const ADMIN_URL = process.env.PS508_PG17_ADMIN_URL;
 if (!ADMIN_URL) {
@@ -47,55 +53,42 @@ const PORTAL_UNPUBLISHED = 'b'.repeat(40); // never seen by GitHub -> 404
 const PORTAL_DIVERGED = 'c'.repeat(40); // published, but not a descendant of the mirror
 const PORTAL_PREDICATE_CHANGED = 'd'.repeat(40); // published descendant, predicate DIFFERS
 const PRED = 'the-canonical-predicate-bytes';
-type StubState = {
-  published: Set<string>;
-  fileAt: Map<string, string>;
-  status: Map<string, string>; // "base...head" -> compare status
-};
-const stubState: StubState = { published: new Set(), fileAt: new Map(), status: new Map() };
-function configureStub(): void {
-  stubState.published = new Set([PORTAL_MIRROR, PORTAL_DEPLOYED, PORTAL_DIVERGED, PORTAL_PREDICATE_CHANGED]);
-  stubState.fileAt = new Map([
-    [PORTAL_MIRROR, PRED], [PORTAL_DEPLOYED, PRED],
-    [PORTAL_DIVERGED, PRED], [PORTAL_PREDICATE_CHANGED, PRED + '-DRIFTED'],
-  ]);
-  stubState.status = new Map([
-    [PORTAL_MIRROR + '...' + PORTAL_DEPLOYED, 'ahead'],
-    [PORTAL_MIRROR + '...' + PORTAL_MIRROR, 'identical'],
-    [PORTAL_MIRROR + '...' + PORTAL_DIVERGED, 'diverged'],
-    [PORTAL_MIRROR + '...' + PORTAL_PREDICATE_CHANGED, 'ahead'],
-  ]);
-}
-// The stub runs in its OWN process: the smoke drives the packet with the SYNCHRONOUS spawnSync,
-// which blocks this event loop, so an in-process HTTP server could never answer the subprocess
-// (that deadlock is exactly why the health stub is also a subprocess). Config is passed as JSON
-// argv.
-function startGithubStub(): Promise<{ base: string; child: ChildProcess }> {
-  const config = JSON.stringify({
-    published: [...stubState.published],
-    fileAt: [...stubState.fileAt],
-    status: [...stubState.status],
+type StubState = { published: Set<string>; fileAt: Map<string, string>; status: Map<string, string> };
+// Round-8: the Portal stub runs IN-PROCESS. Earlier rounds spawned it as a subprocess because the
+// full-activation cases drove the packet with the blocking spawnSync (an in-process server could
+// never answer while the event loop was blocked). The round-8 Portal tests call the exported
+// verifyPortalViaApi owner DIRECTLY and await it, so the loop is free and an in-process http
+// server responds normally — no subprocess, no argv-JSON config.
+function makeStub(state: StubState): Promise<{ base: string; close: () => Promise<void> }> {
+  const server = http.createServer((q, r) => {
+    const u = new URL(q.url ?? '/', 'http://x');
+    r.setHeader('content-type', 'application/json');
+    if (u.pathname.startsWith('/commits/')) {
+      const sha = u.pathname.slice('/commits/'.length);
+      r.writeHead(state.published.has(sha) ? 200 : 404);
+      r.end(JSON.stringify({ sha }));
+    } else if (u.pathname.startsWith('/compare/')) {
+      const key = decodeURIComponent(u.pathname.slice('/compare/'.length));
+      r.writeHead(200);
+      r.end(JSON.stringify({ status: state.status.get(key) ?? 'diverged' }));
+    } else if (u.pathname.startsWith('/contents/')) {
+      const ref = u.searchParams.get('ref') ?? '';
+      const c = state.fileAt.get(ref);
+      if (c == null) { r.writeHead(404); r.end('{}'); }
+      else { r.writeHead(200); r.end(JSON.stringify({ type: 'file', encoding: 'base64', content: Buffer.from(c).toString('base64') })); }
+    } else { r.writeHead(404); r.end('{}'); }
   });
-  const script = `
-    const http=require('http');
-    const cfg=JSON.parse(process.argv[1]);
-    const pub=new Set(cfg.published), file=new Map(cfg.fileAt), status=new Map(cfg.status);
-    const s=http.createServer((q,r)=>{const u=new URL(q.url,'http://x');r.setHeader('content-type','application/json');
-      if(u.pathname.startsWith('/commits/')){const sha=u.pathname.slice(9);r.writeHead(pub.has(sha)?200:404);r.end(JSON.stringify({sha}));}
-      else if(u.pathname.startsWith('/compare/')){const p=decodeURIComponent(u.pathname.slice(9));r.writeHead(200);r.end(JSON.stringify({status:status.get(p)||'diverged'}));}
-      else if(u.pathname.startsWith('/contents/')){const ref=u.searchParams.get('ref');const c=file.get(ref);if(c==null){r.writeHead(404);r.end('{}');}else{r.writeHead(200);r.end(JSON.stringify({encoding:'base64',content:Buffer.from(c).toString('base64')}));}}
-      else{r.writeHead(404);r.end('{}');}});
-    s.listen(0,'127.0.0.1',()=>console.log('PORT='+s.address().port));`;
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['-e', script, config], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let buf = '';
-    child.stdout!.on('data', (d: Buffer) => {
-      buf += d.toString();
-      const m = /PORT=(\d+)/.exec(buf);
-      if (m) resolve({ base: 'http://127.0.0.1:' + m[1], child });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      const port = addr && typeof addr === 'object' ? addr.port : 0;
+      resolve({
+        base: 'http://127.0.0.1:' + port,
+        // closeAllConnections() force-drops undici keep-alive sockets so close() resolves
+        // promptly and leaves no lingering handle (a keep-alive socket otherwise stalls close).
+        close: () => new Promise<void>((res) => { server.closeAllConnections(); server.close(() => res()); }),
+      });
     });
-    child.on('error', reject);
-    setTimeout(() => reject(new Error('github stub did not start')), 10_000);
   });
 }
 
@@ -460,64 +453,111 @@ async function main(): Promise<void> {
     if (all) ok('worker owner: missing / stale-SHA / stale-heartbeat / FUTURE-heartbeat / startedAt-only / malformed / duplicate / aux-key refused, current accepted');
   }
 
-  // ---- 7. round-7: portal identity via the GitHub REST API stub (git-config-independent) -----
+  // ---- 7. round-8: Portal-provenance + executed-source OWNERS (unit-level, no self-run) -------
+  // Round-7 drove the FULL activation subprocess against a stub via PS508_PORTAL_API_BASE. Round-8
+  // removed that env override (it was the REST equivalent of a git-config redirect) AND added a
+  // clean-worktree gate, so the activation subprocess can no longer be pointed at a stub and now
+  // refuses to run on a dirty tree. Portal verification is therefore proven at the OWNER boundary:
+  // the exact exported functions the activation path imports, exercised directly. Plus source
+  // assertions that activation reads no env override, passes the immutable constant, and gates on
+  // a clean worktree.
   {
-    const { url, db, name } = await freshDb();
-    await seed(db, HAPPY); await addSecondShipment(db);
-    await seedWorkerSnapshot(db, REPO_SHA, new Date().toISOString());
-    configureStub();
-    const stub = await startGithubStub();
-    // Point the packet's Portal API at the stub, supply a dummy token, and — critically — set a
-    // HOSTILE git url.insteadOf in the packet's environment to prove it has ZERO effect, because
-    // the packet no longer verifies the Portal through git at all.
-    const hostileGitConfig = path.join(os.tmpdir(), 'ps508-hostile-' + process.pid + '.gitconfig');
-    fs.writeFileSync(hostileGitConfig,
-      '[url "file:///attacker"]\n\tinsteadOf = https://github.com/drprepperusa-org/client-portal-prepship\n');
-    const portalEnv = { PS508_PORTAL_API_BASE: stub.base, PS508_PORTAL_TOKEN: 'stub-token',
-      GIT_CONFIG_GLOBAL: hostileGitConfig };
-    for (const [k, v] of Object.entries(portalEnv)) process.env[k] = v;
+    let all = true;
+    const fail7 = (m: string, d: string) => { all = false; fail(m, d); };
+    const PRED_PATH = 'src/lib/client-portal/customer-shipping-rate.ts';
 
-    // A health stub whose commitSha matches --api-sha, so every identity gate EXCEPT the --api
-    // production-origin passes — that lets the accumulated identity failures reach and exercise
-    // the async Portal-API check (the origin gate no longer fail-fasts).
-    const health = await startHealthStub(REPO_SHA);
-    const NOW = new Date().toISOString();
-    const URLS = ['--ci-run-url', 'https://ci/1', '--pg17-run-url', 'https://ci/2', '--portal-ci-run-url', 'https://ci/3'];
-    const IDENT = (portalSha: string) => ['--env-clients-readback', String(CLIENT),
-      '--env-boundary-readback', BOUNDARY, '--readback-at', NOW, '--api-sha', REPO_SHA,
-      '--worker-sha', REPO_SHA, '--portal-sha', portalSha, '--api', health.url, ...URLS, ...WAIVER_APPROVAL];
-    const ACT = ['--mode', 'activation', '--boundary', BOUNDARY, ...FULL_WAIVERS];
+    // (a) worktreeIdentity — the executed-source gate owner.
+    const clean = worktreeIdentity('');
+    const cleanWs = worktreeIdentity('\n   \n');
+    const dirty = worktreeIdentity(' M scripts/ps-508-canary-evidence-packet.ts\n?? scratch.txt\n');
+    if (!clean.clean) fail7('worktreeIdentity("") must be clean', JSON.stringify(clean));
+    if (!cleanWs.clean) fail7('worktreeIdentity(whitespace) must be clean', JSON.stringify(cleanWs));
+    if (dirty.clean || dirty.dirtyPaths.length !== 2
+        || !dirty.dirtyPaths.some((p) => p.includes('ps-508-canary-evidence-packet.ts'))) {
+      fail7('worktreeIdentity(dirty) must be !clean and list the paths', JSON.stringify(dirty));
+    }
 
-    const unpublished = runPacket(url, [...ACT, ...IDENT(PORTAL_UNPUBLISHED)], BOUNDARY);
-    if (unpublished.code !== 0 && unpublished.stderr.includes('PORTAL-SHA-UNPUBLISHED')) {
-      ok('an unpublished Portal SHA (GitHub 404) is refused -> PORTAL-SHA-UNPUBLISHED');
-    } else fail('unpublished refused', 'code=' + unpublished.code + ' err=' + unpublished.stderr.slice(-200));
+    // (b) Source assertions: activation cannot be redirected by env and BINDS to a clean tree.
+    const PKT = fs.readFileSync('scripts/ps-508-canary-evidence-packet.ts', 'utf8');
+    if (/process\.env\.PS508_PORTAL_API_BASE/.test(PKT)) {
+      fail7('activation must NOT read PS508_PORTAL_API_BASE from the environment', 'found a process.env read in the packet');
+    }
+    if (!/verifyPortalViaApi\(\{[\s\S]{0,400}?apiBase:\s*PORTAL_OFFICIAL_API/.test(PKT)) {
+      fail7('activation must pass the immutable PORTAL_OFFICIAL_API as apiBase', 'call-site apiBase is not the constant');
+    }
+    if (PORTAL_OFFICIAL_API !== 'https://api.github.com/repos/drprepperusa-org/client-portal-prepship') {
+      fail7('PORTAL_OFFICIAL_API is not the official repo base', PORTAL_OFFICIAL_API);
+    }
+    if (!(PKT.includes('CLEAN worktree') && /worktreeIdentity\(porcelain\)/.test(PKT))) {
+      fail7('activation must gate on a clean worktree (worktreeIdentity(porcelain))', 'clean-worktree gate not found in the packet');
+    }
 
-    const diverged = runPacket(url, [...ACT, ...IDENT(PORTAL_DIVERGED)], BOUNDARY);
-    if (diverged.code !== 0 && diverged.stderr.includes('PORTAL-MIRROR-STALE')) {
-      ok('a published Portal SHA that is NOT a descendant of the mirror is refused -> PORTAL-MIRROR-STALE');
-    } else fail('diverged refused', 'code=' + diverged.code + ' err=' + diverged.stderr.slice(-200));
+    // (c) verifyPortalViaApi OWNER tests against an in-process stub. Safe in-process: we await the
+    //     owner directly, so nothing blocks the event loop.
+    const state: StubState = {
+      published: new Set([PORTAL_MIRROR, PORTAL_DEPLOYED, PORTAL_DIVERGED, PORTAL_PREDICATE_CHANGED]),
+      fileAt: new Map([
+        [PORTAL_MIRROR, PRED], [PORTAL_DEPLOYED, PRED],
+        [PORTAL_DIVERGED, PRED], [PORTAL_PREDICATE_CHANGED, PRED + '-DRIFTED'],
+      ]),
+      status: new Map([
+        [PORTAL_MIRROR + '...' + PORTAL_DEPLOYED, 'ahead'],
+        [PORTAL_MIRROR + '...' + PORTAL_MIRROR, 'identical'],
+        [PORTAL_MIRROR + '...' + PORTAL_DIVERGED, 'diverged'],
+        [PORTAL_MIRROR + '...' + PORTAL_PREDICATE_CHANGED, 'ahead'],
+      ]),
+    };
+    const stub = await makeStub(state);
+    const call = (portalSha: string, apiBase = stub.base) =>
+      verifyPortalViaApi({ portalSha, token: 'stub-token', apiBase, mirrorSha: PORTAL_MIRROR, predicatePath: PRED_PATH });
 
-    const changed = runPacket(url, [...ACT, ...IDENT(PORTAL_PREDICATE_CHANGED)], BOUNDARY);
-    if (changed.code !== 0 && changed.stderr.includes('PORTAL-MIRROR-STALE')) {
-      ok('a descendant whose predicate file DIFFERS from the mirror is refused -> PORTAL-MIRROR-STALE');
-    } else fail('predicate-changed refused', 'code=' + changed.code + ' err=' + changed.stderr.slice(-200));
+    const good = await call(PORTAL_DEPLOYED);
+    if (!good.ok) fail7('a valid published descendant with matching predicate must verify', JSON.stringify(good));
 
-    // A VALID published descendant with matching predicate PASSES Portal verification (via the
-    // API, despite the hostile git url.insteadOf in the env) — so the only remaining refusal is
-    // the --api production-origin gate. Exactly one FAIL line proves Portal + worker + health
-    // all passed.
-    const oneLeft = runPacket(url, [...ACT, ...IDENT(PORTAL_DEPLOYED)], BOUNDARY);
-    if (oneLeft.code !== 0 && oneLeft.stderr.includes('approved production origin')
-        && !oneLeft.stderr.includes('portal identity') && countFailLines(oneLeft.stderr) === 1) {
-      ok('a VALID published descendant passes Portal verification (via API, hostile git config ignored); the ONLY remaining refusal is the --api origin');
-    } else fail('portal API passes; origin is the one gate', 'failLines=' + countFailLines(oneLeft.stderr) + ' err=' + oneLeft.stderr.slice(-300));
+    const unpub = await call(PORTAL_UNPUBLISHED);
+    if (unpub.ok || !unpub.reason.includes('PORTAL-SHA-UNPUBLISHED')) {
+      fail7('an unpublished SHA (GitHub 404) -> PORTAL-SHA-UNPUBLISHED', JSON.stringify(unpub));
+    }
 
-    health.child.kill();
-    stub.child.kill();
-    for (const k of Object.keys(portalEnv)) delete process.env[k];
-    fs.rmSync(hostileGitConfig, { force: true });
-    await db.end({ timeout: 5 }); await dropDb(name);
+    const div = await call(PORTAL_DIVERGED);
+    if (div.ok || !div.reason.includes('not an ancestor')) {
+      fail7('a published non-descendant -> PORTAL-MIRROR-STALE (not an ancestor)', JSON.stringify(div));
+    }
+
+    const chg = await call(PORTAL_PREDICATE_CHANGED);
+    if (chg.ok || !chg.reason.includes('CHANGED between')) {
+      fail7('a descendant whose predicate bytes DIFFER -> PORTAL-MIRROR-STALE (CHANGED)', JSON.stringify(chg));
+    }
+
+    // (d) REST-failure normalization: an unreachable base fails CLOSED, never an unhandled reject.
+    const unreachable = await verifyPortalViaApi({
+      portalSha: PORTAL_DEPLOYED, token: 't', apiBase: 'http://127.0.0.1:1',
+      mirrorSha: PORTAL_MIRROR, predicatePath: PRED_PATH,
+    });
+    if (unreachable.ok || !unreachable.reason.includes('PORTAL-API-UNREACHABLE')) {
+      fail7('an unreachable API base must fail CLOSED -> PORTAL-API-UNREACHABLE', JSON.stringify(unreachable));
+    }
+
+    // (e) Override-inert at the boundary: an env var pointing at an EVIL base that WOULD pass a bad
+    //     SHA has ZERO effect, because verifyPortalViaApi reads only its apiBase ARGUMENT. This is
+    //     the boundary half of the round-8 finding; the source assertion in (b) is the other half.
+    const evil = await makeStub({
+      published: new Set([PORTAL_UNPUBLISHED, PORTAL_MIRROR]),
+      fileAt: new Map([[PORTAL_UNPUBLISHED, PRED], [PORTAL_MIRROR, PRED]]),
+      status: new Map([[PORTAL_MIRROR + '...' + PORTAL_UNPUBLISHED, 'ahead']]),
+    });
+    process.env.PS508_PORTAL_API_BASE = evil.base;
+    const stillRefused = await call(PORTAL_UNPUBLISHED, stub.base); // the GOOD base 404s this SHA
+    delete process.env.PS508_PORTAL_API_BASE;
+    if (stillRefused.ok || !stillRefused.reason.includes('PORTAL-SHA-UNPUBLISHED')) {
+      fail7('PS508_PORTAL_API_BASE must be inert — the apiBase argument governs verification', JSON.stringify(stillRefused));
+    }
+    await evil.close();
+    await stub.close();
+
+    if (all) {
+      ok('portal+source owners: worktree clean/whitespace/dirty; no env read of override; apiBase=immutable constant; clean-worktree gate present; verify ok / 404 / non-ancestor / predicate-drift / unreachable / override-inert');
+    }
   }
 
   // ---- 8. inventory-mode health comparison (both directions) ---------------------------------
