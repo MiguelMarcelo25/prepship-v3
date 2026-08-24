@@ -885,6 +885,7 @@
     "canary:ps-508-packet": "tsx scripts/ps-508-canary-evidence-packet.ts",
     "test:ps-508-billing-frozen-tuple-pg17": "tsx scripts/ps-508-billing-frozen-tuple-pg17.ts",
     "test:ps-508-billing-generates-frozen-line-pg17": "tsx scripts/ps-508-billing-generates-frozen-line-pg17.ts",
+    "test:ps-508-canary-packet-smoke-pg17": "tsx scripts/ps-508-canary-packet-smoke-pg17.ts",
     "test:ps-508-outbound-freeze-integration": "tsx scripts/ps-508-outbound-freeze-integration.ts",
     "test:ps-508-classification": "tsx scripts/ps-508-classification-guard.ts",
     "audit:ps-508-coverage": "tsx scripts/ps-508-coverage-audit.ts",

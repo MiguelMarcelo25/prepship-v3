@@ -99,3 +99,11 @@ jobs:
       # artifact. With PS508_PG17_ADMIN_URL present the two generator-layer mutants run too.
       - name: PS-508 mutation manifest (all mutants)
         run: npm run -s test:ps-508-mutation-manifest
+
+      # Round-3 audit: the canary packet cannot be blessed unless its failure paths are
+      # proven. Ten cases: server-enforced read-only (a deliberate write fails), zero-row
+      # INCOMPLETE, cohort gating, NOT-YET-COMPARED failing, the numeric-string tuple the
+      # real Portal SQL rejects, half-cent canonical rounding, once-per-shipment mismatch
+      # counting, and the activation identity gates incl. PORTAL-MIRROR-STALE.
+      - name: PS-508 canary packet smoke
+        run: npm run -s test:ps-508-canary-packet-smoke-pg17

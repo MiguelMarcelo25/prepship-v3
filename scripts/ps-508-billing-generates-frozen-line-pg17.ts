@@ -74,16 +74,17 @@ let failures = 0;
 function ok(name: string): void { console.log('ok   ' + name); }
 function fail(name: string, detail: string): void { failures += 1; console.log('FAIL ' + name + ' — ' + detail); }
 
-// Correction C (Hermes 82% re-audit): a harness that swallows every migration error cannot
-// claim "the actual migrations are applied". Only two failure classes are expected on a bare
-// container — Supabase role grants (no anon/authenticated/service_role roles) and the 0037 RLS
-// statement for inbound_shipments (created outside drizzle in production). Anything else FAILS.
-const EXPECTED_MIGRATION_FAILURES = [
-  /role "(anon|authenticated|service_role)" does not exist/,
-  /inbound_shipments/,
-  // pg-boss creates its own schema at runtime in production; 0094 pins function search paths
-  // for it and legitimately has nothing to pin on a bare container.
-  /schema "pgboss" does not exist/,
+// Correction C (Hermes 82% re-audit, narrowed further at round 3): a harness that swallows
+// every migration error cannot claim "the actual migrations are applied". Exactly three
+// failure classes are expected on a bare container, each scoped to the FILE it may come from
+// and the SQLSTATE it must carry — a matching message from any other migration still fails.
+const EXPECTED_MIGRATION_FAILURES: Array<{ filePrefix: RegExp; sqlState: string; pattern: RegExp }> = [
+  // Supabase role grants: the RLS/grant migrations reference roles a bare container lacks.
+  { filePrefix: /^00(37|45|69)/, sqlState: '42704', pattern: /role "(anon|authenticated|service_role)" does not exist/ },
+  // 0037's RLS statement targets inbound_shipments, created outside drizzle in production.
+  { filePrefix: /^0037/, sqlState: '42P01', pattern: /relation "public\.inbound_shipments" does not exist/ },
+  // pg-boss creates its own schema at runtime; 0094 pins search paths it cannot pin here.
+  { filePrefix: /^0094/, sqlState: '3F000', pattern: /schema "pgboss" does not exist/ },
 ];
 
 async function migrate(sql: postgres.Sql): Promise<void> {
@@ -105,8 +106,11 @@ async function migrate(sql: postgres.Sql): Promise<void> {
         await sql.unsafe(stmt);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        if (!EXPECTED_MIGRATION_FAILURES.some((rx) => rx.test(msg))) {
-          unexpected.push(file + ': ' + msg.slice(0, 140));
+        const code = String((error as { code?: string }).code ?? '');
+        const expected = EXPECTED_MIGRATION_FAILURES.some((e) =>
+          e.filePrefix.test(file) && e.sqlState === code && e.pattern.test(msg));
+        if (!expected) {
+          unexpected.push(file + ' [' + code + ']: ' + msg.slice(0, 140));
         }
       }
     }
