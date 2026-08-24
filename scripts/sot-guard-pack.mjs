@@ -1428,6 +1428,7 @@ const REQUIRED_GUARDS = [
   'test:ps-508-outbound-freeze',
   'test:ps-508-billing-consumes-frozen-tuple',
   'test:ps-508-cutover-gate',
+  'test:ps-508-mutation-manifest',
   'test:ps-508-outbound-freeze-integration',
   'test:ps-508-classification',
 ];

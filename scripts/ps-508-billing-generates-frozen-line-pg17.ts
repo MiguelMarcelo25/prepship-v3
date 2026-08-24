@@ -13,10 +13,12 @@
  *      FROZEN amount and FROZEN suffix (an amount the legacy calculation cannot produce).
  *   S2 gated client,   receipt-only,          post-boundary -> ONE 'shipping_missing' $0 hold
  *      naming post_cutover_shipment_missing_frozen_tuple.
- *   S3 gated client,   receipt-only,          PRE-boundary  -> legacy 'shipping' line (the
- *      boundary governs missing tuples only).
- *   S4 UNGATED client, the SAME valid tuple                 -> legacy 'shipping' line, NOT the
- *      frozen amount — the gate-off differential.
+ *   S3 gated client,   receipt-only,          PRE-boundary  -> the EXACT legacy line.
+ *   S4 UNGATED client, the SAME valid tuple                 -> the EXACT legacy line — the
+ *      gate-off differential.
+ *
+ * Correction B (82% re-audit): S3/S4 pin the exact legacy amount and description, not merely
+ * "not the frozen amount". Correction C: migration failures are allowlisted, not swallowed.
  *
  * UNSKIPPABLE: absent PS508_PG17_ADMIN_URL this FAILS rather than skipping.
  */
@@ -52,6 +54,15 @@ const UNGATED_CLIENT = 9002;
 const FROZEN_AMOUNT = 99.99; // deliberately unreachable by the legacy calculation on these rows
 const FROZEN_SUFFIX = ' (FROZEN-PS508)';
 const BOUNDARY = '2026-06-01T00:00:00Z';
+// Correction B: the EXACT legacy expectation. These clients have no billing_config row, so the
+// generator's defaults apply: 0% + $0.00 markup on labelCost 10 -> 10.00, markupApplied=false
+// -> the suffix is the empty string (billing-shipping-line.ts:114), so the description is
+// exactly 'Shipping · order <n>'.
+const LEGACY_AMOUNT = '10.00';
+// withShipmentBillingLineage (shipment-aggregate.ts) appends the lineage marker to every
+// persisted shipping description — part of the duplicate-suppression key.
+const lineDescription = (suffix: string, o: { orderNumber: string; id: number }) =>
+  'Shipping' + suffix + ' · order ' + o.orderNumber + ' · shipment #' + o.id;
 
 // Everything below must be set BEFORE the first src/ import — env parses once.
 process.env.NODE_ENV = 'test';
@@ -63,9 +74,26 @@ let failures = 0;
 function ok(name: string): void { console.log('ok   ' + name); }
 function fail(name: string, detail: string): void { failures += 1; console.log('FAIL ' + name + ' — ' + detail); }
 
+// Correction C (Hermes 82% re-audit): a harness that swallows every migration error cannot
+// claim "the actual migrations are applied". Only two failure classes are expected on a bare
+// container — Supabase role grants (no anon/authenticated/service_role roles) and the 0037 RLS
+// statement for inbound_shipments (created outside drizzle in production). Anything else FAILS.
+const EXPECTED_MIGRATION_FAILURES = [
+  /role "(anon|authenticated|service_role)" does not exist/,
+  /inbound_shipments/,
+  // pg-boss creates its own schema at runtime in production; 0094 pins function search paths
+  // for it and legitimately has nothing to pin on a bare container.
+  /schema "pgboss" does not exist/,
+];
+
 async function migrate(sql: postgres.Sql): Promise<void> {
   const dir = 'drizzle';
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+  const unexpected: string[] = [];
+  // ONLY the numbered migrations. The directory also holds operator scripts
+  // (apply-test-client-purge.sql etc.) that are not part of the schema lineage — the old
+  // swallow-everything loop was silently attempting to EXECUTE those against the test
+  // database, which is exactly the class of hidden signal correction C existed to surface.
+  for (const file of fs.readdirSync(dir).filter((f) => /^\d{4}.*\.sql$/.test(f)).sort()) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     for (const raw of body.split('--> statement-breakpoint')) {
       let stmt = raw.trim();
@@ -73,8 +101,20 @@ async function migrate(sql: postgres.Sql): Promise<void> {
       stmt = stmt
         .replace(/CREATE\s+INDEX\s+CONCURRENTLY/gi, 'CREATE INDEX')
         .replace(/DROP\s+INDEX\s+CONCURRENTLY/gi, 'DROP INDEX');
-      try { await sql.unsafe(stmt); } catch { /* Supabase roles etc. — asserted below */ }
+      try {
+        await sql.unsafe(stmt);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!EXPECTED_MIGRATION_FAILURES.some((rx) => rx.test(msg))) {
+          unexpected.push(file + ': ' + msg.slice(0, 140));
+        }
+      }
     }
+  }
+  if (unexpected.length > 0) {
+    console.error('FAIL: ' + unexpected.length + ' UNEXPECTED migration failure(s):');
+    for (const u of unexpected) console.error('  - ' + u);
+    process.exit(1);
   }
 }
 
@@ -130,11 +170,16 @@ async function main(): Promise<void> {
     );
 
     let seq = 0;
-    async function seedShipment(clientId: number, shipDate: string, rateJson: unknown): Promise<number> {
+    async function seedShipment(
+      clientId: number,
+      shipDate: string,
+      rateJson: unknown,
+    ): Promise<{ id: number; orderNumber: string }> {
       seq += 1;
+      const orderNumber = 'PS508-' + process.pid + '-' + seq;
       const [o] = await raw.unsafe(
         "insert into orders (order_number, client_id, order_status) values ($1, $2, 'shipped') returning id",
-        ['PS508-' + process.pid + '-' + seq, clientId],
+        [orderNumber, clientId],
       );
       const orderId = (o as { id: number }).id;
       const [s] = await raw.unsafe(
@@ -142,7 +187,7 @@ async function main(): Promise<void> {
         + "values ($1, $2, $3, 10, 10, $4::jsonb) returning id",
         [orderId, clientId, shipDate, JSON.stringify(rateJson)],
       );
-      return (s as { id: number }).id;
+      return { id: (s as { id: number }).id, orderNumber };
     }
 
     const s1 = await seedShipment(GATED_CLIENT, '2026-07-10T12:00:00Z', TUPLE);
@@ -160,22 +205,23 @@ async function main(): Promise<void> {
     } as never);
 
     // ---- read back what Billing actually persisted --------------------------------------------
-    const linesFor = async (shipmentId: number) =>
+    const linesFor = async (shipment: { id: number }) =>
       (await raw.unsafe(
         "select line_type, description, unit_cost, total_cost from billing_line_items "
         + "where shipment_id = $1 and line_type in ('shipping','shipping_missing') order by id",
-        [shipmentId],
+        [shipment.id],
       )) as unknown as Array<{ line_type: string; description: string; unit_cost: string; total_cost: string }>;
 
-    // S1 — the core of blocker B: the generator itself emits the frozen amount and suffix.
+    // S1 — the core of blocker B: the generator itself emits the frozen amount and suffix,
+    // pinned to the EXACT persisted description.
     {
       const lines = await linesFor(s1);
       if (lines.length === 1 && lines[0].line_type === 'shipping'
           && lines[0].unit_cost === '99.99' && lines[0].total_cost === '99.99'
-          && lines[0].description.includes(FROZEN_SUFFIX)) {
-        ok('S1 gated + valid tuple: the REAL generator emits ONE shipping line with the FROZEN amount and suffix');
+          && lines[0].description === lineDescription(FROZEN_SUFFIX, s1)) {
+        ok('S1 gated + valid tuple: the REAL generator emits ONE shipping line with the EXACT frozen amount and description');
       } else {
-        fail('S1 gated + valid tuple: the REAL generator emits ONE shipping line with the FROZEN amount and suffix',
+        fail('S1 gated + valid tuple: the REAL generator emits ONE shipping line with the EXACT frozen amount and description',
           JSON.stringify(lines));
       }
     }
@@ -193,25 +239,28 @@ async function main(): Promise<void> {
       }
     }
 
-    // S3 — pre-boundary rows keep the legacy path even for a gated client.
+    // S3 — pre-boundary rows keep the EXACT legacy line even for a gated client.
     {
       const lines = await linesFor(s3);
-      if (lines.length === 1 && lines[0].line_type === 'shipping' && lines[0].unit_cost !== '99.99') {
-        ok('S3 gated + PRE-boundary missing tuple: legacy shipping line (boundary governs missing tuples only)');
+      if (lines.length === 1 && lines[0].line_type === 'shipping'
+          && lines[0].unit_cost === LEGACY_AMOUNT && lines[0].total_cost === LEGACY_AMOUNT
+          && lines[0].description === lineDescription('', s3)) {
+        ok('S3 gated + PRE-boundary missing tuple: the EXACT legacy line (10.00, empty suffix)');
       } else {
-        fail('S3 gated + PRE-boundary missing tuple: legacy shipping line (boundary governs missing tuples only)',
+        fail('S3 gated + PRE-boundary missing tuple: the EXACT legacy line (10.00, empty suffix)',
           JSON.stringify(lines));
       }
     }
 
-    // S4 — the gate-off differential: same tuple, ungated client, legacy output.
+    // S4 — the gate-off differential: same tuple, ungated client, EXACT legacy output.
     {
       const lines = await linesFor(s4);
       if (lines.length === 1 && lines[0].line_type === 'shipping'
-          && lines[0].unit_cost !== '99.99' && !lines[0].description.includes(FROZEN_SUFFIX)) {
-        ok('S4 UNGATED + the same tuple: legacy shipping line — the gate-off path ignores the tuple entirely');
+          && lines[0].unit_cost === LEGACY_AMOUNT && lines[0].total_cost === LEGACY_AMOUNT
+          && lines[0].description === lineDescription('', s4)) {
+        ok('S4 UNGATED + the same tuple: the EXACT legacy line — the gate-off path ignores the tuple entirely');
       } else {
-        fail('S4 UNGATED + the same tuple: legacy shipping line — the gate-off path ignores the tuple entirely',
+        fail('S4 UNGATED + the same tuple: the EXACT legacy line — the gate-off path ignores the tuple entirely',
           JSON.stringify(lines));
       }
     }

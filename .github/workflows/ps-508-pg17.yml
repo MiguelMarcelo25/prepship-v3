@@ -94,3 +94,8 @@ jobs:
       # migrations — emits the frozen line, the hold, and the gate-off legacy differential.
       - name: PS-508 real Billing generator emits the frozen line
         run: npm run -s test:ps-508-billing-generates-frozen-line-pg17
+
+      # Hermes re-audit correction 6: the mutation claims as a reproducible exact-SHA
+      # artifact. With PS508_PG17_ADMIN_URL present the two generator-layer mutants run too.
+      - name: PS-508 mutation manifest (all mutants)
+        run: npm run -s test:ps-508-mutation-manifest
