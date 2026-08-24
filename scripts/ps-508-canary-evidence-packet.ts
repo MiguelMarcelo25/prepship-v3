@@ -32,8 +32,8 @@
  *  --mode activation  the acceptance gate. Additionally requires: nonempty valid --boundary;
  *                     operator readbacks (--env-clients-readback, --env-boundary-readback,
  *                     --readback-at) matching the inputs; deployed identities (--api-sha,
- *                     --worker-sha, --portal-sha) with --portal-sha REQUIRED to equal the
- *                     embedded mirror ref or the run fails as PORTAL-MIRROR-STALE; every
+ *                     --worker-sha, --portal-sha) all 40-hex; PS508_PORTAL_TOKEN for the
+ *                     GitHub-API Portal verification; every
  *                     REQUIRED cohort represented or explicitly waived via
  *                     --waive "<cohort>:<reason>" (repeatable, recorded in the packet).
  */
@@ -61,12 +61,7 @@ const PACKET_SCHEMA_VERSION = 3;
 /**
  * The EXACT Portal commit this file's embedded SQL was copied from (round-5: full SHA, never a
  * prefix — the seven-char prefix rule guaranteed a false refusal of any descendant head).
- * Activation verifies, against a local clone supplied via --portal-repo:
- *   (a) the attested deployed Portal SHA is a known commit,
- *   (b) this mirror commit is an ANCESTOR of it, and
- *   (c) the predicate source file at the deployed SHA is byte-identical to the file at the
- *       mirror SHA — so a descendant that CHANGED the predicate fails PORTAL-MIRROR-STALE
- *       instead of silently drifting.
+ * See verifyPortalViaApi below for how the deployed Portal SHA is checked against this mirror.
  */
 const PORTAL_MIRROR_SHA = 'cd486cc982870b190692e41bd8fbe35944f1e5ec';
 const PORTAL_PREDICATE_PATH = 'src/lib/client-portal/customer-shipping-rate.ts';
@@ -75,22 +70,73 @@ const PORTAL_MIRROR_SOURCE = 'client-portal-prepship@' + PORTAL_MIRROR_SHA.slice
 /** Activation refuses any --api that is not exactly the approved production origin. */
 const PRODUCTION_API_ORIGIN = 'https://prepshipv4-api-l5xc.onrender.com';
 /**
- * Round-6: Portal verification objects come from THIS hardcoded official remote, fetched into
- * the operator's clone during validation. A doctored local clone therefore cannot fake
- * reachability — the refs and objects used for ancestry, digest, and reachability all originate
- * from GitHub, and replacement objects are disabled for every git call. The deployed-ness of
- * the attested SHA remains an OPERATOR ATTESTATION (recorded as such); what is machine-verified
- * is: known commit, reachable from an official remote ref, mirror-is-ancestor, predicate file
- * byte-identical to the mirror's.
+ * Round-7: Portal verification uses the GitHub REST API over HTTPS, NOT a git fetch. The
+ * round-6 git-fetch approach was refuted: git rewrites command-line URLs through
+ * url.<base>.insteadOf configuration in the operator-supplied clone, and GIT_NO_REPLACE_OBJECTS
+ * does not disable that rewriting — a doctored clone could redirect the "hardcoded" remote to a
+ * local repository and publish a forged descendant. The REST API cannot be redirected by any
+ * git configuration: it is a plain fetch() to api.github.com with redirect:'error'. What is
+ * machine-verified: the attested SHA EXISTS on GitHub (published), the mirror commit is an
+ * ancestor of it (compare), and the predicate file is byte-identical at both SHAs (contents).
+ * Deployed-ness of the attested SHA remains an OPERATOR ATTESTATION — no live Portal version
+ * endpoint exists to read.
  */
-const PORTAL_OFFICIAL_REMOTE = 'https://github.com/drprepperusa-org/client-portal-prepship.git';
-/** argv-array git — no shell, no cmd.exe caret mangling, no injection via repo paths. */
-function gitPortal(repo: string, args: string[]): string {
-  return execFileSync('git', ['-C', repo, ...args], {
-    encoding: 'utf8',
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+const PORTAL_API_BASE = process.env.PS508_PORTAL_API_BASE // test-only override; hardcoded default
+  ?? 'https://api.github.com/repos/drprepperusa-org/client-portal-prepship';
+
+type PortalVerifyResult = { ok: true } | { ok: false; reason: string };
+async function verifyPortalViaApi(input: {
+  portalSha: string; token: string; apiBase: string;
+}): Promise<PortalVerifyResult> {
+  const headers: Record<string, string> = {
+    authorization: 'Bearer ' + input.token,
+    accept: 'application/vnd.github+json',
+    'user-agent': 'ps508-canary-packet',
+    'x-github-api-version': '2022-11-28',
+  };
+  const get = (p: string) => fetch(input.apiBase + p, {
+    headers, redirect: 'error', signal: AbortSignal.timeout(15_000),
+  });
+  // 1. Published: the attested SHA must exist as a commit on GitHub. A truly local/unpushed
+  //    commit returns 404 — GitHub never saw it.
+  let commitRes: Response;
+  try { commitRes = await get('/commits/' + input.portalSha); }
+  catch (e) { return { ok: false, reason: 'PORTAL-API-UNREACHABLE: ' + String(e).slice(0, 100) }; }
+  if (commitRes.status === 404) {
+    return { ok: false, reason: 'PORTAL-SHA-UNPUBLISHED: GitHub has no commit ' + input.portalSha
+      + ' in the official repository — an unpushed local commit cannot attest a deployment' };
+  }
+  if (commitRes.status !== 200) {
+    return { ok: false, reason: 'PORTAL-API-ERROR: /commits returned HTTP ' + commitRes.status };
+  }
+  // 2. Ancestry: the embedded mirror must be an ancestor of the attested SHA.
+  const cmpRes = await get('/compare/' + PORTAL_MIRROR_SHA + '...' + input.portalSha);
+  if (cmpRes.status !== 200) {
+    return { ok: false, reason: 'PORTAL-API-ERROR: /compare returned HTTP ' + cmpRes.status };
+  }
+  const cmp = (await cmpRes.json()) as { status?: string };
+  if (cmp.status !== 'ahead' && cmp.status !== 'identical') {
+    return { ok: false, reason: 'PORTAL-MIRROR-STALE: the embedded mirror commit '
+      + PORTAL_MIRROR_SHA.slice(0, 7) + ' is not an ancestor of the attested Portal SHA (compare status '
+      + String(cmp.status) + ')' };
+  }
+  // 3. Predicate identity: the predicate file must be byte-identical at mirror and attested SHA.
+  const fileAt = async (ref: string): Promise<string | null> => {
+    const r = await get('/contents/' + PORTAL_PREDICATE_PATH + '?ref=' + ref);
+    if (r.status !== 200) return null;
+    const j = (await r.json()) as { content?: string; encoding?: string };
+    if (j.encoding !== 'base64' || typeof j.content !== 'string') return null;
+    return Buffer.from(j.content, 'base64').toString('utf8');
+  };
+  const [atMirror, atDeployed] = await Promise.all([fileAt(PORTAL_MIRROR_SHA), fileAt(input.portalSha)]);
+  if (atMirror == null || atDeployed == null) {
+    return { ok: false, reason: 'PORTAL-API-ERROR: could not read ' + PORTAL_PREDICATE_PATH + ' at both SHAs' };
+  }
+  if (atMirror !== atDeployed) {
+    return { ok: false, reason: 'PORTAL-MIRROR-STALE: ' + PORTAL_PREDICATE_PATH
+      + ' CHANGED between the embedded mirror commit and the attested Portal SHA — re-embed the predicate first' };
+  }
+  return { ok: true };
 }
 
 function arg(name: string): string | undefined {
@@ -157,7 +203,6 @@ const operator = {
   ciRunUrl: arg('ci-run-url') ?? null,
   pg17RunUrl: arg('pg17-run-url') ?? null,
   portalCiRunUrl: arg('portal-ci-run-url') ?? null,
-  portalRepo: arg('portal-repo') ?? null,
   waiveApprovedBy: arg('waive-approved-by') ?? null,
   waiveEvidence: arg('waive-evidence') ?? null,
 };
@@ -194,21 +239,16 @@ if (MODE === 'activation') {
   if (operator.apiSha && operator.workerSha && operator.apiSha !== operator.workerSha) {
     problems.push('api-sha and worker-sha differ — deploy both to one SHA before the canary');
   }
-  if (!operator.portalRepo) {
-    problems.push('activation requires --portal-repo (a local clone used to VERIFY the deployed '
-      + 'Portal SHA by ancestry and predicate digest, replacing the refuted prefix rule)');
+  if (!process.env.PS508_PORTAL_TOKEN) {
+    problems.push('activation requires PS508_PORTAL_TOKEN (a GitHub token with read access to the '
+      + 'Portal repo — verification is via the REST API, not a git clone, so no git configuration '
+      + 'can redirect it)');
   }
   if (!API) {
     problems.push('activation requires --api (live /health is part of the identity binding)');
-  } else {
-    let origin = '';
-    try { origin = new URL(API).origin; } catch { /* handled below */ }
-    if (origin !== PRODUCTION_API_ORIGIN) {
-      problems.push('activation requires --api at the approved production origin '
-        + PRODUCTION_API_ORIGIN + ' (got "' + (origin || API) + '") — a local or arbitrary '
-        + 'endpoint cannot impersonate the deployed API');
-    }
   }
+  // The origin match is verified in main() alongside the other identity gates (so all identity
+  // failures accumulate and report together instead of fail-fast).
   if (WAIVERS.size > 0) {
     if (!operator.waiveApprovedBy || !operator.waiveApprovedBy.trim()) {
       problems.push('activation with waivers requires --waive-approved-by (the accountable operator)');
@@ -217,64 +257,9 @@ if (MODE === 'activation') {
       problems.push('activation with waivers requires --waive-evidence (a reviewable reference)');
     }
   }
-  // Portal identity verification (round-6, injection-proof): every git call is argv-array with
-  // replacement objects disabled, and the verification objects are FETCHED FROM THE OFFICIAL
-  // REMOTE into the operator's clone — a doctored clone cannot fake reachability, because an
-  // unpushed local descendant is not reachable from any official ref.
-  if (operator.portalRepo && operator.portalSha && HEX40.test(operator.portalSha)) {
-    const repo = operator.portalRepo;
-    try {
-      gitPortal(repo, ['fetch', '--prune', PORTAL_OFFICIAL_REMOTE,
-        '+refs/heads/*:refs/ps508-verify/*']);
-      let kind = '';
-      try {
-        kind = gitPortal(repo, ['cat-file', '-t', operator.portalSha]);
-      } catch {
-        // cat-file exits nonzero for an object that simply does not exist — that is UNKNOWN,
-        // not a verification-infrastructure failure.
-        throw Object.assign(new Error('no such object'), { ps508: 'unknown' });
-      }
-      if (kind !== 'commit') throw Object.assign(new Error('not a commit'), { ps508: 'unknown' });
-      const refs = gitPortal(repo, ['for-each-ref', '--format=%(objectname)', 'refs/ps508-verify/'])
-        .split(/\r?\n/).filter(Boolean);
-      let reachable = false;
-      for (const tip of refs) {
-        try {
-          execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', operator.portalSha, tip],
-            { stdio: 'ignore', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
-          reachable = true; break;
-        } catch { /* try next ref */ }
-      }
-      if (!reachable) {
-        problems.push('PORTAL-SHA-UNPUBLISHED: ' + operator.portalSha + ' is not reachable from any '
-          + 'ref of the official remote ' + PORTAL_OFFICIAL_REMOTE + ' — an unpushed local commit '
-          + 'cannot attest a deployment');
-      } else {
-        try {
-          execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', PORTAL_MIRROR_SHA, operator.portalSha],
-            { stdio: 'ignore', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
-          const atMirror = gitPortal(repo, ['show', PORTAL_MIRROR_SHA + ':' + PORTAL_PREDICATE_PATH]);
-          const atDeployed = gitPortal(repo, ['show', operator.portalSha + ':' + PORTAL_PREDICATE_PATH]);
-          if (atMirror !== atDeployed) {
-            problems.push('PORTAL-MIRROR-STALE: ' + PORTAL_PREDICATE_PATH + ' CHANGED between the embedded '
-              + 'mirror commit and the attested Portal SHA — re-embed the predicate first');
-          }
-        } catch {
-          problems.push('PORTAL-MIRROR-STALE: the embedded mirror commit ' + PORTAL_MIRROR_SHA.slice(0, 7)
-            + ' is not an ancestor of the attested Portal SHA ' + operator.portalSha);
-        }
-      }
-    } catch (error) {
-      if ((error as { ps508?: string }).ps508 === 'unknown') {
-        problems.push('PORTAL-SHA-UNKNOWN: ' + operator.portalSha
-          + ' is not a commit object after fetching the official remote');
-      } else {
-        problems.push('PORTAL-VERIFY-FAILED: git verification against --portal-repo failed ('
-          + String(error).slice(0, 120) + ') — the path must be a real clone with network access '
-          + 'to the official remote');
-      }
-    }
-  }
+  // Portal identity is verified via the GitHub REST API in main() (round-7) — see
+  // verifyPortalViaApi. It cannot live in this sync validation phase because it is async, and it
+  // no longer touches git at all, so nothing in the operator's environment can redirect it.
   for (const [flag, v] of [['ci-run-url', operator.ciRunUrl], ['pg17-run-url', operator.pg17RunUrl], ['portal-ci-run-url', operator.portalCiRunUrl]] as const) {
     if (!v) problems.push('activation requires --' + flag + ' (the exact-SHA evidence run)');
   }
@@ -374,7 +359,10 @@ async function main(): Promise<void> {
   }
   let toolGitSha: string | null = null;
   try {
-    toolGitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    // Reads THIS repo's HEAD (not operator-supplied); argv-array and replacement objects
+    // disabled for consistency, though rev-parse HEAD is not influenced by either.
+    toolGitSha = execFileSync('git', ['rev-parse', 'HEAD'],
+      { encoding: 'utf8', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } }).trim();
   } catch { /* packaged run */ }
   // Inventory mode: when both --api and --api-sha are supplied, a health/SHA disagreement is a
   // recorded failure (the run cannot silently carry a wrong identity even outside activation).
@@ -385,32 +373,49 @@ async function main(): Promise<void> {
       + ') does not equal --api-sha ' + operator.apiSha);
   }
   if (MODE === 'activation') {
+    // Round-7: the identity checks ACCUMULATE (they were fail-fast, which hid later gate
+    // failures — e.g. a wrong --api origin aborted before the async Portal check could run).
+    // Every failed gate is reported, then the run exits nonzero.
+    const idFailures: string[] = [];
+    // The --api URL must be exactly the approved production origin (moved here from the sync
+    // phase so it accumulates with the other identity gates rather than fail-fast).
+    let origin = '';
+    try { origin = API ? new URL(API).origin : ''; } catch { /* below */ }
+    if (origin !== PRODUCTION_API_ORIGIN) {
+      idFailures.push('activation requires --api at the approved production origin '
+        + PRODUCTION_API_ORIGIN + ' (got "' + (origin || API) + '") — a local or arbitrary '
+        + 'endpoint cannot impersonate the deployed API');
+    }
     // The tool must BE the reviewed code: its own git SHA must exist and equal the attested
     // API deployment SHA. A packaged or drifted tool cannot self-attest acceptance.
     if (!toolGitSha || !HEX40.test(toolGitSha)) {
-      console.error('FAIL: activation requires the tool to run from a git checkout (toolGitSha unavailable)');
-      process.exit(1);
-    }
-    if (toolGitSha !== operator.apiSha) {
-      console.error('FAIL: toolGitSha ' + toolGitSha + ' != attested --api-sha ' + operator.apiSha
+      idFailures.push('activation requires the tool to run from a git checkout (toolGitSha unavailable)');
+    } else if (toolGitSha !== operator.apiSha) {
+      idFailures.push('toolGitSha ' + toolGitSha + ' != attested --api-sha ' + operator.apiSha
         + ' — run the packet from the exact deployed SHA');
-      process.exit(1);
     }
     // Live health must corroborate the attested identity.
     if (!healthSha || healthSha !== operator.apiSha) {
-      console.error('FAIL: /health commitSha (' + String(healthSha) + ') does not equal --api-sha '
+      idFailures.push('/health commitSha (' + String(healthSha) + ') does not equal --api-sha '
         + operator.apiSha + ' — the deployed API is not the attested SHA');
-      process.exit(1);
     }
-    // Round-6: the worker decision is a pure, separately-tested owner: one canonical scheduler
-    // snapshot only, service === 'worker', full-SHA equality, RECENT heartbeat, ambiguity
-    // refused. A months-old snapshot with the right SHA is historical identity, not liveness.
+    // The worker decision is a pure, separately-tested owner: one canonical scheduler snapshot
+    // only, service === 'worker', full-SHA equality, RECENT heartbeat, ambiguity refused.
     const workerRows = (await sql.unsafe(
       "select key, value from settings where key like 'worker.status.snapshot%'",
     )) as unknown as Array<{ key: string; value: unknown }>;
     const workerDecision = decideWorkerIdentity(workerRows, operator.apiSha as string, Date.now());
-    if (!workerDecision.ok) {
-      console.error('FAIL: worker identity: ' + workerDecision.reason);
+    if (!workerDecision.ok) idFailures.push('worker identity: ' + workerDecision.reason);
+    // Portal identity via the GitHub REST API — unspoofable by git configuration.
+    const portalCheck = await verifyPortalViaApi({
+      portalSha: operator.portalSha as string,
+      token: process.env.PS508_PORTAL_TOKEN as string,
+      apiBase: PORTAL_API_BASE,
+    });
+    if (!portalCheck.ok) idFailures.push('portal identity: ' + portalCheck.reason);
+
+    if (idFailures.length > 0) {
+      for (const f of idFailures) console.error('FAIL: ' + f);
       process.exit(1);
     }
   }
@@ -638,10 +643,11 @@ async function main(): Promise<void> {
     portalMirror: {
       sha: PORTAL_MIRROR_SHA, source: PORTAL_MIRROR_SOURCE, executedAsSql: true,
       verification: MODE === 'activation'
-        ? 'machine-verified: known commit, reachable from an official-remote ref (fetched from '
-          + PORTAL_OFFICIAL_REMOTE + ' with replacement objects disabled), mirror-is-ancestor, '
-          + 'predicate file byte-identical. DEPLOYED-ness of the attested SHA remains an '
-          + 'OPERATOR ATTESTATION — no live Portal version endpoint exists to read.'
+        ? 'machine-verified via the GitHub REST API (' + PORTAL_API_BASE + ', redirect:error, '
+          + 'un-redirectable by git configuration): the attested SHA is published on GitHub, the '
+          + 'mirror commit is an ancestor of it, and the predicate file is byte-identical at both '
+          + 'SHAs. DEPLOYED-ness of the attested SHA remains an OPERATOR ATTESTATION — no live '
+          + 'Portal version endpoint exists to read.'
         : 'not verified in inventory mode',
     },
     evidenceRunUrls: {

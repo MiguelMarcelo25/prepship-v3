@@ -1,13 +1,13 @@
 /**
  * PS-508 — smoke proof for the canary evidence packet (schema v3), against real PostgreSQL.
  *
- * Round-6 additions: git verification is injection-proof (argv arrays — the audit DEMONSTRATED
- * a shell injection through the old concatenated --portal-repo) and sourced from the OFFICIAL
- * remote, so an unpushed local descendant is refused as UNPUBLISHED; the worker decision is a
- * pure owner unit-tested across missing/stale-SHA/stale-heartbeat/malformed/duplicate/current;
- * excluded rows must carry ZERO shipping-domain lines of any type or sign and no Portal money;
- * multi_shipment is an evidence-grain cohort — only orders with >=2 CLEANLY-COMPARED frozen
- * shipments represent it.
+ * Round-7: Portal identity is verified via the GitHub REST API (un-redirectable by git
+ * configuration), driven here by an in-process API stub — no clone, no token, no network. A
+ * hostile git url.insteadOf is placed in the packet env and proven to have zero effect. The
+ * worker decision is a pure owner tested across missing/stale-SHA/stale-heartbeat/future-
+ * heartbeat/startedAt-only/malformed/duplicate/aux-key/current; excluded rows tolerate no
+ * shipping-domain line of any sign and no Portal money; multi_shipment counts only orders with
+ * >=2 CLEANLY-COMPARED frozen shipments.
  *
  * UNSKIPPABLE: absent PS508_PG17_ADMIN_URL this FAILS rather than skipping.
  */
@@ -36,23 +36,68 @@ function ok(name: string): void { console.log('ok   ' + name); }
 function fail(name: string, detail: string): void { failures += 1; console.log('FAIL ' + name + ' — ' + detail); }
 
 const REPO_SHA = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
-const PORTAL_REPO = process.env.PS508_SMOKE_PORTAL_REPO
-  ?? path.resolve('..', 'client-portal-prepship');
-const PORTAL_HEAD = 'cd486cc982870b190692e41bd8fbe35944f1e5ec'; // == the embedded mirror SHA, pushed
-const PORTAL_ANCESTOR = 'd447d89d83238ea2a522c06e9a158c2f1b20466e'; // real + pushed, but BEHIND the mirror
-const PORTAL_FABRICATED = 'd447d89' + 'a'.repeat(33); // round-4's fabrication — refused as unknown
-const INJECTION_REPO = '/definitely/not/a/repo"; printf commit; #'; // the audit's demonstrated payload
-if (!fs.existsSync(path.join(PORTAL_REPO, '.git'))) {
-  console.error('FAIL: portal clone not found at ' + PORTAL_REPO
-    + ' (set PS508_SMOKE_PORTAL_REPO) — the ancestry cases are unskippable.');
-  process.exit(1);
+
+// Round-7: Portal identity is verified via the GitHub REST API, so the smoke drives a local
+// stub of that API instead of a git clone — fully hermetic (no network, no token, no git
+// config), and it proves the exact HTTP shape the packet consumes. The mirror/deployed/other
+// SHAs are arbitrary 40-hex values the stub is configured to recognise.
+const PORTAL_MIRROR = 'cd486cc982870b190692e41bd8fbe35944f1e5ec'; // == the packet's embedded mirror
+const PORTAL_DEPLOYED = 'a'.repeat(40); // a published descendant, predicate unchanged
+const PORTAL_UNPUBLISHED = 'b'.repeat(40); // never seen by GitHub -> 404
+const PORTAL_DIVERGED = 'c'.repeat(40); // published, but not a descendant of the mirror
+const PORTAL_PREDICATE_CHANGED = 'd'.repeat(40); // published descendant, predicate DIFFERS
+const PRED = 'the-canonical-predicate-bytes';
+type StubState = {
+  published: Set<string>;
+  fileAt: Map<string, string>;
+  status: Map<string, string>; // "base...head" -> compare status
+};
+const stubState: StubState = { published: new Set(), fileAt: new Map(), status: new Map() };
+function configureStub(): void {
+  stubState.published = new Set([PORTAL_MIRROR, PORTAL_DEPLOYED, PORTAL_DIVERGED, PORTAL_PREDICATE_CHANGED]);
+  stubState.fileAt = new Map([
+    [PORTAL_MIRROR, PRED], [PORTAL_DEPLOYED, PRED],
+    [PORTAL_DIVERGED, PRED], [PORTAL_PREDICATE_CHANGED, PRED + '-DRIFTED'],
+  ]);
+  stubState.status = new Map([
+    [PORTAL_MIRROR + '...' + PORTAL_DEPLOYED, 'ahead'],
+    [PORTAL_MIRROR + '...' + PORTAL_MIRROR, 'identical'],
+    [PORTAL_MIRROR + '...' + PORTAL_DIVERGED, 'diverged'],
+    [PORTAL_MIRROR + '...' + PORTAL_PREDICATE_CHANGED, 'ahead'],
+  ]);
 }
-/** An UNPUSHED descendant of the mirror with the predicate unchanged — must be refused. */
-const UNPUSHED_DESCENDANT = (() => {
-  const tree = execFileSync('git', ['-C', PORTAL_REPO, 'rev-parse', PORTAL_HEAD + '^{tree}'], { encoding: 'utf8' }).trim();
-  return execFileSync('git', ['-C', PORTAL_REPO, 'commit-tree', tree, '-p', PORTAL_HEAD, '-m', 'ps508-smoke unpushed descendant'],
-    { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'smoke', GIT_AUTHOR_EMAIL: 's@s', GIT_COMMITTER_NAME: 'smoke', GIT_COMMITTER_EMAIL: 's@s' } }).trim();
-})();
+// The stub runs in its OWN process: the smoke drives the packet with the SYNCHRONOUS spawnSync,
+// which blocks this event loop, so an in-process HTTP server could never answer the subprocess
+// (that deadlock is exactly why the health stub is also a subprocess). Config is passed as JSON
+// argv.
+function startGithubStub(): Promise<{ base: string; child: ChildProcess }> {
+  const config = JSON.stringify({
+    published: [...stubState.published],
+    fileAt: [...stubState.fileAt],
+    status: [...stubState.status],
+  });
+  const script = `
+    const http=require('http');
+    const cfg=JSON.parse(process.argv[1]);
+    const pub=new Set(cfg.published), file=new Map(cfg.fileAt), status=new Map(cfg.status);
+    const s=http.createServer((q,r)=>{const u=new URL(q.url,'http://x');r.setHeader('content-type','application/json');
+      if(u.pathname.startsWith('/commits/')){const sha=u.pathname.slice(9);r.writeHead(pub.has(sha)?200:404);r.end(JSON.stringify({sha}));}
+      else if(u.pathname.startsWith('/compare/')){const p=decodeURIComponent(u.pathname.slice(9));r.writeHead(200);r.end(JSON.stringify({status:status.get(p)||'diverged'}));}
+      else if(u.pathname.startsWith('/contents/')){const ref=u.searchParams.get('ref');const c=file.get(ref);if(c==null){r.writeHead(404);r.end('{}');}else{r.writeHead(200);r.end(JSON.stringify({encoding:'base64',content:Buffer.from(c).toString('base64')}));}}
+      else{r.writeHead(404);r.end('{}');}});
+    s.listen(0,'127.0.0.1',()=>console.log('PORT='+s.address().port));`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script, config], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let buf = '';
+    child.stdout!.on('data', (d: Buffer) => {
+      buf += d.toString();
+      const m = /PORT=(\d+)/.exec(buf);
+      if (m) resolve({ base: 'http://127.0.0.1:' + m[1], child });
+    });
+    child.on('error', reject);
+    setTimeout(() => reject(new Error('github stub did not start')), 10_000);
+  });
+}
 
 const SCHEMA = `
   create table orders (
@@ -415,46 +460,63 @@ async function main(): Promise<void> {
     if (all) ok('worker owner: missing / stale-SHA / stale-heartbeat / FUTURE-heartbeat / startedAt-only / malformed / duplicate / aux-key refused, current accepted');
   }
 
-  // ---- 7. round-6: portal identity — injection-proof and official-remote sourced -------------
+  // ---- 7. round-7: portal identity via the GitHub REST API stub (git-config-independent) -----
   {
     const { url, db, name } = await freshDb();
     await seed(db, HAPPY); await addSecondShipment(db);
     await seedWorkerSnapshot(db, REPO_SHA, new Date().toISOString());
+    configureStub();
+    const stub = await startGithubStub();
+    // Point the packet's Portal API at the stub, supply a dummy token, and — critically — set a
+    // HOSTILE git url.insteadOf in the packet's environment to prove it has ZERO effect, because
+    // the packet no longer verifies the Portal through git at all.
+    const hostileGitConfig = path.join(os.tmpdir(), 'ps508-hostile-' + process.pid + '.gitconfig');
+    fs.writeFileSync(hostileGitConfig,
+      '[url "file:///attacker"]\n\tinsteadOf = https://github.com/drprepperusa-org/client-portal-prepship\n');
+    const portalEnv = { PS508_PORTAL_API_BASE: stub.base, PS508_PORTAL_TOKEN: 'stub-token',
+      GIT_CONFIG_GLOBAL: hostileGitConfig };
+    for (const [k, v] of Object.entries(portalEnv)) process.env[k] = v;
+
+    // A health stub whose commitSha matches --api-sha, so every identity gate EXCEPT the --api
+    // production-origin passes — that lets the accumulated identity failures reach and exercise
+    // the async Portal-API check (the origin gate no longer fail-fasts).
+    const health = await startHealthStub(REPO_SHA);
     const NOW = new Date().toISOString();
     const URLS = ['--ci-run-url', 'https://ci/1', '--pg17-run-url', 'https://ci/2', '--portal-ci-run-url', 'https://ci/3'];
-    const IDENT = (portalSha: string, portalRepo: string) => ['--env-clients-readback', String(CLIENT),
+    const IDENT = (portalSha: string) => ['--env-clients-readback', String(CLIENT),
       '--env-boundary-readback', BOUNDARY, '--readback-at', NOW, '--api-sha', REPO_SHA,
-      '--worker-sha', REPO_SHA, '--portal-sha', portalSha, '--portal-repo', portalRepo,
-      ...URLS, ...WAIVER_APPROVAL];
+      '--worker-sha', REPO_SHA, '--portal-sha', portalSha, '--api', health.url, ...URLS, ...WAIVER_APPROVAL];
     const ACT = ['--mode', 'activation', '--boundary', BOUNDARY, ...FULL_WAIVERS];
 
-    const injected = runPacket(url, [...ACT, ...IDENT(PORTAL_HEAD, INJECTION_REPO)], BOUNDARY);
-    if (injected.code !== 0 && injected.stderr.includes('PORTAL-VERIFY-FAILED')) {
-      ok("the audit's shell-injection payload in --portal-repo is REFUSED (argv-array git, no shell)");
-    } else fail('injection refused', 'code=' + injected.code + ' err=' + injected.stderr.slice(-200));
+    const unpublished = runPacket(url, [...ACT, ...IDENT(PORTAL_UNPUBLISHED)], BOUNDARY);
+    if (unpublished.code !== 0 && unpublished.stderr.includes('PORTAL-SHA-UNPUBLISHED')) {
+      ok('an unpublished Portal SHA (GitHub 404) is refused -> PORTAL-SHA-UNPUBLISHED');
+    } else fail('unpublished refused', 'code=' + unpublished.code + ' err=' + unpublished.stderr.slice(-200));
 
-    const unpushed = runPacket(url, [...ACT, ...IDENT(UNPUSHED_DESCENDANT, PORTAL_REPO)], BOUNDARY);
-    if (unpushed.code !== 0 && unpushed.stderr.includes('PORTAL-SHA-UNPUBLISHED')) {
-      ok('an UNPUSHED local descendant (predicate unchanged) is refused — verification objects come from the official remote');
-    } else fail('unpushed descendant refused', 'code=' + unpushed.code + ' err=' + unpushed.stderr.slice(-200));
+    const diverged = runPacket(url, [...ACT, ...IDENT(PORTAL_DIVERGED)], BOUNDARY);
+    if (diverged.code !== 0 && diverged.stderr.includes('PORTAL-MIRROR-STALE')) {
+      ok('a published Portal SHA that is NOT a descendant of the mirror is refused -> PORTAL-MIRROR-STALE');
+    } else fail('diverged refused', 'code=' + diverged.code + ' err=' + diverged.stderr.slice(-200));
 
-    const fabricated = runPacket(url, [...ACT, ...IDENT(PORTAL_FABRICATED, PORTAL_REPO)], BOUNDARY);
-    if (fabricated.code !== 0 && fabricated.stderr.includes('PORTAL-SHA-UNKNOWN')) {
-      ok("round-4's fabricated padded SHA is refused as an unknown commit");
-    } else fail('fabricated refused', 'code=' + fabricated.code);
+    const changed = runPacket(url, [...ACT, ...IDENT(PORTAL_PREDICATE_CHANGED)], BOUNDARY);
+    if (changed.code !== 0 && changed.stderr.includes('PORTAL-MIRROR-STALE')) {
+      ok('a descendant whose predicate file DIFFERS from the mirror is refused -> PORTAL-MIRROR-STALE');
+    } else fail('predicate-changed refused', 'code=' + changed.code + ' err=' + changed.stderr.slice(-200));
 
-    const behind = runPacket(url, [...ACT, ...IDENT(PORTAL_ANCESTOR, PORTAL_REPO)], BOUNDARY);
-    if (behind.code !== 0 && behind.stderr.includes('PORTAL-MIRROR-STALE')) {
-      ok('a REAL pushed commit BEHIND the mirror fails ancestry -> PORTAL-MIRROR-STALE');
-    } else fail('behind-mirror refused', 'code=' + behind.code + ' err=' + behind.stderr.slice(-200));
+    // A VALID published descendant with matching predicate PASSES Portal verification (via the
+    // API, despite the hostile git url.insteadOf in the env) — so the only remaining refusal is
+    // the --api production-origin gate. Exactly one FAIL line proves Portal + worker + health
+    // all passed.
+    const oneLeft = runPacket(url, [...ACT, ...IDENT(PORTAL_DEPLOYED)], BOUNDARY);
+    if (oneLeft.code !== 0 && oneLeft.stderr.includes('approved production origin')
+        && !oneLeft.stderr.includes('portal identity') && countFailLines(oneLeft.stderr) === 1) {
+      ok('a VALID published descendant passes Portal verification (via API, hostile git config ignored); the ONLY remaining refusal is the --api origin');
+    } else fail('portal API passes; origin is the one gate', 'failLines=' + countFailLines(oneLeft.stderr) + ' err=' + oneLeft.stderr.slice(-300));
 
-    const stub = await startHealthStub(REPO_SHA);
-    const stubApi = runPacket(url, [...ACT, ...IDENT(PORTAL_HEAD, PORTAL_REPO), '--api', stub.url], BOUNDARY);
+    health.child.kill();
     stub.child.kill();
-    if (stubApi.code !== 0 && stubApi.stderr.includes('approved production origin')
-        && countFailLines(stubApi.stderr) === 1) {
-      ok('with EVERY other gate bound (incl. official-remote portal verification), a stub API is the ONE remaining refusal');
-    } else fail('origin is the only remaining gate', 'failLines=' + countFailLines(stubApi.stderr) + ' err=' + stubApi.stderr.slice(-300));
+    for (const k of Object.keys(portalEnv)) delete process.env[k];
+    fs.rmSync(hostileGitConfig, { force: true });
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 

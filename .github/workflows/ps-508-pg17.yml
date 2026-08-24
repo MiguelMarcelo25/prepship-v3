@@ -59,14 +59,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The packet smoke verifies Portal identity by ANCESTRY against a real clone.
-      - uses: actions/checkout@v4
-        with:
-          repository: drprepperusa-org/client-portal-prepship
-          token: ${{ secrets.GITHUB_TOKEN }}
-          path: portal-clone
-          fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -123,7 +115,7 @@ jobs:
           --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
           scripts/ps-508-canary-evidence-packet.ts scripts/ps-508-canary-packet-smoke-pg17.ts
 
+      # Round-7: the smoke drives an in-process GitHub-API stub — no Portal clone, no token,
+      # no network — so the auth-flaky portal-clone checkout is gone.
       - name: PS-508 canary packet smoke
-        env:
-          PS508_SMOKE_PORTAL_REPO: ${{ github.workspace }}/portal-clone
         run: npm run -s test:ps-508-canary-packet-smoke-pg17
