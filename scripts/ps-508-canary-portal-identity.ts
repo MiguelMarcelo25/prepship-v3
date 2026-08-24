@@ -28,6 +28,38 @@ export const PORTAL_OFFICIAL_API =
 export type PortalVerifyResult = { ok: true } | { ok: false; reason: string };
 
 /**
+ * STRICT base64 decode (Hermes round-9). Node's Buffer.from(x,'base64') is permissive: it silently
+ * ignores characters outside the base64 alphabet, so 'YWJj' and 'YWJj@@@' decode to the SAME bytes
+ * and would compare equal. For an evidence packet whose whole posture is fail-closed, a malformed
+ * payload must be REJECTED, not quietly accepted. GitHub's Contents API returns canonical base64
+ * wrapped only with newlines, so:
+ *   - strip only the CR/LF whitespace GitHub legitimately inserts;
+ *   - require a strict alphabet + padding and a length that is a multiple of 4;
+ *   - decode, reject an empty result;
+ *   - re-encode and require canonical equivalence (Node's encoder is canonical, so any trailing-bit
+ *     garbage or non-canonical padding fails this round-trip).
+ * The caller still compares the resulting raw bytes with Buffer.equals.
+ */
+export function decodeStrictBase64(content: string):
+  | { ok: true; bytes: Buffer }
+  | { ok: false; reason: string } {
+  const stripped = content.replace(/[\r\n]/g, '');
+  if (stripped.length === 0) return { ok: false, reason: 'empty base64 payload' };
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(stripped)) {
+    return { ok: false, reason: 'invalid base64 alphabet or padding' };
+  }
+  if (stripped.length % 4 !== 0) {
+    return { ok: false, reason: 'base64 length is not a multiple of 4 (invalid padding)' };
+  }
+  const bytes = Buffer.from(stripped, 'base64');
+  if (bytes.length === 0) return { ok: false, reason: 'base64 decoded to zero bytes' };
+  if (bytes.toString('base64') !== stripped) {
+    return { ok: false, reason: 'base64 is not canonical (re-encode mismatch — corrupt or non-canonical payload)' };
+  }
+  return { ok: true, bytes };
+}
+
+/**
  * Pure (apiBase, token, portalSha, mirrorSha, predicatePath are all parameters) so it is
  * unit-testable WITHOUT any env seam on the activation path. The whole REST sequence is wrapped
  * so every fetch/JSON failure normalizes into a fail-closed PortalVerifyResult, and the predicate
@@ -78,7 +110,9 @@ export async function verifyPortalViaApi(input: {
       if (j.type !== 'file' || j.encoding !== 'base64' || typeof j.content !== 'string') {
         return { err: 'unexpected contents shape at ref ' + ref };
       }
-      return Buffer.from(j.content, 'base64');
+      const dec = decodeStrictBase64(j.content);
+      if (!dec.ok) return { err: 'malformed base64 at ref ' + ref + ': ' + dec.reason };
+      return dec.bytes;
     };
     const [atMirror, atDeployed] = await Promise.all([bytesAt(input.mirrorSha), bytesAt(input.portalSha)]);
     if ('err' in atMirror) return { ok: false, reason: 'PORTAL-API-ERROR: ' + atMirror.err };

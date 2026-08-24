@@ -45,6 +45,11 @@ import {
   verifyPortalViaApi,
   worktreeIdentity,
 } from './ps-508-canary-portal-identity';
+import {
+  BOUND_SOURCE_CLOSURE,
+  parseLsFilesV,
+  sourceBindingFailures,
+} from './ps-508-canary-source-binding';
 import postgres from 'postgres';
 import {
   decideBillableShippingMoney,
@@ -105,6 +110,20 @@ function args(name: string): string[] {
     if (process.argv[i] === '--' + name && next) out.push(next);
   }
   return out;
+}
+
+/**
+ * Round-9: a child-process env for git that disables replace-object resolution AND strips the
+ * GIT_*-redirection family, so a stray GIT_DIR / GIT_INDEX_FILE / alternates cannot repoint a git
+ * query at an attacker-built repository. A PATH-level `git` shim is still out of scope (it already
+ * implies control of the whole run) — see the environment-trust note in ps-508-canary-source-binding.
+ */
+function scrubbedGitEnv(): NodeJS.ProcessEnv {
+  const e: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' };
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
+    'GIT_CONFIG_COUNT', 'GIT_NAMESPACE', 'GIT_CONFIG_PARAMETERS', 'GIT_ATTR_SOURCE']) delete e[k];
+  return e;
 }
 
 const HEX40 = /^[0-9a-f]{40}$/;
@@ -314,10 +333,10 @@ async function main(): Promise<void> {
   }
   let toolGitSha: string | null = null;
   try {
-    // Reads THIS repo's HEAD (not operator-supplied); argv-array and replacement objects
-    // disabled for consistency, though rev-parse HEAD is not influenced by either.
+    // Reads THIS repo's HEAD (not operator-supplied). Uses the scrubbed git env so a stray
+    // GIT_DIR cannot repoint rev-parse at another repository.
     toolGitSha = execFileSync('git', ['rev-parse', 'HEAD'],
-      { encoding: 'utf8', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } }).trim();
+      { encoding: 'utf8', env: scrubbedGitEnv() }).trim();
   } catch { /* packaged run */ }
   // Inventory mode: when both --api and --api-sha are supplied, a health/SHA disagreement is a
   // recorded failure (the run cannot silently carry a wrong identity even outside activation).
@@ -354,13 +373,35 @@ async function main(): Promise<void> {
     let porcelain = 'GIT-STATUS-UNAVAILABLE';
     try {
       porcelain = execFileSync('git', ['status', '--porcelain'],
-        { encoding: 'utf8', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
+        { encoding: 'utf8', env: scrubbedGitEnv() });
     } catch { /* handled below */ }
     const wt = porcelain === 'GIT-STATUS-UNAVAILABLE' ? { clean: false, dirtyPaths: ['<git status unavailable>'] } : worktreeIdentity(porcelain);
     if (!wt.clean) {
       idFailures.push('activation requires a CLEAN worktree — the executed code must be the '
         + 'reviewed commit, not a modified tree. Uncommitted: ' + wt.dirtyPaths.slice(0, 5).join(', '));
     }
+    // Round-9: the porcelain check above is defense in depth only. A tracked file carrying the
+    // skip-worktree or assume-unchanged index flag stays out of `git status`, so the AUTHORITATIVE
+    // binding compares the acceptance-critical source closure to its committed HEAD blobs and
+    // rejects hidden index flags (see ps-508-canary-source-binding). git is shelled here; the
+    // pure decision is sourceBindingFailures(), unit-tested in the smoke.
+    const gitBuf = (a: string[]): Buffer | null => {
+      try { return execFileSync('git', a, { env: scrubbedGitEnv() }); }
+      catch { return null; }
+    };
+    const gitTxt = (a: string[]): string | null => {
+      try { return execFileSync('git', a, { encoding: 'utf8', env: scrubbedGitEnv() }); }
+      catch { return null; }
+    };
+    const lsV = gitTxt(['ls-files', '-v', '--', ...BOUND_SOURCE_CLOSURE]);
+    const tagByPath = lsV === null ? new Map<string, string>() : parseLsFilesV(lsV);
+    const bindFacts = BOUND_SOURCE_CLOSURE.map((path) => ({
+      path,
+      tag: tagByPath.get(path),
+      headBlob: gitBuf(['cat-file', 'blob', 'HEAD:' + path]),
+      disk: fs.existsSync(path) ? fs.readFileSync(path) : null,
+    }));
+    for (const f of sourceBindingFailures(bindFacts)) idFailures.push(f);
     // Live health must corroborate the attested identity.
     if (!healthSha || healthSha !== operator.apiSha) {
       idFailures.push('/health commitSha (' + String(healthSha) + ') does not equal --api-sha '

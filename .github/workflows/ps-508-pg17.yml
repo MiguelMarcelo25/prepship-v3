@@ -115,6 +115,7 @@ jobs:
           --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
           scripts/ps-508-canary-evidence-packet.ts scripts/ps-508-canary-packet-smoke-pg17.ts
           scripts/ps-508-canary-portal-identity.ts scripts/ps-508-canary-worker-identity.ts
+          scripts/ps-508-canary-source-binding.ts
 
       # Round-8: Portal provenance is proven at the OWNER boundary — the smoke calls the
       # exported verifyPortalViaApi/worktreeIdentity directly against an in-process stub, and

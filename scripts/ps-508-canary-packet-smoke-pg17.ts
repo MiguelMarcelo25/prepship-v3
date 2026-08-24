@@ -22,7 +22,16 @@ import {
   PORTAL_OFFICIAL_API,
   verifyPortalViaApi,
   worktreeIdentity,
+  decodeStrictBase64,
 } from './ps-508-canary-portal-identity';
+import {
+  BOUND_SOURCE_CLOSURE,
+  parseLsFilesV,
+  isBoundIndexTagSafe,
+  sourceBindingFailures,
+  extractRelativeImports,
+  type BoundFileFact,
+} from './ps-508-canary-source-binding';
 
 const ADMIN_URL = process.env.PS508_PG17_ADMIN_URL;
 if (!ADMIN_URL) {
@@ -38,7 +47,8 @@ if (!ADMIN_URL) {
 }
 
 let failures = 0;
-function ok(name: string): void { console.log('ok   ' + name); }
+let passed = 0;
+function ok(name: string): void { passed += 1; console.log('ok   ' + name); }
 function fail(name: string, detail: string): void { failures += 1; console.log('FAIL ' + name + ' — ' + detail); }
 
 const REPO_SHA = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
@@ -560,7 +570,163 @@ async function main(): Promise<void> {
     }
   }
 
-  // ---- 8. inventory-mode health comparison (both directions) ---------------------------------
+  // ---- 8. round-9: strict base64 decode + robust executed-source binding OWNERS --------------
+  // Round-9 found two acceptance-mechanism holes: (1) Node's base64 decoder is permissive, so a
+  // malformed predicate payload could decode equal to the mirror; (2) `git status --porcelain`
+  // reports clean when a tracked file carries the skip-worktree/assume-unchanged index flag, so a
+  // modified acceptance file could run while attesting the reviewed commit. Both closures are pure
+  // owners, exercised here directly; the index-flag attack is additionally reproduced end-to-end in
+  // a THROWAWAY git repo so the real git plumbing is proven, never touching this checkout.
+  {
+    let all = true;
+    const f8 = (m: string, d: string) => { all = false; fail(m, d); };
+
+    // (a) strict base64 — the exact round-9 forgery case and its neighbours.
+    const abc = Buffer.from('abc');
+    const b1 = decodeStrictBase64('YWJj');
+    if (!(b1.ok && b1.bytes.equals(abc))) f8('valid base64 must decode', JSON.stringify(b1));
+    const bWrap = decodeStrictBase64('YWJj\n'); // GitHub wraps with newlines
+    if (!(bWrap.ok && bWrap.bytes.equals(abc))) f8('GitHub newline-wrapped base64 must decode', JSON.stringify(bWrap));
+    const bAt = decodeStrictBase64('YWJj@@@');  // the round-9 case: Node would ignore the invalid chars
+    if (bAt.ok || !/alphabet/.test(bAt.reason)) f8('malformed base64 (YWJj@@@) must be REJECTED', JSON.stringify(bAt));
+    const bNon = decodeStrictBase64('YWJjZB=='); // non-canonical trailing bits
+    if (bNon.ok || !/canonical/.test(bNon.reason)) f8('non-canonical base64 must be rejected', JSON.stringify(bNon));
+    const bEmpty = decodeStrictBase64('');
+    if (bEmpty.ok || !/empty/.test(bEmpty.reason)) f8('empty base64 must be rejected', JSON.stringify(bEmpty));
+    const bLen = decodeStrictBase64('YWJ'); // length not a multiple of 4
+    if (bLen.ok) f8('base64 with bad length/padding must be rejected', JSON.stringify(bLen));
+
+    // (b) source-binding decision owner — synthetic facts for each refusal path.
+    const clean = Buffer.from('l1\nl2\n');
+    const cleanCRLF = Buffer.from('l1\r\nl2\r\n'); // CRLF disk vs LF blob: equal after CR-strip
+    const tamper = Buffer.from('l1\nl2\n// tamper\n');
+    const F = (o: Partial<BoundFileFact>): BoundFileFact => ({ path: 'x.ts', tag: 'H', headBlob: clean, disk: clean, ...o });
+    if (sourceBindingFailures([F({})]).length !== 0) f8('a clean bound file must bind', '');
+    if (sourceBindingFailures([F({ disk: cleanCRLF })]).length !== 0) f8('CRLF-vs-LF must bind (normalization-tolerant)', '');
+    // lone-CR relineation: a lone U+000D (NOT part of a CRLF) is a JS/TS line terminator that ends a
+    // `//` comment early. normalizeLineEndings collapses only \r\n, so the lone CR survives the compare.
+    const headLF = Buffer.from('a = 1; // note\nb = 2;\n');
+    const diskLoneCR = Buffer.from('a = 1; // note \rEVIL();\nb = 2;\n');
+    if (!sourceBindingFailures([F({ headBlob: headLF, disk: diskLoneCR })]).some((x) => /content tamper/.test(x))) {
+      f8('lone-CR relineation must be REFUSED (a lone CR must not be stripped)', '');
+    }
+    if (!sourceBindingFailures([F({ tag: 'S' })]).some((x) => /hidden git index flag/.test(x))) f8('skip-worktree (S) must be refused', '');
+    if (!sourceBindingFailures([F({ tag: 'h' })]).some((x) => /hidden git index flag/.test(x))) f8('assume-unchanged (h) must be refused', '');
+    if (!sourceBindingFailures([F({ disk: tamper })]).some((x) => /content tamper/.test(x))) f8('content tamper must be refused', '');
+    if (!sourceBindingFailures([F({ disk: null })]).some((x) => /missing on disk/.test(x))) f8('missing-on-disk must be refused', '');
+    if (!sourceBindingFailures([F({ headBlob: null })]).some((x) => /not present at HEAD/.test(x))) f8('missing-at-HEAD must be refused', '');
+    if (!sourceBindingFailures([]).some((x) => /EMPTY file closure/.test(x))) f8('empty closure must be refused', '');
+    if (!isBoundIndexTagSafe('H') || isBoundIndexTagSafe('S') || isBoundIndexTagSafe('h') || isBoundIndexTagSafe(undefined)) f8('isBoundIndexTagSafe must accept only H', '');
+    { const m = parseLsFilesV('H a.ts\nS b.ts\nh c.ts\n');
+      if (m.get('a.ts') !== 'H' || m.get('b.ts') !== 'S' || m.get('c.ts') !== 'h') f8('parseLsFilesV must map tags', JSON.stringify([...m])); }
+
+    // (c) REAL git integration in a THROWAWAY repo — reproduce both index-flag attacks end-to-end
+    //     against actual `git ls-files -v` + `git cat-file blob`, then restore. Never touches this
+    //     checkout, so it is safe locally and in CI.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ps508-bind-'));
+    try {
+      const g = (a: string[]): string => execFileSync('git', ['-C', tmp, ...a], { encoding: 'utf8' });
+      const gBuf = (a: string[]): Buffer | null => { try { return execFileSync('git', ['-C', tmp, ...a]); } catch { return null; } };
+      g(['init', '-q']); g(['config', 'user.email', 't@t']); g(['config', 'user.name', 't']);
+      g(['config', 'core.autocrlf', 'false']); // deterministic: no CRLF translation on commit/checkout
+      fs.writeFileSync(path.join(tmp, 'A.ts'), 'export const a = 1;\n');
+      fs.writeFileSync(path.join(tmp, 'B.ts'), 'export const b = 2;\n');
+      g(['add', 'A.ts', 'B.ts']); g(['commit', '-q', '-m', 'init']);
+      const factsFor = (files: string[]): BoundFileFact[] => {
+        const tags = parseLsFilesV(g(['ls-files', '-v', '--', ...files]));
+        return files.map((rel) => ({
+          path: rel, tag: tags.get(rel), headBlob: gBuf(['cat-file', 'blob', 'HEAD:' + rel]),
+          disk: fs.existsSync(path.join(tmp, rel)) ? fs.readFileSync(path.join(tmp, rel)) : null,
+        }));
+      };
+      if (sourceBindingFailures(factsFor(['A.ts', 'B.ts'])).length !== 0) f8('real clean temp repo must bind', '');
+
+      // skip-worktree attack on A.ts
+      g(['update-index', '--skip-worktree', 'A.ts']);
+      fs.appendFileSync(path.join(tmp, 'A.ts'), '// tamper under skip-worktree\n');
+      if (g(['status', '--porcelain']).trim() !== '') f8('sanity: skip-worktree should hide the change from porcelain', '');
+      if (!sourceBindingFailures(factsFor(['A.ts'])).some((x) => /A\.ts/.test(x))) {
+        f8('REAL skip-worktree tamper must be refused by the binding owner', '');
+      }
+      g(['update-index', '--no-skip-worktree', 'A.ts']); g(['checkout', '--', 'A.ts']);
+
+      // assume-unchanged attack on B.ts
+      g(['update-index', '--assume-unchanged', 'B.ts']);
+      fs.appendFileSync(path.join(tmp, 'B.ts'), '// tamper under assume-unchanged\n');
+      if (g(['status', '--porcelain']).trim() !== '') f8('sanity: assume-unchanged should hide the change from porcelain', '');
+      if (!sourceBindingFailures(factsFor(['B.ts'])).some((x) => /B\.ts/.test(x))) {
+        f8('REAL assume-unchanged tamper must be refused by the binding owner', '');
+      }
+
+      // lone-CR relineation attack on C.ts (NO index flag; tag stays H, differs only by a lone CR).
+      fs.writeFileSync(path.join(tmp, 'C.ts'), 'export const c = 3; // ok\n');
+      g(['add', 'C.ts']); g(['commit', '-q', '-m', 'add C']);
+      fs.writeFileSync(path.join(tmp, 'C.ts'), 'export const c = 3; // ok \rEVIL();\n'); // lone CR, not CRLF
+      const cFacts = factsFor(['C.ts']);
+      if (cFacts[0]?.tag !== 'H') f8('sanity: lone-CR edit should keep ls-files -v tag H (no index flag)', String(cFacts[0]?.tag));
+      if (!sourceBindingFailures(cFacts).some((x) => /C\.ts/.test(x))) {
+        f8('REAL lone-CR relineation must be refused by the binding owner', '');
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+
+    // (d) the ACTUAL acceptance closure binds on a clean checkout (CI). On a dirty local dev tree
+    //     the closure files legitimately differ from HEAD — logged, not a failure.
+    const realFacts: BoundFileFact[] = (() => {
+      const lsV = execSync('git ls-files -v -- ' + BOUND_SOURCE_CLOSURE.join(' '), { encoding: 'utf8' });
+      const tags = parseLsFilesV(lsV);
+      return BOUND_SOURCE_CLOSURE.map((rel) => {
+        let headBlob: Buffer | null = null;
+        try { headBlob = execFileSync('git', ['cat-file', 'blob', 'HEAD:' + rel]); } catch { headBlob = null; }
+        return { path: rel, tag: tags.get(rel), headBlob, disk: fs.existsSync(rel) ? fs.readFileSync(rel) : null };
+      });
+    })();
+    const realFail = sourceBindingFailures(realFacts);
+    const treeClean = execSync('git status --porcelain', { encoding: 'utf8' }).trim() === '';
+    if (treeClean) {
+      if (realFail.length !== 0) f8('on a clean checkout the acceptance closure must bind to HEAD', realFail.join(' | '));
+      else ok('the actual acceptance closure binds to HEAD on this clean checkout');
+    } else {
+      console.log('note: local tree is dirty (' + realFail.length + ' closure file(s) differ from HEAD) — '
+        + 'closure-binds-to-HEAD is asserted only on clean checkouts (CI). The isolated-repo attack proofs above still ran.');
+    }
+
+    // (e) closure-completeness: every FIRST-PARTY module transitively imported by the packet must be
+    //     in BOUND_SOURCE_CLOSURE. This closes the only seam where BOTH the index-flag and porcelain
+    //     checks could miss — an acceptance-critical module omitted from the closure and hidden behind
+    //     an index flag. A new relative import that escapes the closure fails CI here.
+    const reachable = new Set<string>();
+    const queue = ['scripts/ps-508-canary-evidence-packet.ts'];
+    while (queue.length) {
+      const rel = queue.shift();
+      if (rel === undefined || reachable.has(rel)) continue;
+      reachable.add(rel);
+      let src: string;
+      try { src = fs.readFileSync(rel, 'utf8'); } catch { f8('closure walk: cannot read ' + rel, ''); continue; }
+      for (const spec of extractRelativeImports(src)) {
+        let target = path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec));
+        // TS ESM imports reference the compiled '.js' (etc.) — map back to the '.ts' source.
+        if (/\.(js|mjs|cjs)$/.test(target)) target = target.replace(/\.(js|mjs|cjs)$/, '.ts');
+        else if (!target.endsWith('.ts')) target += '.ts';
+        queue.push(target);
+      }
+    }
+    for (const rel of reachable) {
+      if (!BOUND_SOURCE_CLOSURE.includes(rel)) {
+        f8('BOUND_SOURCE_CLOSURE is incomplete: ' + rel + ' is imported by the acceptance mechanism but not bound', '');
+      }
+    }
+
+    if (all) {
+      ok('base64+source-binding owners: strict decode (rejects YWJj@@@ / non-canonical / empty / bad-length); '
+        + 'binding refuses skip-worktree(S) / assume-unchanged(h) / content-tamper / lone-CR relineation / missing, '
+        + 'tolerates CRLF, reproduces index-flag AND lone-CR attacks end-to-end in a throwaway git repo, and the '
+        + reachable.size + '-module import closure is fully bound');
+    }
+  }
+
+  // ---- 9. inventory-mode health comparison (both directions) ---------------------------------
   {
     const { url, db, name } = await freshDb();
     await seed(db, HAPPY); await addSecondShipment(db);
@@ -579,7 +745,9 @@ async function main(): Promise<void> {
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 
-  console.log(failures === 0 ? '\nPASS' : '\n' + failures + ' FAILED');
+  console.log(failures === 0
+    ? '\nPASS — ' + passed + '/' + (passed + failures) + ' checks'
+    : '\n' + failures + ' FAILED (' + passed + '/' + (passed + failures) + ' passed)');
   process.exit(failures === 0 ? 0 : 1);
 }
 
