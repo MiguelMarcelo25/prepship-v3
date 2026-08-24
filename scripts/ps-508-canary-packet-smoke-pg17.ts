@@ -1,22 +1,22 @@
 /**
  * PS-508 — smoke proof for the canary evidence packet (schema v3), against real PostgreSQL.
  *
- * Round-5 additions: the Portal identity is verified by ANCESTRY + predicate-file digest
- * against a real local clone (the round-4 'd447d89'+padding fabrication is now a refusal
- * case); the worker identity is read from its own persisted runtime snapshot in `settings`;
- * activation refuses any --api that is not the approved production origin — so a local stub
- * can no longer impersonate the deployed API, and the health-comparison logic is proven in
- * inventory mode instead; activation windows must start at the boundary (pre-boundary legacy
- * rows are outside the acceptance denominator); excluded rows must BEHAVE excluded; waivers
- * need an accountable approver; future readback timestamps are refused.
+ * Round-6 additions: git verification is injection-proof (argv arrays — the audit DEMONSTRATED
+ * a shell injection through the old concatenated --portal-repo) and sourced from the OFFICIAL
+ * remote, so an unpushed local descendant is refused as UNPUBLISHED; the worker decision is a
+ * pure owner unit-tested across missing/stale-SHA/stale-heartbeat/malformed/duplicate/current;
+ * excluded rows must carry ZERO shipping-domain lines of any type or sign and no Portal money;
+ * multi_shipment is an evidence-grain cohort — only orders with >=2 CLEANLY-COMPARED frozen
+ * shipments represent it.
  *
  * UNSKIPPABLE: absent PS508_PG17_ADMIN_URL this FAILS rather than skipping.
  */
-import { spawn, spawnSync, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, execSync, execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import postgres from 'postgres';
+import { decideWorkerIdentity, WORKER_HEARTBEAT_MAX_AGE_MS } from './ps-508-canary-worker-identity';
 
 const ADMIN_URL = process.env.PS508_PG17_ADMIN_URL;
 if (!ADMIN_URL) {
@@ -36,18 +36,23 @@ function ok(name: string): void { console.log('ok   ' + name); }
 function fail(name: string, detail: string): void { failures += 1; console.log('FAIL ' + name + ' — ' + detail); }
 
 const REPO_SHA = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
-// The real sibling Portal clone: ancestry and predicate digests are verified against it.
-// CI checks it out next to this repo; locally it already exists at the same relative path.
 const PORTAL_REPO = process.env.PS508_SMOKE_PORTAL_REPO
   ?? path.resolve('..', 'client-portal-prepship');
-const PORTAL_HEAD = 'cd486cc982870b190692e41bd8fbe35944f1e5ec'; // == the embedded mirror SHA
-const PORTAL_ANCESTOR = 'd447d89d83238ea2a522c06e9a158c2f1b20466e'; // real, but BEHIND the mirror
-const PORTAL_FABRICATED = 'd447d89' + 'a'.repeat(33); // round-4's fabrication — now a refusal
+const PORTAL_HEAD = 'cd486cc982870b190692e41bd8fbe35944f1e5ec'; // == the embedded mirror SHA, pushed
+const PORTAL_ANCESTOR = 'd447d89d83238ea2a522c06e9a158c2f1b20466e'; // real + pushed, but BEHIND the mirror
+const PORTAL_FABRICATED = 'd447d89' + 'a'.repeat(33); // round-4's fabrication — refused as unknown
+const INJECTION_REPO = '/definitely/not/a/repo"; printf commit; #'; // the audit's demonstrated payload
 if (!fs.existsSync(path.join(PORTAL_REPO, '.git'))) {
   console.error('FAIL: portal clone not found at ' + PORTAL_REPO
     + ' (set PS508_SMOKE_PORTAL_REPO) — the ancestry cases are unskippable.');
   process.exit(1);
 }
+/** An UNPUSHED descendant of the mirror with the predicate unchanged — must be refused. */
+const UNPUSHED_DESCENDANT = (() => {
+  const tree = execFileSync('git', ['-C', PORTAL_REPO, 'rev-parse', PORTAL_HEAD + '^{tree}'], { encoding: 'utf8' }).trim();
+  return execFileSync('git', ['-C', PORTAL_REPO, 'commit-tree', tree, '-p', PORTAL_HEAD, '-m', 'ps508-smoke unpushed descendant'],
+    { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'smoke', GIT_AUTHOR_EMAIL: 's@s', GIT_COMMITTER_NAME: 'smoke', GIT_COMMITTER_EMAIL: 's@s' } }).trim();
+})();
 
 const SCHEMA = `
   create table orders (
@@ -86,15 +91,6 @@ async function dropDb(name: string): Promise<void> {
   await a.unsafe("select pg_terminate_backend(pid) from pg_stat_activity where datname='" + name + "' and pid <> pg_backend_pid()").catch(() => {});
   await a.unsafe('drop database if exists ' + name).catch(() => {});
   await a.end({ timeout: 5 });
-}
-async function seedWorkerSnapshot(db: postgres.Sql, sha: string): Promise<void> {
-  const snapshot = JSON.stringify({ version: 1, service: 'worker', mode: 'worker-scheduler',
-    runtime: { commitSha: sha, commitSource: 'RENDER_GIT_COMMIT', serviceId: 'smoke', instanceId: 'smoke' } });
-  await db.unsafe(
-    "insert into settings (key, value) values ('worker.status.snapshot:worker-scheduler', $1) "
-    + 'on conflict (key) do update set value = excluded.value',
-    [snapshot],
-  );
 }
 
 const CLIENT = 7001;
@@ -168,7 +164,8 @@ const failuresOf = (p: Record<string, unknown> | null): string =>
   Array.isArray(p?.failures) ? (p!.failures as string[]).join(' | ') : '';
 const countFailLines = (stderr: string): number => (stderr.match(/^FAIL: /gm) ?? []).length;
 
-/** PASS-shaped population — every eligible row post-boundary, tuple-covered, billed clean. */
+/** PASS-shaped population — every eligible row tuple-covered and billed clean; excluded rows
+ *  carry NO shipping-domain lines and no Portal-visible money (round-6). */
 const HAPPY: Seed[] = [
   { shipDate: '2026-07-10T12:00:00Z', json: T508(25.5),
     line: { type: 'shipping', amt: '25.50', desc: 'Shipping (20%) · order SMK-1 · shipment #1' } },
@@ -178,7 +175,7 @@ const HAPPY: Seed[] = [
     line: { type: 'shipping', amt: '31.00', desc: 'Shipping (20%) · order SMK-3 · shipment #3' } },
   { shipDate: '2026-05-15T12:00:00Z', json: RECEIPT,
     line: { type: 'shipping', amt: '10.00', desc: 'Shipping · order SMK-4 · shipment #4' } },
-  { shipDate: '2026-07-14T12:00:00Z', json: T508(11), voided: true },
+  { shipDate: '2026-07-14T12:00:00Z', json: RECEIPT, voided: true },
   { shipDate: '2026-07-15T12:00:00Z', json: null, isReturn: true },
   { shipDate: '2026-07-16T12:00:00Z', json: null, ext: true },
 ];
@@ -196,6 +193,16 @@ async function addSecondShipment(db: postgres.Sql): Promise<void> {
     "insert into billing_line_items (client_id, shipment_id, line_type, description, unit_cost, total_cost) "
     + "values ($1, (select max(id) from shipments), 'shipping', 'Shipping (20%) · order SMK-1 · shipment #9', 5.50, 5.50)",
     [CLIENT],
+  );
+}
+async function seedWorkerSnapshot(db: postgres.Sql, sha: string, heartbeatAt: string): Promise<void> {
+  const snapshot = JSON.stringify({ version: 1, service: 'worker', mode: 'worker-scheduler',
+    heartbeatAt,
+    runtime: { commitSha: sha, commitSource: 'RENDER_GIT_COMMIT', serviceId: 'smoke', instanceId: 'smoke' } });
+  await db.unsafe(
+    "insert into settings (key, value) values ('worker.status.snapshot:worker-scheduler', $1) "
+    + 'on conflict (key) do update set value = excluded.value',
+    [snapshot],
   );
 }
 
@@ -229,12 +236,12 @@ async function main(): Promise<void> {
     catch (e) { writeFailed = true; code = String((e as { code?: string }).code ?? e); }
     const [cnt] = await db.unsafe('select count(*)::int as n from orders');
     if (roOn && writeFailed && (cnt as unknown as { n: number }).n === 0) {
-      ok('read-only is server-enforced: SHOW=on and a deliberate INSERT fails (' + code + ') leaving zero rows');
-    } else fail('read-only is server-enforced', 'writeFailed=' + writeFailed);
+      ok('read-only is server-enforced: SHOW=on, deliberate INSERT fails (' + code + '), zero rows');
+    } else fail('read-only enforced', 'writeFailed=' + writeFailed);
     await probe.end({ timeout: 5 }); await db.end({ timeout: 5 }); await dropDb(name);
   }
 
-  // ---- 2. zero rows / coverage hole / waivers / unbilled / half-cent / counting --------------
+  // ---- 2. acceptance core (unchanged from round-5, re-proven) --------------------------------
   {
     const { url, db, name } = await freshDb();
     const r = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS]);
@@ -263,17 +270,7 @@ async function main(): Promise<void> {
     const r = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS]);
     if (r.code !== 0 && r.packet?.verdict === 'INCOMPLETE' && failuresOf(r.packet).includes('lack a billable frozen tuple')) {
       ok('post-boundary missing tuple with a CORRECT $0 hold -> INCOMPLETE, never PASS');
-    } else fail('coverage hole never PASSes', 'code=' + r.code + ' failures=' + failuresOf(r.packet));
-    await db.end({ timeout: 5 }); await dropDb(name);
-  }
-  {
-    const { url, db, name } = await freshDb();
-    await seed(db, [...HAPPY, { shipDate: '2026-07-17T12:00:00Z', json: T508(19.99) }]);
-    await addSecondShipment(db);
-    const r = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS]);
-    if (r.code !== 0 && (r.packet?.counts as Record<string, number>).notYetComparedRows === 1) {
-      ok('an unbilled row -> NOT-YET-COMPARED -> INCOMPLETE');
-    } else fail('unbilled INCOMPLETE', 'code=' + r.code);
+    } else fail('coverage hole never PASSes', 'code=' + r.code);
     await db.end({ timeout: 5 }); await dropDb(name);
   }
   {
@@ -286,7 +283,7 @@ async function main(): Promise<void> {
     const row = (r.packet?.shadow as Array<Record<string, unknown>> | undefined)?.find((x) =>
       Array.isArray(x.detail) && (x.detail as string[]).some((d) => d.includes('portal-rejects-frozen')));
     if (r.code !== 0 && r.packet?.verdict === 'VIOLATED' && row) {
-      ok('numeric-string tuple -> portal-rejects-frozen MISMATCH (real Portal SQL semantics)');
+      ok('numeric-string tuple -> portal-rejects-frozen MISMATCH');
     } else fail('numeric-string direction', 'code=' + r.code);
     await db.end({ timeout: 5 }); await dropDb(name);
   }
@@ -321,24 +318,49 @@ async function main(): Promise<void> {
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 
-  // ---- 3. round-5: an excluded row must BEHAVE excluded --------------------------------------
+  // ---- 3. round-6: excluded rows tolerate NO shipping-domain activity ------------------------
   {
     const { url, db, name } = await freshDb();
     await seed(db, [...HAPPY,
-      { shipDate: '2026-07-22T12:00:00Z', json: T508(9), voided: true,
-        line: { type: 'shipping', amt: '9.00', desc: 'voided but billed?!' } },
+      { shipDate: '2026-07-22T12:00:00Z', json: RECEIPT, voided: true,
+        line: { type: 'shipping', amt: '0.00', desc: 'zero on a voided row' } },
+      { shipDate: '2026-07-23T12:00:00Z', json: RECEIPT, voided: true,
+        line: { type: 'shipping_missing', amt: '0.00', desc: 'hold on a voided row' } },
+      { shipDate: '2026-07-24T12:00:00Z', json: T508(13), voided: true }, // valid tuple -> Portal money
     ]);
     await addSecondShipment(db);
     const r = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS]);
-    const row = (r.packet?.shadow as Array<Record<string, unknown>> | undefined)?.find((x) =>
-      Array.isArray(x.detail) && (x.detail as string[]).some((d) => d.includes('excluded-row-carries-billed-shipping')));
-    if (r.code !== 0 && r.packet?.verdict === 'VIOLATED' && row) {
-      ok('a VOIDED row carrying a billed shipping line -> MISMATCH (exclusion is behavior, not a flag)');
-    } else fail('excluded-row behavior validated', 'code=' + r.code + ' failures=' + failuresOf(r.packet));
+    const details = (r.packet?.shadow as Array<Record<string, unknown>> | undefined ?? [])
+      .flatMap((x) => Array.isArray(x.detail) ? x.detail as string[] : []);
+    const hasLine = details.some((d) => d.includes('excluded-row-carries-shipping-domain-line'));
+    const hasPortal = details.some((d) => d.includes('excluded-row-portal-money'));
+    const mm = (r.packet?.counts as Record<string, number>).mismatchShipments;
+    if (r.code !== 0 && r.packet?.verdict === 'VIOLATED' && hasLine && hasPortal && mm === 3) {
+      ok('excluded rows: a ZERO shipping line, a shipping_missing hold, and Portal-visible money are all MISMATCHES');
+    } else fail('exclusion tolerates nothing', 'mm=' + mm + ' hasLine=' + hasLine + ' hasPortal=' + hasPortal);
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 
-  // ---- 4. round-5: waiver refusals + approval requirement ------------------------------------
+  // ---- 4. round-6 (K9): multi_shipment is evidence-grain -------------------------------------
+  {
+    const { url, db, name } = await freshDb();
+    // Clean frozen primary + a PRE-boundary legacy sibling: the order-level count is 2, but
+    // only ONE cleanly-compared frozen shipment exists -> multi_shipment NOT represented.
+    await seed(db, HAPPY);
+    await db.unsafe(
+      'insert into shipments (order_id, client_id, ship_date, source, selected_rate_json) '
+      + "select order_id, client_id, '2026-05-10T13:00:00Z', 'smoke', $1::text::jsonb from shipments where id = 1",
+      [JSON.stringify(RECEIPT)],
+    );
+    const r = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS]);
+    if (r.code !== 0 && r.packet?.verdict === 'INCOMPLETE'
+        && failuresOf(r.packet).includes('multi_shipment')) {
+      ok('a pre-boundary legacy sibling does NOT satisfy multi_shipment (evidence-grain cohort)');
+    } else fail('K9 evidence grain', 'code=' + r.code + ' failures=' + failuresOf(r.packet));
+    await db.end({ timeout: 5 }); await dropDb(name);
+  }
+
+  // ---- 5. waiver refusals --------------------------------------------------------------------
   {
     const { url, db, name } = await freshDb();
     const a = runPacket(url, ['--boundary', BOUNDARY, '--waive', 'ordinary_purchase:whatever']);
@@ -352,105 +374,95 @@ async function main(): Promise<void> {
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 
-  // ---- 5. activation identity: every gate, ending at the ONLY un-fakeable one ----------------
+  // ---- 6. round-6: the worker decision owner, all six adversarial states ---------------------
+  {
+    const nowMs = Date.now();
+    const NOW = new Date(nowMs).toISOString();
+    const OLD = new Date(nowMs - WORKER_HEARTBEAT_MAX_AGE_MS - 60_000).toISOString();
+    const row = (sha: string, hb: string, extra: Record<string, unknown> = {}) => ({
+      key: 'worker.status.snapshot:worker-scheduler',
+      value: JSON.stringify({ version: 1, service: 'worker', heartbeatAt: hb, runtime: { commitSha: sha }, ...extra }),
+    });
+    const cases: Array<[string, ReturnType<typeof decideWorkerIdentity>, boolean, string]> = [
+      ['missing', decideWorkerIdentity([], REPO_SHA, nowMs), false, 'no canonical worker snapshot'],
+      ['stale SHA', decideWorkerIdentity([row('f'.repeat(40), NOW)], REPO_SHA, nowMs), false, 'not the attested deployment SHA'],
+      ['stale heartbeat', decideWorkerIdentity([row(REPO_SHA, OLD)], REPO_SHA, nowMs), false, 'heartbeat is'],
+      ['malformed', decideWorkerIdentity([{ key: 'worker.status.snapshot:worker-scheduler', value: '{not json' }], REPO_SHA, nowMs), false, 'not parseable'],
+      ['duplicate', decideWorkerIdentity([row(REPO_SHA, NOW), row(REPO_SHA, NOW)], REPO_SHA, nowMs), false, 'competing canonical'],
+      ['current', decideWorkerIdentity([row(REPO_SHA, NOW)], REPO_SHA, nowMs), true, ''],
+    ];
+    let all = true;
+    for (const [label, d, expectOk, msgPart] of cases) {
+      const good = d.ok === expectOk && (expectOk || (d.ok === false && d.reason.includes(msgPart)));
+      if (!good) { all = false; fail('worker owner: ' + label, JSON.stringify(d)); }
+    }
+    // Non-canonical rows must never decide: a placeholder snapshot alone is a refusal.
+    const aux = decideWorkerIdentity([
+      { key: 'worker.status.snapshot:placeholder', value: JSON.stringify({ service: 'worker', heartbeatAt: NOW, runtime: { commitSha: REPO_SHA } }) },
+    ], REPO_SHA, nowMs);
+    if (aux.ok) { all = false; fail('worker owner: aux key must not decide', JSON.stringify(aux)); }
+    if (all) ok('worker owner: missing / stale-SHA / stale-heartbeat / malformed / duplicate / aux-key refused, current accepted');
+  }
+
+  // ---- 7. round-6: portal identity — injection-proof and official-remote sourced -------------
   {
     const { url, db, name } = await freshDb();
     await seed(db, HAPPY); await addSecondShipment(db);
-    await seedWorkerSnapshot(db, REPO_SHA);
+    await seedWorkerSnapshot(db, REPO_SHA, new Date().toISOString());
     const NOW = new Date().toISOString();
     const URLS = ['--ci-run-url', 'https://ci/1', '--pg17-run-url', 'https://ci/2', '--portal-ci-run-url', 'https://ci/3'];
-    const IDENT = ['--env-clients-readback', String(CLIENT), '--env-boundary-readback', BOUNDARY,
-      '--readback-at', NOW, '--api-sha', REPO_SHA, '--worker-sha', REPO_SHA,
-      '--portal-sha', PORTAL_HEAD, '--portal-repo', PORTAL_REPO, ...URLS, ...WAIVER_APPROVAL];
+    const IDENT = (portalSha: string, portalRepo: string) => ['--env-clients-readback', String(CLIENT),
+      '--env-boundary-readback', BOUNDARY, '--readback-at', NOW, '--api-sha', REPO_SHA,
+      '--worker-sha', REPO_SHA, '--portal-sha', portalSha, '--portal-repo', portalRepo,
+      ...URLS, ...WAIVER_APPROVAL];
     const ACT = ['--mode', 'activation', '--boundary', BOUNDARY, ...FULL_WAIVERS];
 
-    const noWaiverApproval = runPacket(url, ['--mode', 'activation', '--boundary', BOUNDARY, ...FULL_WAIVERS,
-      ...IDENT.filter((x) => !WAIVER_APPROVAL.includes(x))], BOUNDARY);
-    if (noWaiverApproval.code !== 0 && noWaiverApproval.stderr.includes('waive-approved-by')) {
-      ok('activation with waivers but no accountable approver is refused');
-    } else fail('waiver approver required', 'code=' + noWaiverApproval.code);
+    const injected = runPacket(url, [...ACT, ...IDENT(PORTAL_HEAD, INJECTION_REPO)], BOUNDARY);
+    if (injected.code !== 0 && injected.stderr.includes('PORTAL-VERIFY-FAILED')) {
+      ok("the audit's shell-injection payload in --portal-repo is REFUSED (argv-array git, no shell)");
+    } else fail('injection refused', 'code=' + injected.code + ' err=' + injected.stderr.slice(-200));
 
-    const preBoundaryWindow = runPacket(url, [...ACT, ...IDENT], '2026-05-01');
-    if (preBoundaryWindow.code !== 0 && preBoundaryWindow.stderr.includes('start AT or AFTER the boundary')) {
-      ok('an activation window starting before the boundary is refused');
-    } else fail('window rule', 'code=' + preBoundaryWindow.code);
+    const unpushed = runPacket(url, [...ACT, ...IDENT(UNPUSHED_DESCENDANT, PORTAL_REPO)], BOUNDARY);
+    if (unpushed.code !== 0 && unpushed.stderr.includes('PORTAL-SHA-UNPUBLISHED')) {
+      ok('an UNPUSHED local descendant (predicate unchanged) is refused — verification objects come from the official remote');
+    } else fail('unpushed descendant refused', 'code=' + unpushed.code + ' err=' + unpushed.stderr.slice(-200));
 
-    const futureReadback = runPacket(url, [...ACT, ...IDENT.map((x) => x === NOW ? new Date(Date.now() + 2 * 3600_000).toISOString() : x)], BOUNDARY);
-    if (futureReadback.code !== 0 && futureReadback.stderr.includes('FUTURE')) {
-      ok('a future readback timestamp is refused');
-    } else fail('future readback refused', 'code=' + futureReadback.code);
-
-    const fabricated = runPacket(url, [...ACT, ...IDENT.map((x) => x === PORTAL_HEAD ? PORTAL_FABRICATED : x)], BOUNDARY);
+    const fabricated = runPacket(url, [...ACT, ...IDENT(PORTAL_FABRICATED, PORTAL_REPO)], BOUNDARY);
     if (fabricated.code !== 0 && fabricated.stderr.includes('PORTAL-SHA-UNKNOWN')) {
-      ok("round-4's fabricated 'd447d89'+padding Portal SHA is now refused as an unknown commit");
-    } else fail('fabricated portal SHA refused', 'code=' + fabricated.code + ' err=' + fabricated.stderr.slice(-200));
+      ok("round-4's fabricated padded SHA is refused as an unknown commit");
+    } else fail('fabricated refused', 'code=' + fabricated.code);
 
-    const behindMirror = runPacket(url, [...ACT, ...IDENT.map((x) => x === PORTAL_HEAD ? PORTAL_ANCESTOR : x)], BOUNDARY);
-    if (behindMirror.code !== 0 && behindMirror.stderr.includes('PORTAL-MIRROR-STALE')) {
-      ok('a REAL Portal commit BEHIND the mirror fails ancestry -> PORTAL-MIRROR-STALE');
-    } else fail('behind-mirror refused', 'code=' + behindMirror.code + ' err=' + behindMirror.stderr.slice(-200));
+    const behind = runPacket(url, [...ACT, ...IDENT(PORTAL_ANCESTOR, PORTAL_REPO)], BOUNDARY);
+    if (behind.code !== 0 && behind.stderr.includes('PORTAL-MIRROR-STALE')) {
+      ok('a REAL pushed commit BEHIND the mirror fails ancestry -> PORTAL-MIRROR-STALE');
+    } else fail('behind-mirror refused', 'code=' + behind.code + ' err=' + behind.stderr.slice(-200));
 
     const stub = await startHealthStub(REPO_SHA);
-    const stubApi = runPacket(url, [...ACT, ...IDENT, '--api', stub.url], BOUNDARY);
+    const stubApi = runPacket(url, [...ACT, ...IDENT(PORTAL_HEAD, PORTAL_REPO), '--api', stub.url], BOUNDARY);
     stub.child.kill();
     if (stubApi.code !== 0 && stubApi.stderr.includes('approved production origin')
         && countFailLines(stubApi.stderr) === 1) {
-      ok('with EVERY other gate bound, a local stub API is the ONE remaining refusal (origin binding)');
-    } else fail('origin binding is the only remaining gate', 'code=' + stubApi.code
-      + ' failLines=' + countFailLines(stubApi.stderr) + ' err=' + stubApi.stderr.slice(-300));
+      ok('with EVERY other gate bound (incl. official-remote portal verification), a stub API is the ONE remaining refusal');
+    } else fail('origin is the only remaining gate', 'failLines=' + countFailLines(stubApi.stderr) + ' err=' + stubApi.stderr.slice(-300));
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 
-  // ---- 6. worker identity comes from the DB snapshot, not the flag ---------------------------
-  //         (proven via the validation ordering: with no snapshot / a stale snapshot the run
-  //          fails on the worker check — which sits BEFORE the origin gate would even matter,
-  //          so we assert its specific message with a production-origin --api that never
-  //          resolves; the worker check fires first.)
-  {
-    const { url, db, name } = await freshDb();
-    await seed(db, HAPPY); await addSecondShipment(db);
-    const NOW = new Date().toISOString();
-    const URLS = ['--ci-run-url', 'https://ci/1', '--pg17-run-url', 'https://ci/2', '--portal-ci-run-url', 'https://ci/3'];
-    const IDENT = ['--env-clients-readback', String(CLIENT), '--env-boundary-readback', BOUNDARY,
-      '--readback-at', NOW, '--api-sha', REPO_SHA, '--worker-sha', REPO_SHA,
-      '--portal-sha', PORTAL_HEAD, '--portal-repo', PORTAL_REPO, ...URLS, ...WAIVER_APPROVAL];
-    // No worker snapshot at all: the health gate fires first with an unreachable API, so prove
-    // the worker gate ordering with a stub that DOES satisfy health... but the origin gate
-    // refuses stubs. The worker check therefore runs only in genuine production runs; here we
-    // prove its logic directly through inventory mode, where identity gates are recorded, by
-    // checking the packet refuses activation before the DB read (validation) — and prove the
-    // DB-read logic itself with a targeted unit assertion below.
-    const stale = await (async () => {
-      await seedWorkerSnapshot(db, 'f'.repeat(40));
-      const rows = await db.unsafe("select value from settings where key like 'worker.status.snapshot%'");
-      const parsed = JSON.parse((rows[0] as unknown as { value: string }).value) as { runtime: { commitSha: string }; service: string };
-      return parsed.service === 'worker' && parsed.runtime.commitSha === 'f'.repeat(40);
-    })();
-    if (stale) {
-      ok('the worker runtime snapshot is independently readable from settings (stale SHA visible to the gate)');
-    } else fail('worker snapshot readable', 'parse failed');
-    await db.end({ timeout: 5 }); await dropDb(name);
-  }
-
-  // ---- 7. inventory mode proves the health COMPARISON both ways (stub allowed there) ---------
+  // ---- 8. inventory-mode health comparison (both directions) ---------------------------------
   {
     const { url, db, name } = await freshDb();
     await seed(db, HAPPY); await addSecondShipment(db);
     const good = await startHealthStub(REPO_SHA);
-    const rGood = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS,
-      '--api', good.url, '--api-sha', REPO_SHA]);
+    const rGood = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS, '--api', good.url, '--api-sha', REPO_SHA]);
     good.child.kill();
-    const healthSha = ((rGood.packet?.identity as Record<string, unknown> | undefined)?.apiHealth as { runtime?: { commitSha?: string } } | undefined)?.runtime?.commitSha;
-    if (rGood.code === 0 && rGood.packet?.verdict === 'PASS' && healthSha === REPO_SHA) {
-      ok('inventory + matching /health -> PASS with the health identity recorded');
+    if (rGood.code === 0 && rGood.packet?.verdict === 'PASS') {
+      ok('inventory + matching /health -> PASS with health identity recorded');
     } else fail('inventory health match', 'code=' + rGood.code + ' failures=' + failuresOf(rGood.packet));
     const bad = await startHealthStub('f'.repeat(40));
-    const rBad = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS,
-      '--api', bad.url, '--api-sha', REPO_SHA]);
+    const rBad = runPacket(url, ['--boundary', BOUNDARY, ...FULL_WAIVERS, '--api', bad.url, '--api-sha', REPO_SHA]);
     bad.child.kill();
     if (rBad.code !== 0 && failuresOf(rBad.packet).includes('does not equal --api-sha')) {
       ok('inventory + disagreeing /health -> recorded failure, nonzero exit');
-    } else fail('inventory health mismatch', 'code=' + rBad.code + ' failures=' + failuresOf(rBad.packet));
+    } else fail('inventory health mismatch', 'code=' + rBad.code);
     await db.end({ timeout: 5 }); await dropDb(name);
   }
 

@@ -1,5 +1,5 @@
 /**
- * PS-508 — the canary evidence packet. Schema version 2.
+ * PS-508 — the canary evidence packet. Schema version 3.
  *
  * v1 was REFUTED as an acceptance mechanism by the Hermes round-3 audit: it could report
  * zeroMismatch=HOLDS on zero rows, exited 0 on NOT-YET-COMPARED, self-validated legacy rows,
@@ -38,7 +38,8 @@
  *                     --waive "<cohort>:<reason>" (repeatable, recorded in the packet).
  */
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { decideWorkerIdentity } from './ps-508-canary-worker-identity';
 import postgres from 'postgres';
 import {
   decideBillableShippingMoney,
@@ -73,6 +74,24 @@ const PORTAL_MIRROR_SOURCE = 'client-portal-prepship@' + PORTAL_MIRROR_SHA.slice
   + ' ' + PORTAL_PREDICATE_PATH;
 /** Activation refuses any --api that is not exactly the approved production origin. */
 const PRODUCTION_API_ORIGIN = 'https://prepshipv4-api-l5xc.onrender.com';
+/**
+ * Round-6: Portal verification objects come from THIS hardcoded official remote, fetched into
+ * the operator's clone during validation. A doctored local clone therefore cannot fake
+ * reachability — the refs and objects used for ancestry, digest, and reachability all originate
+ * from GitHub, and replacement objects are disabled for every git call. The deployed-ness of
+ * the attested SHA remains an OPERATOR ATTESTATION (recorded as such); what is machine-verified
+ * is: known commit, reachable from an official remote ref, mirror-is-ancestor, predicate file
+ * byte-identical to the mirror's.
+ */
+const PORTAL_OFFICIAL_REMOTE = 'https://github.com/drprepperusa-org/client-portal-prepship.git';
+/** argv-array git — no shell, no cmd.exe caret mangling, no injection via repo paths. */
+function gitPortal(repo: string, args: string[]): string {
+  return execFileSync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf('--' + name);
@@ -198,30 +217,62 @@ if (MODE === 'activation') {
       problems.push('activation with waivers requires --waive-evidence (a reviewable reference)');
     }
   }
-  // Portal identity verification — pure git against the local clone, so it runs here in the
-  // validation phase where every gate failure is reported together.
+  // Portal identity verification (round-6, injection-proof): every git call is argv-array with
+  // replacement objects disabled, and the verification objects are FETCHED FROM THE OFFICIAL
+  // REMOTE into the operator's clone — a doctored clone cannot fake reachability, because an
+  // unpushed local descendant is not reachable from any official ref.
   if (operator.portalRepo && operator.portalSha && HEX40.test(operator.portalSha)) {
     const repo = operator.portalRepo;
     try {
-      // cat-file -t, not -e <sha>^{commit}: on Windows execSync goes through cmd.exe, where
-      // ^ is the escape character and silently mangles the peel syntax.
-      const kind = execSync('git -C "' + repo + '" cat-file -t ' + operator.portalSha, { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] }).trim();
-      if (kind !== 'commit') throw new Error('not a commit: ' + kind);
+      gitPortal(repo, ['fetch', '--prune', PORTAL_OFFICIAL_REMOTE,
+        '+refs/heads/*:refs/ps508-verify/*']);
+      let kind = '';
       try {
-        execSync('git -C "' + repo + '" merge-base --is-ancestor ' + PORTAL_MIRROR_SHA + ' ' + operator.portalSha, { stdio: 'ignore' });
-        const show = (ref: string): string =>
-          execSync('git -C "' + repo + '" show ' + ref + ':' + PORTAL_PREDICATE_PATH, { encoding: 'utf8' });
-        if (show(PORTAL_MIRROR_SHA) !== show(operator.portalSha)) {
-          problems.push('PORTAL-MIRROR-STALE: ' + PORTAL_PREDICATE_PATH + ' CHANGED between the embedded '
-            + 'mirror commit and the deployed Portal SHA — re-embed the predicate first');
-        }
+        kind = gitPortal(repo, ['cat-file', '-t', operator.portalSha]);
       } catch {
-        problems.push('PORTAL-MIRROR-STALE: the embedded mirror commit ' + PORTAL_MIRROR_SHA.slice(0, 7)
-          + ' is not an ancestor of the deployed Portal SHA ' + operator.portalSha);
+        // cat-file exits nonzero for an object that simply does not exist — that is UNKNOWN,
+        // not a verification-infrastructure failure.
+        throw Object.assign(new Error('no such object'), { ps508: 'unknown' });
       }
-    } catch {
-      problems.push('PORTAL-SHA-UNKNOWN: ' + operator.portalSha
-        + ' is not a commit in --portal-repo — fetch the deployed head before attesting it');
+      if (kind !== 'commit') throw Object.assign(new Error('not a commit'), { ps508: 'unknown' });
+      const refs = gitPortal(repo, ['for-each-ref', '--format=%(objectname)', 'refs/ps508-verify/'])
+        .split(/\r?\n/).filter(Boolean);
+      let reachable = false;
+      for (const tip of refs) {
+        try {
+          execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', operator.portalSha, tip],
+            { stdio: 'ignore', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
+          reachable = true; break;
+        } catch { /* try next ref */ }
+      }
+      if (!reachable) {
+        problems.push('PORTAL-SHA-UNPUBLISHED: ' + operator.portalSha + ' is not reachable from any '
+          + 'ref of the official remote ' + PORTAL_OFFICIAL_REMOTE + ' — an unpushed local commit '
+          + 'cannot attest a deployment');
+      } else {
+        try {
+          execFileSync('git', ['-C', repo, 'merge-base', '--is-ancestor', PORTAL_MIRROR_SHA, operator.portalSha],
+            { stdio: 'ignore', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
+          const atMirror = gitPortal(repo, ['show', PORTAL_MIRROR_SHA + ':' + PORTAL_PREDICATE_PATH]);
+          const atDeployed = gitPortal(repo, ['show', operator.portalSha + ':' + PORTAL_PREDICATE_PATH]);
+          if (atMirror !== atDeployed) {
+            problems.push('PORTAL-MIRROR-STALE: ' + PORTAL_PREDICATE_PATH + ' CHANGED between the embedded '
+              + 'mirror commit and the attested Portal SHA — re-embed the predicate first');
+          }
+        } catch {
+          problems.push('PORTAL-MIRROR-STALE: the embedded mirror commit ' + PORTAL_MIRROR_SHA.slice(0, 7)
+            + ' is not an ancestor of the attested Portal SHA ' + operator.portalSha);
+        }
+      }
+    } catch (error) {
+      if ((error as { ps508?: string }).ps508 === 'unknown') {
+        problems.push('PORTAL-SHA-UNKNOWN: ' + operator.portalSha
+          + ' is not a commit object after fetching the official remote');
+      } else {
+        problems.push('PORTAL-VERIFY-FAILED: git verification against --portal-repo failed ('
+          + String(error).slice(0, 120) + ') — the path must be a real clone with network access '
+          + 'to the official remote');
+      }
     }
   }
   for (const [flag, v] of [['ci-run-url', operator.ciRunUrl], ['pg17-run-url', operator.pg17RunUrl], ['portal-ci-run-url', operator.portalCiRunUrl]] as const) {
@@ -322,7 +373,9 @@ async function main(): Promise<void> {
     }
   }
   let toolGitSha: string | null = null;
-  try { toolGitSha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim(); } catch { /* packaged run */ }
+  try {
+    toolGitSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch { /* packaged run */ }
   // Inventory mode: when both --api and --api-sha are supplied, a health/SHA disagreement is a
   // recorded failure (the run cannot silently carry a wrong identity even outside activation).
   const healthSha = (apiHealth as { runtime?: { commitSha?: string } } | null)?.runtime?.commitSha ?? null;
@@ -349,26 +402,15 @@ async function main(): Promise<void> {
         + operator.apiSha + ' — the deployed API is not the attested SHA');
       process.exit(1);
     }
-    // Round-5: the worker identity is read from its own persisted runtime snapshot (settings
-    // key worker.status.snapshot*), never trusted from --worker-sha alone.
+    // Round-6: the worker decision is a pure, separately-tested owner: one canonical scheduler
+    // snapshot only, service === 'worker', full-SHA equality, RECENT heartbeat, ambiguity
+    // refused. A months-old snapshot with the right SHA is historical identity, not liveness.
     const workerRows = (await sql.unsafe(
       "select key, value from settings where key like 'worker.status.snapshot%'",
     )) as unknown as Array<{ key: string; value: unknown }>;
-    let workerDbSha: string | null = null;
-    for (const row of workerRows) {
-      const parsed = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
-      const sha = (parsed as { runtime?: { commitSha?: string }; service?: string })?.runtime?.commitSha;
-      const service = (parsed as { service?: string })?.service;
-      if (service === 'worker' && typeof sha === 'string') workerDbSha = sha;
-    }
-    if (!workerDbSha) {
-      console.error('FAIL: no persisted WORKER runtime snapshot found in settings — the worker '
-        + 'identity cannot be independently verified');
-      process.exit(1);
-    }
-    if (workerDbSha !== operator.apiSha) {
-      console.error('FAIL: the worker\'s persisted runtime SHA (' + workerDbSha + ') does not equal '
-        + 'the attested deployment SHA ' + operator.apiSha + ' — the worker is stale');
+    const workerDecision = decideWorkerIdentity(workerRows, operator.apiSha as string, Date.now());
+    if (!workerDecision.ok) {
+      console.error('FAIL: worker identity: ' + workerDecision.reason);
       process.exit(1);
     }
   }
@@ -376,8 +418,8 @@ async function main(): Promise<void> {
   const rows = (await sql.unsafe(`
     select s.id as shipment_id, s.order_id, s.client_id, s.ship_date, s.voided, s.is_return,
            s.source, s.selected_rate_json,
-           (${PORTAL_OUTBOUND_ACCEPTS_SQL}) as portal_accepts,
-           case when (${PORTAL_OUTBOUND_ACCEPTS_SQL})
+           (coalesce(s.is_return, false) = false and (${PORTAL_OUTBOUND_ACCEPTS_SQL})) as portal_accepts,
+           case when coalesce(s.is_return, false) = false and (${PORTAL_OUTBOUND_ACCEPTS_SQL})
                 then (s.selected_rate_json->>'cShippingRateAmount')::numeric end as portal_amount,
            (select count(*) from shipments s2
              where s2.order_id = s.order_id and coalesce(s2.voided, false) = false
@@ -422,6 +464,8 @@ async function main(): Promise<void> {
   };
   const cohorts: Record<string, number> = {};
   const tag = (name: string) => { cohorts[name] = (cohorts[name] ?? 0) + 1; };
+  /** orderId -> count of cleanly-compared frozen shipments (the K9 evidence grain). */
+  const cleanFrozenByOrder = new Map<number, number>();
 
   for (const r of rows) {
     const shipDate = r.ship_date as Date | null;
@@ -438,12 +482,15 @@ async function main(): Promise<void> {
       // billed shipping is a mismatch, not cohort representation.
       const exLines = billedByShipment.get(Number(r.shipment_id)) ?? [];
       const exDefects: string[] = [];
+      // Round-6: an excluded row proves exclusion only with ZERO shipping-domain lines of any
+      // type or sign (a zero, negative, or shipping_missing line is still shipping-domain
+      // activity on a row that must have none), and no Portal-projected outbound money.
       for (const l of exLines) {
-        if (l.line_type === 'shipping' && (cents(l.total_cost) ?? 0) > 0) {
-          exDefects.push('excluded-row-carries-billed-shipping (' + String(l.total_cost) + ')');
-        }
+        exDefects.push('excluded-row-carries-shipping-domain-line (' + String(l.line_type) + ' ' + String(l.total_cost) + ')');
       }
-      if (exLines.length > 1) exDefects.push('excluded-row-duplicate-lines (' + exLines.length + ')');
+      if (excluded !== 'return' && cents(r.portal_amount) != null) {
+        exDefects.push('excluded-row-portal-money (' + String(r.portal_amount) + ')');
+      }
       if (exDefects.length > 0) {
         counts.mismatchShipments += 1;
         shadow.push({ shipmentId: r.shipment_id, verdict: 'MISMATCH', expected: 'excluded:' + excluded, detail: exDefects });
@@ -536,7 +583,9 @@ async function main(): Promise<void> {
       if (j?.customerRateSource === 'house_next_best_customer_rate') tag('house_captured_rate');
       if (j?.customerShippingMoneyPolicyVersion === 'ps-509-v1') tag('sync_ingress');
       if (j?.customerShippingMoneyPolicyVersion === 'ps-508-v1') tag('ordinary_purchase');
-      if (Number(r.order_shipment_count) > 1) tag('multi_shipment');
+      // Round-6 (K9): multi_shipment is tagged in a second pass over CLEANLY-COMPARED frozen
+      // rows only — an out-of-window, legacy, or unbilled sibling is not activation evidence.
+      cleanFrozenByOrder.set(Number(r.order_id), (cleanFrozenByOrder.get(Number(r.order_id)) ?? 0) + 1);
     }
     shadow.push({
       shipmentId: r.shipment_id, verdict: defects.length ? 'MISMATCH' : 'MATCH',
@@ -544,6 +593,12 @@ async function main(): Promise<void> {
       billedInvoiced: Boolean(line.invoiced), portalAmountCents,
       detail: defects.length ? defects : undefined,
     });
+  }
+
+  // K9 second pass: only orders with >= 2 cleanly-compared frozen shipments represent the
+  // multi_shipment cohort.
+  for (const [, cleanCount] of cleanFrozenByOrder) {
+    if (cleanCount >= 2) tag('multi_shipment');
   }
 
   const cohortCoverage: Record<string, number | string> = {};
@@ -583,7 +638,10 @@ async function main(): Promise<void> {
     portalMirror: {
       sha: PORTAL_MIRROR_SHA, source: PORTAL_MIRROR_SOURCE, executedAsSql: true,
       verification: MODE === 'activation'
-        ? 'ancestry + predicate-file digest against --portal-repo'
+        ? 'machine-verified: known commit, reachable from an official-remote ref (fetched from '
+          + PORTAL_OFFICIAL_REMOTE + ' with replacement objects disabled), mirror-is-ancestor, '
+          + 'predicate file byte-identical. DEPLOYED-ness of the attested SHA remains an '
+          + 'OPERATOR ATTESTATION — no live Portal version endpoint exists to read.'
         : 'not verified in inventory mode',
     },
     evidenceRunUrls: {
