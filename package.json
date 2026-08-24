@@ -882,6 +882,7 @@
     "test:ps-508-billing-consumes-frozen-tuple": "tsx scripts/ps-508-billing-consumes-frozen-tuple-guard.ts",
     "test:ps-508-cutover-gate": "tsx scripts/ps-508-cutover-gate-guard.ts",
     "test:ps-508-mutation-manifest": "node scripts/ps-508-mutation-manifest.mjs",
+    "canary:ps-508-packet": "tsx scripts/ps-508-canary-evidence-packet.ts",
     "test:ps-508-billing-frozen-tuple-pg17": "tsx scripts/ps-508-billing-frozen-tuple-pg17.ts",
     "test:ps-508-billing-generates-frozen-line-pg17": "tsx scripts/ps-508-billing-generates-frozen-line-pg17.ts",
     "test:ps-508-outbound-freeze-integration": "tsx scripts/ps-508-outbound-freeze-integration.ts",
