@@ -38,7 +38,7 @@ export function decideWorkerIdentity(
   } catch {
     return { ok: false, reason: 'the canonical worker snapshot is not parseable JSON' };
   }
-  const snap = parsed as { service?: unknown; runtime?: { commitSha?: unknown }; heartbeatAt?: unknown; startedAt?: unknown } | null;
+  const snap = parsed as { service?: unknown; runtime?: { commitSha?: unknown }; heartbeatAt?: unknown } | null;
   if (!snap || snap.service !== 'worker') {
     return { ok: false, reason: 'the canonical snapshot is not a worker-service snapshot (service=' + String(snap?.service) + ')' };
   }
@@ -46,12 +46,21 @@ export function decideWorkerIdentity(
   if (typeof sha !== 'string' || !HEX40.test(sha)) {
     return { ok: false, reason: 'the worker snapshot carries no full 40-hex commitSha (got ' + String(sha) + ')' };
   }
-  const heartbeatRaw = snap.heartbeatAt ?? snap.startedAt;
+  // Round-7: liveness requires an actual heartbeatAt — NOT a startedAt fallback. startedAt is
+  // set once at boot and never advances, so a worker that booted and then stopped would keep a
+  // recent startedAt while doing nothing; only a moving heartbeat proves a live worker.
+  const heartbeatRaw = snap.heartbeatAt;
   const heartbeat = typeof heartbeatRaw === 'string' ? Date.parse(heartbeatRaw) : NaN;
   if (Number.isNaN(heartbeat)) {
-    return { ok: false, reason: 'the worker snapshot has no parseable heartbeatAt — liveness cannot be established' };
+    return { ok: false, reason: 'the worker snapshot has no parseable heartbeatAt — liveness cannot be established (startedAt is not accepted as a liveness signal)' };
   }
   const age = now - heartbeat;
+  // A heartbeat in the future is a clock error or a fabricated timestamp, not liveness. Allow
+  // only 5 minutes of skew, matching the readback-timestamp rule.
+  if (age < -5 * 60_000) {
+    return { ok: false, reason: 'the worker heartbeat is in the FUTURE (' + Math.round(-age / 60_000)
+      + ' minutes ahead) — a clock error or fabricated timestamp, not liveness' };
+  }
   if (age > WORKER_HEARTBEAT_MAX_AGE_MS) {
     return { ok: false, reason: 'the worker heartbeat is ' + Math.round(age / 60_000) + ' minutes old (max '
       + WORKER_HEARTBEAT_MAX_AGE_MS / 60_000 + ') — the snapshot proves historical identity, not a live worker' };

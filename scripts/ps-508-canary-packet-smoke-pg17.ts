@@ -153,9 +153,14 @@ const WAIVER_APPROVAL = ['--waive-approved-by', 'smoke-harness', '--waive-eviden
 
 function runPacket(dbUrl: string, extra: string[], windowFrom = '2026-05-01'): { code: number; packet: Record<string, unknown> | null; stderr: string } {
   const out = path.join(os.tmpdir(), 'ps508-pkt-' + process.pid + '-' + (++dbSeq) + '.json');
-  const r = spawnSync('npx', ['tsx', 'scripts/ps-508-canary-evidence-packet.ts',
+  // shell:false via `node --import tsx` — argv arrays, no /bin/sh. The previous shell:true
+  // re-parsed the args through /bin/sh, so a fixture value containing shell metacharacters
+  // crashed the harness with "Unterminated quoted string" BEFORE the packet ran, instead of
+  // reaching the packet's own argv-array git helper. Verbatim argv is exactly what the real
+  // operator invocation gives the packet, so this is also more faithful.
+  const r = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/ps-508-canary-evidence-packet.ts',
     '--client', String(CLIENT), '--from', windowFrom, '--to', '2026-08-01', '--out', out, ...extra],
-  { shell: true, encoding: 'utf8', timeout: 300_000, env: { ...process.env, PS508_PACKET_DATABASE_URL: dbUrl } });
+  { shell: false, encoding: 'utf8', timeout: 300_000, env: { ...process.env, PS508_PACKET_DATABASE_URL: dbUrl } });
   let packet: Record<string, unknown> | null = null;
   try { packet = JSON.parse(fs.readFileSync(out, 'utf8')); fs.unlinkSync(out); } catch { /* no packet */ }
   return { code: r.status ?? 1, packet, stderr: (r.stderr ?? '') + (r.stdout ?? '') };
@@ -383,10 +388,16 @@ async function main(): Promise<void> {
       key: 'worker.status.snapshot:worker-scheduler',
       value: JSON.stringify({ version: 1, service: 'worker', heartbeatAt: hb, runtime: { commitSha: sha }, ...extra }),
     });
+    const FUTURE = new Date(nowMs + 2 * 3600_000).toISOString();
+    // startedAt-only: a snapshot with startedAt but no heartbeatAt must NOT prove liveness.
+    const startedOnly = { key: 'worker.status.snapshot:worker-scheduler',
+      value: JSON.stringify({ version: 1, service: 'worker', startedAt: NOW, runtime: { commitSha: REPO_SHA } }) };
     const cases: Array<[string, ReturnType<typeof decideWorkerIdentity>, boolean, string]> = [
       ['missing', decideWorkerIdentity([], REPO_SHA, nowMs), false, 'no canonical worker snapshot'],
       ['stale SHA', decideWorkerIdentity([row('f'.repeat(40), NOW)], REPO_SHA, nowMs), false, 'not the attested deployment SHA'],
       ['stale heartbeat', decideWorkerIdentity([row(REPO_SHA, OLD)], REPO_SHA, nowMs), false, 'heartbeat is'],
+      ['future heartbeat', decideWorkerIdentity([row(REPO_SHA, FUTURE)], REPO_SHA, nowMs), false, 'FUTURE'],
+      ['startedAt-only', decideWorkerIdentity([startedOnly], REPO_SHA, nowMs), false, 'no parseable heartbeatAt'],
       ['malformed', decideWorkerIdentity([{ key: 'worker.status.snapshot:worker-scheduler', value: '{not json' }], REPO_SHA, nowMs), false, 'not parseable'],
       ['duplicate', decideWorkerIdentity([row(REPO_SHA, NOW), row(REPO_SHA, NOW)], REPO_SHA, nowMs), false, 'competing canonical'],
       ['current', decideWorkerIdentity([row(REPO_SHA, NOW)], REPO_SHA, nowMs), true, ''],
@@ -401,7 +412,7 @@ async function main(): Promise<void> {
       { key: 'worker.status.snapshot:placeholder', value: JSON.stringify({ service: 'worker', heartbeatAt: NOW, runtime: { commitSha: REPO_SHA } }) },
     ], REPO_SHA, nowMs);
     if (aux.ok) { all = false; fail('worker owner: aux key must not decide', JSON.stringify(aux)); }
-    if (all) ok('worker owner: missing / stale-SHA / stale-heartbeat / malformed / duplicate / aux-key refused, current accepted');
+    if (all) ok('worker owner: missing / stale-SHA / stale-heartbeat / FUTURE-heartbeat / startedAt-only / malformed / duplicate / aux-key refused, current accepted');
   }
 
   // ---- 7. round-6: portal identity — injection-proof and official-remote sourced -------------
