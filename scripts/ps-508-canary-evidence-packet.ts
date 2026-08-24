@@ -56,12 +56,23 @@ import {
 } from '../src/services/customer-shipping-money-snapshot';
 import { roundMoney } from '../src/lib/money';
 
-const PACKET_SCHEMA_VERSION = 2;
-/** The Portal source this file's embedded SQL was copied from. Activation REQUIRES the
- *  deployed Portal SHA to start with this ref, or the packet fails PORTAL-MIRROR-STALE. */
-const PORTAL_MIRROR_REF = 'd447d89';
-const PORTAL_MIRROR_SOURCE = 'client-portal-prepship@' + PORTAL_MIRROR_REF
-  + ' src/lib/client-portal/customer-shipping-rate.ts';
+const PACKET_SCHEMA_VERSION = 3;
+/**
+ * The EXACT Portal commit this file's embedded SQL was copied from (round-5: full SHA, never a
+ * prefix — the seven-char prefix rule guaranteed a false refusal of any descendant head).
+ * Activation verifies, against a local clone supplied via --portal-repo:
+ *   (a) the attested deployed Portal SHA is a known commit,
+ *   (b) this mirror commit is an ANCESTOR of it, and
+ *   (c) the predicate source file at the deployed SHA is byte-identical to the file at the
+ *       mirror SHA — so a descendant that CHANGED the predicate fails PORTAL-MIRROR-STALE
+ *       instead of silently drifting.
+ */
+const PORTAL_MIRROR_SHA = 'cd486cc982870b190692e41bd8fbe35944f1e5ec';
+const PORTAL_PREDICATE_PATH = 'src/lib/client-portal/customer-shipping-rate.ts';
+const PORTAL_MIRROR_SOURCE = 'client-portal-prepship@' + PORTAL_MIRROR_SHA.slice(0, 7)
+  + ' ' + PORTAL_PREDICATE_PATH;
+/** Activation refuses any --api that is not exactly the approved production origin. */
+const PRODUCTION_API_ORIGIN = 'https://prepshipv4-api-l5xc.onrender.com';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf('--' + name);
@@ -122,9 +133,14 @@ const operator = {
   apiSha: arg('api-sha') ?? null,
   workerSha: arg('worker-sha') ?? null,
   portalSha: arg('portal-sha') ?? null,
+  // Round-5: evidence run URLs are recorded as OPERATOR ATTESTATIONS, not machine-verified
+  // facts — the packet does not call the CI API. Anything stronger must come from the audit.
   ciRunUrl: arg('ci-run-url') ?? null,
   pg17RunUrl: arg('pg17-run-url') ?? null,
   portalCiRunUrl: arg('portal-ci-run-url') ?? null,
+  portalRepo: arg('portal-repo') ?? null,
+  waiveApprovedBy: arg('waive-approved-by') ?? null,
+  waiveEvidence: arg('waive-evidence') ?? null,
 };
 if (MODE === 'activation') {
   // Round-4 audit: identities are BOUND, not self-attested strings — full 40-hex SHAs only,
@@ -141,8 +157,17 @@ if (MODE === 'activation') {
   }
   if (!operator.readbackAtUtc || Number.isNaN(Date.parse(operator.readbackAtUtc))) {
     problems.push('activation requires --readback-at as a valid ISO timestamp');
-  } else if (Math.abs(Date.now() - Date.parse(operator.readbackAtUtc)) > 24 * 3600_000) {
-    problems.push('--readback-at is older than 24h — re-read the Render values');
+  } else {
+    const delta = Date.now() - Date.parse(operator.readbackAtUtc);
+    if (delta > 24 * 3600_000) problems.push('--readback-at is older than 24h — re-read the Render values');
+    if (delta < -5 * 60_000) problems.push('--readback-at is in the FUTURE — a readback cannot postdate the run');
+  }
+  // Round-5: pre-boundary legacy rows are OUTSIDE the acceptance denominator by construction —
+  // the activation window must start at or after the boundary, so no OBSERVED-LEGACY row can
+  // sit uncompared inside an accepted packet.
+  if (boundary.kind === 'at' && FROM && Date.parse(FROM) < boundary.at.getTime()) {
+    problems.push('activation window must start AT or AFTER the boundary ('
+      + boundary.at.toISOString() + ') — pre-boundary legacy rows are not acceptance evidence');
   }
   for (const [flag, v] of [['api-sha', operator.apiSha], ['worker-sha', operator.workerSha], ['portal-sha', operator.portalSha]] as const) {
     if (!v || !HEX40.test(v)) problems.push('activation requires --' + flag + ' as a FULL 40-hex git SHA (got "' + (v ?? '') + '")');
@@ -150,12 +175,55 @@ if (MODE === 'activation') {
   if (operator.apiSha && operator.workerSha && operator.apiSha !== operator.workerSha) {
     problems.push('api-sha and worker-sha differ — deploy both to one SHA before the canary');
   }
-  if (operator.portalSha && HEX40.test(operator.portalSha) && !operator.portalSha.startsWith(PORTAL_MIRROR_REF)) {
-    problems.push('PORTAL-MIRROR-STALE: deployed Portal SHA ' + operator.portalSha
-      + ' does not match the embedded mirror ref ' + PORTAL_MIRROR_REF
-      + ' — re-embed the predicate from the deployed Portal before trusting portal parity');
+  if (!operator.portalRepo) {
+    problems.push('activation requires --portal-repo (a local clone used to VERIFY the deployed '
+      + 'Portal SHA by ancestry and predicate digest, replacing the refuted prefix rule)');
   }
-  if (!API) problems.push('activation requires --api (live /health is part of the identity binding)');
+  if (!API) {
+    problems.push('activation requires --api (live /health is part of the identity binding)');
+  } else {
+    let origin = '';
+    try { origin = new URL(API).origin; } catch { /* handled below */ }
+    if (origin !== PRODUCTION_API_ORIGIN) {
+      problems.push('activation requires --api at the approved production origin '
+        + PRODUCTION_API_ORIGIN + ' (got "' + (origin || API) + '") — a local or arbitrary '
+        + 'endpoint cannot impersonate the deployed API');
+    }
+  }
+  if (WAIVERS.size > 0) {
+    if (!operator.waiveApprovedBy || !operator.waiveApprovedBy.trim()) {
+      problems.push('activation with waivers requires --waive-approved-by (the accountable operator)');
+    }
+    if (!operator.waiveEvidence || !operator.waiveEvidence.trim()) {
+      problems.push('activation with waivers requires --waive-evidence (a reviewable reference)');
+    }
+  }
+  // Portal identity verification — pure git against the local clone, so it runs here in the
+  // validation phase where every gate failure is reported together.
+  if (operator.portalRepo && operator.portalSha && HEX40.test(operator.portalSha)) {
+    const repo = operator.portalRepo;
+    try {
+      // cat-file -t, not -e <sha>^{commit}: on Windows execSync goes through cmd.exe, where
+      // ^ is the escape character and silently mangles the peel syntax.
+      const kind = execSync('git -C "' + repo + '" cat-file -t ' + operator.portalSha, { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] }).trim();
+      if (kind !== 'commit') throw new Error('not a commit: ' + kind);
+      try {
+        execSync('git -C "' + repo + '" merge-base --is-ancestor ' + PORTAL_MIRROR_SHA + ' ' + operator.portalSha, { stdio: 'ignore' });
+        const show = (ref: string): string =>
+          execSync('git -C "' + repo + '" show ' + ref + ':' + PORTAL_PREDICATE_PATH, { encoding: 'utf8' });
+        if (show(PORTAL_MIRROR_SHA) !== show(operator.portalSha)) {
+          problems.push('PORTAL-MIRROR-STALE: ' + PORTAL_PREDICATE_PATH + ' CHANGED between the embedded '
+            + 'mirror commit and the deployed Portal SHA — re-embed the predicate first');
+        }
+      } catch {
+        problems.push('PORTAL-MIRROR-STALE: the embedded mirror commit ' + PORTAL_MIRROR_SHA.slice(0, 7)
+          + ' is not an ancestor of the deployed Portal SHA ' + operator.portalSha);
+      }
+    } catch {
+      problems.push('PORTAL-SHA-UNKNOWN: ' + operator.portalSha
+        + ' is not a commit in --portal-repo — fetch the deployed head before attesting it');
+    }
+  }
   for (const [flag, v] of [['ci-run-url', operator.ciRunUrl], ['pg17-run-url', operator.pg17RunUrl], ['portal-ci-run-url', operator.portalCiRunUrl]] as const) {
     if (!v) problems.push('activation requires --' + flag + ' (the exact-SHA evidence run)');
   }
@@ -243,17 +311,29 @@ async function main(): Promise<void> {
   let apiHealth: Record<string, unknown> | null = null;
   if (API) {
     try {
-      const res = await fetch(API.replace(/\/$/, '') + '/health');
-      apiHealth = (await res.json()) as Record<string, unknown>;
+      const res = await fetch(API.replace(/\/$/, '') + '/health', {
+        redirect: 'error',
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) apiHealth = { error: 'HTTP ' + res.status };
+      else apiHealth = (await res.json()) as Record<string, unknown>;
     } catch (error) {
       apiHealth = { error: String(error).slice(0, 120) };
     }
   }
   let toolGitSha: string | null = null;
   try { toolGitSha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim(); } catch { /* packaged run */ }
+  // Inventory mode: when both --api and --api-sha are supplied, a health/SHA disagreement is a
+  // recorded failure (the run cannot silently carry a wrong identity even outside activation).
+  const healthSha = (apiHealth as { runtime?: { commitSha?: string } } | null)?.runtime?.commitSha ?? null;
+  const inventoryHealthFailures: string[] = [];
+  if (MODE === 'inventory' && API && operator.apiSha && healthSha !== operator.apiSha) {
+    inventoryHealthFailures.push('/health commitSha (' + String(healthSha)
+      + ') does not equal --api-sha ' + operator.apiSha);
+  }
   if (MODE === 'activation') {
     // The tool must BE the reviewed code: its own git SHA must exist and equal the attested
-    // API/worker deployment SHA. A packaged or drifted tool cannot self-attest acceptance.
+    // API deployment SHA. A packaged or drifted tool cannot self-attest acceptance.
     if (!toolGitSha || !HEX40.test(toolGitSha)) {
       console.error('FAIL: activation requires the tool to run from a git checkout (toolGitSha unavailable)');
       process.exit(1);
@@ -264,10 +344,31 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     // Live health must corroborate the attested identity.
-    const healthSha = (apiHealth as { runtime?: { commitSha?: string } } | null)?.runtime?.commitSha;
     if (!healthSha || healthSha !== operator.apiSha) {
       console.error('FAIL: /health commitSha (' + String(healthSha) + ') does not equal --api-sha '
         + operator.apiSha + ' — the deployed API is not the attested SHA');
+      process.exit(1);
+    }
+    // Round-5: the worker identity is read from its own persisted runtime snapshot (settings
+    // key worker.status.snapshot*), never trusted from --worker-sha alone.
+    const workerRows = (await sql.unsafe(
+      "select key, value from settings where key like 'worker.status.snapshot%'",
+    )) as unknown as Array<{ key: string; value: unknown }>;
+    let workerDbSha: string | null = null;
+    for (const row of workerRows) {
+      const parsed = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+      const sha = (parsed as { runtime?: { commitSha?: string }; service?: string })?.runtime?.commitSha;
+      const service = (parsed as { service?: string })?.service;
+      if (service === 'worker' && typeof sha === 'string') workerDbSha = sha;
+    }
+    if (!workerDbSha) {
+      console.error('FAIL: no persisted WORKER runtime snapshot found in settings — the worker '
+        + 'identity cannot be independently verified');
+      process.exit(1);
+    }
+    if (workerDbSha !== operator.apiSha) {
+      console.error('FAIL: the worker\'s persisted runtime SHA (' + workerDbSha + ') does not equal '
+        + 'the attested deployment SHA ' + operator.apiSha + ' — the worker is stale');
       process.exit(1);
     }
   }
@@ -279,7 +380,8 @@ async function main(): Promise<void> {
            case when (${PORTAL_OUTBOUND_ACCEPTS_SQL})
                 then (s.selected_rate_json->>'cShippingRateAmount')::numeric end as portal_amount,
            (select count(*) from shipments s2
-             where s2.order_id = s.order_id and coalesce(s2.voided, false) = false) as order_shipment_count,
+             where s2.order_id = s.order_id and coalesce(s2.voided, false) = false
+               and coalesce(s2.is_return, false) = false) as order_shipment_count,
            o.order_number, o.externally_shipped,
            coalesce(o.raw->>'externallyFulfilled', 'false') = 'true' as externally_fulfilled
     from shipments s
@@ -327,9 +429,30 @@ async function main(): Promise<void> {
       : Boolean(r.is_return) ? 'return'
       : Boolean(r.externally_shipped) || Boolean(r.externally_fulfilled) ? 'external_fulfillment'
       : null;
-    if (excluded === 'return') { counts.excludedReturns += 1; tag('return_isolation'); }
-    if (excluded === 'voided') { counts.excludedVoids += 1; tag('voided'); }
-    if (excluded === 'external_fulfillment') { counts.excludedExternalFulfillment += 1; tag('external_fulfillment_exclusion'); }
+    if (excluded === 'return') counts.excludedReturns += 1;
+    if (excluded === 'voided') counts.excludedVoids += 1;
+    if (excluded === 'external_fulfillment') counts.excludedExternalFulfillment += 1;
+    if (excluded) {
+      // Round-5: an exclusion row proves its cohort only by BEHAVING excluded — no billed
+      // outbound shipping money, no duplicate shipping lines. A flagged row that still carries
+      // billed shipping is a mismatch, not cohort representation.
+      const exLines = billedByShipment.get(Number(r.shipment_id)) ?? [];
+      const exDefects: string[] = [];
+      for (const l of exLines) {
+        if (l.line_type === 'shipping' && (cents(l.total_cost) ?? 0) > 0) {
+          exDefects.push('excluded-row-carries-billed-shipping (' + String(l.total_cost) + ')');
+        }
+      }
+      if (exLines.length > 1) exDefects.push('excluded-row-duplicate-lines (' + exLines.length + ')');
+      if (exDefects.length > 0) {
+        counts.mismatchShipments += 1;
+        shadow.push({ shipmentId: r.shipment_id, verdict: 'MISMATCH', expected: 'excluded:' + excluded, detail: exDefects });
+      } else {
+        if (excluded === 'return') tag('return_isolation');
+        if (excluded === 'voided') tag('voided');
+        if (excluded === 'external_fulfillment') tag('external_fulfillment_exclusion');
+      }
+    }
 
     const j = (r.selected_rate_json ?? null) as Record<string, unknown> | null;
     const classification = classifyCustomerShippingMoney(j);
@@ -433,7 +556,7 @@ async function main(): Promise<void> {
   }
 
   // ---- acceptance (round-3: no false green) --------------------------------------------------
-  const failures: string[] = [];
+  const failures: string[] = [...inventoryHealthFailures];
   if (counts.mismatchShipments > 0) failures.push(counts.mismatchShipments + ' mismatching shipment(s)');
   if (counts.eligibleShipments === 0) failures.push('zero eligible shipments — an empty window proves nothing');
   if (counts.notYetComparedRows > 0) failures.push(counts.notYetComparedRows + ' row(s) not yet compared');
@@ -457,7 +580,19 @@ async function main(): Promise<void> {
     mode: MODE,
     readOnly: { requested: true, sessionDefaultTransactionReadOnly: 'on' },
     toolGitSha,
-    portalMirror: { ref: PORTAL_MIRROR_REF, source: PORTAL_MIRROR_SOURCE, executedAsSql: true },
+    portalMirror: {
+      sha: PORTAL_MIRROR_SHA, source: PORTAL_MIRROR_SOURCE, executedAsSql: true,
+      verification: MODE === 'activation'
+        ? 'ancestry + predicate-file digest against --portal-repo'
+        : 'not verified in inventory mode',
+    },
+    evidenceRunUrls: {
+      note: 'OPERATOR ATTESTATIONS — recorded verbatim, not machine-verified by this tool',
+      ciRunUrl: operator.ciRunUrl, pg17RunUrl: operator.pg17RunUrl, portalCiRunUrl: operator.portalCiRunUrl,
+    },
+    waiverApproval: WAIVERS.size > 0
+      ? { approvedBy: operator.waiveApprovedBy, evidence: operator.waiveEvidence }
+      : null,
     inputs: { clientId: CLIENT, boundary: BOUNDARY_RAW || '(none)', from: FROM_ISO, to: TO_ISO },
     identity: { apiHealth, operator },
     counts, cohortCoverage,

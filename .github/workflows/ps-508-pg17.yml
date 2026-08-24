@@ -59,6 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The packet smoke verifies Portal identity by ANCESTRY against a real clone.
+      - uses: actions/checkout@v4
+        with:
+          repository: drprepperusa-org/client-portal-prepship
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: portal-clone
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -111,9 +119,11 @@ jobs:
       # repository's strict settings including noUncheckedIndexedAccess.
       - name: PS-508 packet scripts pass repo-strict TypeScript
         run: >-
-          npx tsc --noEmit --strict --noUncheckedIndexedAccess --skipLibCheck
+          npx tsc --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride --skipLibCheck
           --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
           scripts/ps-508-canary-evidence-packet.ts scripts/ps-508-canary-packet-smoke-pg17.ts
 
       - name: PS-508 canary packet smoke
+        env:
+          PS508_SMOKE_PORTAL_REPO: ${{ github.workspace }}/portal-clone
         run: npm run -s test:ps-508-canary-packet-smoke-pg17
