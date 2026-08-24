@@ -70,10 +70,28 @@ function arg(name: string): string | undefined {
 function args(name: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < process.argv.length; i += 1) {
-    if (process.argv[i] === '--' + name && process.argv[i + 1]) out.push(process.argv[i + 1]);
+    const next = process.argv[i + 1];
+    if (process.argv[i] === '--' + name && next) out.push(next);
   }
   return out;
 }
+
+const HEX40 = /^[0-9a-f]{40}$/;
+const REQUIRED_COHORTS = [
+  { name: 'ordinary_purchase', derivable: true },
+  { name: 'sync_ingress', derivable: true },
+  { name: 'house_captured_rate', derivable: true },
+  { name: 'multi_shipment', derivable: true },
+  { name: 'voided', derivable: true },
+  { name: 'return_isolation', derivable: true },
+  { name: 'external_fulfillment_exclusion', derivable: true },
+  // Not derivable from shipment rows alone; the operator either finds a pilot row and tags it
+  // or waives with a recorded reason. Silent zeros are not accepted, and derivable cohorts
+  // are NOT waivable at all (round-4 audit).
+  { name: 'insurance_adjusted_final_cost', derivable: false },
+  { name: 'markup_changed_after_purchase', derivable: false },
+  { name: 'direct_carrier_purchase', derivable: false },
+] as const;
 
 const DB_URL = process.env.PS508_PACKET_DATABASE_URL;
 const MODE = (arg('mode') ?? 'inventory') as 'inventory' | 'activation';
@@ -109,24 +127,45 @@ const operator = {
   portalCiRunUrl: arg('portal-ci-run-url') ?? null,
 };
 if (MODE === 'activation') {
+  // Round-4 audit: identities are BOUND, not self-attested strings — full 40-hex SHAs only,
+  // API and worker on ONE SHA, a fresh readback timestamp, the exact-SHA evidence URLs, and a
+  // live /health that must agree with the attested API SHA (verified after fetch, below).
   if (boundary.kind !== 'at') problems.push('activation mode requires a nonempty valid --boundary');
   if (!operator.envClientsReadback) problems.push('activation requires --env-clients-readback (direct Render readback)');
   if (!operator.envBoundaryReadback) problems.push('activation requires --env-boundary-readback');
-  if (!operator.readbackAtUtc) problems.push('activation requires --readback-at');
-  if (!operator.apiSha) problems.push('activation requires --api-sha');
-  if (!operator.workerSha) problems.push('activation requires --worker-sha');
-  if (!operator.portalSha) problems.push('activation requires --portal-sha (deployed Portal SHA)');
   if (operator.envClientsReadback && operator.envClientsReadback.trim() !== String(CLIENT)) {
     problems.push('env-clients-readback ("' + operator.envClientsReadback + '") does not equal the pilot client ' + CLIENT);
   }
   if (operator.envBoundaryReadback && operator.envBoundaryReadback.trim() !== BOUNDARY_RAW.trim()) {
     problems.push('env-boundary-readback does not equal --boundary');
   }
-  if (operator.portalSha && !operator.portalSha.startsWith(PORTAL_MIRROR_REF)) {
+  if (!operator.readbackAtUtc || Number.isNaN(Date.parse(operator.readbackAtUtc))) {
+    problems.push('activation requires --readback-at as a valid ISO timestamp');
+  } else if (Math.abs(Date.now() - Date.parse(operator.readbackAtUtc)) > 24 * 3600_000) {
+    problems.push('--readback-at is older than 24h — re-read the Render values');
+  }
+  for (const [flag, v] of [['api-sha', operator.apiSha], ['worker-sha', operator.workerSha], ['portal-sha', operator.portalSha]] as const) {
+    if (!v || !HEX40.test(v)) problems.push('activation requires --' + flag + ' as a FULL 40-hex git SHA (got "' + (v ?? '') + '")');
+  }
+  if (operator.apiSha && operator.workerSha && operator.apiSha !== operator.workerSha) {
+    problems.push('api-sha and worker-sha differ — deploy both to one SHA before the canary');
+  }
+  if (operator.portalSha && HEX40.test(operator.portalSha) && !operator.portalSha.startsWith(PORTAL_MIRROR_REF)) {
     problems.push('PORTAL-MIRROR-STALE: deployed Portal SHA ' + operator.portalSha
       + ' does not match the embedded mirror ref ' + PORTAL_MIRROR_REF
       + ' — re-embed the predicate from the deployed Portal before trusting portal parity');
   }
+  if (!API) problems.push('activation requires --api (live /health is part of the identity binding)');
+  for (const [flag, v] of [['ci-run-url', operator.ciRunUrl], ['pg17-run-url', operator.pg17RunUrl], ['portal-ci-run-url', operator.portalCiRunUrl]] as const) {
+    if (!v) problems.push('activation requires --' + flag + ' (the exact-SHA evidence run)');
+  }
+}
+// Waivers are restricted to explicitly waivable (non-derivable) cohorts, with real reasons.
+for (const [name, reason] of WAIVERS) {
+  const cohort = REQUIRED_COHORTS.find((c) => c.name === name);
+  if (!cohort) problems.push('--waive names an unknown cohort "' + name + '"');
+  else if (cohort.derivable) problems.push('--waive "' + name + '" refused: derivable cohorts must be REPRESENTED, never waived');
+  if (!reason || !reason.trim()) problems.push('--waive "' + name + '" requires a nonblank reason');
 }
 if (problems.length > 0) {
   for (const p of problems) console.error('FAIL: ' + p);
@@ -182,20 +221,6 @@ const PORTAL_OUTBOUND_ACCEPTS_SQL = `
     and coalesce(s.selected_rate_json, '{}'::jsonb) ? 'customerShippingMoneyCaptureSource'
     and s.selected_rate_json->>'customerShippingMoneyCaptureSource' = 'shipstation_sync_ingestion')`;
 
-const REQUIRED_COHORTS: Array<{ name: string; derivable: boolean }> = [
-  { name: 'ordinary_purchase', derivable: true },
-  { name: 'sync_ingress', derivable: true },
-  { name: 'house_captured_rate', derivable: true },
-  { name: 'multi_shipment', derivable: true },
-  { name: 'voided', derivable: true },
-  { name: 'return_isolation', derivable: true },
-  { name: 'external_fulfillment_exclusion', derivable: true },
-  // Not derivable from shipment rows alone; the operator either finds a pilot row and tags it
-  // or waives with a recorded reason. Silent zeros are not accepted.
-  { name: 'insurance_adjusted_final_cost', derivable: false },
-  { name: 'markup_changed_after_purchase', derivable: false },
-  { name: 'direct_carrier_purchase', derivable: false },
-];
 
 async function main(): Promise<void> {
   const sql = postgres(DB_URL as string, {
@@ -226,6 +251,26 @@ async function main(): Promise<void> {
   }
   let toolGitSha: string | null = null;
   try { toolGitSha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim(); } catch { /* packaged run */ }
+  if (MODE === 'activation') {
+    // The tool must BE the reviewed code: its own git SHA must exist and equal the attested
+    // API/worker deployment SHA. A packaged or drifted tool cannot self-attest acceptance.
+    if (!toolGitSha || !HEX40.test(toolGitSha)) {
+      console.error('FAIL: activation requires the tool to run from a git checkout (toolGitSha unavailable)');
+      process.exit(1);
+    }
+    if (toolGitSha !== operator.apiSha) {
+      console.error('FAIL: toolGitSha ' + toolGitSha + ' != attested --api-sha ' + operator.apiSha
+        + ' — run the packet from the exact deployed SHA');
+      process.exit(1);
+    }
+    // Live health must corroborate the attested identity.
+    const healthSha = (apiHealth as { runtime?: { commitSha?: string } } | null)?.runtime?.commitSha;
+    if (!healthSha || healthSha !== operator.apiSha) {
+      console.error('FAIL: /health commitSha (' + String(healthSha) + ') does not equal --api-sha '
+        + operator.apiSha + ' — the deployed API is not the attested SHA');
+      process.exit(1);
+    }
+  }
 
   const rows = (await sql.unsafe(`
     select s.id as shipment_id, s.order_id, s.client_id, s.ship_date, s.voided, s.is_return,
@@ -307,10 +352,9 @@ async function main(): Promise<void> {
         else counts.malformedRows += 1;
       }
       if (decision.source === 'legacy_recompute') counts.preBoundaryLegacyRows += 1;
-      if (j?.customerRateSource === 'house_next_best_customer_rate') tag('house_captured_rate');
-      if (j?.customerShippingMoneyPolicyVersion === 'ps-509-v1') tag('sync_ingress');
-      if (j?.customerShippingMoneyPolicyVersion === 'ps-508-v1') tag('ordinary_purchase');
-      if (Number(r.order_shipment_count) > 1) tag('multi_shipment');
+      // Cohort tags for ordinary/sync/house/multi are assigned ONLY after a row proves itself:
+      // valid frozen decision AND a MATCH comparison (round-4: a malformed tuple must never
+      // count as cohort representation). See the comparison block below.
     }
 
     const portalAmountCents = cents(r.portal_amount);
@@ -351,6 +395,7 @@ async function main(): Promise<void> {
     }
     if (lines.length !== 1) defects.push('expected exactly one line, got ' + lines.length);
     const line = lines[0];
+    if (!line) continue; // unreachable after the length-0 branch above; satisfies noUncheckedIndexedAccess honestly
     if (decision.source === 'frozen') {
       const expectCents = cents(decision.value.amount);
       if (line.line_type !== 'shipping') defects.push('expected shipping, got ' + line.line_type);
@@ -364,6 +409,12 @@ async function main(): Promise<void> {
       if (portalAmountCents != null) defects.push('portal-displays-held: the Portal shows a tuple Billing holds');
     }
     if (defects.length) counts.mismatchShipments += 1;
+    if (defects.length === 0 && decision.source === 'frozen') {
+      if (j?.customerRateSource === 'house_next_best_customer_rate') tag('house_captured_rate');
+      if (j?.customerShippingMoneyPolicyVersion === 'ps-509-v1') tag('sync_ingress');
+      if (j?.customerShippingMoneyPolicyVersion === 'ps-508-v1') tag('ordinary_purchase');
+      if (Number(r.order_shipment_count) > 1) tag('multi_shipment');
+    }
     shadow.push({
       shipmentId: r.shipment_id, verdict: defects.length ? 'MISMATCH' : 'MATCH',
       expected: decision.source, billedLineType: line.line_type, billedTotalCents: cents(line.total_cost),
@@ -375,8 +426,9 @@ async function main(): Promise<void> {
   const cohortCoverage: Record<string, number | string> = {};
   const missingCohorts: string[] = [];
   for (const c of REQUIRED_COHORTS) {
-    if (cohorts[c.name]) cohortCoverage[c.name] = cohorts[c.name];
-    else if (WAIVERS.has(c.name)) cohortCoverage[c.name] = 'WAIVED: ' + WAIVERS.get(c.name);
+    const n = cohorts[c.name];
+    if (n) cohortCoverage[c.name] = n;
+    else if (WAIVERS.has(c.name)) cohortCoverage[c.name] = 'WAIVED: ' + (WAIVERS.get(c.name) ?? '');
     else { cohortCoverage[c.name] = 'NOT REPRESENTED'; missingCohorts.push(c.name); }
   }
 
@@ -385,6 +437,17 @@ async function main(): Promise<void> {
   if (counts.mismatchShipments > 0) failures.push(counts.mismatchShipments + ' mismatching shipment(s)');
   if (counts.eligibleShipments === 0) failures.push('zero eligible shipments — an empty window proves nothing');
   if (counts.notYetComparedRows > 0) failures.push(counts.notYetComparedRows + ' row(s) not yet compared');
+  // Round-4 decisive defect closed: the PS-508 acceptance contract requires 100% eligible
+  // tuple coverage. An eligible post-boundary row whose tuple is missing, malformed, or
+  // unknown is a coverage FAILURE even when Billing correctly holds it as a $0
+  // shipping_missing line — a correctly-reported hole is still a hole.
+  const uncovered = counts.postBoundaryMissingRows + counts.malformedRows + counts.unknownVersionRows;
+  if (uncovered > 0) {
+    failures.push(uncovered + ' eligible row(s) lack a billable frozen tuple '
+      + '(missing=' + counts.postBoundaryMissingRows + ', malformed=' + counts.malformedRows
+      + ', unknownVersion=' + counts.unknownVersionRows + ') — 100% coverage is required, '
+      + 'a correctly-held hole is still a hole');
+  }
   if (missingCohorts.length > 0) failures.push('required cohorts not represented and not waived: ' + missingCohorts.join(', '));
   const verdict = counts.mismatchShipments > 0 ? 'VIOLATED' : failures.length > 0 ? 'INCOMPLETE' : 'PASS';
 

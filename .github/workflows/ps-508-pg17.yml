@@ -105,5 +105,15 @@ jobs:
       # INCOMPLETE, cohort gating, NOT-YET-COMPARED failing, the numeric-string tuple the
       # real Portal SQL rejects, half-cent canonical rounding, once-per-shipment mismatch
       # counting, and the activation identity gates incl. PORTAL-MIRROR-STALE.
+      # Round-4 audit: the packet scripts live outside the root typecheck (tsconfig
+      # excludes scripts/**) and tsx transpiles without checking — which is how a
+      # read-only-breaking TS2322 shipped unseen. This step compiles both under the
+      # repository's strict settings including noUncheckedIndexedAccess.
+      - name: PS-508 packet scripts pass repo-strict TypeScript
+        run: >-
+          npx tsc --noEmit --strict --noUncheckedIndexedAccess --skipLibCheck
+          --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
+          scripts/ps-508-canary-evidence-packet.ts scripts/ps-508-canary-packet-smoke-pg17.ts
+
       - name: PS-508 canary packet smoke
         run: npm run -s test:ps-508-canary-packet-smoke-pg17
