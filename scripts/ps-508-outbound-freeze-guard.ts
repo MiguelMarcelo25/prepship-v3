@@ -307,17 +307,33 @@ check('the shipments writer inventory is unchanged (7 insert sites in src/)',
 check('no raw-SQL INSERT INTO shipments in src/ (every writer goes through drizzle)',
   rawInserts === 0, `${rawInserts} found`);
 
-// ── 4. THE CUTOVER HAS NOT SILENTLY HAPPENED ──────────────────────────────────────────────
+// ── 4. THE CUTOVER LANDED — ASSERT THE POST-CUTOVER ARCHITECTURE ─────────────────────────
 
-// billing.ts must still recompute until the cutover is a deliberate, reviewed step. If this starts
-// failing, either the cutover landed (update this guard AND the PS-437 pin at
-// ps-437-customer-shipping-money-guard.ts:127) or something removed the recompute by accident.
+// PS-508 W5/W6 landed 2026-08-24. This section previously asserted the PRE-cutover state —
+// "billing still recomputes" / "billing does NOT yet read outbound tuples" — and stayed green
+// straight through the cutover because its regexes matched by accident: the recompute call
+// survived inside a thunk, and billing imports the accepted-version UNION so the _OUTBOUND
+// constant name never appears in the file. The Hermes re-audit (2026-08-24, correction 3)
+// flagged that as a guard asserting a stale architecture narrative while green.
+// These are import-graph / structure checks only; the behavioural proof that Billing's real
+// generator emits the frozen line is ps-508-billing-generates-frozen-line-pg17.ts.
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
-check('billing still recomputes at invoice time (the cutover is a separate, reviewed step)',
-  /resolveCustomerShippingMoney\(\{/.test(billingSrc));
+check('billing imports the frozen-vs-recompute decision owner',
+  /from '\.\/customer-shipping-money-billable-decision'/.test(billingSrc));
 
-check('billing does NOT yet read outbound tuples (no consumer opted into the v2 version)',
-  !/CUSTOMER_SHIPPING_MONEY_POLICY_VERSION_OUTBOUND/.test(billingSrc));
+check('billing consults the per-client activation gate before the decision',
+  /isFrozenTupleBillingEnabledForClient\(\{/.test(billingSrc)
+  && /PS508_BILLING_FROZEN_TUPLE_CLIENTS/.test(billingSrc));
+
+check('the legacy invoice-time calculation is LAZY — a thunk, not an eager per-shipment call',
+  /const computeLegacyShippingDecision = \(\) => resolveCustomerShippingMoney\(\{/.test(billingSrc)
+  && !/const shippingDecision = resolveCustomerShippingMoney\(/.test(billingSrc));
+
+check('a held tuple surfaces as a visible review line, never a silent reprice',
+  /Customer shipping money needs review/.test(billingSrc));
+
+check('billing accepts the shared version union (which includes ps-508-v1), not a private list',
+  /ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS/.test(billingSrc));
 
 if (failures > 0) {
   console.log(`\nFAIL PS-508 outbound freeze guard (${failures} failing)`);

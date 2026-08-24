@@ -1522,7 +1522,12 @@ export async function generateLineItems(input: GenerateInput) {
         clientShippingMarkupPct: toNum(cfg.shippingMarkupPct),
         clientShippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
       });
-      const shippingDecision = resolveCustomerShippingMoney({
+      // PS-508 (Hermes re-audit correction 1): the legacy invoice-time calculation is LAZY.
+      // It executes only when the decision actually routes to it — gate off, or a gated
+      // legacy_absent row. For a frozen row it never runs at all, which is the call graph the
+      // ps-508 guards assert (the recalculator is a spy that must never fire). The previous
+      // shape computed it eagerly for every shipment and merely ignored the result.
+      const computeLegacyShippingDecision = () => resolveCustomerShippingMoney({
         selectedRateCost: labelCost,
         cShippingRateAmount,
         billingMode: cfg.billingMode,
@@ -1553,10 +1558,13 @@ export async function generateLineItems(input: GenerateInput) {
               resolveCutoverBoundary(env.PS508_BILLING_FROZEN_TUPLE_CUTOVER_AT),
               s.shipDate,
             ),
-            recompute: () => ({
-              amount: shippingDecision.cShippingRateAmount,
-              descriptionSuffix: shippingDecision.billingDescriptionSuffix,
-            }),
+            recompute: () => {
+              const legacy = computeLegacyShippingDecision();
+              return {
+                amount: legacy.cShippingRateAmount,
+                descriptionSuffix: legacy.billingDescriptionSuffix,
+              };
+            },
           })
         : null;
       if (billableShipping?.source === 'review') {
@@ -1576,12 +1584,16 @@ export async function generateLineItems(input: GenerateInput) {
           packageId: billedPackageId,
         });
       } else {
-        const billedShippingAmount = billableShipping
-          ? billableShipping.value.amount
-          : shippingDecision.cShippingRateAmount;
-        const billingDescriptionSuffix = billableShipping
-          ? billableShipping.value.descriptionSuffix
-          : shippingDecision.billingDescriptionSuffix;
+        let billedShippingAmount: number;
+        let billingDescriptionSuffix: string;
+        if (billableShipping) {
+          billedShippingAmount = billableShipping.value.amount;
+          billingDescriptionSuffix = billableShipping.value.descriptionSuffix;
+        } else {
+          const shippingDecision = computeLegacyShippingDecision();
+          billedShippingAmount = shippingDecision.cShippingRateAmount;
+          billingDescriptionSuffix = shippingDecision.billingDescriptionSuffix;
+        }
         rows.push({
           clientId,
           orderId: s.orderId,

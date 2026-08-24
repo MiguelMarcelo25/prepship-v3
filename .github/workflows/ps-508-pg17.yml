@@ -80,3 +80,9 @@ jobs:
 
       - name: PS-508 frozen tuple round trip
         run: npm run -s test:ps-508-billing-frozen-tuple-pg17
+
+      # Hermes re-audit correction 2: the round trip above proves the DECISION on persisted
+      # rows; this proves the REAL generator — generateLineItems against the actual
+      # migrations — emits the frozen line, the hold, and the gate-off legacy differential.
+      - name: PS-508 real Billing generator emits the frozen line
+        run: npm run -s test:ps-508-billing-generates-frozen-line-pg17
