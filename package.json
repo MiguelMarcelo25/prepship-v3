@@ -985,6 +985,8 @@
     "test:ps-487-return-billing-wiring": "tsx scripts/ps-487-return-billing-wiring-guard.ts",
     "test:ps-487-return-date-correction": "tsx scripts/ps-487-return-date-correction-guard.ts",
     "test:ps-487-return-date-route": "tsx scripts/ps-487-return-date-route-guard.ts",
+    "test:ps-487-ac6-fence": "tsx scripts/ps-487-ac6-finalized-fence-guard.ts && tsx scripts/ps-487-ac6-finalized-period-fence-integration.ts",
+    "test:ps-487-ac6-concurrency-pg17": "tsx scripts/ps-487-ac6-concurrency-pg17.ts",
     "test:ps-488-billing-row-reference": "tsx scripts/ps-488-billing-row-reference-guard.ts",
     "test:ps-488-invoice-reconcile": "tsx scripts/ps-488-invoice-reconcile-guard.ts",
     "test:ps-488-m2-readiness": "tsx scripts/ps-488-m2-readiness.ts",

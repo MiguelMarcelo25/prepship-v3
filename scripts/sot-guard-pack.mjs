@@ -1008,6 +1008,14 @@ const REQUIRED_GUARDS = [
   // out-of-scope as missing), override + audit written in one transaction, and it
   // posts no adjustment of its own.
   'test:ps-487-return-date-route',
+  // PS-487 AC-6 — the finalized-period return fence. A structural guard pins the delegation
+  // (billing.ts -> the finalization owner's classifier, half-open + per-client lock + FOR UPDATE),
+  // that finalized-period lines can never reach the direct INSERT, and the reconciler's
+  // zero-baseline path; a PGlite integration proves the behaviour (escaping-order -> one signed
+  // debit, idempotency, existing-finalized parity, open-period, half-open boundaries, safety,
+  // fail-closed). Both are offline (structural read + in-process PGlite). The two-connection
+  // concurrency proof is PG17-only and runs in the ps-487-ac6-pg17 workflow, not here.
+  'test:ps-487-ac6-fence',
   // NOT gated, currently BROKEN rather than merely failing:
   //   test:ps-343-ratebrowsermodal-money-normalization-cleanup -- its sliceBetween THROWS
   //     on a dead anchor ("const TEST_MOCK_SERVICE_TEMPLATES"), so the guard crashes

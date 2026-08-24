@@ -112,6 +112,7 @@ import { billingLineItemsHasReplacementIdColumn } from './billing-column-presenc
 import {
   assertBillingOrdersEditable,
   billingLineItemIsEditablePredicate,
+  classifyReturnLinesByFinalization,
   ensureBillingFinalizationPolicySchema,
   finalizedBillingOrderIdsForRange,
   isBillingFinalizedLockError,
@@ -1878,6 +1879,10 @@ export async function generateLineItems(input: GenerateInput) {
   // Return amounts whose order is already finalized — folded into the PS-449
   // reconciliation below instead of being written into the frozen period.
   const finalizedReturnTotalsByClient = new Map<number, Map<number, number>>();
+  // PS-487 AC-6: for a finalized-PERIOD return line whose order has NO invoiced baseline (so the
+  // reconciler's frozenRows join would miss it), remember which locked finalization it belongs to.
+  // Keyed clientId -> orderId -> finalizationId. Consumed when building the reconciler candidates.
+  const zeroBaselineFinalizationByClientOrder = new Map<number, Map<number, string>>();
   if (env.RETURN_BILLING_ENABLED) {
     const returnRows = await db
       .select({
@@ -1934,34 +1939,65 @@ export async function generateLineItems(input: GenerateInput) {
     });
     returnLinesSkipped = returnPlan.skipped.length;
 
-    // AC-6. A return whose order sits in a FINALIZED period must not be inserted there —
-    // that would add to a frozen invoice. Split it out and let PS-449's canonical
-    // reconciliation owner handle it exactly like a finalized order line: it locks the
-    // client, compares against the immutable finalized rows AND prior signed
-    // corrections, then appends only the remaining delta to the backend-selected open
-    // period. Building a second override/adjustment path here would be a duplicate owner
-    // of the rule PS-449 already owns.
-    const openReturnLines = returnPlan.lines.filter((l) => !finalizedOrderIds.has(l.orderId));
-    for (const line of returnPlan.lines) {
-      if (!finalizedOrderIds.has(line.orderId)) continue;
-      returnLinesIntoFinalizedAdjustment += 1;
-      let clientTotals = finalizedReturnTotalsByClient.get(line.clientId);
-      if (!clientTotals) {
-        clientTotals = new Map<number, number>();
-        finalizedReturnTotalsByClient.set(line.clientId, clientTotals);
-      }
-      clientTotals.set(
-        line.orderId,
-        roundMoney((clientTotals.get(line.orderId) ?? 0) + toNum(line.totalCost)),
-      );
-    }
-    returnPlan.lines.length = 0;
-    returnPlan.lines.push(...openReturnLines);
-
-    if (returnPlan.lines.length) {
+    // AC-6 (period-authoritative). A return line whose canonical billingEffectiveDate falls in a
+    // FINALIZED client-period must not be inserted there — that would add to a frozen invoice.
+    // Classification is owned by billing-finalization-policy.classifyReturnLinesByFinalization,
+    // which takes the per-client finalization lock and selects the overlapping finalizations FOR
+    // UPDATE. Classify + delete + insert run in ONE transaction that holds every per-client lock,
+    // so a concurrent close cannot finalize a period between classification and insertion (the race
+    // Hermes required closed — a static pre-query would not). Finalized-period lines route to
+    // PS-449's reconciler: orders WITH an invoiced baseline fold into finalizedReturnTotalsByClient
+    // as before; orders WITHOUT one carry their finalization id so the reconciler's zero-baseline
+    // path appends the remaining signed delta instead of silently dropping the charge. Order-level
+    // finalizedOrderIds is used ONLY to tell those two sub-cases apart, never to classify finality.
+    const plannedReturnLines = [...returnPlan.lines];
+    if (plannedReturnLines.length) {
+      const returnClientIds = [...new Set(plannedReturnLines.map((l) => l.clientId))].sort((a, b) => a - b);
       await db.transaction(async (tx) => {
-        // Clear only EDITABLE return lines in range, so regeneration is repeatable and a
-        // finalized period keeps its rows.
+        const openLines: typeof plannedReturnLines = [];
+        for (const clientId of returnClientIds) {
+          const clientLines = plannedReturnLines.filter((l) => l.clientId === clientId);
+          const classified = await classifyReturnLinesByFinalization(
+            {
+              clientId,
+              dateFrom: fromIso,
+              dateTo: toIso,
+              lines: clientLines.map((l) => ({
+                orderId: l.orderId,
+                clientId: l.clientId,
+                billingEffectiveDate: l.billingEffectiveDate,
+                line: l,
+              })),
+            },
+            tx,
+          );
+          for (const entry of classified.openLines) openLines.push(entry.line);
+          for (const { line: entry, finalizationId } of classified.finalizedLines) {
+            const line = entry.line;
+            returnLinesIntoFinalizedAdjustment += 1;
+            let clientTotals = finalizedReturnTotalsByClient.get(line.clientId);
+            if (!clientTotals) {
+              clientTotals = new Map<number, number>();
+              finalizedReturnTotalsByClient.set(line.clientId, clientTotals);
+            }
+            clientTotals.set(
+              line.orderId,
+              roundMoney((clientTotals.get(line.orderId) ?? 0) + toNum(line.totalCost)),
+            );
+            // Zero-baseline = finalized period, but the order has NO invoiced frozen row, so the
+            // reconciler's frozenRows join would miss it. Remember its finalization id.
+            if (!finalizedOrderIds.has(line.orderId)) {
+              let zb = zeroBaselineFinalizationByClientOrder.get(line.clientId);
+              if (!zb) {
+                zb = new Map<number, string>();
+                zeroBaselineFinalizationByClientOrder.set(line.clientId, zb);
+              }
+              zb.set(line.orderId, finalizationId);
+            }
+          }
+        }
+        // Clear only EDITABLE return lines in range, so regeneration is repeatable and a finalized
+        // period keeps its rows. Held in the SAME transaction as the per-client locks above.
         await tx.delete(billingLineItems).where(
           and(
             inArray(billingLineItems.lineType, [
@@ -1977,36 +2013,34 @@ export async function generateLineItems(input: GenerateInput) {
             billingLineItemIsEditablePredicate(),
           ),
         );
-        const inserted = await tx
-          .insert(billingLineItems)
-          .values(
-            returnPlan.lines.map((line) => ({
-              clientId: line.clientId,
-              orderId: line.orderId,
-              orderNumber: line.orderNumber,
-              shipmentId: null,
-              // PS-488 M2 — relational return identity (migration 0089).
-              //
-              // This is the ONLY writer of return billing lines: CP reads them but never
-              // inserts, and the other two inserts in this file are outbound lines and
-              // storage. So populating it here is what makes return_id trustworthy
-              // enough for PS-487 AC-7 to record which rows a correction touched.
-              returnId: line.returnId,
-              lineType: line.lineType,
-              description: line.description,
-              qty: line.qty,
-              unitCost: line.unitCost,
-              totalCost: line.totalCost,
-              shipDate: new Date(`${line.shipDate}T00:00:00.000Z`),
-              billingEffectiveDate: new Date(`${line.billingEffectiveDate}T00:00:00.000Z`),
-            })),
-          )
-          // Same choice as PS-425: a duplicate is a loud transaction failure. The unique
-          // index on (order_id, line_type, description) is what makes this idempotent,
-          // and the description carries the canonical return event key.
-          .returning({ id: billingLineItems.id, totalCost: billingLineItems.totalCost });
-        returnLinesGenerated = inserted.length;
-        for (const r of inserted) total += toNum(r.totalCost);
+        if (openLines.length) {
+          const inserted = await tx
+            .insert(billingLineItems)
+            .values(
+              openLines.map((line) => ({
+                clientId: line.clientId,
+                orderId: line.orderId,
+                orderNumber: line.orderNumber,
+                shipmentId: null,
+                // PS-488 M2 — relational return identity (migration 0089). This is the ONLY writer
+                // of return billing lines, so populating it here is what makes return_id trustworthy
+                // enough for PS-487 AC-7 to record which rows a correction touched.
+                returnId: line.returnId,
+                lineType: line.lineType,
+                description: line.description,
+                qty: line.qty,
+                unitCost: line.unitCost,
+                totalCost: line.totalCost,
+                shipDate: new Date(`${line.shipDate}T00:00:00.000Z`),
+                billingEffectiveDate: new Date(`${line.billingEffectiveDate}T00:00:00.000Z`),
+              })),
+            )
+            // Same choice as PS-425: a duplicate is a loud transaction failure. The unique index on
+            // (order_id, line_type, description) is what makes this idempotent.
+            .returning({ id: billingLineItems.id, totalCost: billingLineItems.totalCost });
+          returnLinesGenerated = inserted.length;
+          for (const r of inserted) total += toNum(r.totalCost);
+        }
       });
       generated += returnLinesGenerated;
     }
@@ -2057,10 +2091,17 @@ export async function generateLineItems(input: GenerateInput) {
       clientId,
       dateFrom: fromIso,
       dateTo: toIso,
-      candidates: [...candidateTotals].map(([orderId, currentTotal]) => ({
-        orderId,
-        currentTotal: currentTotal.toFixed(2),
-      })),
+      candidates: [...candidateTotals].map(([orderId, currentTotal]) => {
+        // PS-487 AC-6: a finalized-period return line whose order has NO invoiced baseline carries
+        // its finalization id so the reconciler's zero-baseline path appends the delta against a
+        // $0.00 frozen total instead of missing the order entirely.
+        const zeroBaselineFinalizationId = zeroBaselineFinalizationByClientOrder.get(clientId)?.get(orderId);
+        return {
+          orderId,
+          currentTotal: currentTotal.toFixed(2),
+          ...(zeroBaselineFinalizationId ? { zeroBaselineFinalizationId } : {}),
+        };
+      }),
       actorId: input.actorId,
       actorEmail: input.actorEmail,
       now: input.now,

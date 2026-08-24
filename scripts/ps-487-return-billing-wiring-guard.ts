@@ -42,14 +42,14 @@ check('the whole return-billing pass sits behind the flag', () => {
   // before the unrelated storage pass begins.
   const gate = billing.indexOf('if (env.RETURN_BILLING_ENABLED) {');
   const del = billing.indexOf('inArray(billingLineItems.lineType, [');
-  const insert = billing.indexOf('returnPlan.lines.map((line)');
+  const insert = billing.indexOf('openLines.map((line)');
   assert.ok(gate >= 0, 'the flag block must exist');
   assert.ok(del > gate, 'the return-line DELETE must live inside the flag block');
   assert.ok(insert > gate, 'the return-line INSERT must live inside the flag block');
 });
 
 check('the flag block closes before the unrelated storage pass', () => {
-  const insert = billing.indexOf('returnPlan.lines.map((line)');
+  const insert = billing.indexOf('openLines.map((line)');
   const storage = billing.indexOf('// One inventory read + one ledger read', insert);
   assert.ok(storage > insert, 'the return pass must not swallow the storage pass');
 });
@@ -82,7 +82,7 @@ check('amounts come from the planner, not from arithmetic in the generator', () 
 });
 
 check('the insert is a loud failure on duplicates (no onConflictDoNothing)', () => {
-  const start = billing.indexOf('returnPlan.lines.map((line)');
+  const start = billing.indexOf('openLines.map((line)');
   assert.ok(start >= 0);
   const span = billing.slice(start, start + 1_400);
   assert.doesNotMatch(span, /onConflictDoNothing|onConflictDoUpdate/,
@@ -90,7 +90,7 @@ check('the insert is a loud failure on duplicates (no onConflictDoNothing)', () 
 });
 
 check('return lines carry no shipmentId (they are order-scoped, matching the unique index)', () => {
-  const start = billing.indexOf('returnPlan.lines.map((line)');
+  const start = billing.indexOf('openLines.map((line)');
   const span = billing.slice(start, start + 1_400);
   assert.match(span, /shipmentId: null/,
     'the unique index that dedupes these is the order_id/line_type/description one');
@@ -107,13 +107,18 @@ check('the returns schema maps only columns that exist in production', () => {
   }
 });
 
-// ── 5. AC-6: a finalized period is never written, only adjusted ──────────────
-check('a return on a FINALIZED order is excluded from the insert', () => {
-  assert.match(
-    billing,
-    /const openReturnLines = returnPlan\.lines\.filter\(\(l\) => !finalizedOrderIds\.has\(l\.orderId\)\)/,
-    'return lines for finalized orders must not be inserted into the frozen period',
-  );
+// ── 5. AC-6: a finalized PERIOD is never written, only adjusted ──────────────
+check('a return in a FINALIZED period is excluded from the insert (period-authoritative)', () => {
+  // Finality is a property of billing_finalizations, resolved by the finalization owner's
+  // classifier — NOT the order-level finalizedOrderIds (which missed an order with no invoiced
+  // baseline). Only the classifier openLines reach the direct insert; finalized-period lines route
+  // to the reconciler.
+  assert.match(billing, /await classifyReturnLinesByFinalization\(/,
+    'return finality must be classified by the finalization owner, not re-derived here');
+  assert.match(billing, /\.insert\(billingLineItems\)[\s\S]{0,200}?openLines\.map\(\(line\)/,
+    'only the classifier openLines may be inserted directly into a period');
+  assert.doesNotMatch(billing, /const openReturnLines = returnPlan\.lines\.filter/,
+    'the old order-level finalizedOrderIds split must be gone (it did not fence the period)');
 });
 
 check('finalized return amounts are folded into the PS-449 reconciliation candidates', () => {
@@ -288,7 +293,7 @@ check('M2: no writer emits a frozen legacy alias as a NEW write type', () => {
 
 check('M2: the return insert carries returnId and lets duplicates abort', () => {
   const billing = readFileSync('src/services/billing.ts', 'utf8');
-  const start = billing.indexOf('returnPlan.lines.map');
+  const start = billing.indexOf('openLines.map');
   assert.notEqual(start, -1, 'the return insert must exist');
   const block = billing.slice(start, start + 1200);
   assert.match(block, /returnId: line\.returnId,/, 'every return row must carry its relational identity');

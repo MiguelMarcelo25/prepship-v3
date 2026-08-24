@@ -1,0 +1,85 @@
+# PS-487 AC-6 — the finalized-period return fence against REAL PostgreSQL 17.
+#
+# PGlite (used by the offline AC-6 integration in the SOT pack) is a single connection and cannot
+# prove mutual exclusion. This job runs two INDEPENDENT connections and proves that while the real
+# classifier holds the per-client finalization advisory lock, a concurrent finalization cannot take
+# it (so a period cannot finalize between classification and the direct insert), that the lock
+# releases on commit, and that the reconciler's zero-baseline path fails closed.
+name: PS-487 AC-6 PG17 proofs
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'review/ps-487-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-487-ac6-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg17-proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps487
+          POSTGRES_PASSWORD: ps487
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps487"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable and no deploy secret
+      # is exposed to this job.
+      PS487_PG17_ADMIN_URL: postgres://ps487:ps487@127.0.0.1:5432/postgres
+      # billing-finalization-policy -> env.ts needs the Supabase vars at parse time. Inert dummies:
+      # nothing in this job talks to Supabase, and the tests use loopback Postgres only.
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: offline-dummy
+      SUPABASE_SERVICE_ROLE_KEY: offline-dummy
+      SUPABASE_JWT_SECRET: offline-dummy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # The proof itself refuses anything below 170000, but fail earlier and louder if the service
+      # container is not the intended major.
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          node -e "const p=require('postgres');const s=p(process.env.PS487_PG17_ADMIN_URL,{max:1});s\`select current_setting('server_version_num')::int as v\`.then(r=>{const v=r[0].v;if(v<170000||v>=180000){console.error('not PG17: '+v);process.exit(1)}console.log('server_version_num='+v);return s.end()}).catch(e=>{console.error(e);process.exit(1)})"
+
+      - name: PS-487 AC-6 concurrency (two connections, real advisory lock)
+        run: npm run -s test:ps-487-ac6-concurrency-pg17
+
+      # Co-locate the offline structural guard + PGlite behavioural proof so the whole AC-6 surface
+      # is exercised together on a money path (also covered offline by sot-guard-pack).
+      - name: PS-487 AC-6 structural guard + behavioural integration
+        run: npm run -s test:ps-487-ac6-fence
+
+      - name: PS-487 AC-6 scripts pass repo-strict TypeScript
+        run: >-
+          npx tsc --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride --skipLibCheck
+          --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
+          scripts/ps-487-ac6-concurrency-pg17.ts
+          scripts/ps-487-ac6-finalized-period-fence-integration.ts
+          scripts/ps-487-ac6-finalized-fence-guard.ts

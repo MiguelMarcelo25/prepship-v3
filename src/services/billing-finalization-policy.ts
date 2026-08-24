@@ -861,6 +861,17 @@ export async function createBillingCreditNote(input: {
 export type BillingRegenerationCandidate = {
   orderId: number;
   currentTotal: string;
+  /**
+   * PS-487 AC-6: set when this candidate is a finalized-PERIOD return line whose order has NO
+   * invoiced frozen baseline (so it never appears in the reconciler's invoiced-line `frozenRows`
+   * join, and its charge would otherwise vanish). The finalization owner's classifier
+   * (`classifyReturnLinesByFinalization`) resolved this id from `billing_finalizations` by the
+   * half-open period contract on `billingEffectiveDate`. The reconciler treats the frozen baseline
+   * as $0.00 for this `(order, finalization)`, still subtracts prior signed regeneration
+   * adjustments, and appends only the remaining signed delta. It must be a finalization THIS call
+   * locks; a candidate pointing at an unlocked/absent finalization fails closed.
+   */
+  zeroBaselineFinalizationId?: string;
 };
 
 export type BillingRegenerationAdjustmentResult = {
@@ -887,6 +898,58 @@ export function resolveBillingRegenerationAdjustment(input: {
     amount,
     signedAmount: centsMoney(deltaCents),
   };
+}
+
+export type ReturnLineForFinalizationClassification = {
+  orderId: number;
+  clientId: number;
+  /** Canonical billing day, 'YYYY-MM-DD' — coalesce(billing_date_override, created_at) day. */
+  billingEffectiveDate: string;
+};
+
+/**
+ * PS-487 AC-6 — the finalization owner's PERIOD classifier. Given one client's planned return
+ * lines, split them by whether their canonical billingEffectiveDate falls inside a FINALIZED
+ * client-period (billing_finalizations, half-open `period_start <= date < period_end`). It
+ * acquires the per-client finalization advisory lock (36421) and selects the overlapping
+ * finalizations FOR UPDATE, so a classification cannot be invalidated by a concurrent close before
+ * the caller's transaction commits — the caller MUST run this, insert the open lines, and
+ * reconcile the finalized ones in the SAME transaction (`tx`). Order-level "does this order
+ * already have an invoiced row" is deliberately NOT consulted: finality is a property of the
+ * client-period, not of one order's frozen line (the invoiced-baseline vs zero-baseline split is
+ * resolved downstream by the reconciler). Periods are compared by epoch seconds so the half-open
+ * boundary does not depend on parsing Postgres timestamptz text in JS.
+ */
+export async function classifyReturnLinesByFinalization<T extends ReturnLineForFinalizationClassification>(
+  input: { clientId: number; dateFrom: string; dateTo: string; lines: T[] },
+  tx: BillingPolicyExecutor,
+): Promise<{ openLines: T[]; finalizedLines: Array<{ line: T; finalizationId: string }> }> {
+  assertPeriod(input.dateFrom, input.dateTo);
+  const openLines: T[] = [];
+  const finalizedLines: Array<{ line: T; finalizationId: string }> = [];
+  if (input.lines.length === 0) return { openLines, finalizedLines };
+  await tx.execute(sql`select pg_advisory_xact_lock(36421, ${input.clientId})`);
+  const periods = resultRows<{ id: string; startEpoch: string; endEpoch: string }>(await tx.execute(sql`
+    select ${billingFinalizations.id} as "id",
+      extract(epoch from ${billingFinalizations.periodStart})::bigint::text as "startEpoch",
+      extract(epoch from ${billingFinalizations.periodEnd})::bigint::text as "endEpoch"
+    from ${billingFinalizations}
+    where ${billingFinalizations.clientId} = ${input.clientId}
+      and ${billingFinalizations.periodStart} < ${input.dateTo}::timestamptz
+      and ${billingFinalizations.periodEnd} > ${input.dateFrom}::timestamptz
+    order by ${billingFinalizations.periodStart}
+    for update
+  `));
+  const bounds = periods.map((p) => ({ id: p.id, start: Number(p.startEpoch), end: Number(p.endEpoch) }));
+  for (const line of input.lines) {
+    const at = Math.floor(Date.parse(`${line.billingEffectiveDate}T00:00:00.000Z`) / 1000);
+    // Half-open: period_start <= date < period_end. First match wins (periods do not overlap
+    // for one client — enforced by billing_finalizations_client_period_unq).
+    const hit = Number.isFinite(at) ? bounds.find((b) => b.start <= at && at < b.end) : undefined;
+    if (hit) finalizedLines.push({ line, finalizationId: hit.id });
+    else openLines.push(line);
+  }
+  return { openLines, finalizedLines };
 }
 
 /**
@@ -1174,7 +1237,12 @@ export async function reconcileFinalizedBillingOrderAdjustments(input: {
         order by ${billingFinalizations.periodStart}
         for update
       `));
-      if (lockedFinalizations.length === 0) {
+      // Nothing finalized in this window: normally there is nothing to reconcile. But if a caller
+      // routed a ZERO-BASELINE finalized-period return candidate here, an empty lock set is an
+      // inconsistency, not "nothing to do" — fall through so the validation below fails CLOSED
+      // rather than silently dropping the charge.
+      const hasZeroBaselineCandidate = input.candidates.some((c) => c.zeroBaselineFinalizationId != null);
+      if (lockedFinalizations.length === 0 && !hasZeroBaselineCandidate) {
         return {
           finalizedOrderCount: 0,
           adjustedOrderCount: 0,
@@ -1273,10 +1341,88 @@ export async function reconcileFinalizedBillingOrderAdjustments(input: {
         else debitCount += 1;
       }
 
+      // PS-487 AC-6 — ZERO-BASELINE finalized-period return lines. An order with NO invoiced frozen
+      // row in this period never appears in `frozenRows` above, so without this its charge would
+      // silently vanish (the exact defect Hermes flagged). The finalization owner's classifier
+      // already resolved which locked finalization each such line belongs to; the frozen baseline is
+      // $0.00, but prior signed regeneration adjustments for the same (order, finalization) are still
+      // netted out so a re-run adds nothing. `lockedIds` proves the finalization is one THIS
+      // transaction holds FOR UPDATE — a candidate pointing anywhere else fails closed.
+      const lockedIds = new Set(lockedFinalizations.map((f) => f.id));
+      const baselineOrderIds = new Set(frozenRows.map((f) => Number(f.orderId)));
+      let zeroBaselineCount = 0;
+      for (const candidate of input.candidates) {
+        const fid = candidate.zeroBaselineFinalizationId;
+        if (fid == null) continue;
+        if (!Number.isInteger(candidate.orderId) || candidate.orderId <= 0) continue;
+        if (baselineOrderIds.has(candidate.orderId)) continue; // a real invoiced baseline handled it above
+        if (!lockedIds.has(fid)) {
+          throw new BillingCloseWorkflowError(
+            'BILLING_ZERO_BASELINE_FINALIZATION_NOT_LOCKED',
+            'A finalized-period return line points at a finalization this reconciliation did not lock.',
+            409,
+            { finalizationId: fid, orderId: candidate.orderId },
+          );
+        }
+        const currentTotal = candidateTotals.get(candidate.orderId);
+        if (currentTotal == null) continue;
+        zeroBaselineCount += 1;
+        const existingSignedTotal = resultRows<{ signed: string }>(await tx.execute(sql`
+          select coalesce(sum(case
+            when note.adjustment_kind = 'credit' then -note.amount
+            else note.amount
+          end), 0)::text as "signed"
+          from billing_credit_notes note
+          where note.finalization_id = ${fid}
+            and note.client_id = ${input.clientId}
+            and note.adjustment_source = 'regeneration'
+            and note.source_order_id = ${candidate.orderId}
+        `))[0]?.signed ?? '0';
+        const decision = resolveBillingRegenerationAdjustment({
+          currentTotal,
+          frozenTotal: '0.00',
+          existingSignedTotal,
+        });
+        if (!decision) continue;
+        if (decision.adjustmentKind === 'credit') {
+          const summary = await billingFinalizationSummary(fid, input.clientId, tx);
+          if (!summary || moneyCents(decision.amount) > moneyCents(summary.balance)) {
+            throw new BillingCloseWorkflowError(
+              'BILLING_CREDIT_EXCEEDS_BALANCE',
+              'Regeneration credit exceeds the adjusted finalized balance.',
+              409,
+              { finalizationId: fid, orderId: candidate.orderId },
+            );
+          }
+        }
+        const adjustmentId = randomUUID();
+        await appendBillingAdjustmentProjection({
+          id: adjustmentId,
+          clientId: input.clientId,
+          finalizationId: fid,
+          adjustmentKind: decision.adjustmentKind,
+          adjustmentSource: 'regeneration',
+          sourceOrderId: candidate.orderId,
+          replacementId: null,
+          amount: decision.amount,
+          reason: `Regeneration correction for order ${candidate.orderId}: canonical ${Number(currentTotal).toFixed(2)}, frozen 0.00 (return in finalized period, no invoiced baseline)`,
+          idempotencyKey: `billing-regen:${adjustmentId}`,
+          actorId: input.actorId?.trim() || 'system:billing-regeneration',
+          actorEmail: input.actorEmail ?? null,
+          activityDate,
+          effectiveDate,
+          billingPolicyVersion: calendar.policyVersion,
+        }, tx);
+        adjustedOrderCount += 1;
+        if (decision.adjustmentKind === 'credit') creditCount += 1;
+        else debitCount += 1;
+      }
+
+      const finalizedOrderCount = frozenRows.length + zeroBaselineCount;
       return {
-        finalizedOrderCount: frozenRows.length,
+        finalizedOrderCount,
         adjustedOrderCount,
-        untouchedOrderCount: frozenRows.length - adjustedOrderCount,
+        untouchedOrderCount: finalizedOrderCount - adjustedOrderCount,
         creditCount,
         debitCount,
       };
