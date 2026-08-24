@@ -124,7 +124,12 @@ const overrideOwner = fs.readFileSync('src/services/billing-hugrab-shipping-rate
 const billingRoute = fs.readFileSync('src/routes/billing.ts', 'utf8');
 const billingParity = fs.readFileSync('web/src/components/Views/billing-parity.ts', 'utf8');
 const reconciliation = fs.readFileSync('scripts/ps-437-reconcile-return-money.ts', 'utf8');
-assert.match(billing, /resolveCustomerShippingMoney\(\{/);
+// PS-508 blocker B: this line used to assert that billing.ts merely CONTAINS a
+// resolveCustomerShippingMoney({ call. That passed whether Billing repriced everything or
+// nothing — a call-site pin, not a behaviour — and so encoded invoice-time recalculation as
+// required. The contract is now proven behaviourally in
+// scripts/ps-508-billing-consumes-frozen-tuple-guard.ts, where the legacy recalculator is a
+// spy that must never fire for a shipment carrying a valid frozen tuple.
 assert.match(route, /customer-shipping-money\/freeze/);
 assert.match(route, /requirePermission\('billing:generate'\)/);
 assert.match(route, /isClientVisibleToScope\(\{ id: target\.clientId, storeIds: target\.storeIds \}, scope\)/);

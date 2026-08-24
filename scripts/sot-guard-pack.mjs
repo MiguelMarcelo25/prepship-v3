@@ -1426,6 +1426,7 @@ const REQUIRED_GUARDS = [
   // which is the file that defines the source-of-truth surface — an inconsistency PS-508's
   // own audit flagged.
   'test:ps-508-outbound-freeze',
+  'test:ps-508-billing-consumes-frozen-tuple',
   'test:ps-508-outbound-freeze-integration',
   'test:ps-508-classification',
 ];
