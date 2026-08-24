@@ -127,6 +127,14 @@ const schema = z.object({
   // approves an exact dry-run plan and enables this gate for the reviewed run.
   INVENTORY_RECONCILIATION_APPLY_ENABLED: booleanFlag(false),
   STRICT_JWT_CLAIMS: booleanFlag(false),
+  // PS-508 W5: Billing consumes the frozen outbound customer-money tuple instead of
+  // recalculating it from MUTABLE billing config at invoice-generation time. Default EMPTY =
+  // OFF for every client, and OFF is byte-identical to the previous behaviour (the gate
+  // bypasses the decision entirely rather than narrowing accepted versions, which would send
+  // gated-off clients to review). Comma-separated client IDs enable the cutover for exactly
+  // those clients; "*" enables it for all. DJ canaries ONE client on Render, shadow-verifies
+  // snapshot-vs-Billing parity, then expands only at zero mismatches.
+  PS508_BILLING_FROZEN_TUPLE_CLIENTS: z.string().default(''),
   // PS-487: return billing generation. Default OFF — flipping it on is what starts
   // putting return_processing / return_label lines on real invoices, so it stays a
   // deliberate Render env change after canary, never a deploy side effect.

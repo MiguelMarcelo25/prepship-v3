@@ -1427,6 +1427,7 @@ const REQUIRED_GUARDS = [
   // own audit flagged.
   'test:ps-508-outbound-freeze',
   'test:ps-508-billing-consumes-frozen-tuple',
+  'test:ps-508-cutover-gate',
   'test:ps-508-outbound-freeze-integration',
   'test:ps-508-classification',
 ];

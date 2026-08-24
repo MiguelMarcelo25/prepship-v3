@@ -19,16 +19,25 @@ import type {
  * customer money from MUTABLE billing config. That made Billing a second source of truth and
  * broke PS-437's contract: frozen customer money must not move when markup changes later.
  *
- * This owns the choice so callers cannot re-derive it. `resolveCustomerShippingMoney` remains
- * the calculation owner at preview and label commit; it stops being an invoice-time repricing
- * authority for any shipment that already carries a frozen tuple.
+ * `resolveCustomerShippingMoney` remains the calculation owner at preview and label commit. It
+ * stops being an invoice-time repricing authority for any shipment that already carries a
+ * frozen tuple.
  *
- * Fails CLOSED: anything that is neither a valid accepted tuple nor a clean legacy receipt
- * goes to review rather than being silently repriced.
+ * Fails CLOSED: anything that is neither a valid accepted tuple nor a clean legacy receipt goes
+ * to review rather than being silently repriced.
  */
+
+/**
+ * Billing consumes exactly two outputs — the amount and the description suffix. Both must come
+ * from the SAME source. The suffix is part of the (order_id, line_type, description) key that
+ * suppresses duplicate lines, so pairing a frozen amount with a recomputed suffix would drift
+ * descriptions at cutover and stop duplicate suppression from matching.
+ */
+export type BillableShippingMoney = { amount: number; descriptionSuffix: string };
+
 export type BillableShippingMoneyDecision =
-  | { source: 'frozen'; amount: number; frozen: FrozenCustomerShippingMoney }
-  | { source: 'legacy_recompute'; amount: number }
+  | { source: 'frozen'; value: BillableShippingMoney; frozen: FrozenCustomerShippingMoney }
+  | { source: 'legacy_recompute'; value: BillableShippingMoney }
   | { source: 'review'; reason: string };
 
 function reviewReason(c: CustomerShippingMoneyClassification): string {
@@ -49,17 +58,28 @@ export function decideBillableShippingMoney(input: {
   selectedRateJson: unknown;
   accept: readonly CustomerShippingMoneyPolicyVersion[];
   /** The legacy invoice-time calculation. Invoked ONLY for `legacy_absent`. */
-  recompute: () => number;
+  recompute: () => BillableShippingMoney;
 }): BillableShippingMoneyDecision {
   const classification = classifyCustomerShippingMoney(input.selectedRateJson);
 
   const frozen = billableUnder(classification, input.accept);
   if (frozen) {
-    return { source: 'frozen', amount: frozen.cShippingRateAmount, frozen };
+    // The eighth field is optional on the tuple because production ps-437-v1 rows predate it.
+    // A tuple without it can reproduce the AMOUNT but not the LINE. Recomputing just the suffix
+    // would let a later markup change move the description while the money stayed frozen, so
+    // this fails closed instead.
+    if (typeof frozen.billingDescriptionSuffix !== 'string') {
+      return { source: 'review', reason: 'frozen_tuple_missing_billing_description_suffix' };
+    }
+    return {
+      source: 'frozen',
+      value: { amount: frozen.cShippingRateAmount, descriptionSuffix: frozen.billingDescriptionSuffix },
+      frozen,
+    };
   }
 
   if (mayUseLegacyRecompute(classification)) {
-    return { source: 'legacy_recompute', amount: input.recompute() };
+    return { source: 'legacy_recompute', value: input.recompute() };
   }
 
   return { source: 'review', reason: reviewReason(classification) };

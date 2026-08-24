@@ -880,6 +880,7 @@
     "test:ps-502-runtime-version": "tsx scripts/ps-502-runtime-version-guard.ts",
     "test:ps-508-outbound-freeze": "tsx scripts/ps-508-outbound-freeze-guard.ts",
     "test:ps-508-billing-consumes-frozen-tuple": "tsx scripts/ps-508-billing-consumes-frozen-tuple-guard.ts",
+    "test:ps-508-cutover-gate": "tsx scripts/ps-508-cutover-gate-guard.ts",
     "test:ps-508-outbound-freeze-integration": "tsx scripts/ps-508-outbound-freeze-integration.ts",
     "test:ps-508-classification": "tsx scripts/ps-508-classification-guard.ts",
     "audit:ps-508-coverage": "tsx scripts/ps-508-coverage-audit.ts",

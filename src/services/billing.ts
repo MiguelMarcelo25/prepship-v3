@@ -31,6 +31,9 @@ import {
 } from './billing-storage';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 import { resolveCustomerShippingMoney } from './customer-shipping-money';
+import { decideBillableShippingMoney } from './customer-shipping-money-billable-decision';
+import { isFrozenTupleBillingEnabledForClient } from './customer-shipping-money-cutover-gate';
+import { ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS } from './customer-shipping-money-snapshot';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
 // Slice 2c (fixed): the per-account OVERRIDE is wired via the shipment's providerAccountId — the
@@ -1535,21 +1538,60 @@ export async function generateLineItems(input: GenerateInput) {
           amount: cfg.hugrabShippingRateOverrideAmount,
         },
       });
-      const billedShippingAmount = shippingDecision.cShippingRateAmount;
-      const billingDescriptionSuffix = shippingDecision.billingDescriptionSuffix;
-      rows.push({
+      // PS-508 W5: Billing delegates the frozen-vs-recompute choice to the canonical owner
+      // instead of unconditionally repricing from MUTABLE billing config at invoice time. The
+      // gate BYPASSES the decision when off — rather than narrowing accepted versions, which
+      // would route valid tuples to review — so a gated-off client stays byte-identical.
+      const billableShipping = isFrozenTupleBillingEnabledForClient({
         clientId,
-        orderId: s.orderId,
-        orderNumber: s.orderNumber,
-        shipmentId: s.id,
-        shipDate: s.shipDate,
-        lineType: 'shipping',
-        description: `Shipping${billingDescriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
-        qty: '1',
-        unitCost: roundMoney(billedShippingAmount).toFixed(2),
-        totalCost: roundMoney(billedShippingAmount).toFixed(2),
-        packageId: billedPackageId,
-      });
+        allowlist: env.PS508_BILLING_FROZEN_TUPLE_CLIENTS,
+      })
+        ? decideBillableShippingMoney({
+            selectedRateJson: s.selectedRateJson,
+            accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
+            recompute: () => ({
+              amount: shippingDecision.cShippingRateAmount,
+              descriptionSuffix: shippingDecision.billingDescriptionSuffix,
+            }),
+          })
+        : null;
+      if (billableShipping?.source === 'review') {
+        // Fail closed: a shipment carrying a marker Billing cannot bill from is HELD and made
+        // visible, never silently repriced from today's config.
+        rows.push({
+          clientId,
+          orderId: s.orderId,
+          orderNumber: s.orderNumber,
+          shipmentId: s.id,
+          shipDate: s.shipDate,
+          lineType: 'shipping_missing',
+          description: `Customer shipping money needs review (${billableShipping.reason}) - order ${s.orderNumber ?? s.orderId}`,
+          qty: '1',
+          unitCost: '0.00',
+          totalCost: '0.00',
+          packageId: billedPackageId,
+        });
+      } else {
+        const billedShippingAmount = billableShipping
+          ? billableShipping.value.amount
+          : shippingDecision.cShippingRateAmount;
+        const billingDescriptionSuffix = billableShipping
+          ? billableShipping.value.descriptionSuffix
+          : shippingDecision.billingDescriptionSuffix;
+        rows.push({
+          clientId,
+          orderId: s.orderId,
+          orderNumber: s.orderNumber,
+          shipmentId: s.id,
+          shipDate: s.shipDate,
+          lineType: 'shipping',
+          description: `Shipping${billingDescriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
+          qty: '1',
+          unitCost: roundMoney(billedShippingAmount).toFixed(2),
+          totalCost: roundMoney(billedShippingAmount).toFixed(2),
+          packageId: billedPackageId,
+        });
+      }
     } else if (fulfillmentConflict?.billingAction === 'shipping_missing_review') {
       rows.push({
         clientId,
