@@ -25,3 +25,46 @@ export function isFrozenTupleBillingEnabledForClient(input: {
     .filter((entry) => entry !== '')
     .includes(String(input.clientId));
 }
+
+/**
+ * PS-508 W6 — the cutover boundary.
+ *
+ * Before the boundary, a shipment with no frozen tuple is a legitimate historical row and the
+ * legacy recalculation is the correct answer. At or after it, freezing is live, so a missing
+ * tuple is a FAILURE, not a legacy row, and must be held rather than silently repriced from
+ * today's config.
+ *
+ * `invalid` is deliberately distinct from `none`. If a typo in the boundary collapsed to "no
+ * boundary", a single bad character in an env var would silently switch the protection off and
+ * every post-cutover freeze failure would start billing a recomputed number again. Callers must
+ * treat `invalid` as fail-closed.
+ */
+export type CutoverBoundary =
+  | { kind: 'none' }
+  | { kind: 'at'; at: Date }
+  | { kind: 'invalid'; raw: string };
+
+export function resolveCutoverBoundary(rawBoundary: string | null | undefined): CutoverBoundary {
+  const value = (rawBoundary ?? '').trim();
+  if (value === '') return { kind: 'none' };
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return { kind: 'invalid', raw: value };
+  return { kind: 'at', at };
+}
+
+/**
+ * Is this shipment governed by the post-cutover "tuple required" rule?
+ *
+ * An undated shipment counts as post-cutover once a boundary is configured. It cannot be PROVEN
+ * pre-cutover, and on a money path an unprovable row is held, not billed from a recomputed
+ * number. Real post-cutover shipments always carry a ship date; undated rows are characteristic
+ * of old or incomplete records, so the canary client surfaces the true volume before expansion.
+ */
+export function isAfterCutover(boundary: CutoverBoundary, shipDate: Date | null | undefined): boolean {
+  if (boundary.kind === 'none') return false;
+  if (boundary.kind === 'invalid') return true;
+  if (shipDate == null) return true;
+  const t = shipDate instanceof Date ? shipDate.getTime() : new Date(shipDate).getTime();
+  if (Number.isNaN(t)) return true;
+  return t >= boundary.at.getTime();
+}

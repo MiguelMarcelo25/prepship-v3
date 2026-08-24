@@ -126,5 +126,36 @@ function spy(v: BillableShippingMoney = { amount: 999, descriptionSuffix: ' (LEG
     d.source === 'review' && s.calls() === 0, `got ${d.source} calls=${s.calls()}`);
 }
 
+// --- PS-508 W6: post-cutover rows may not fall back to the legacy recalculation -------------
+
+{
+  const s = spy({ amount: 31, descriptionSuffix: ' (10%)' });
+  const receiptOnly = { carrierCode: 'ups', cost: 10, totalCost: 10, providerLabelId: 'x' };
+  const d = decideBillableShippingMoney({
+    selectedRateJson: receiptOnly, accept, recompute: s.fn, afterCutover: true,
+  });
+  check('post-cutover shipment with NO tuple -> review (a freeze failure, not a legacy row)',
+    d.source === 'review', `got ${d.source}`);
+  check('post-cutover missing tuple never recomputes', s.calls() === 0);
+}
+{
+  const s = spy({ amount: 31, descriptionSuffix: ' (10%)' });
+  const receiptOnly = { carrierCode: 'ups', cost: 10, totalCost: 10, providerLabelId: 'x' };
+  const d = decideBillableShippingMoney({
+    selectedRateJson: receiptOnly, accept, recompute: s.fn, afterCutover: false,
+  });
+  check('PRE-cutover shipment with no tuple still recomputes (legacy path preserved)',
+    d.source === 'legacy_recompute' && s.calls() === 1);
+}
+{
+  // The boundary governs MISSING tuples only. A frozen row stays frozen on either side of it.
+  const s = spy();
+  const d = decideBillableShippingMoney({
+    selectedRateJson: v508, accept, recompute: s.fn, afterCutover: true,
+  });
+  check('a frozen tuple is unaffected by the cutover boundary',
+    d.source === 'frozen' && d.value.amount === 12 && s.calls() === 0);
+}
+
 console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

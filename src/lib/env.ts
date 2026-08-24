@@ -135,6 +135,12 @@ const schema = z.object({
   // those clients; "*" enables it for all. DJ canaries ONE client on Render, shadow-verifies
   // snapshot-vs-Billing parity, then expands only at zero mismatches.
   PS508_BILLING_FROZEN_TUPLE_CLIENTS: z.string().default(''),
+  // PS-508 W6: the cutover boundary (ISO date). EMPTY = no boundary, so every un-frozen
+  // shipment stays on the legacy recalculation exactly as before. Once set, a shipment at or
+  // after this instant with no frozen tuple is a FREEZE FAILURE, not a legacy row, and is held
+  // for review instead of being repriced from current config. An UNPARSEABLE value fails
+  // CLOSED (treated as after-cutover) so a typo cannot silently disable the protection.
+  PS508_BILLING_FROZEN_TUPLE_CUTOVER_AT: z.string().default(''),
   // PS-487: return billing generation. Default OFF — flipping it on is what starts
   // putting return_processing / return_label lines on real invoices, so it stays a
   // deliberate Render env change after canary, never a deploy side effect.

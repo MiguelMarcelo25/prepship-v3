@@ -59,6 +59,14 @@ export function decideBillableShippingMoney(input: {
   accept: readonly CustomerShippingMoneyPolicyVersion[];
   /** The legacy invoice-time calculation. Invoked ONLY for `legacy_absent`. */
   recompute: () => BillableShippingMoney;
+  /**
+   * PS-508 W6 — true when this shipment is governed by the post-cutover "tuple required" rule
+   * (resolved by isAfterCutover in the cutover gate). Before the boundary a missing tuple is a
+   * legitimate historical row; at or after it, a missing tuple is a FREEZE FAILURE and must be
+   * held rather than repriced from today's config. Default false = no boundary configured =
+   * pre-cutover behaviour for every row.
+   */
+  afterCutover?: boolean;
 }): BillableShippingMoneyDecision {
   const classification = classifyCustomerShippingMoney(input.selectedRateJson);
 
@@ -79,6 +87,9 @@ export function decideBillableShippingMoney(input: {
   }
 
   if (mayUseLegacyRecompute(classification)) {
+    if (input.afterCutover) {
+      return { source: 'review', reason: 'post_cutover_shipment_missing_frozen_tuple' };
+    }
     return { source: 'legacy_recompute', value: input.recompute() };
   }
 

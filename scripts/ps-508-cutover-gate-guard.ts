@@ -1,3 +1,4 @@
+import { resolveCutoverBoundary as rb, isAfterCutover as after } from '../src/services/customer-shipping-money-cutover-gate';
 import { isFrozenTupleBillingEnabledForClient as on } from '../src/services/customer-shipping-money-cutover-gate';
 
 /**
@@ -47,6 +48,32 @@ check('client 1 is NOT enabled by an allowlist of 12,13', on({ clientId: 1, allo
 // Malformed operator input must never fail OPEN.
 check('stray commas do not enable everyone', on({ clientId: 4, allowlist: ',,,' }) === false);
 check('a non-numeric entry does not enable an unlisted client', on({ clientId: 4, allowlist: 'all' }) === false);
+
+// --- PS-508 W6: the cutover boundary -------------------------------------------------------
+
+check('empty boundary -> none', rb('').kind === 'none');
+check('whitespace boundary -> none', rb('   ').kind === 'none');
+check('ISO date parses', rb('2026-08-24').kind === 'at');
+check('ISO datetime parses', rb('2026-08-24T00:00:00Z').kind === 'at');
+// A typo must NOT collapse to 'none' — that would silently switch the protection off.
+check('garbage boundary -> invalid, NOT none', rb('not-a-date').kind === 'invalid');
+check('a near-miss typo -> invalid, NOT none', rb('2026-13-45').kind === 'invalid');
+
+const B = rb('2026-08-01T00:00:00Z');
+check('no boundary configured -> nothing is after cutover',
+  after(rb(''), new Date('2030-01-01')) === false);
+check('shipment before the boundary is pre-cutover',
+  after(B, new Date('2026-07-31T23:59:59Z')) === false);
+check('shipment after the boundary is post-cutover',
+  after(B, new Date('2026-08-01T00:00:01Z')) === true);
+check('shipment exactly AT the boundary is post-cutover (at-or-after)',
+  after(B, new Date('2026-08-01T00:00:00Z')) === true);
+// Fail closed: unprovable rows are held, not billed from a recomputed number.
+check('undated shipment is treated as post-cutover', after(B, null) === true);
+check('undefined ship date is treated as post-cutover', after(B, undefined) === true);
+check('an invalid Date is treated as post-cutover', after(B, new Date('nope')) === true);
+check('an INVALID boundary fails closed for every shipment',
+  after(rb('not-a-date'), new Date('2020-01-01')) === true);
 
 console.log(failures === 0 ? '\nPASS' : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -32,7 +32,7 @@ import {
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 import { resolveCustomerShippingMoney } from './customer-shipping-money';
 import { decideBillableShippingMoney } from './customer-shipping-money-billable-decision';
-import { isFrozenTupleBillingEnabledForClient } from './customer-shipping-money-cutover-gate';
+import { isFrozenTupleBillingEnabledForClient, isAfterCutover, resolveCutoverBoundary } from './customer-shipping-money-cutover-gate';
 import { ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS } from './customer-shipping-money-snapshot';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
@@ -1549,6 +1549,10 @@ export async function generateLineItems(input: GenerateInput) {
         ? decideBillableShippingMoney({
             selectedRateJson: s.selectedRateJson,
             accept: ACCEPTED_CUSTOMER_SHIPPING_MONEY_POLICY_VERSIONS,
+            afterCutover: isAfterCutover(
+              resolveCutoverBoundary(env.PS508_BILLING_FROZEN_TUPLE_CUTOVER_AT),
+              s.shipDate,
+            ),
             recompute: () => ({
               amount: shippingDecision.cShippingRateAmount,
               descriptionSuffix: shippingDecision.billingDescriptionSuffix,
