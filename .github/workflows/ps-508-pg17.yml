@@ -1,0 +1,82 @@
+# PS-508 — the frozen customer-money tuple against REAL PostgreSQL 17.
+#
+# The pure guards build tuples as JavaScript object literals, which proves the RULE but not the
+# ROUND TRIP. This job proves the persisted behaviour on the version production actually runs.
+name: PS-508 PG17 proofs
+
+on:
+  # No paths filter, deliberately — same reasoning as the PS-488 M2 job. The behavioural
+  # dependencies of this proof span billing.ts, the customer-money services, the classifier and
+  # the snapshot contract; a list of "obvious" files would let a change to any of the others
+  # bypass the proof entirely. On a money path, running it every time is cheaper than
+  # maintaining that list.
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'review/ps-508-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-508-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg17-proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps508
+          POSTGRES_PASSWORD: ps508
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps508"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable here and no deploy
+      # secret is exposed to this job.
+      PS508_PG17_ADMIN_URL: postgres://ps508:ps508@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # The proof itself refuses anything below 170000, so it cannot silently prove nothing.
+      # This step fails earlier and louder if the service container is not the intended major.
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          set -euo pipefail
+          version="$(npx tsx -e "
+            (async () => {
+              const postgres = (await import('postgres')).default;
+              const sql = postgres(process.env.PS508_PG17_ADMIN_URL, { max: 1, prepare: false });
+              const rows = await sql.unsafe(\"select current_setting('server_version_num') as v\");
+              console.log(rows[0].v);
+              await sql.end({ timeout: 5 });
+            })();
+          ")"
+          echo "server_version_num=$version"
+          case "$version" in
+            17*) echo "PostgreSQL 17 confirmed" ;;
+            *) echo "REFUSING: expected PostgreSQL 17, got $version" >&2; exit 1 ;;
+          esac
+
+      - name: PS-508 frozen tuple round trip
+        run: npm run -s test:ps-508-billing-frozen-tuple-pg17
