@@ -1439,6 +1439,10 @@ const REQUIRED_GUARDS = [
   'test:ps-508-mutation-manifest',
   'test:ps-508-outbound-freeze-integration',
   'test:ps-508-classification',
+  // ── PS-497 Slice 2 Release B: shipped-outcome invariant (the forward fix greens it) ──
+  // Only the PGlite twin is enrolled — the real-PG17 runner cannot be a pack member (OFFLINE_GUARD_ENV gives
+  // it no PS497_PG_ADMIN_URL and it would fail the whole pack). The real-PG17 proof runs in CI instead.
+  'test:ps-497-shipped-outcome-invariant-pglite',
 ];
 
 const npmCli = process.env.npm_execpath;
