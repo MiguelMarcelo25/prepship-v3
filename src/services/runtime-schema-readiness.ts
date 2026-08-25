@@ -64,7 +64,9 @@ const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // columns that the Drizzle mapping now names. Fail boot closed until 0104 has been applied.
   order_lifecycle_events: ['occurrence_id'],
   fulfillment_line_claims: ['occurrence_id', 'canonical_line_identity', 'supply'],
-  fulfillment_occurrences: ['order_id', 'shipment_id', 'occurrence_key', 'discriminator_kind', 'first_seen_source', 'superseded_by_occurrence_id', 'effective_at'],
+  // Every column the Drizzle mapping names — INCLUDING the identity/audit columns id/created_at/updated_at,
+  // so a malformed occurrence table missing any of them fails boot closed (Release A blocker 5).
+  fulfillment_occurrences: ['id', 'order_id', 'shipment_id', 'occurrence_key', 'discriminator_kind', 'first_seen_source', 'superseded_by_occurrence_id', 'effective_at', 'created_at', 'updated_at'],
   automation_rules: ['active_version_id', 'active_from', 'draft_revision', 'system_locked'],
   automation_rule_versions: ['document_hash', 'draft_revision', 'simulation_hash', 'lifecycle'],
   automation_shipping_controls: ['control_key', 'control_type', 'client_id', 'store_id', 'system_locked', 'provenance', 'position'],
@@ -288,11 +290,12 @@ const REQUIRED_INDEXES = [
 // part of the PS-452 execution fence. Missing counters must fail boot readiness
 // even when every column and index happens to exist.
 const REQUIRED_CONSTRAINTS = [
-  // PS-497 Slice 2 (S2.0): migration 0104's occurrence-scoped identity + supply CHECKs. (0090's
-  // quantity_state_check is intentionally NOT enrolled — migration 0105 replaces it, so requiring the
-  // old name here would fail the boot after the 0105 apply.)
+  // PS-497 Slice 2 (S2.0): migration 0104's occurrence-scoped identity + supply CHECKs, and the occurrence
+  // table's own discriminator-kind CHECK. (0090's quantity_state_check is intentionally NOT enrolled —
+  // migration 0105 replaces it, so requiring the old name here would fail the boot after the 0105 apply.)
   'fulfillment_line_claims_occ_identity_present_chk',
   'fulfillment_line_claims_supply_chk',
+  'fulfillment_occurrences_kind_chk',
   'billing_credit_notes_adjustment_kind_chk',
   'billing_credit_notes_adjustment_source_chk',
   'billing_credit_notes_posting_version_chk',
@@ -381,6 +384,64 @@ const REQUIRED_TRIGGERS = [
   'shipment_hazmat_snapshots_no_truncate',
 ] as const;
 
+/** The catalog of objects a live database actually has — built by verifyRuntimeSchema from the DB. */
+export interface SchemaCatalog {
+  relations: Set<string>;
+  columnsByTable: Map<string, Set<string>>;
+  indexes: Set<string>;
+  constraints: Set<string>;
+  functions: Set<string>;
+  triggers: Set<string>;
+}
+
+/**
+ * Pure boundary between "what the database has" and "what boot requires". Returns the list of missing
+ * required objects (prefixed by kind). Exported so a fixture can prove that removing any single required
+ * object — e.g. fulfillment_occurrences.id / .created_at / .updated_at or fulfillment_occurrences_kind_chk
+ * — is reported, without needing a live database (Release A blocker 5).
+ */
+export function collectMissingSchemaObjects(catalog: SchemaCatalog): string[] {
+  const missing: string[] = [];
+  for (const relation of REQUIRED_RELATIONS) {
+    if (!catalog.relations.has(relation)) missing.push(`relation:${relation}`);
+  }
+  for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    const present = catalog.columnsByTable.get(table) ?? new Set<string>();
+    for (const column of columns) {
+      if (!present.has(column)) missing.push(`column:${table}.${column}`);
+    }
+  }
+  for (const index of REQUIRED_INDEXES) {
+    if (!catalog.indexes.has(index)) missing.push(`index:${index}`);
+  }
+  for (const constraint of REQUIRED_CONSTRAINTS) {
+    if (!catalog.constraints.has(constraint)) missing.push(`constraint:${constraint}`);
+  }
+  for (const functionName of REQUIRED_FUNCTIONS) {
+    if (!catalog.functions.has(functionName)) missing.push(`function:${functionName}`);
+  }
+  for (const trigger of REQUIRED_TRIGGERS) {
+    if (!catalog.triggers.has(trigger)) missing.push(`trigger:${trigger}`);
+  }
+  return missing;
+}
+
+/** A complete catalog (every required object present) — the fixture removes one object at a time from it. */
+export function requiredSchemaCatalogForTests(): SchemaCatalog {
+  const columnsByTable = new Map<string, Set<string>>();
+  for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    columnsByTable.set(table, new Set(columns));
+  }
+  return {
+    relations: new Set(REQUIRED_RELATIONS),
+    columnsByTable,
+    indexes: new Set(REQUIRED_INDEXES),
+    constraints: new Set(REQUIRED_CONSTRAINTS),
+    functions: new Set(REQUIRED_FUNCTIONS),
+    triggers: new Set(REQUIRED_TRIGGERS),
+  };
+}
+
 let readiness: Promise<void> | null = null;
 
 export function resetRuntimeSchemaReadinessForTests(): void {
@@ -396,17 +457,11 @@ export function assertRuntimeSchemaReady(): Promise<void> {
 }
 
 async function verifyRuntimeSchema(): Promise<void> {
-  const missing: string[] = [];
-
   const relationRows = await pg<Array<{ relation_name: string }>>`
     select relation_name
     from unnest(${[...REQUIRED_RELATIONS]}::text[]) as required(relation_name)
     where to_regclass('public.' || relation_name) is not null
   `;
-  const presentRelations = new Set(relationRows.map((row) => String(row.relation_name)));
-  for (const relation of REQUIRED_RELATIONS) {
-    if (!presentRelations.has(relation)) missing.push(`relation:${relation}`);
-  }
 
   const tableNames = Object.keys(REQUIRED_COLUMNS);
   const columnRows = await pg<Array<{ table_name: string; column_name: string }>>`
@@ -421,12 +476,6 @@ async function verifyRuntimeSchema(): Promise<void> {
     columns.add(row.column_name);
     columnsByTable.set(row.table_name, columns);
   }
-  for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
-    const present = columnsByTable.get(table) ?? new Set<string>();
-    for (const column of columns) {
-      if (!present.has(column)) missing.push(`column:${table}.${column}`);
-    }
-  }
 
   const indexRows = await pg<Array<{ indexname: string }>>`
     select indexname
@@ -434,10 +483,6 @@ async function verifyRuntimeSchema(): Promise<void> {
     where schemaname = 'public'
       and indexname = any(${[...REQUIRED_INDEXES]})
   `;
-  const presentIndexes = new Set(indexRows.map((row) => String(row.indexname)));
-  for (const index of REQUIRED_INDEXES) {
-    if (!presentIndexes.has(index)) missing.push(`index:${index}`);
-  }
 
   const constraintRows = await pg<Array<{ conname: string }>>`
     select c.conname
@@ -446,10 +491,6 @@ async function verifyRuntimeSchema(): Promise<void> {
     where n.nspname = 'public'
       and c.conname = any(${[...REQUIRED_CONSTRAINTS]})
   `;
-  const presentConstraints = new Set(constraintRows.map((row) => String(row.conname)));
-  for (const constraint of REQUIRED_CONSTRAINTS) {
-    if (!presentConstraints.has(constraint)) missing.push(`constraint:${constraint}`);
-  }
 
   const functionRows = await pg<Array<{ proname: string }>>`
     select distinct p.proname
@@ -458,10 +499,6 @@ async function verifyRuntimeSchema(): Promise<void> {
     where n.nspname = 'public'
       and p.proname = any(${[...REQUIRED_FUNCTIONS]})
   `;
-  const presentFunctions = new Set(functionRows.map((row) => String(row.proname)));
-  for (const functionName of REQUIRED_FUNCTIONS) {
-    if (!presentFunctions.has(functionName)) missing.push(`function:${functionName}`);
-  }
 
   const triggerRows = await pg<Array<{ tgname: string }>>`
     select tgname
@@ -470,10 +507,15 @@ async function verifyRuntimeSchema(): Promise<void> {
       and tgenabled <> 'D'
       and tgname = any(${[...REQUIRED_TRIGGERS]})
   `;
-  const presentTriggers = new Set(triggerRows.map((row) => String(row.tgname)));
-  for (const trigger of REQUIRED_TRIGGERS) {
-    if (!presentTriggers.has(trigger)) missing.push(`trigger:${trigger}`);
-  }
+
+  const missing = collectMissingSchemaObjects({
+    relations: new Set(relationRows.map((row) => String(row.relation_name))),
+    columnsByTable,
+    indexes: new Set(indexRows.map((row) => String(row.indexname))),
+    constraints: new Set(constraintRows.map((row) => String(row.conname))),
+    functions: new Set(functionRows.map((row) => String(row.proname))),
+    triggers: new Set(triggerRows.map((row) => String(row.tgname))),
+  });
 
   if (missing.length > 0) {
     throw new Error(

@@ -1,0 +1,93 @@
+# PS-497 Slice 2 Release A — the occurrence resolver, the supply policy, the S2.0 readiness enrollment,
+# and the 0105 claim-status runner, proven against REAL PostgreSQL 17 on the actual release branch.
+#
+# The offline PGlite guards are single-connection and cannot prove the resolver's concurrent single-winner
+# or the 0105 runner's exact-phase machine against a real catalog. This job runs on the release/ps-497-**
+# ref, reports the exact SHA under test, and runs the Release A PG17 suite + the pure supply/readiness
+# guards + strict TypeScript over every new Release A file, so the exact-SHA evidence is reachable in CI.
+name: PS-497 Slice 2 Release A PG17 proofs
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'release/ps-497-**'
+      - 'review/ps-497-**'
+      - 'ps-497-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-497-slice2-release-a-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-a-pg17:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps497
+          POSTGRES_PASSWORD: ps497
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps497"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable.
+      PS497_PG17_ADMIN_URL: postgres://ps497:ps497@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the exact commit under test
+        run: |
+          echo "ref=${{ github.ref }}"
+          echo "sha=${{ github.sha }}"
+          git rev-parse HEAD
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          node -e "const p=require('postgres');const s=p(process.env.PS497_PG17_ADMIN_URL,{max:1});s\`select current_setting('server_version_num')::int as v\`.then(r=>{const v=r[0].v;if(v<170000||v>=180000){console.error('not PG17: '+v);process.exit(1)}console.log('server_version_num='+v);return s.end()}).catch(e=>{console.error(e);process.exit(1)})"
+
+      - name: Release A — resolver + 0105 runner exact-phase machine + digest binding (real PG17)
+        run: npm run -s test:ps-497-slice2-release-a-pg17
+
+      - name: Release A — frozen supply/evidence disposition matrix (pure unit)
+        run: npm run -s test:ps-497-line-supply-policy
+
+      - name: Release A — S2.0 runtime-schema-readiness enrollment fails boot on each missing object (pure)
+        run: npm run -s test:ps-497-readiness-enrollment
+
+      - name: Release A — additive-only DDL (runtime DDL guard)
+        run: node scripts/runtime-ddl-guard.mjs
+
+      - name: Release A — new scripts + resolver pass repo-strict TypeScript
+        run: >-
+          npx tsc --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride --skipLibCheck
+          --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
+          scripts/ps-497-slice2-release-a-pg17.ts
+          scripts/apply-ps-497-claim-not-applicable-status.ts
+          scripts/ps-497-claim-status-migration-digest.ts
+          scripts/ps-497-0105-readback.ts
+          scripts/ps-497-line-supply-policy-guard.ts
+          scripts/ps-497-readiness-enrollment-guard.ts
+          src/services/fulfillment/resolve-fulfillment-occurrence.ts
+          src/services/fulfillment/line-supply-policy.ts

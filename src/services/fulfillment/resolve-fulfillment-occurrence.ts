@@ -60,36 +60,75 @@ export function deriveOccurrenceKey(
     : { key: `ord:${ctx.orderId}|whole`, kind: 'whole_order' };
 }
 
-type OccRow = { id: number; order_id: number; occurrence_key: string; discriminator_kind: OccurrenceDiscriminator };
+type OccRow = { id: number; order_id: number; occurrence_key: string; shipment_id: number | null; discriminator_kind: OccurrenceDiscriminator };
 
 /**
- * Resolve-or-create the occurrence. Key-stability hierarchy (Hermes §2): look up by shipment_id FIRST so a
- * shipment later enriched with a provider id never spawns a second occurrence; only when none exists derive
- * the key and insert with a TARGETLESS on-conflict (absorbs either the occurrence_key OR the shipment_id
- * unique), then read back by BOTH identities and reject cross-order winners.
+ * Resolve the occurrence by BOTH identities and reject any contradiction. Every candidate row must belong
+ * to this order (fail-closed on ANY cross-order row, not only the selected winner). If the DERIVED key and
+ * the shipment identity resolve to DIFFERENT occurrences — e.g. shipment B (local key) is enriched with a
+ * provider id whose provider key is already owned by a different occurrence A — the identities disagree and
+ * we throw rather than silently prefer one (Release A blocker 3). Returns null when neither identity exists.
+ */
+async function resolveExistingOccurrence(
+  sql: postgres.Sql,
+  ctx: OccurrenceResolveContext,
+  key: string,
+  shipmentId: number | null,
+): Promise<ResolvedOccurrence | null> {
+  const rows = shipmentId != null
+    ? await sql<OccRow[]>`
+        select id, order_id, occurrence_key, shipment_id, discriminator_kind
+        from public.fulfillment_occurrences
+        where occurrence_key = ${key} or shipment_id = ${shipmentId}
+      `
+    : await sql<OccRow[]>`
+        select id, order_id, occurrence_key, shipment_id, discriminator_kind
+        from public.fulfillment_occurrences
+        where occurrence_key = ${key}
+      `;
+  if (rows.length === 0) return null;
+
+  // Validate order consistency on EVERY candidate — not only the winner.
+  for (const r of rows) {
+    if (Number(r.order_id) !== ctx.orderId) {
+      throw new Error(`occurrence candidate ${r.id} belongs to order ${r.order_id}, not ${ctx.orderId} (key=${key}, shipment=${shipmentId})`);
+    }
+  }
+
+  const byKey = rows.find((r) => r.occurrence_key === key) ?? null;
+  const byShipment = shipmentId != null ? (rows.find((r) => r.shipment_id != null && Number(r.shipment_id) === shipmentId) ?? null) : null;
+
+  // Contradiction: the derived key and the shipment identity resolve to two DIFFERENT occurrences.
+  if (byKey && byShipment && Number(byKey.id) !== Number(byShipment.id)) {
+    throw new Error(
+      `occurrence identity conflict for order ${ctx.orderId}: derived key ${key} -> occurrence ${byKey.id}, ` +
+        `but shipment ${shipmentId} -> occurrence ${byShipment.id} (key ${byShipment.occurrence_key})`,
+    );
+  }
+
+  // Physical shipment identity is stable under provider enrichment; prefer it, else the key match.
+  const winner = byShipment ?? byKey;
+  if (!winner) return null;
+  return { occurrenceId: Number(winner.id), occurrenceKey: winner.occurrence_key, discriminatorKind: winner.discriminator_kind, created: false };
+}
+
+/**
+ * Resolve-or-create the occurrence. Key-stability hierarchy (Hermes §2): resolve by shipment_id AND the
+ * derived key up front so a shipment later enriched with a provider id never spawns a second occurrence and
+ * never silently masks a pre-existing provider-key occurrence; only when neither identity exists do we insert
+ * with a TARGETLESS on-conflict (absorbs either the occurrence_key OR the shipment_id unique), then re-resolve
+ * and re-check the contradiction on the race path.
  */
 export async function resolveFulfillmentOccurrence(
   sql: postgres.Sql,
   ctx: OccurrenceResolveContext,
 ): Promise<ResolvedOccurrence> {
   const shipmentId = ctx.lockedShipment?.id ?? null;
-
-  if (shipmentId != null) {
-    const existing = await sql<OccRow[]>`
-      select id, order_id, occurrence_key, discriminator_kind
-      from public.fulfillment_occurrences
-      where shipment_id = ${shipmentId}
-    `;
-    const found = existing[0];
-    if (found) {
-      if (Number(found.order_id) !== ctx.orderId) {
-        throw new Error(`occurrence ${found.id} on shipment ${shipmentId} belongs to order ${found.order_id}, not ${ctx.orderId}`);
-      }
-      return { occurrenceId: Number(found.id), occurrenceKey: found.occurrence_key, discriminatorKind: found.discriminator_kind, created: false };
-    }
-  }
-
   const { key, kind } = deriveOccurrenceKey(ctx);
+
+  const pre = await resolveExistingOccurrence(sql, ctx, key, shipmentId);
+  if (pre) return pre;
+
   const inserted = await sql<{ id: number }[]>`
     insert into public.fulfillment_occurrences
       (order_id, shipment_id, occurrence_key, discriminator_kind, first_seen_source, effective_at)
@@ -101,25 +140,8 @@ export async function resolveFulfillmentOccurrence(
     return { occurrenceId: Number(inserted[0].id), occurrenceKey: key, discriminatorKind: kind, created: true };
   }
 
-  // Lost the race / already present. Read back by BOTH identities; prefer the physical shipment row.
-  const rows = shipmentId != null
-    ? await sql<OccRow[]>`
-        select id, order_id, occurrence_key, discriminator_kind
-        from public.fulfillment_occurrences
-        where occurrence_key = ${key} or shipment_id = ${shipmentId}
-      `
-    : await sql<OccRow[]>`
-        select id, order_id, occurrence_key, discriminator_kind
-        from public.fulfillment_occurrences
-        where occurrence_key = ${key}
-      `;
-  const winner =
-    (shipmentId != null ? rows.find((r) => r.occurrence_key !== key) : undefined) ??
-    rows.find((r) => r.occurrence_key === key) ??
-    rows[0];
-  if (!winner) throw new Error(`occurrence resolve produced no winner for key=${key}`);
-  if (Number(winner.order_id) !== ctx.orderId) {
-    throw new Error(`occurrence winner ${winner.id} belongs to order ${winner.order_id}, not ${ctx.orderId}`);
-  }
-  return { occurrenceId: Number(winner.id), occurrenceKey: winner.occurrence_key, discriminatorKind: winner.discriminator_kind, created: false };
+  // Lost the race: another writer inserted a conflicting identity. Re-resolve + re-check the contradiction.
+  const post = await resolveExistingOccurrence(sql, ctx, key, shipmentId);
+  if (!post) throw new Error(`occurrence resolve produced no winner for key=${key} (order ${ctx.orderId})`);
+  return post;
 }
