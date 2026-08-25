@@ -63,6 +63,9 @@ jobs:
       - name: PS-497 fulfillment_occurrences concurrency + uniqueness (two connections, real PG17)
         run: npm run -s test:ps-497-fulfillment-occurrences-concurrency-pg17
 
+      - name: PS-497 operator apply lane through the UNCHANGED production runner (real PG17)
+        run: npm run -s test:ps-497-apply-lane-pg17
+
       - name: PS-497 0104 is additive-only DDL (runtime DDL guard)
         run: node scripts/runtime-ddl-guard.mjs
 
@@ -72,3 +75,5 @@ jobs:
           --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
           scripts/ps-497-fulfillment-occurrences-concurrency-pg17.ts
           scripts/apply-ps-497-fulfillment-occurrences.ts
+          scripts/ps-497-apply-lane-pg17.ts
+          scripts/ps-497-fulfillment-occurrences-digest.ts

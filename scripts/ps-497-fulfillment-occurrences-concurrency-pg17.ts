@@ -20,7 +20,14 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import {
+  EXPECTED_MIGRATION_SHA256,
+  readVerifiedMigration,
+  splitMigration,
+} from './ps-497-fulfillment-occurrences-digest.js';
 
 const ADMIN_URL =
   process.env.PS497_PG17_ADMIN_URL ||
@@ -33,35 +40,16 @@ if (!ADMIN_URL) {
   process.exit(1);
 }
 const ADMIN: string = ADMIN_URL;
-const NON_TX_SENTINEL = '-- >>> NON-TRANSACTIONAL <<<';
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function migration(path: string): string {
-  return readFileSync(path, 'utf8');
-}
-
-function splitMigration(sql: string): { transactional: string; concurrent: string[] } {
-  // Anchor on the sentinel as its own line so a mention of the marker text inside a comment
-  // cannot be mistaken for the real split point.
-  const marker = `\n${NON_TX_SENTINEL}`;
-  const at = sql.indexOf(marker);
-  if (at < 0) throw new Error(`migration missing ${NON_TX_SENTINEL} sentinel line`);
-  const concurrent = sql
-    .slice(at + marker.length)
-    .split('--> statement-breakpoint')
-    .map((chunk) =>
-      chunk
-        .split('\n')
-        .filter((line) => !line.trim().startsWith('--'))
-        .join('\n')
-        .trim(),
-    )
-    .filter((stmt) => stmt.length > 0);
-  return { transactional: sql.slice(0, at), concurrent };
+function migration(relpath: string): string {
+  return readFileSync(path.join(REPO_ROOT, relpath), 'utf8');
 }
 
 async function setupSchema(db: postgres.Sql): Promise<void> {
   // Minimal FK parents that the real 0070 requires, then the real claim/event tables and 0090's
-  // state check, then the migration under test.
+  // state check, then the migration under test — read through the SHARED digest-verified path so
+  // this proof exercises the exact pinned bytes and the exact production split logic.
   await db.unsafe(`
     create table orders (id integer primary key);
     create table shipments (id integer primary key);
@@ -73,7 +61,7 @@ async function setupSchema(db: postgres.Sql): Promise<void> {
   await db.unsafe(migration('drizzle/0090_fulfillment_claim_nullable_quantity.sql'));
 
   const { transactional, concurrent } = splitMigration(
-    migration('drizzle/0104_ps497_fulfillment_occurrences.sql'),
+    readVerifiedMigration().text,
   );
   await db.begin(async (tx) => {
     await tx.unsafe(transactional);
@@ -127,6 +115,10 @@ async function main(): Promise<void> {
     process.exit(3);
   }, 90_000);
   hardTimeout.unref();
+
+  // This proof runs against the EXACT pinned migration bytes.
+  assert.equal(readVerifiedMigration().digest, EXPECTED_MIGRATION_SHA256, 'schema proof runs against the pinned migration');
+  console.log('ok   digest: schema proof is bound to the pinned migration bytes');
 
   const admin = postgres(ADMIN, { max: 1, prepare: false, onnotice: () => {} });
   const [ver] = await admin<{ v: number }[]>`select current_setting('server_version_num')::int as v`;
