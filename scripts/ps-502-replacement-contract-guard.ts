@@ -3406,6 +3406,14 @@ console.log('\nordinary readers exclude source = replacement');
       ],
       why: 'imported activeOutboundShipmentPredicate binds shipments.orderId; PS-497 occurrence reads bound by orderId/shipmentId',
     },
+    // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.6 correction, Hermes #3).
+    // The operator review-resolver recomputes sole-outbound over the CANONICAL active outbound shipments set
+    // using the SAME imported activeOutboundShipmentPredicate({ orderId }) the owner uses — order-bound, read
+    // under the order FOR UPDATE lock. Never order-less; a replacement vessel cannot survive the orderId bind.
+    'src/services/fulfillment/resolve-occurrence-review.ts': {
+      sites: ['src/services/fulfillment/resolve-occurrence-review.ts#0:1fd28d26156de26c'],
+      why: 'PS-497 review-resolver sole-outbound recheck; imported activeOutboundShipmentPredicate binds shipments.orderId under the order lock',
+    },
     // Genuinely unbound and genuinely inert: this Drizzle query carries limit(0). The OPERATIVE
     // rate-reference query joins shipments to orders, where an order-less vessel cannot survive.
     // Listed rather than "fixed" — adding a predicate to a query returning nothing is theatre.
