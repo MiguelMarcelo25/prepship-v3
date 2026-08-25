@@ -46,7 +46,11 @@ assert.match(claimOwner, /return \{ applied: 0, alreadyApplied: 0, lockedDown: t
 // forward deduction runs through the dedicated occurrence lane. The occurrence worker preserves the
 // lockedDown-keeps-retryable semantics for the NEW lane instead.
 assert.match(deductionOutbox, /the legacy inventory_deduction_requested lane is quarantined \(fail-closed\)/);
-assert.match(read('src/services/fulfillment/occurrence-deduction-outbox.ts'), /result\.lockedDown[\s\S]*status = 'pending'/);
+// PS-497 Release B (S2.5 correction, Hermes #5): the occurrence worker distinguishes a discriminated outcome.
+// A flag-off row (outcome 'locked_down') AND an out-of-scope row (outcome 'fenced') both stay retryable
+// (status 'pending'); only a TERMINAL outcome settles as 'succeeded'.
+assert.match(read('src/services/fulfillment/occurrence-deduction-outbox.ts'), /result\.outcome === 'locked_down'[\s\S]*status = 'pending'/);
+assert.match(read('src/services/fulfillment/occurrence-deduction-outbox.ts'), /result\.outcome === 'fenced'[\s\S]*parkFenced/);
 assert.match(outbox, /status IN \('pending', 'failed'\)[\s\S]*next_run_at <= NOW\(\)/);
 assert.match(outbox, /status = 'processing'[\s\S]*updated_at < NOW\(\) -/);
 

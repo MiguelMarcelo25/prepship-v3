@@ -23,6 +23,7 @@ import {
   readOccurrenceExecutionScope,
   assertExecutionScopeReady,
   claimEligibleForExecution,
+  occurrenceInExecutionScope,
 } from './fulfillment/occurrence-execution-scope';
 
 type OrderForDeduction = {
@@ -171,6 +172,28 @@ export type FulfillmentClaimApplicationResult = {
   applied: number;
   alreadyApplied: number;
   lockedDown: boolean;
+};
+
+// Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4e correction, Hermes #5). The
+// occurrence executor returns a DISCRIMINATED outcome so the dedicated worker can tell TERMINAL settlement
+// (the intent is done: applied / no pending claims / superseded) apart from TRANSIENT parking (the intent must
+// be retried, not consumed: locked_down when a flag is off, fenced when the occurrence is out of the approved
+// execution scope/floor). An out-of-scope occurrence NEVER settles as succeeded and its claims are left
+// 'pending' so a later in-scope drain still finds them.
+export type OccurrenceExecutionOutcome =
+  | 'applied'
+  | 'no_pending'
+  | 'superseded'
+  | 'fenced'
+  | 'locked_down';
+
+export type OccurrenceClaimApplicationResult = {
+  applied: number;
+  alreadyApplied: number;
+  /** kept for back-compat: true iff outcome === 'locked_down'. */
+  lockedDown: boolean;
+  outcome: OccurrenceExecutionOutcome;
+  reason?: string;
 };
 
 /**
@@ -375,9 +398,9 @@ function isOccurrenceExecutionEnabled(): boolean {
 export async function applyOccurrenceClaims(
   occurrenceId: number,
   conn: Pick<typeof db, 'transaction'> = db,
-): Promise<FulfillmentClaimApplicationResult> {
+): Promise<OccurrenceClaimApplicationResult> {
   if (!isOccurrenceExecutionEnabled()) {
-    return { applied: 0, alreadyApplied: 0, lockedDown: true };
+    return { applied: 0, alreadyApplied: 0, lockedDown: true, outcome: 'locked_down' };
   }
   if (conn !== db && process.env.NODE_ENV !== 'test') {
     throw new Error('Occurrence claim executor may only be injected in tests');
@@ -399,7 +422,9 @@ export async function applyOccurrenceClaims(
       .for('update')
       .limit(1);
     if (!occ) throw new Error(`Occurrence ${occurrenceId} does not exist`);
-    if (occ.supersededBy != null) return { applied: 0, alreadyApplied: 0, lockedDown: false };
+    // Superseded is TERMINAL: this occurrence will never move stock (supersession transitions its unapplied
+    // claims), so the intent is settled, not parked.
+    if (occ.supersededBy != null) return { applied: 0, alreadyApplied: 0, lockedDown: false, outcome: 'superseded' };
 
     const [order] = await tx
       .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId, orderNumber: orders.orderNumber })
@@ -407,6 +432,18 @@ export async function applyOccurrenceClaims(
       .where(eq(orders.id, occ.orderId))
       .limit(1);
     if (!order) throw new Error(`Occurrence order ${occ.orderId} no longer exists`);
+
+    // Hermes #5: the OCCURRENCE-LEVEL scope/floor fence, re-checked under lock. If the occurrence is out of the
+    // approved execution scope (or below the canary floor), PARK it — return 'fenced' and touch NO claims, so
+    // they stay 'pending' for a later in-scope drain. This distinguishes transient scope-parking from the
+    // terminal per-line demotions handled inside the loop below.
+    const occScope = occurrenceInExecutionScope(
+      { occurrenceId: occ.id, clientId: order.clientId, storeId: order.storeId, orderId: order.id },
+      scope,
+    );
+    if (!occScope.eligible) {
+      return { applied: 0, alreadyApplied: 0, lockedDown: false, outcome: 'fenced', reason: occScope.reason };
+    }
 
     const isTestClient = order.clientId != null
       ? ((await tx.select({ isTest: clients.isTest }).from(clients).where(eq(clients.id, order.clientId)).limit(1))[0]?.isTest === true)
@@ -422,7 +459,7 @@ export async function applyOccurrenceClaims(
       ))
       .orderBy(fulfillmentLineClaims.id)
       .for('update');
-    if (claims.length === 0) return { applied: 0, alreadyApplied: 0, lockedDown: false };
+    if (claims.length === 0) return { applied: 0, alreadyApplied: 0, lockedDown: false, outcome: 'no_pending' };
 
     let applied = 0;
     let alreadyApplied = 0;
@@ -516,7 +553,10 @@ export async function applyOccurrenceClaims(
       if (movement.status === 'already_applied') alreadyApplied += 1;
       else applied += 1;
     }
-    return { applied, alreadyApplied, lockedDown: false };
+    // The pending prepship claims were processed under lock (some may have demoted to review for terminal
+    // per-line reasons — bad quantity, key mismatch, missing sku, test client). The occurrence intent is
+    // settled either way; only the occurrence-scope fence above parks.
+    return { applied, alreadyApplied, lockedDown: false, outcome: 'applied' };
   });
 }
 

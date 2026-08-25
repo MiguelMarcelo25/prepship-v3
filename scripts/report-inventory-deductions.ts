@@ -6,7 +6,7 @@ function usage(): void {
 Usage:
   npm run inventory:deduction-report -- [--limit <1-500>]
 
-Shows pending, processing, retrying, exhausted, and kill-switch-parked rows.
+Shows the parked-legacy (quarantined) lane and the dedicated occurrence lane by state.
 No order, shipment, inventory, ledger, outbox, label, or provider state is changed.`);
 }
 
@@ -35,6 +35,7 @@ async function main(): Promise<void> {
   try {
     const report = await getInventoryDeductionReport(sql, {
       inventoryAutoDeductEnabled: env.INVENTORY_AUTO_DEDUCT,
+      legacyLaneQuarantined: true,
       limit,
     });
     console.log(JSON.stringify(report, null, 2));

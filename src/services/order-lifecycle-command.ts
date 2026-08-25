@@ -661,7 +661,6 @@ export async function applyOrderLifecycleCommandInTransaction(
             quantity: line.quantity,
             soleOutbound,
           });
-          if (disposition.enqueue) occurrenceEnqueueEligible = true;
           return {
             lifecycleEventId: event.id,
             orderId: input.orderId,
@@ -683,8 +682,20 @@ export async function applyOrderLifecycleCommandInTransaction(
           };
         }))
         .onConflictDoNothing()
-        .returning({ id: fulfillmentLineClaims.id });
+        .returning({
+          id: fulfillmentLineClaims.id,
+          status: fulfillmentLineClaims.status,
+          supply: fulfillmentLineClaims.supply,
+        });
       claimCount = inserted.length;
+      // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4 correction, Hermes #4).
+      // Enqueue authority is derived EXCLUSIVELY from the rows this owner actually inserted (the
+      // onConflictDoNothing() winners), NEVER from the candidate boolean. A zero-winner retry — where a
+      // competing writer already owns every claim — inserts nothing, so `inserted` is empty and no occurrence
+      // intent is minted here (the winning writer already minted it).
+      occurrenceEnqueueEligible = inserted.some(
+        (row) => row.status === 'pending' && row.supply === 'prepship',
+      );
     } else {
       // Legacy path (PROJECTION off): byte-identical to Release A.
       await tx.insert(fulfillmentLineClaims).values(

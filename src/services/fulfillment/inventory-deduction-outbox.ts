@@ -1,14 +1,37 @@
 // Per user override unlock shipped data on 2026-07-14: durable inventory-deduction lane.
-// Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4x) QUARANTINE. The
-// legacy minters + recovery re-minter + processor are retired (no-op / fail-closed); the event constant +
-// predicate are retained ONLY for parking + the discrepancy report. The db-client, outbox schema, and
-// fulfillment-deductions imports are no longer needed here (the occurrence lane owns write + execute).
-import { db } from '../../db/client.js';
+// Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4x) QUARANTINE +
+// (S2.8 correction, Hermes flags-off finding). The legacy EXECUTION is retired — the generic worker no longer
+// claims this event and the processor fails closed. BUT the per-claim MINT is preserved as a durable, INERT
+// record: while FULFILLMENT_OCCURRENCE_PROJECTION is off (the flags-off hardening window), a shipment still
+// records a durable inventory_deduction_requested intent exactly as Release A does — so a claim created during
+// the quarantine window is NOT lost, is distinguishable from the historical occurrence_id-NULL backlog (which
+// has no fresh pending intent), and stays available for back-projection when projection is enabled. The only
+// difference from Release A is that NOTHING executes it (quarantine) — which is the intended movement-off
+// state (execution is dead in production since 2026-07-16 regardless). The bundle minter and the backlog
+// recovery re-minter stay retired (they would grow the historical backlog).
+import { db, sql as pg } from '../../db/client.js';
+import { fulfillmentOutbox } from '../../db/schema/fulfillment-outbox.js';
 
 export const INVENTORY_DEDUCTION_OUTBOX_EVENT = 'inventory_deduction_requested';
+const INVENTORY_DEDUCTION_PROVIDER = 'inventory';
 
 export function isInventoryDeductionOutboxEvent(eventType: string): boolean {
   return eventType === INVENTORY_DEDUCTION_OUTBOX_EVENT;
+}
+
+/**
+ * Count durable legacy intents that are preserved-but-inert (the flags-off quarantine window). These are the
+ * claims minted while occurrence projection is off: recoverable, and distinct from the historical
+ * occurrence_id-NULL backlog. The discrepancy report uses this to label them `parked_legacy`, never `pending`.
+ */
+export async function countParkedLegacyDeductionIntents(): Promise<number> {
+  const rows = (await pg`
+    SELECT COUNT(*)::int AS n
+    FROM fulfillment_outbox
+    WHERE event_type = ${INVENTORY_DEDUCTION_OUTBOX_EVENT}
+      AND status IN ('pending', 'failed')
+  `) as Array<{ n: number }>;
+  return rows[0]?.n ?? 0;
 }
 
 type InventoryDeductionOrderRef = {
@@ -24,32 +47,74 @@ export type InventoryDeductionOutboxInput = {
 };
 
 export async function enqueueInventoryClaimDeduction(
-  _input: {
+  input: {
     lifecycleEventId: number;
     orderId: number;
     shipmentId?: number | null;
     source: string;
   },
-  _executor: InventoryDeductionOutboxExecutor = db,
+  executor: InventoryDeductionOutboxExecutor = db,
 ): Promise<void> {
-  // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4x) QUARANTINE.
-  // The legacy inventory_deduction_requested lane is retired — the generic worker no longer claims it and its
-  // processor fails closed. Minting new legacy events would only grow an unclaimed backlog, so this is a
-  // no-op. Forward deduction intent is now minted occurrence-scoped by the owner under
-  // FULFILLMENT_OCCURRENCE_PROJECTION (occurrence-deduction-outbox.ts::enqueueOccurrenceDeduction).
-  return;
+  // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.8, Hermes flags-off
+  // finding). DURABLE + INERT. Records the same intent Release A records so a claim created during the
+  // flags-off (projection-off) window is preserved (not lost) and back-projectable — but nothing executes it:
+  // the generic worker is de-scoped from this event (outbox.ts) and processInventoryDeductionOutboxEvent
+  // fails closed. When FULFILLMENT_OCCURRENCE_PROJECTION is on, the owner mints occurrence-scoped intent
+  // instead (occurrence-deduction-outbox.ts::enqueueOccurrenceDeduction) and this legacy path is not taken.
+  const dedupeKey = `${INVENTORY_DEDUCTION_OUTBOX_EVENT}:lifecycle:${input.lifecycleEventId}`;
+  await executor
+    .insert(fulfillmentOutbox)
+    .values({
+      orderId: input.orderId,
+      shipmentId: input.shipmentId ?? null,
+      eventType: INVENTORY_DEDUCTION_OUTBOX_EVENT,
+      provider: INVENTORY_DEDUCTION_PROVIDER,
+      dedupeKey,
+      payload: {
+        lifecycleEventId: input.lifecycleEventId,
+        orderId: input.orderId,
+        shipmentId: input.shipmentId ?? null,
+        source: input.source,
+      },
+      status: 'pending',
+      attempts: 0,
+      nextRunAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing({ target: fulfillmentOutbox.dedupeKey });
 }
 
 export async function enqueueInventoryDeduction(
-  _order: InventoryDeductionOrderRef,
-  _input: InventoryDeductionOutboxInput,
-  _executor: InventoryDeductionOutboxExecutor = db,
+  order: InventoryDeductionOrderRef,
+  input: InventoryDeductionOutboxInput,
+  executor: InventoryDeductionOutboxExecutor = db,
 ): Promise<void> {
-  // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4x) QUARANTINE.
-  // The pure-legacy order-keyed minter (bundle deduct-once fan-out) is retired — bundle/package deduction is
-  // intentionally NOT migrated in Release B, and the narrow occurrence-execution gate must never unlock it.
-  // A no-op documented park, not a silent regression.
-  return;
+  // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.8, Hermes flags-off
+  // finding). DURABLE + INERT, atomic with the caller's transaction (the durable intent and the status change
+  // commit or roll back together). The order-keyed bundle deduct-once fan-out (labels.ts, default-OFF
+  // BUNDLE_DEDUCT_ONCE) records intent here; nothing EXECUTES it (the generic worker is de-scoped and the
+  // processor fails closed) because bundle/package deduction is intentionally NOT migrated in Release B. This
+  // preserves the durable record exactly as Release A does rather than silently dropping it.
+  const dedupeKey = `${INVENTORY_DEDUCTION_OUTBOX_EVENT}:${order.id}`;
+  await executor
+    .insert(fulfillmentOutbox)
+    .values({
+      orderId: order.id,
+      shipmentId: input.shipmentId ?? null,
+      eventType: INVENTORY_DEDUCTION_OUTBOX_EVENT,
+      provider: INVENTORY_DEDUCTION_PROVIDER,
+      dedupeKey,
+      payload: {
+        orderId: order.id,
+        shipmentId: input.shipmentId ?? null,
+        source: input.source,
+      },
+      status: 'pending',
+      attempts: 0,
+      nextRunAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing({ target: fulfillmentOutbox.dedupeKey });
 }
 
 /**

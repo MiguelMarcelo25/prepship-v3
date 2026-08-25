@@ -9,6 +9,7 @@ import { fulfillmentOutbox } from '../../db/schema/fulfillment-outbox.js';
 import { applyOccurrenceClaims } from '../fulfillment-deductions.js';
 import {
   occurrenceInExecutionScope,
+  readOccurrenceExecutionScope,
   type OccurrenceExecutionScope,
 } from './occurrence-execution-scope.js';
 
@@ -109,19 +110,63 @@ async function claimDueOccurrenceOutboxRows(limit: number): Promise<OccurrenceOu
   ` as Promise<OccurrenceOutboxRow[]>;
 }
 
+/** How long a scope-fenced (out-of-approved-scope) intent waits before re-checking. Scope widens only by an
+ *  operator config change, so it is checked less often than a locked-down flag flip. */
+const OCCURRENCE_OUTBOX_FENCED_RETRY_MINUTES = 30;
+
+type OccurrenceScopeSubject =
+  | { found: false }
+  | { found: true; clientId: number | null; storeId: number | null; orderId: number };
+
+/**
+ * Load the occurrence's scope subject (its order's client/store/order ids) so the dedicated worker can apply
+ * the canonical eligibility fence AT THE CLAIM STAGE (Hermes #5) — before it settles the outbox event — rather
+ * than relying only on the executor's later re-check. Delegates the DECISION to occurrenceInExecutionScope;
+ * this only supplies the subject.
+ */
+async function readOccurrenceScopeSubject(occurrenceId: number): Promise<OccurrenceScopeSubject> {
+  const rows = (await pg`
+    SELECT o.client_id AS "clientId", o.store_id AS "storeId", o.id AS "orderId"
+    FROM fulfillment_occurrences fo
+    JOIN orders o ON o.id = fo.order_id
+    WHERE fo.id = ${occurrenceId}
+    LIMIT 1
+  `) as Array<{ clientId: number | null; storeId: number | null; orderId: number }>;
+  const r = rows[0];
+  if (!r) return { found: false };
+  return { found: true, clientId: r.clientId ?? null, storeId: r.storeId ?? null, orderId: r.orderId };
+}
+
+async function parkFenced(rowId: number, reason: string): Promise<void> {
+  await pg`UPDATE fulfillment_outbox SET status = 'pending', last_error = ${`fenced (out of execution scope): ${reason}`}, next_run_at = NOW() + (${OCCURRENCE_OUTBOX_FENCED_RETRY_MINUTES} || ' minutes')::interval, updated_at = NOW() WHERE id = ${rowId}`;
+}
+
 /**
  * Drain occurrence-deduction intents. The SOLE dispatch target is the occurrence executor
  * (applyOccurrenceClaims) — never the legacy processInventoryDeductionOutboxEvent / writer-side resolution.
- * lockedDown (a flag off) keeps the row retryable so no work is lost when the canary is later enabled.
+ *
+ * Outcome discipline (Hermes #5): the complete canonical fence is applied at THIS boundary before an event is
+ * settled. An event is marked 'succeeded' ONLY when the executor reports a TERMINAL outcome (applied /
+ * no_pending / superseded). A 'locked_down' flag-off or a 'fenced' out-of-scope occurrence keeps the row
+ * retryable (pending) and its claims 'pending', so no work is lost or silently consumed when the canary is
+ * later enabled or the scope widened. Malformed payloads and executor errors fail (attempts++).
  */
 export async function processFulfillmentOccurrenceOutboxOnce(
-  options: { limit?: number } = {},
-): Promise<{ claimed: number; applied: number; parked: number; lockedDown: number }> {
+  options: { limit?: number; executor?: Pick<typeof db, 'transaction'> } = {},
+): Promise<{ claimed: number; applied: number; parked: number; lockedDown: number; fenced: number }> {
   const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+  // The executor DB handle is injectable ONLY in tests (mirrors applyOccurrenceClaims' own conn guard), so the
+  // full owner->outbox->worker->executor->ledger path can be driven against a hand-rolled PG17 test schema
+  // without the production runtime-schema-readiness catalog (covered separately by the readiness-enrollment
+  // suite). In production it is always the default db.
+  const executor: Pick<typeof db, 'transaction'> =
+    process.env.NODE_ENV === 'test' && options.executor ? options.executor : db;
   const rows = await claimDueOccurrenceOutboxRows(limit);
+  const scope = readOccurrenceExecutionScope();
   let applied = 0;
   let parked = 0;
   let lockedDown = 0;
+  let fenced = 0;
   for (const row of rows) {
     const occurrenceId = Number(row.payload.occurrenceId ?? 0);
     if (!Number.isInteger(occurrenceId) || occurrenceId <= 0) {
@@ -129,13 +174,35 @@ export async function processFulfillmentOccurrenceOutboxOnce(
       parked += 1;
       continue;
     }
+    // Worker-boundary fence: verify the complete canonical eligibility predicate BEFORE dispatching. An
+    // out-of-scope / below-floor occurrence is PARKED here (retryable), never settled with zero movements.
+    const subject = await readOccurrenceScopeSubject(occurrenceId);
+    if (!subject.found) {
+      await pg`UPDATE fulfillment_outbox SET status = 'failed', attempts = attempts + 1, last_error = 'occurrence not found', updated_at = NOW() WHERE id = ${row.id}`;
+      parked += 1;
+      continue;
+    }
+    const gate = occurrenceInExecutionScope(
+      { occurrenceId, clientId: subject.clientId, storeId: subject.storeId, orderId: subject.orderId },
+      scope,
+    );
+    if (!gate.eligible) {
+      await parkFenced(row.id, gate.reason);
+      fenced += 1;
+      continue;
+    }
     try {
-      const result = await applyOccurrenceClaims(occurrenceId);
-      if (result.lockedDown) {
+      const result = await applyOccurrenceClaims(occurrenceId, executor);
+      if (result.outcome === 'locked_down') {
         // Master or the narrow execution flag is off — keep the intent retryable, do not settle.
         await pg`UPDATE fulfillment_outbox SET status = 'pending', next_run_at = NOW() + (${OCCURRENCE_OUTBOX_RETRY_MINUTES} || ' minutes')::interval, updated_at = NOW() WHERE id = ${row.id}`;
         lockedDown += 1;
+      } else if (result.outcome === 'fenced') {
+        // Executor's deeper re-check found it out of scope (defense in depth) — park, do not settle.
+        await parkFenced(row.id, result.reason ?? 'executor fence');
+        fenced += 1;
       } else {
+        // Terminal: applied / no_pending / superseded — the intent is settled.
         await pg`UPDATE fulfillment_outbox SET status = 'succeeded', last_error = NULL, updated_at = NOW() WHERE id = ${row.id}`;
         applied += result.applied;
       }
@@ -145,5 +212,5 @@ export async function processFulfillmentOccurrenceOutboxOnce(
       parked += 1;
     }
   }
-  return { claimed: rows.length, applied, parked, lockedDown };
+  return { claimed: rows.length, applied, parked, lockedDown, fenced };
 }

@@ -611,6 +611,9 @@ app.get(
   zValidator('query', inventoryDeductionReportQuery),
   async (c) => c.json(await getInventoryDeductionReport(pg, {
     inventoryAutoDeductEnabled: env.INVENTORY_AUTO_DEDUCT,
+    // PS-497 Release B: the legacy lane is quarantined, so its unsettled rows report as parked_legacy and the
+    // occurrence lane is surfaced separately.
+    legacyLaneQuarantined: true,
     limit: c.req.valid('query').limit,
   })),
 );

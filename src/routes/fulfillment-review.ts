@@ -7,13 +7,17 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { db } from '../db/client';
+import { requireInternalPermission } from '../middleware/auth';
 import { resolveOccurrenceReviewClaim } from '../services/fulfillment/resolve-occurrence-review';
 
 const app = new Hono<{ Variables: { email?: string } }>();
 
 const bodySchema = z.object({ decision: z.enum(['pending', 'not_applicable']) });
 
-app.post('/claims/:claimId/resolve', zValidator('json', bodySchema), async (c) => {
+// Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.6 correction) — resolving a
+// shipped claim mutates inventory-bound state, so it requires the internal inventory:write permission (NOT
+// merely authentication). This excludes portal/client_user/read_only_support roles.
+app.post('/claims/:claimId/resolve', requireInternalPermission('inventory:write'), zValidator('json', bodySchema), async (c) => {
   const claimId = Number(c.req.param('claimId'));
   if (!Number.isInteger(claimId) || claimId <= 0) {
     return c.json({ error: 'claimId must be a positive integer' }, 400);

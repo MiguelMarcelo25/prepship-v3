@@ -36,6 +36,8 @@ async function main(): Promise<void> {
     CREATE TABLE orders (
       id serial PRIMARY KEY,
       client_id integer,
+      -- PS-497 Release B (Hermes #7): the additive store_id the lifecycle owner now selects unconditionally.
+      store_id integer,
       order_number text NOT NULL,
       order_status text NOT NULL DEFAULT 'awaiting_shipment',
       canonical_status text,
@@ -69,6 +71,10 @@ async function main(): Promise<void> {
     CREATE TABLE shipments (
       id serial PRIMARY KEY,
       order_id integer REFERENCES orders(id),
+      -- PS-497 Release B (Hermes #7): the additive columns the lifecycle owner reads on the shipment lock
+      -- (the occurrence resolver keys off label_shipment_id + source when projection is on).
+      label_shipment_id integer,
+      source text,
       voided boolean NOT NULL DEFAULT false,
       is_return boolean NOT NULL DEFAULT false,
       updated_at timestamptz NOT NULL DEFAULT now()
@@ -137,6 +143,16 @@ async function main(): Promise<void> {
   // this suite exercises the same schema production will have, rather than a hand-written
   // approximation that could drift from either migration.
   await client.exec(readFileSync('drizzle/0090_fulfillment_claim_nullable_quantity.sql', 'utf8'));
+  // PS-497 Release B (Hermes #7): apply the REAL 0104 additive identity migration so this suite exercises the
+  // same additive schema production will have (occurrence_id on order_lifecycle_events + fulfillment_line_claims,
+  // canonical_line_identity, supply, and the fulfillment_occurrences table) rather than a hand-written
+  // approximation. Split on drizzle breakpoints, strip CONCURRENTLY (PGlite runs each exec in an implicit
+  // transaction), and swallow PGlite-unsupported artefacts — the additive ALTERs are what this suite needs.
+  for (const raw of readFileSync('drizzle/0104_ps497_fulfillment_occurrences.sql', 'utf8').split('--> statement-breakpoint')) {
+    const stmt = raw.replace(/CREATE\s+INDEX\s+CONCURRENTLY/gi, 'CREATE INDEX').trim();
+    if (!stmt) continue;
+    try { await client.exec(stmt); } catch { /* PGlite-unsupported artefact (non-fatal for the additive columns) */ }
+  }
   const pg = drizzle(client, { schema, casing: 'snake_case' });
   const stockQuantity = async (sku: string): Promise<number> => {
     const [row] = await pg

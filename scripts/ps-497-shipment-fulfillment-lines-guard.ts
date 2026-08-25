@@ -147,8 +147,11 @@ check('the label path loads real shipped lines',
 check('the lines are read on the SAME tx as the lifecycle write',
   /loadWholeOrderShipmentLines\(order\.id, tx\)/.test(labelsCode),
   'a different connection could read lines that change before the claim is written');
-check('exact facts are used when the lines are known',
-  /fulfillmentFacts: shippedLines\?\.length\s*\n?\s*\? \{ kind: 'exact', lines: shippedLines \}/.test(labelsCode));
+// PS-497 Release B: the label path reads the order's whole-order lines under requireNoActiveOutboundShipment
+// (sole outbound), so the exact facts carry evidence='whole_order_fallback' + soleOutbound=true — the
+// disposition owner then treats a sole-outbound whole-order fallback as deductible.
+check('exact facts (whole-order fallback, sole outbound) are used when the lines are known',
+  /fulfillmentFacts: shippedLines\?\.length\s*\n?\s*\? \{ kind: 'exact', evidence: 'whole_order_fallback', soleOutbound: true, lines: shippedLines \}/.test(labelsCode));
 check('the review receipt is still emitted when they are not',
   /kind: 'unavailable',\s*\n\s*description: 'Label purchase request did not identify shipped line quantities'/.test(labelsCode));
 

@@ -73,7 +73,14 @@ async function main(): Promise<void> {
         (45005, NULL, 'inventory_deduction_requested', '{}'::jsonb,
           'succeeded', 1, NULL, now()),
         (45006, NULL, 'shipment_confirmation_requested', '{}'::jsonb,
-          'failed', 1, 'unrelated event', now());
+          'failed', 1, 'unrelated event', now()),
+        -- PS-497 Release B (Hermes #6a): the dedicated occurrence lane the report must surface separately.
+        (45007, NULL, 'fulfillment_occurrence_deduction_requested', '{"occurrenceId":7}'::jsonb,
+          'pending', 0, NULL, now()),
+        (45008, NULL, 'fulfillment_occurrence_deduction_requested', '{"occurrenceId":8}'::jsonb,
+          'succeeded', 1, NULL, now()),
+        (45009, NULL, 'fulfillment_occurrence_deduction_requested', '{"occurrenceId":9}'::jsonb,
+          'failed', 2, 'transient', now() + interval '5 minutes');
     `);
 
     const executor = pgliteSql(client);
@@ -100,11 +107,35 @@ async function main(): Promise<void> {
     });
     assert.deepEqual(active.counts, {
       parked_kill_switch: 0,
+      parked_legacy: 0,
       pending: 1,
       processing: 1,
       retrying: 1,
       exhausted: 1,
     });
+    // Hermes #6a: the occurrence lane is surfaced separately from the legacy lane, in EVERY report.
+    assert.deepEqual(active.occurrenceLane.counts, {
+      pending: 1, processing: 0, retrying: 1, exhausted: 0, succeeded: 1,
+    }, 'the occurrence lane is reported by state, distinct from the legacy lane');
+
+    // PS-497 Release B (Hermes #6a): with the legacy lane quarantined, its unsettled rows report as
+    // parked_legacy (NEVER pending), so the hardening gate can distinguish parked-legacy from occurrence work.
+    const quarantined = await getInventoryDeductionReport(executor as never, {
+      inventoryAutoDeductEnabled: true,
+      legacyLaneQuarantined: true,
+      limit: 500,
+    });
+    assert.equal(quarantined.legacyLaneQuarantined, true);
+    assert.deepEqual(quarantined.counts, {
+      parked_kill_switch: 0,
+      parked_legacy: 4,
+      pending: 0,
+      processing: 0,
+      retrying: 0,
+      exhausted: 0,
+    }, 'a quarantined legacy lane never reports pending — every unsettled legacy row is parked_legacy');
+    assert.ok(quarantined.rows.every((row) => row.state === 'parked_legacy'));
+
     const after = await client.query(snapshotSql);
     assert.deepEqual(after.rows, before.rows, 'the report must not mutate outbox state');
   } finally {
