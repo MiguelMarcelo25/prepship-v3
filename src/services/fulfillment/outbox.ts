@@ -13,7 +13,9 @@ import {
 // Per user override unlock shipped data on 2026-07-14: inventory events share
 // only the durable retry lifecycle; confirmation/order state remains isolated.
 import {
-  INVENTORY_DEDUCTION_OUTBOX_EVENT,
+  // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4x). The generic claim
+  // query no longer references INVENTORY_DEDUCTION_OUTBOX_EVENT (de-scoped to confirmation-only). The
+  // predicate + dispatch below remain fail-closed for any legacy inventory row that somehow reaches them.
   isInventoryDeductionOutboxEvent,
   processInventoryDeductionOutboxEvent,
 } from './inventory-deduction-outbox.js';
@@ -905,7 +907,11 @@ async function claimDueOutboxRows(limit: number, orderId?: number): Promise<Outb
     WHERE id IN (
       SELECT id
       FROM fulfillment_outbox
-      WHERE event_type IN ('shipment_confirmation_requested', ${INVENTORY_DEDUCTION_OUTBOX_EVENT})
+      -- Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4x). De-scoped to
+      -- confirmation ONLY. The generic worker can NEVER claim the legacy inventory_deduction_requested event
+      -- (now quarantined) nor the dedicated fulfillment_occurrence_deduction_requested event (owned solely by
+      -- the isolated occurrence worker) — this prevents the generic worker from starving/racing the canary.
+      WHERE event_type = 'shipment_confirmation_requested'
         AND (
           (status IN ('pending', 'failed') AND next_run_at <= NOW())
           OR (status = 'processing'
