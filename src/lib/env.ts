@@ -123,6 +123,24 @@ const schema = z.object({
   // off) instead of silently ignoring the operator. Resolved value is logged at
   // first use by fulfillment-deductions.ts.
   INVENTORY_AUTO_DEDUCT: booleanFlag(true),
+  // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B — the 3-flag model.
+  // These two NEW occurrence flags default OFF (booleanFlag(false)); the master INVENTORY_AUTO_DEDUCT above
+  // stays booleanFlag(true) => UNSET = ON, so the API + generic scheduler must set INVENTORY_AUTO_DEDUCT=false
+  // EXPLICITLY (unset is NOT off). PROJECTION (writer-side): populate occurrence_id/canonical_line_identity/
+  // supply + mint the occurrence event. EXECUTION (narrow occurrence-only canary): the dedicated occurrence
+  // worker moves stock. ALL THREE must be ON — and master ON belongs ONLY in the isolated occurrence worker
+  // process — to move occurrence stock. The narrow EXECUTION gate must never unlock legacy/package/bundle/
+  // replacement deduction. Both default OFF, so a flags-off Release B merge is a no-op at rest.
+  FULFILLMENT_OCCURRENCE_PROJECTION: booleanFlag(false),
+  FULFILLMENT_OCCURRENCE_EXECUTION: booleanFlag(false),
+  // Fail-closed canary scope for FULFILLMENT_OCCURRENCE_EXECUTION (occurrence-execution-scope.ts owns parsing):
+  // approved client/store/order ids (empty/malformed => zero eligibility, never "all"), the frozen
+  // pre-projection max occurrence id (canary floor), and the explicit canary|broad mode.
+  FULFILLMENT_OCCURRENCE_SCOPE_MODE: z.enum(['canary', 'broad']).default('canary'),
+  FULFILLMENT_OCCURRENCE_SCOPE_CLIENT_IDS: z.string().optional(),
+  FULFILLMENT_OCCURRENCE_SCOPE_STORE_IDS: z.string().optional(),
+  FULFILLMENT_OCCURRENCE_SCOPE_ORDER_IDS: z.string().optional(),
+  FULFILLMENT_OCCURRENCE_PREPROJECTION_MAX_ID: z.coerce.number().int().nonnegative().optional(),
   // PS-427: production cache repair remains fail-closed until DJ separately
   // approves an exact dry-run plan and enables this gate for the reviewed run.
   INVENTORY_RECONCILIATION_APPLY_ENABLED: booleanFlag(false),

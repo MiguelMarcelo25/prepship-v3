@@ -980,6 +980,7 @@
     "test:ps-497-apply-lane-pg17": "tsx scripts/ps-497-apply-lane-pg17.ts",
     "test:ps-497-line-supply-policy": "tsx scripts/ps-497-line-supply-policy-guard.ts",
     "test:ps-497-readiness-enrollment": "tsx scripts/ps-497-readiness-enrollment-guard.ts",
+    "test:ps-497-occurrence-execution-scope": "tsx scripts/ps-497-occurrence-execution-scope-guard.ts",
     "test:ps-497-0105-runbook-smoke": "tsx scripts/ps-497-0105-runbook-smoke.ts",
     "test:ps-497-slice2-release-a-pg17": "tsx scripts/ps-497-slice2-release-a-pg17.ts",
     "migrate:ps-497-claim-nullable-quantity": "tsx scripts/apply-ps-497-claim-nullable-quantity.ts",
