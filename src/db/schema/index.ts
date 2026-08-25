@@ -31,6 +31,7 @@ export * from './order-competitive-rate.js';
 export * from './shipment-groups.js';
 export * from './shipment-bundles.js';
 export * from './store-source-cutovers.js';
+export * from './fulfillment-occurrences.js';
 export * from './order-lifecycle.js';
 export * from './automations.js';
 export * from './hazmat.js';

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -9,12 +10,19 @@ import {
   uniqueIndex,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { fulfillmentOccurrences } from './fulfillment-occurrences.js';
 import { inventory } from './inventory.js';
 import { orders } from './orders.js';
 import { shipments } from './shipments.js';
 
 // Per user override unlock shipped data on 2026-07-16: PS-424 adds a
 // review-only JSON snapshot reason; no orders/shipments column is changed.
+//
+// PS-497 Slice 2 (S2.0): additive occurrence-projection mapping for migration 0104's already-applied
+// columns/indexes (occurrence_id on both sidecars; canonical_line_identity + supply + the two PARTIAL
+// uniqueness indexes on claims). Additive/nullable only — no orders/shipments column changed, no
+// writer behavior. runtime-schema-readiness enrolls these, so a deploy that lands this mapping ahead
+// of 0104 fails the boot CLOSED (it never 500s a select). Deploys only after 0104 is applied to prod.
 
 /**
  * PS-497: what the provider actually sent, when it could not be used as a quantity.
@@ -120,6 +128,9 @@ export const orderLifecycleEvents = pgTable(
     fulfilledLines: jsonb().$type<FulfilledLineSnapshot[]>().default([]).notNull(),
     effectiveAt: timestamp({ withTimezone: true }).notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+    // S2.0 (migration 0104): the event's projection of its physical occurrence. INSERT-time only
+    // (the append-only trigger blocks UPDATE); historical events stay NULL forever.
+    occurrenceId: integer().references(() => fulfillmentOccurrences.id),
   },
   (t) => [
     uniqueIndex('order_lifecycle_events_command_unq').on(t.commandKey),
@@ -159,12 +170,29 @@ export const fulfillmentLineClaims = pgTable(
     appliedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+    // S2.0 (migration 0104): occurrence-scoped identity. `occurrenceId` is the column the two PARTIAL
+    // uniqueness indexes ride on (inert until Slice-2 writers set it). `canonicalLineIdentity` is the
+    // ordinal-disambiguated per-physical-line identity (normalizeFulfilledLines lineKey, NEVER a bare
+    // SKU). `supply` is the per-line deduction authority ('prepship' | 'external' | 'unknown').
+    occurrenceId: integer().references(() => fulfillmentOccurrences.id),
+    canonicalLineIdentity: text(),
+    supply: text(),
   },
   (t) => [
     uniqueIndex('fulfillment_line_claims_idempotency_unq').on(t.idempotencyKey),
     index('fulfillment_line_claims_event_status_idx').on(t.lifecycleEventId, t.status),
     index('fulfillment_line_claims_shipment_idx').on(t.shipmentId, t.id),
     index('fulfillment_line_claims_original_idx').on(t.originalClaimId),
+    // Hermes uniqueness key #1 (the double-deduct fix) — PARTIAL on occurrence_id (inert over legacy
+    // NULL rows). Matches migration 0104's fulfillment_line_claims_occ_line_dir_unq exactly.
+    uniqueIndex('fulfillment_line_claims_occ_line_dir_unq')
+      .on(t.occurrenceId, t.canonicalLineIdentity, t.direction)
+      .where(sql`${t.occurrenceId} is not null`),
+    // Hermes uniqueness key #2 — reverse uniqueness by original_claim_id. Matches 0104's
+    // fulfillment_line_claims_reverse_original_unq.
+    uniqueIndex('fulfillment_line_claims_reverse_original_unq')
+      .on(t.originalClaimId)
+      .where(sql`${t.direction} = 'reverse' and ${t.originalClaimId} is not null`),
   ],
 );
 

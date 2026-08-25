@@ -28,6 +28,9 @@ const REQUIRED_RELATIONS = [
   'order_rate_jobs',
   'package_consumption_reviews',
   'fulfillment_line_claims',
+  // PS-497 Slice 2 (S2.0): the fulfillment_occurrences identity from migration 0104. Enrolled here so
+  // a deploy of the S2.0 Drizzle mapping ahead of 0104 fails the boot CLOSED instead of 500ing.
+  'fulfillment_occurrences',
   'print_queue_batch_job_items',
   'print_queue_merge_jobs',
   'print_queue_merged_pdfs',
@@ -57,6 +60,11 @@ const REQUIRED_RELATIONS = [
 ] as const;
 
 const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
+  // PS-497 Slice 2 (S2.0): migration 0104's occurrence projection columns + the occurrence table's own
+  // columns that the Drizzle mapping now names. Fail boot closed until 0104 has been applied.
+  order_lifecycle_events: ['occurrence_id'],
+  fulfillment_line_claims: ['occurrence_id', 'canonical_line_identity', 'supply'],
+  fulfillment_occurrences: ['order_id', 'shipment_id', 'occurrence_key', 'discriminator_kind', 'first_seen_source', 'superseded_by_occurrence_id', 'effective_at'],
   automation_rules: ['active_version_id', 'active_from', 'draft_revision', 'system_locked'],
   automation_rule_versions: ['document_hash', 'draft_revision', 'simulation_hash', 'lifecycle'],
   automation_shipping_controls: ['control_key', 'control_type', 'client_id', 'store_id', 'system_locked', 'provenance', 'position'],
@@ -228,6 +236,13 @@ const REQUIRED_INDEXES = [
   'fulfillment_line_claims_idempotency_unq',
   'fulfillment_line_claims_original_idx',
   'fulfillment_line_claims_shipment_idx',
+  // PS-497 Slice 2 (S2.0): migration 0104's occurrence indexes (3 on the new table + the 2 PARTIAL
+  // claim uniqueness indexes — the double-deduct fix + reverse uniqueness).
+  'fulfillment_occurrences_key_unq',
+  'fulfillment_occurrences_order_idx',
+  'fulfillment_occurrences_shipment_unq',
+  'fulfillment_line_claims_occ_line_dir_unq',
+  'fulfillment_line_claims_reverse_original_unq',
   'print_queue_batch_job_items_job_idx',
   'print_queue_batch_job_items_state_idx',
   'print_queue_merge_jobs_updated_at_idx',
@@ -273,6 +288,11 @@ const REQUIRED_INDEXES = [
 // part of the PS-452 execution fence. Missing counters must fail boot readiness
 // even when every column and index happens to exist.
 const REQUIRED_CONSTRAINTS = [
+  // PS-497 Slice 2 (S2.0): migration 0104's occurrence-scoped identity + supply CHECKs. (0090's
+  // quantity_state_check is intentionally NOT enrolled — migration 0105 replaces it, so requiring the
+  // old name here would fail the boot after the 0105 apply.)
+  'fulfillment_line_claims_occ_identity_present_chk',
+  'fulfillment_line_claims_supply_chk',
   'billing_credit_notes_adjustment_kind_chk',
   'billing_credit_notes_adjustment_source_chk',
   'billing_credit_notes_posting_version_chk',
