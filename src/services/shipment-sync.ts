@@ -1139,10 +1139,14 @@ async function upsertShipmentsBatch(
               : (await isSoleOutboundShipment(tx, row.orderId, row.id))
                 ? await loadWholeOrderShipmentLines(row.orderId, tx)
                 : null;
+            // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4). Distinguish
+            // per-shipment EXACT lines from a WHOLE-ORDER fallback (the fallback rides isSoleOutboundShipment
+            // above) so the owner maps LineEvidence correctly — exact lines deduct even for a split, but a
+            // whole-order fallback deducts only when the owner re-proves sole-outbound in-tx (Hermes #8).
             const fulfillmentFacts = providerLines
-              ? { kind: 'exact' as const, lines: providerLines }
+              ? { kind: 'exact' as const, evidence: 'exact_shipment' as const, lines: providerLines }
               : wholeOrderLines
-                ? { kind: 'exact' as const, lines: wholeOrderLines }
+                ? { kind: 'exact' as const, evidence: 'whole_order_fallback' as const, soleOutbound: true, lines: wholeOrderLines }
                 : {
                     kind: 'unavailable' as const,
                     description: 'ShipStation shipment did not include fulfillment-line quantities',
@@ -1227,8 +1231,12 @@ async function upsertShipmentsBatch(
     if (!row.order || row.order.status !== 'awaiting_shipment' || row.values.voided || row.values.isReturn) continue;
     // Per user override unlock shipped data on 2026-07-16: existing provider
     // shipments use exact shipmentItems or an explicit review receipt.
+    // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4) — these are per-shipment
+    // EXACT lines (no whole-order fallback on this path); tag evidence 'exact_shipment'. `provenance.provider`
+    // below stays audit metadata only — NON-authoritative for occurrence identity, which the owner derives
+    // from the locked shipment (shipments.source/labelShipmentId) via resolveFulfillmentOccurrence.
     const fulfillmentFacts = Array.isArray(row.source.shipmentItems) && row.source.shipmentItems.length > 0
-      ? { kind: 'exact' as const, lines: row.source.shipmentItems }
+      ? { kind: 'exact' as const, evidence: 'exact_shipment' as const, lines: row.source.shipmentItems }
       : {
           kind: 'unavailable' as const,
           description: 'ShipStation shipment did not include fulfillment-line quantities',

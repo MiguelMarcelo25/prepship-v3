@@ -3329,8 +3329,13 @@ async function createLabelV2Impl(
         // label is the order's SOLE outbound shipment and the shipment's scope equals the
         // order's. When the lines are not certain the loader returns null and we emit the
         // same review receipt as before — this narrows the gap, it does not weaken PS-424.
+        // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4). These lines come from
+        // loadWholeOrderShipmentLines under the requireAwaitingOrderStatus + requireNoActiveOutboundShipment
+        // guards, i.e. a WHOLE-ORDER fallback where this label is the order's sole outbound. Emit the
+        // distinguished evidence + soleOutbound corroboration; the owner re-derives sole-outbound in-tx
+        // (Hermes #8) and only deducts a whole-order fallback when it re-proves sole-outbound.
         fulfillmentFacts: shippedLines?.length
-          ? { kind: 'exact', lines: shippedLines }
+          ? { kind: 'exact', evidence: 'whole_order_fallback', soleOutbound: true, lines: shippedLines }
           : {
               kind: 'unavailable',
               description: 'Label purchase request did not identify shipped line quantities',
