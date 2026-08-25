@@ -74,8 +74,11 @@ jobs:
       - name: Release B — worker keeps intent retryable with execution OFF (real PG17, Hermes #2)
         run: npm run -s test:ps-497-occurrence-worker-execoff-pg17
 
-      - name: Release B — review-resolver re-derivation matrix (real PG17, Hermes #3)
+      - name: Release B — review-resolver evidence + sole-outbound matrix (real PG17, Hermes #3)
         run: npm run -s test:ps-497-review-resolver-pg17
+
+      - name: Release B — worker retry hardening: malformed cannot starve valid movement (real PG17)
+        run: npm run -s test:ps-497-worker-retry-hardening-pg17
 
       - name: Release B — review route authorization (inventory:write, Hermes #1)
         run: npm run -s test:ps-497-review-route-authz

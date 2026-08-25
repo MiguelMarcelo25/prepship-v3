@@ -5,11 +5,13 @@
 // deduct). It NEVER moves stock synchronously — execution still requires the dedicated worker + all three
 // flags. It refuses to promote external, unknown, superseded, historical (occurrence_id IS NULL), or malformed
 // claims. The thin route delegates here; it never owns the disposition rule.
-import { and, eq, isNull, ne } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { db } from '../../db/client.js';
-import { fulfillmentLineClaims } from '../../db/schema/order-lifecycle.js';
+import { fulfillmentLineClaims, orderLifecycleEvents } from '../../db/schema/order-lifecycle.js';
 import { fulfillmentOccurrences } from '../../db/schema/fulfillment-occurrences.js';
 import { orders } from '../../db/schema/orders.js';
+import { shipments } from '../../db/schema/shipments.js';
+import { activeOutboundShipmentPredicate } from '../shipment-aggregate.js';
 import { decideClaimDisposition, type LineEvidence } from './line-supply-policy.js';
 import {
   readOccurrenceExecutionScope,
@@ -49,14 +51,24 @@ export async function resolveOccurrenceReviewClaim(
     throw new Error(`claim ${input.claimId} has no occurrence identity (historical backlog is fenced)`);
   }
 
-  // Lock the occurrence + verify not superseded. Re-read the canonical discriminator + soft shipment
-  // reference so evidence and sole-outbound are DERIVED under the lock, not asserted (Hermes #3).
+  // Lock the ORDER row FOR UPDATE first (the aggregate root). Every shipment-lifecycle writer that could add
+  // or void an outbound shipment goes through the lifecycle owner, which also locks the order FOR UPDATE — so
+  // taking this lock serializes the sole-outbound recheck below against a concurrent second-shipment creation
+  // or void (Hermes #3: lock/recheck the relevant shipment state so a race cannot promote an over-deduction).
+  const [order] = await tx
+    .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+    .from(orders)
+    .where(eq(orders.id, claim.orderId))
+    .for('update')
+    .limit(1);
+  if (!order) throw new Error(`order ${claim.orderId} no longer exists`);
+
+  // Lock the occurrence + verify not superseded.
   const [occ] = await tx
     .select({
       id: fulfillmentOccurrences.id,
       orderId: fulfillmentOccurrences.orderId,
       shipmentId: fulfillmentOccurrences.shipmentId,
-      discriminatorKind: fulfillmentOccurrences.discriminatorKind,
       supersededBy: fulfillmentOccurrences.supersededByOccurrenceId,
     })
     .from(fulfillmentOccurrences)
@@ -91,24 +103,42 @@ export async function resolveOccurrenceReviewClaim(
   if (claim.supply !== 'prepship') {
     throw new Error(`claim ${input.claimId} supply=${claim.supply}: only a prepship claim can be promoted to pending`);
   }
-  // Evidence is DERIVED from the occurrence discriminator, never hardcoded (Hermes #3). A shipment-backed
-  // occurrence (provider/local shipment) carries exact-shipment evidence; a whole-order occurrence is a
-  // fallback that only deducts when it is provably the sole active outbound occurrence for the order.
-  const evidence: LineEvidence =
-    occ.discriminatorKind === 'provider_shipment' || occ.discriminatorKind === 'local_shipment'
-      ? 'exact_shipment'
-      : 'whole_order_fallback';
-  // Sole-outbound is RECOMPUTED from the DB under the lock: any other non-superseded occurrence on the same
-  // order means this whole-order fallback is not sole and must stay in review.
-  const otherActive = await tx
-    .select({ id: fulfillmentOccurrences.id })
-    .from(fulfillmentOccurrences)
-    .where(and(
-      eq(fulfillmentOccurrences.orderId, claim.orderId),
-      ne(fulfillmentOccurrences.id, claim.occurrenceId),
-      isNull(fulfillmentOccurrences.supersededByOccurrenceId),
-    ));
-  const soleOutbound = otherActive.length === 0;
+  // Read the AUTHORITATIVE line-evidence fact the owner persisted on the immutable lifecycle event (Hermes #3).
+  // The occurrence DISCRIMINATOR identifies the physical occurrence; it does NOT prove the supplied quantities
+  // were exact shipment-scoped lines. A provider/local shipment occurrence can still carry whole-order-fallback
+  // lines, so inferring evidence from the discriminator could promote a fallback claim as exact (ignoring the
+  // sole-outbound restriction) and over-deduct. If the evidence was not recorded, fail closed.
+  const [lifecycleEvent] = await tx
+    .select({ provenance: orderLifecycleEvents.provenance })
+    .from(orderLifecycleEvents)
+    .where(eq(orderLifecycleEvents.id, claim.lifecycleEventId))
+    .limit(1);
+  const recorded = (lifecycleEvent?.provenance as { ps497LineEvidence?: unknown } | null)?.ps497LineEvidence;
+  if (recorded !== 'exact_shipment' && recorded !== 'whole_order_fallback' && recorded !== 'unavailable') {
+    throw new Error(`claim ${input.claimId} has no recorded line evidence — cannot prove exact vs whole-order fallback; refusing promotion`);
+  }
+  const evidence: LineEvidence = recorded;
+  if (evidence === 'unavailable') {
+    throw new Error(`claim ${input.claimId} carries unavailable line evidence (no canonical line to deduct)`);
+  }
+
+  // For a whole-order FALLBACK, deduction is safe ONLY when this is the order's sole active outbound shipment
+  // (else the order's full line list over-deducts, once per shipment). Recompute that over the CANONICAL active
+  // outbound SHIPMENTS set using the SAME predicate the owner uses — NOT an occurrence count. A second live
+  // shipment that has not yet produced an occurrence row must still make this not-sole. Read under the order
+  // lock taken above. exact_shipment evidence deducts even for a split, so it does not consult sole-outbound.
+  let soleOutbound = false;
+  if (evidence === 'whole_order_fallback') {
+    if (claim.shipmentId == null) {
+      throw new Error(`claim ${input.claimId} whole-order fallback has no shipment reference to prove sole-outbound; refusing`);
+    }
+    const active = await tx
+      .select({ id: shipments.id })
+      .from(shipments)
+      .where(activeOutboundShipmentPredicate({ orderId: claim.orderId }))
+      .limit(2);
+    soleOutbound = active.length === 1 && Number(active[0]?.id) === claim.shipmentId;
+  }
   const disposition = decideClaimDisposition({
     supply: 'prepship',
     evidence,
@@ -121,13 +151,6 @@ export async function resolveOccurrenceReviewClaim(
       `claim ${input.claimId} does not satisfy the deductible predicate (evidence=${evidence}, soleOutbound=${soleOutbound}, sku=${claim.sku ?? 'null'}, qty=${claim.quantity ?? 'null'})`,
     );
   }
-
-  const [order] = await tx
-    .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
-    .from(orders)
-    .where(eq(orders.id, claim.orderId))
-    .limit(1);
-  if (!order) throw new Error(`order ${claim.orderId} no longer exists`);
 
   const scope = readOccurrenceExecutionScope();
   const gate = claimEligibleForExecution({

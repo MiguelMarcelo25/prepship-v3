@@ -83,6 +83,10 @@ export async function enqueueOccurrenceDeduction(
 
 const OCCURRENCE_OUTBOX_LEASE_MINUTES = 10;
 const OCCURRENCE_OUTBOX_RETRY_MINUTES = 5;
+// Hermes worker-hardening: a bounded retry budget for genuinely-failing rows so a malformed/stale batch cannot
+// be re-claimed every poll and starve valid movement ahead of it. Past the budget the row is parked terminally
+// (next_run_at = 'infinity'), never re-selected by claimDueOccurrenceOutboxRows.
+const OCCURRENCE_OUTBOX_MAX_ATTEMPTS = 12;
 
 type OccurrenceOutboxRow = { id: number; payload: Record<string, unknown>; attempts: number };
 
@@ -170,7 +174,10 @@ export async function processFulfillmentOccurrenceOutboxOnce(
   for (const row of rows) {
     const occurrenceId = Number(row.payload.occurrenceId ?? 0);
     if (!Number.isInteger(occurrenceId) || occurrenceId <= 0) {
-      await pg`UPDATE fulfillment_outbox SET status = 'failed', last_error = 'missing occurrenceId in payload', updated_at = NOW() WHERE id = ${row.id}`;
+      // A malformed payload can NEVER self-heal (the payload does not change), so park it TERMINALLY
+      // (next_run_at = 'infinity') — never re-selected — instead of leaving it immediately re-due, which would
+      // let a batch of old malformed rows occupy the worker limit every poll and starve valid movement.
+      await pg`UPDATE fulfillment_outbox SET status = 'failed', attempts = attempts + 1, last_error = 'missing occurrenceId in payload (terminal)', next_run_at = 'infinity'::timestamptz, updated_at = NOW() WHERE id = ${row.id}`;
       parked += 1;
       continue;
     }
@@ -178,7 +185,9 @@ export async function processFulfillmentOccurrenceOutboxOnce(
     // out-of-scope / below-floor occurrence is PARKED here (retryable), never settled with zero movements.
     const subject = await readOccurrenceScopeSubject(occurrenceId);
     if (!subject.found) {
-      await pg`UPDATE fulfillment_outbox SET status = 'failed', attempts = attempts + 1, last_error = 'occurrence not found', updated_at = NOW() WHERE id = ${row.id}`;
+      // Bounded retry (a missing occurrence could in principle be a transient referential race), then terminal:
+      // back off each attempt and park at 'infinity' once the budget is spent so it cannot be re-claimed forever.
+      await pg`UPDATE fulfillment_outbox SET status = 'failed', attempts = attempts + 1, last_error = 'occurrence not found', next_run_at = CASE WHEN attempts + 1 >= ${OCCURRENCE_OUTBOX_MAX_ATTEMPTS} THEN 'infinity'::timestamptz ELSE NOW() + (${OCCURRENCE_OUTBOX_RETRY_MINUTES} || ' minutes')::interval END, updated_at = NOW() WHERE id = ${row.id}`;
       parked += 1;
       continue;
     }
@@ -208,7 +217,9 @@ export async function processFulfillmentOccurrenceOutboxOnce(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await pg`UPDATE fulfillment_outbox SET status = 'failed', attempts = attempts + 1, last_error = ${message}, next_run_at = NOW() + (${OCCURRENCE_OUTBOX_RETRY_MINUTES} || ' minutes')::interval, updated_at = NOW() WHERE id = ${row.id}`;
+      // Backoff each attempt, then park terminally at the retry budget so a persistently-failing row cannot be
+      // re-claimed every poll and crowd out valid movement.
+      await pg`UPDATE fulfillment_outbox SET status = 'failed', attempts = attempts + 1, last_error = ${message}, next_run_at = CASE WHEN attempts + 1 >= ${OCCURRENCE_OUTBOX_MAX_ATTEMPTS} THEN 'infinity'::timestamptz ELSE NOW() + (${OCCURRENCE_OUTBOX_RETRY_MINUTES} || ' minutes')::interval END, updated_at = NOW() WHERE id = ${row.id}`;
       parked += 1;
     }
   }

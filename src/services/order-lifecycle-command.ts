@@ -538,7 +538,14 @@ export async function applyOrderLifecycleCommandInTransaction(
       commandKey,
       transition,
       source,
-      provenance: input.provenance ?? {},
+      // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.6 correction, Hermes #3).
+      // Persist the AUTHORITATIVE line-evidence fact on this append-only (immutable) event so the operator
+      // review-resolver can read the true evidence (exact_shipment vs whole_order_fallback) instead of
+      // inferring it from the occurrence discriminator — the occurrence identity does NOT prove the supplied
+      // quantities were exact shipment-scoped lines. Written only when projecting; flags-off is unchanged.
+      provenance: projectionOn
+        ? { ...(input.provenance ?? {}), ps497LineEvidence: lineEvidence }
+        : (input.provenance ?? {}),
       fulfilledLines,
       effectiveAt,
       occurrenceId: resolvedOccurrence?.occurrenceId ?? null,
