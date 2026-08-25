@@ -46,6 +46,31 @@ function runRunner(dbUrl: string, args: string[], env: Record<string, string> = 
   });
 }
 
+// Poll from an INDEPENDENT connection until the runner's backend is provably waiting on a lock. Used
+// to time genuine multi-backend interleaving: the harness holds ROW EXCLUSIVE on `orders`, which
+// inspect()/snapshot never touch (so they pass) but the runner's FIRST txn statement (CREATE TABLE
+// fulfillment_occurrences ... REFERENCES orders) needs ShareRowExclusive on — so the runner blocks
+// there, AFTER its pre-snapshot, holding NO lock on fulfillment_line_claims. That leaves an
+// independent connection free to INSERT/UPDATE claims (its FK checks take RowShare on orders, which
+// is compatible with the held RowExclusive and the runner's pending ShareRowExclusive), commit, and
+// only then is the lock released — so the write lands strictly in (beforeSnap, afterSnap).
+async function waitUntilRunnerBlocked(dbUrl: string, timeoutMs = 25_000): Promise<void> {
+  const w = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
+  const start = Date.now();
+  try {
+    for (;;) {
+      const rows = await w`
+        select 1 from pg_stat_activity
+        where application_name = 'ps-497-migration-0104' and state = 'active' and wait_event_type = 'Lock'`;
+      if (rows.length > 0) return;
+      if (Date.now() - start > timeoutMs) throw new Error('runner did not reach a blocked lock wait in time');
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  } finally {
+    await w.end({ timeout: 5 });
+  }
+}
+
 async function applyBase(dbUrl: string): Promise<void> {
   const sql = postgres(dbUrl, { max: 1, prepare: false, onnotice: () => {} });
   await sql.unsafe(`
@@ -155,6 +180,7 @@ async function main(): Promise<void> {
     // bounds actually took effect.
     assert.ok(/txn timeouts lock_timeout=7s/.test(r.out), 'the transactional phase applies the bounded lock_timeout');
     assert.ok(/concurrent timeouts lock_timeout=7s/.test(r.out), 'the CONCURRENTLY phase applies the bounded lock_timeout');
+    assert.ok(/session application_name=ps-497-migration-0104/.test(r.out), 'the runner positively attests its session application_name');
     const c = conn(db);
     const idx = await c<{ n: number }[]>`
       select count(*)::int as n from pg_index i join pg_class cc on cc.oid=i.indexrelid
@@ -228,6 +254,34 @@ async function main(): Promise<void> {
     ok('fail-closed (c): a right-name/wrong-definition index (non-unique) is caught by exact-def comparison');
   }
 
+  // 5d) Right columns + kind CHECK + all FKs, but a WEAKENED identity contract: id has no serial
+  // default and the timestamps have no default now(). Only the PK/default/timestamp catalog checks
+  // catch this — presence + business-column checks alone would pass.
+  {
+    const db = await freshDb();
+    const c = conn(db);
+    await c.unsafe(`
+      create table public.fulfillment_occurrences (
+        id integer primary key,             -- WRONG: no serial/nextval default
+        order_id integer not null references public.orders(id),
+        shipment_id integer,
+        occurrence_key text not null,
+        discriminator_kind text not null,
+        first_seen_source text not null,
+        superseded_by_occurrence_id integer references public.fulfillment_occurrences(id),
+        effective_at timestamptz not null,
+        created_at timestamptz not null,    -- WRONG: no default now()
+        updated_at timestamptz not null,    -- WRONG: no default now()
+        constraint fulfillment_occurrences_kind_chk
+          check (discriminator_kind in ('provider_shipment','local_shipment','whole_order'))
+      )`);
+    await c.end({ timeout: 5 });
+    const r = await runRunner(db, ['--apply', CONFIRM]);
+    assert.notEqual(r.code, 0, 'apply over a table with a weakened id/timestamp default contract fails closed');
+    assert.ok(/default/.test(r.err), 'the mismatch names the missing serial/now() defaults');
+    ok('fail-closed (d): a same-named table lacking the id-serial / timestamp-default contract is caught by the catalog default checks');
+  }
+
   // 6) Invalid-index recovery: corrupt one concurrent index into INVALID, then the runner rebuilds it.
   {
     const db = await freshDb();
@@ -299,35 +353,74 @@ async function main(): Promise<void> {
     ok('bounded lock timeout: a conflicting lock makes the apply fail fast instead of hanging');
   }
 
-  // 9) Concurrent-insert tolerance: a claim inserted in the apply window (higher id) is ignored.
+  // 9) Concurrent-INSERT tolerance — genuine multi-backend interleaving. Hold ROW EXCLUSIVE on
+  // orders so the runner blocks at CREATE TABLE fulfillment_occurrences (AFTER its pre-snapshot);
+  // while it is provably waiting, an INDEPENDENT connection inserts a new claim (higher id) and
+  // commits; only then is the lock released. The bounded guard ignores the higher id, so apply succeeds.
   {
     const db = await freshDb();
-    const r = await runRunner(db, ['--apply', CONFIRM], {
-      PS497_APPLY_TEST_PRE_APPLY_SQL:
-        "insert into public.fulfillment_line_claims (lifecycle_event_id, order_id, line_key, quantity, direction, status, idempotency_key) values (1,1,'concurrent',3,'deduct','pending','concurrent:new')",
-    });
-    assert.equal(r.code, 0, `apply tolerates a concurrent insert (stderr: ${r.err})`);
+    const holder = conn(db);
+    await holder.unsafe('begin');
+    await holder.unsafe('lock table public.orders in row exclusive mode');
+    const runnerP = runRunner(db, ['--apply', CONFIRM], { PS497_LOCK_TIMEOUT: '30s' });
+    await waitUntilRunnerBlocked(db);
+    const injector = conn(db);
+    await injector`
+      insert into public.fulfillment_line_claims (lifecycle_event_id, order_id, line_key, quantity, direction, status, idempotency_key)
+      values (1, 1, 'concurrent', 3, 'deduct', 'pending', 'concurrent:new')`;
+    await injector.end({ timeout: 5 });
+    await holder.unsafe('rollback');
+    await holder.end({ timeout: 5 });
+    const r = await runnerP;
+    assert.equal(r.code, 0, `apply tolerates a genuinely-concurrent insert (stderr: ${r.err})`);
     assert.ok(/preexisting_claims_unchanged=true/.test(r.out), 'the concurrent insert did not trip the integrity guard');
-    ok('concurrent-insert tolerance: a claim inserted during the apply window (higher id) is ignored');
+    assert.ok(/total_rows=3/.test(r.out), 'the concurrently-inserted claim is present in the final table (real interleaving)');
+    ok('concurrent-insert tolerance: an independent backend inserting a claim (higher id) during the apply window is ignored');
   }
 
-  // 10) Concurrent-update conservative red: mutating a pre-existing row trips the guard. The mutated
-  // column (last_error) is NOT part of claim_count or by_status, so ONLY the bounded md5 h1/h2
-  // set-hash can catch it — this exercises the checksum itself, not the status tally.
+  // 10) Concurrent-UPDATE conservative red — same real interleaving. The independent backend UPDATEs
+  // a pre-existing claim's last_error (NOT part of claim_count or by_status), so ONLY the bounded md5
+  // h1/h2 set-hash can catch it. The drift trips a conservative red even though the additive schema
+  // applied correctly.
   {
     const db = await freshDb();
-    const r = await runRunner(db, ['--apply', CONFIRM], {
-      PS497_APPLY_TEST_PRE_APPLY_SQL:
-        "update public.fulfillment_line_claims set last_error='drift' where idempotency_key='seed:a'",
-    });
-    assert.notEqual(r.code, 0, 'a concurrent update of a pre-existing claim trips a conservative red');
+    const holder = conn(db);
+    await holder.unsafe('begin');
+    await holder.unsafe('lock table public.orders in row exclusive mode');
+    const runnerP = runRunner(db, ['--apply', CONFIRM], { PS497_LOCK_TIMEOUT: '30s' });
+    await waitUntilRunnerBlocked(db);
+    const injector = conn(db);
+    await injector`update public.fulfillment_line_claims set last_error = 'drift' where idempotency_key = 'seed:a'`;
+    await injector.end({ timeout: 5 });
+    await holder.unsafe('rollback');
+    await holder.end({ timeout: 5 });
+    const r = await runnerP;
+    assert.notEqual(r.code, 0, 'a genuinely-concurrent update of a pre-existing claim trips a conservative red');
     assert.ok(/pre-existing claim/.test(r.err), 'the red names the pre-existing-row mutation');
-    // The schema still applied correctly (conservative red is a guard signal, not corruption).
     const c = conn(db);
-    const [srow] = await c<{ t: string | null }[]>`select to_regclass('public.fulfillment_occurrences')::text as t`;
+    const [srow] = await c<{ t: string | null; drift: string | null }[]>`
+      select to_regclass('public.fulfillment_occurrences')::text as t,
+             (select last_error from public.fulfillment_line_claims where idempotency_key = 'seed:a') as drift`;
     await c.end({ timeout: 5 });
     assert.ok(srow?.t != null, 'the additive schema still applied despite the conservative red');
-    ok('concurrent-update conservative red: a non-status column mutation (caught only by the md5 h1/h2 checksum) fails closed after a correct apply');
+    assert.equal(srow?.drift, 'drift', 'the concurrent update really landed (real interleaving); only the md5 checksum caught it');
+    ok('concurrent-update conservative red: an independent backend mutating a non-status column (caught only by the md5 checksum) fails closed after a correct apply');
+  }
+
+  // 11) Timeout bounds are real: a disabled (0) or absurd (over-max) timeout is REFUSED before connecting.
+  {
+    const db = await freshDb();
+    const zero = await runRunner(db, ['--apply', CONFIRM], { PS497_LOCK_TIMEOUT: '0' });
+    assert.notEqual(zero.code, 0, 'a unitless/zero lock_timeout is refused');
+    assert.ok(/bounded timeout|bounded range/.test(zero.err), 'the refusal explains the timeout is not bounded');
+    const huge = await runRunner(db, ['--apply', CONFIRM], { PS497_LOCK_TIMEOUT: '999999min' });
+    assert.notEqual(huge.code, 0, 'an over-maximum lock_timeout is refused');
+    assert.ok(/bounded range/.test(huge.err), 'the refusal explains the value exceeds the bounded range');
+    const c = conn(db);
+    const [t] = await c<{ t: string | null }[]>`select to_regclass('public.fulfillment_occurrences')::text as t`;
+    await c.end({ timeout: 5 });
+    assert.equal(t?.t, null, 'a refused timeout applied nothing');
+    ok('timeout bounds: 0/disabled and over-maximum timeout values are refused before connecting');
   }
 
   // 11) Session cleanup: no runner connection lingers after the process exits. (This observes state

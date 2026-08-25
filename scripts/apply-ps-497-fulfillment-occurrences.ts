@@ -15,18 +15,27 @@ import { readVerifiedMigration, splitMigration, MIGRATION_RELPATH } from './ps-4
 
 const CONFIRMATION = 'apply-ps-497-fulfillment-occurrences-0104';
 
-// Bounded operational timeouts (env-overridable, validated). Transactional metadata DDL is fast;
-// the CONCURRENTLY index builds can legitimately be long, so they get a generous but still-bounded
-// ceiling rather than waiting forever.
-const TIMEOUT_RE = /^\d+\s*(ms|s|min)?$/;
-function timeout(name: string, fallback: string): string {
-  const v = (process.env[name] ?? fallback).trim();
-  if (!TIMEOUT_RE.test(v)) throw new Error(`${name} is not a valid Postgres timeout: ${v}`);
-  return v;
+// Bounded operational timeouts (env-overridable, PARSED and RANGE-CHECKED into milliseconds). A
+// syntactically numeric value is not a bounded value: Postgres treats 0 as "disabled", so 0 / 0ms /
+// an absurd duration / a unitless (ambiguous) value are all rejected. The unit is REQUIRED and the
+// result must fall inside an explicit [min, max] ms window.
+function parseTimeoutMs(name: string, fallback: string, minMs: number, maxMs: number): number {
+  const raw = (process.env[name] ?? fallback).trim();
+  const m = /^(\d+)\s*(ms|s|min)$/.exec(raw);
+  if (!m) throw new Error(`${name}='${raw}' is not a valid bounded timeout (expected <n>ms|s|min with an explicit unit)`);
+  const n = Number(m[1]);
+  const ms = m[2] === 'ms' ? n : m[2] === 's' ? n * 1000 : n * 60_000;
+  if (!Number.isSafeInteger(ms)) throw new Error(`${name}='${raw}' overflows a safe integer of milliseconds`);
+  if (ms < minMs || ms > maxMs) {
+    throw new Error(`${name}='${raw}' (${ms}ms) is outside the bounded range [${minMs}ms, ${maxMs}ms] — 0/disabled and unbounded values are refused`);
+  }
+  return ms;
 }
-const LOCK_TIMEOUT = timeout('PS497_LOCK_TIMEOUT', '5s');
-const TXN_STATEMENT_TIMEOUT = timeout('PS497_TXN_STATEMENT_TIMEOUT', '60s');
-const CONCURRENT_STATEMENT_TIMEOUT = timeout('PS497_CONCURRENT_STATEMENT_TIMEOUT', '3600s');
+// lock waits stay tight; the transactional metadata DDL is fast; the CONCURRENTLY builds may be long
+// but must still have a real operational ceiling.
+const LOCK_TIMEOUT_MS = parseTimeoutMs('PS497_LOCK_TIMEOUT', '5s', 1, 300_000); // (0, 5min]
+const TXN_STATEMENT_TIMEOUT_MS = parseTimeoutMs('PS497_TXN_STATEMENT_TIMEOUT', '60s', 1_000, 600_000); // [1s, 10min]
+const CONCURRENT_STATEMENT_TIMEOUT_MS = parseTimeoutMs('PS497_CONCURRENT_STATEMENT_TIMEOUT', '3600s', 1_000, 21_600_000); // [1s, 6h]
 
 // pg_get_indexdef / pg_get_constraintdef are always schema-qualified and canonicalized by Postgres,
 // so these exact strings are stable across environments and pin uniqueness, access method, key
@@ -52,27 +61,40 @@ const EXPECTED_CHECKDEF: Record<string, string> = {
   // (and would silently accept invalid discriminator_kind values) fails closed.
   fulfillment_occurrences_kind_chk:
     "CHECK ((discriminator_kind = ANY (ARRAY['provider_shipment'::text, 'local_shipment'::text, 'whole_order'::text])))",
+  // 0090's quantity-state guard verified by EXACT definition + validation state, not merely by name.
+  fulfillment_line_claims_quantity_state_check:
+    "CHECK ((((quantity IS NOT NULL) AND (quantity > 0)) OR ((quantity IS NULL) AND (status = 'review'::text))))",
 };
-// Every column is verified for exact type + nullability + absence of default, on BOTH the sidecar
-// projection columns and the new fulfillment_occurrences relation's own structural columns.
+// The occurrences relation's PRIMARY KEY, so a same-named table lacking the PK contract fails closed.
+const EXPECTED_PK: Record<string, string> = {
+  fulfillment_occurrences_pkey: 'PRIMARY KEY (id)',
+};
+// Every column is verified for exact type + nullability + default, on BOTH the sidecar projection
+// columns and the new fulfillment_occurrences relation's own structural columns. `defaultKind`:
+// 'none' = must have no default; 'nextval' = serial sequence default; 'now' = now().
 const EXPECTED_COLUMNS = [
-  { table: 'order_lifecycle_events', column: 'occurrence_id', type: 'integer', nullable: true },
-  { table: 'fulfillment_line_claims', column: 'occurrence_id', type: 'integer', nullable: true },
-  { table: 'fulfillment_line_claims', column: 'canonical_line_identity', type: 'text', nullable: true },
-  { table: 'fulfillment_line_claims', column: 'supply', type: 'text', nullable: true },
-  { table: 'fulfillment_occurrences', column: 'order_id', type: 'integer', nullable: false },
-  { table: 'fulfillment_occurrences', column: 'shipment_id', type: 'integer', nullable: true },
-  { table: 'fulfillment_occurrences', column: 'occurrence_key', type: 'text', nullable: false },
-  { table: 'fulfillment_occurrences', column: 'discriminator_kind', type: 'text', nullable: false },
-  { table: 'fulfillment_occurrences', column: 'first_seen_source', type: 'text', nullable: false },
-  { table: 'fulfillment_occurrences', column: 'superseded_by_occurrence_id', type: 'integer', nullable: true },
-  { table: 'fulfillment_occurrences', column: 'effective_at', type: 'timestamp with time zone', nullable: false },
+  { table: 'order_lifecycle_events', column: 'occurrence_id', type: 'integer', nullable: true, defaultKind: 'none' },
+  { table: 'fulfillment_line_claims', column: 'occurrence_id', type: 'integer', nullable: true, defaultKind: 'none' },
+  { table: 'fulfillment_line_claims', column: 'canonical_line_identity', type: 'text', nullable: true, defaultKind: 'none' },
+  { table: 'fulfillment_line_claims', column: 'supply', type: 'text', nullable: true, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'id', type: 'integer', nullable: false, defaultKind: 'nextval' },
+  { table: 'fulfillment_occurrences', column: 'order_id', type: 'integer', nullable: false, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'shipment_id', type: 'integer', nullable: true, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'occurrence_key', type: 'text', nullable: false, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'discriminator_kind', type: 'text', nullable: false, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'first_seen_source', type: 'text', nullable: false, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'superseded_by_occurrence_id', type: 'integer', nullable: true, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'effective_at', type: 'timestamp with time zone', nullable: false, defaultKind: 'none' },
+  { table: 'fulfillment_occurrences', column: 'created_at', type: 'timestamp with time zone', nullable: false, defaultKind: 'now' },
+  { table: 'fulfillment_occurrences', column: 'updated_at', type: 'timestamp with time zone', nullable: false, defaultKind: 'now' },
 ] as const;
+// FKs verified for referenced SCHEMA + table + column, single-column key, validation state, and the
+// exact update/delete actions + match type (all NO ACTION 'a', MATCH SIMPLE 's').
 const EXPECTED_FKS = [
-  { table: 'order_lifecycle_events', column: 'occurrence_id', refTable: 'fulfillment_occurrences', refColumn: 'id' },
-  { table: 'fulfillment_line_claims', column: 'occurrence_id', refTable: 'fulfillment_occurrences', refColumn: 'id' },
-  { table: 'fulfillment_occurrences', column: 'order_id', refTable: 'orders', refColumn: 'id' },
-  { table: 'fulfillment_occurrences', column: 'superseded_by_occurrence_id', refTable: 'fulfillment_occurrences', refColumn: 'id' },
+  { table: 'order_lifecycle_events', column: 'occurrence_id', refSchema: 'public', refTable: 'fulfillment_occurrences', refColumn: 'id' },
+  { table: 'fulfillment_line_claims', column: 'occurrence_id', refSchema: 'public', refTable: 'fulfillment_occurrences', refColumn: 'id' },
+  { table: 'fulfillment_occurrences', column: 'order_id', refSchema: 'public', refTable: 'orders', refColumn: 'id' },
+  { table: 'fulfillment_occurrences', column: 'superseded_by_occurrence_id', refSchema: 'public', refTable: 'fulfillment_occurrences', refColumn: 'id' },
 ] as const;
 const CONCURRENT_INDEXES = [
   'fulfillment_line_claims_occ_line_dir_unq',
@@ -84,8 +106,8 @@ type SchemaState = {
   columns_ok: boolean;
   indexes_ok: boolean;
   checks_ok: boolean;
+  pk_ok: boolean;
   fks_ok: boolean;
-  quantity_state_check_intact: boolean;
 };
 type Inspection = { state: SchemaState; mismatches: string[] };
 type ClaimsSnapshot = { claim_count: string; by_status: string; h1: string; h2: string };
@@ -138,7 +160,14 @@ async function main(): Promise<void> {
   // pre-audit, snapshot, or apply — can wait indefinitely on a lock (the exact failure the earlier
   // lock-timeout gap allowed), and a generous-but-bounded statement_timeout for the large read scans
   // and the CONCURRENTLY builds. The transactional phase tightens statement_timeout via SET LOCAL.
-  await client.unsafe(`set lock_timeout = '${LOCK_TIMEOUT}'; set statement_timeout = '${CONCURRENT_STATEMENT_TIMEOUT}';`);
+  await client.unsafe(`set lock_timeout = '${LOCK_TIMEOUT_MS}'; set statement_timeout = '${CONCURRENT_STATEMENT_TIMEOUT_MS}';`);
+
+  // Positively attest this session's identity so the post-run leak check has a proven selector.
+  const [appRow] = await client<{ app: string }[]>`select current_setting('application_name') as app`;
+  if (appRow?.app !== 'ps-497-migration-0104') {
+    throw new Error(`unexpected application_name '${appRow?.app}' — refusing to proceed under an unattested session identity`);
+  }
+  console.log(`[ps-497-0104] session application_name=${appRow.app}`);
 
   // Exact-catalog inspection. `ready` requires EVERY object to match its exact definition, so a
   // malformed same-named table/index/column/FK/CHECK can never satisfy already_applied.
@@ -165,7 +194,14 @@ async function main(): Promise<void> {
       if (got.data_type !== want.type) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} type=${got.data_type} want ${want.type}`); }
       const wantNullable = want.nullable ? 'YES' : 'NO';
       if (got.is_nullable !== wantNullable) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} nullable=${got.is_nullable} want ${wantNullable}`); }
-      if (got.column_default !== null) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} has default ${got.column_default}`); }
+      const def = got.column_default;
+      if (want.defaultKind === 'none') {
+        if (def !== null) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} unexpected default ${def}`); }
+      } else if (want.defaultKind === 'nextval') {
+        if (!def || !/^nextval\(/.test(def)) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} default=${def} want a nextval sequence`); }
+      } else if (want.defaultKind === 'now') {
+        if (def !== 'now()') { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} default=${def} want now()`); }
+      }
     }
 
     const idxRows = await client<{ name: string; def: string; valid: boolean }[]>`
@@ -199,12 +235,16 @@ async function main(): Promise<void> {
       if (got.def !== want) { checksOk = false; mismatches.push(`check:${name} def mismatch: ${got.def}`); }
     }
 
-    const fkRows = await client<{ tbl: string; col: string; ref: string; refcol: string }[]>`
-      select r.relname as tbl, a.attname as col, cr.relname as ref, ca.attname as refcol
+    const fkRows = await client<
+      { tbl: string; col: string; refschema: string; ref: string; refcol: string; upd: string; del: string; mt: string; keylen: number | null }[]
+    >`
+      select r.relname as tbl, a.attname as col, ns.nspname as refschema, cr.relname as ref, ca.attname as refcol,
+             con.confupdtype as upd, con.confdeltype as del, con.confmatchtype as mt, array_length(con.conkey, 1) as keylen
       from pg_constraint con
       join pg_class r on r.oid = con.conrelid
       join pg_namespace n on n.oid = r.relnamespace
       join pg_class cr on cr.oid = con.confrelid
+      join pg_namespace ns on ns.oid = cr.relnamespace
       join pg_attribute a on a.attrelid = con.conrelid and a.attnum = con.conkey[1]
       join pg_attribute ca on ca.attrelid = con.confrelid and ca.attnum = con.confkey[1]
       where con.contype = 'f' and n.nspname = 'public'
@@ -216,31 +256,39 @@ async function main(): Promise<void> {
     for (const want of EXPECTED_FKS) {
       const got = fkRows.find((r) => r.tbl === want.table && r.col === want.column);
       if (!got) { fksOk = false; mismatches.push(`fk:${want.table}.${want.column} missing`); continue; }
-      if (got.ref !== want.refTable || got.refcol !== want.refColumn) {
+      if (got.refschema !== want.refSchema || got.ref !== want.refTable || got.refcol !== want.refColumn) {
         fksOk = false;
-        mismatches.push(`fk:${want.table}.${want.column} -> ${got.ref}.${got.refcol} want ${want.refTable}.${want.refColumn}`);
+        mismatches.push(`fk:${want.table}.${want.column} -> ${got.refschema}.${got.ref}.${got.refcol} want ${want.refSchema}.${want.refTable}.${want.refColumn}`);
+      }
+      // NO ACTION on update/delete ('a'), MATCH SIMPLE ('s'), single-column key. A weakened FK
+      // (e.g. ON DELETE CASCADE, or a composite/mismatched key) is a different contract and fails closed.
+      if (got.upd !== 'a' || got.del !== 'a' || got.mt !== 's' || got.keylen !== 1) {
+        fksOk = false;
+        mismatches.push(`fk:${want.table}.${want.column} upd=${got.upd} del=${got.del} match=${got.mt} keylen=${got.keylen} want a/a/s/1`);
       }
     }
 
-    const q0090 = await client<{ has_0090: boolean }[]>`
-      select exists (
-        select 1 from pg_constraint con
-        join pg_class r on r.oid = con.conrelid
-        join pg_namespace n on n.oid = r.relnamespace
-        where n.nspname = 'public' and r.relname = 'fulfillment_line_claims'
-          and con.conname = 'fulfillment_line_claims_quantity_state_check'
-      ) as has_0090
+    const pkRows = await client<{ name: string; def: string }[]>`
+      select con.conname as name, pg_get_constraintdef(con.oid) as def
+      from pg_constraint con
+      join pg_class r on r.oid = con.conrelid
+      join pg_namespace n on n.oid = r.relnamespace
+      where n.nspname = 'public' and con.contype = 'p' and con.conname = any(${Object.keys(EXPECTED_PK)})
     `;
-    const has_0090 = q0090[0]?.has_0090 ?? false;
-
+    let pkOk = true;
+    for (const [name, want] of Object.entries(EXPECTED_PK)) {
+      const got = pkRows.find((r) => r.name === name);
+      if (!got) { pkOk = false; mismatches.push(`pk:${name} missing`); continue; }
+      if (got.def !== want) { pkOk = false; mismatches.push(`pk:${name} def mismatch: ${got.def}`); }
+    }
     return {
       state: {
         occurrences_table: has_table,
         columns_ok: columnsOk,
         indexes_ok: indexesOk,
         checks_ok: checksOk,
+        pk_ok: pkOk,
         fks_ok: fksOk,
-        quantity_state_check_intact: has_0090,
       },
       mismatches,
     };
@@ -351,17 +399,8 @@ async function main(): Promise<void> {
     const beforeTotal = await totalClaims();
     const beforeSnap = await snapshot(beforeMaxId);
 
-    // TEST-ONLY seam (no-op in production): simulate concurrent app activity landing in the apply
-    // window, so the apply-lane suite can deterministically prove concurrent-insert tolerance and
-    // the concurrent-update conservative red. Only fires when the env var is explicitly set.
-    const testHook = process.env.PS497_APPLY_TEST_PRE_APPLY_SQL;
-    if (testHook) {
-      console.log('[ps-497-0104] TEST HOOK: executing injected pre-apply SQL');
-      await client.unsafe(testHook);
-    }
-
     await client.begin(async (tx) => {
-      await tx.unsafe(`set local lock_timeout = '${LOCK_TIMEOUT}'; set local statement_timeout = '${TXN_STATEMENT_TIMEOUT}';`);
+      await tx.unsafe(`set local lock_timeout = '${LOCK_TIMEOUT_MS}'; set local statement_timeout = '${TXN_STATEMENT_TIMEOUT_MS}';`);
       const [t] = await tx<{ lt: string; st: string }[]>`select current_setting('lock_timeout') as lt, current_setting('statement_timeout') as st`;
       console.log(`[ps-497-0104] txn timeouts lock_timeout=${t?.lt} statement_timeout=${t?.st}`);
       await tx.unsafe(transactional);
