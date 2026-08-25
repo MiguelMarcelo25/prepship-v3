@@ -282,6 +282,69 @@ async function main(): Promise<void> {
     ok('fail-closed (d): a same-named table lacking the id-serial / timestamp-default contract is caught by the catalog default checks');
   }
 
+  // 5e) A FK that looks exactly right (source/ref/actions/match/key) but is NOT VALID. Only the
+  // convalidated check catches it.
+  {
+    const db = await freshDb();
+    assert.equal((await runRunner(db, ['--apply', CONFIRM])).code, 0, 'baseline apply for the NOT-VALID-FK case');
+    const c = conn(db);
+    await c.unsafe(`
+      alter table public.fulfillment_line_claims drop constraint fulfillment_line_claims_occurrence_id_fkey;
+      alter table public.fulfillment_line_claims add constraint fulfillment_line_claims_occurrence_id_fkey
+        foreign key (occurrence_id) references public.fulfillment_occurrences(id) not valid;
+    `);
+    await c.end({ timeout: 5 });
+    const r = await runRunner(db, ['--apply', CONFIRM]);
+    assert.notEqual(r.code, 0, 'apply over an expected-shaped but NOT VALID FK fails closed');
+    assert.ok(/NOT VALIDATED/.test(r.err), 'the FK validation-state check is the deciding factor');
+    ok('fail-closed (e): an expected-looking FK that is NOT VALID is caught by the convalidated check');
+  }
+
+  // 5f) The expected PK NAME on a decoy relation, while fulfillment_occurrences' own PK is renamed
+  // away. Only binding the PK lookup to the owning relation catches it.
+  {
+    const db = await freshDb();
+    assert.equal((await runRunner(db, ['--apply', CONFIRM])).code, 0, 'baseline apply for the decoy-PK case');
+    const c = conn(db);
+    await c.unsafe(`
+      alter table public.fulfillment_occurrences rename constraint fulfillment_occurrences_pkey to fulfillment_occurrences_pk_renamed;
+      create table public.decoy_pk (id integer constraint fulfillment_occurrences_pkey primary key);
+    `);
+    await c.end({ timeout: 5 });
+    const r = await runRunner(db, ['--apply', CONFIRM]);
+    assert.notEqual(r.code, 0, 'apply fails closed when the expected PK name lives on a decoy relation');
+    assert.ok(/pk:fulfillment_occurrences_pkey missing/.test(r.err), 'the PK lookup is bound to fulfillment_occurrences, not any public relation');
+    ok('fail-closed (f): an expected PK name on a decoy relation cannot satisfy pk_ok');
+  }
+
+  // 5g) id defaults from a WRONG, unowned sequence. The exact-default and OWNED-BY sequence checks
+  // both catch it — "some nextval" is not accepted.
+  {
+    const db = await freshDb();
+    const c = conn(db);
+    await c.unsafe(`
+      create sequence public.wrong_seq;
+      create table public.fulfillment_occurrences (
+        id integer not null default nextval('public.wrong_seq'::regclass) primary key,
+        order_id integer not null references public.orders(id),
+        shipment_id integer,
+        occurrence_key text not null,
+        discriminator_kind text not null,
+        first_seen_source text not null,
+        superseded_by_occurrence_id integer references public.fulfillment_occurrences(id),
+        effective_at timestamptz not null,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        constraint fulfillment_occurrences_kind_chk
+          check (discriminator_kind in ('provider_shipment','local_shipment','whole_order'))
+      )`);
+    await c.end({ timeout: 5 });
+    const r = await runRunner(db, ['--apply', CONFIRM]);
+    assert.notEqual(r.code, 0, 'apply over an id defaulting from a wrong/unowned sequence fails closed');
+    assert.ok(/sequence: id owned-sequence/.test(r.err), 'the OWNED-BY sequence-identity check is the deciding factor');
+    ok('fail-closed (g): an id default from a wrong/unowned sequence is caught by the exact-default + OWNED-BY checks');
+  }
+
   // 6) Invalid-index recovery: corrupt one concurrent index into INVALID, then the runner rebuilds it.
   {
     const db = await freshDb();

@@ -107,6 +107,7 @@ type SchemaState = {
   indexes_ok: boolean;
   checks_ok: boolean;
   pk_ok: boolean;
+  seq_ok: boolean;
   fks_ok: boolean;
 };
 type Inspection = { state: SchemaState; mismatches: string[] };
@@ -198,7 +199,11 @@ async function main(): Promise<void> {
       if (want.defaultKind === 'none') {
         if (def !== null) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} unexpected default ${def}`); }
       } else if (want.defaultKind === 'nextval') {
-        if (!def || !/^nextval\(/.test(def)) { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} default=${def} want a nextval sequence`); }
+        // Exact default: the id must default from THIS table's own sequence, not merely some nextval.
+        if (def !== "nextval('fulfillment_occurrences_id_seq'::regclass)") {
+          columnsOk = false;
+          mismatches.push(`column:${want.table}.${want.column} default=${def} want nextval('fulfillment_occurrences_id_seq'::regclass)`);
+        }
       } else if (want.defaultKind === 'now') {
         if (def !== 'now()') { columnsOk = false; mismatches.push(`column:${want.table}.${want.column} default=${def} want now()`); }
       }
@@ -236,10 +241,11 @@ async function main(): Promise<void> {
     }
 
     const fkRows = await client<
-      { tbl: string; col: string; refschema: string; ref: string; refcol: string; upd: string; del: string; mt: string; keylen: number | null }[]
+      { tbl: string; col: string; refschema: string; ref: string; refcol: string; upd: string; del: string; mt: string; keylen: number | null; validated: boolean }[]
     >`
       select r.relname as tbl, a.attname as col, ns.nspname as refschema, cr.relname as ref, ca.attname as refcol,
-             con.confupdtype as upd, con.confdeltype as del, con.confmatchtype as mt, array_length(con.conkey, 1) as keylen
+             con.confupdtype as upd, con.confdeltype as del, con.confmatchtype as mt, array_length(con.conkey, 1) as keylen,
+             con.convalidated as validated
       from pg_constraint con
       join pg_class r on r.oid = con.conrelid
       join pg_namespace n on n.oid = r.relnamespace
@@ -260,20 +266,28 @@ async function main(): Promise<void> {
         fksOk = false;
         mismatches.push(`fk:${want.table}.${want.column} -> ${got.refschema}.${got.ref}.${got.refcol} want ${want.refSchema}.${want.refTable}.${want.refColumn}`);
       }
-      // NO ACTION on update/delete ('a'), MATCH SIMPLE ('s'), single-column key. A weakened FK
-      // (e.g. ON DELETE CASCADE, or a composite/mismatched key) is a different contract and fails closed.
+      // NO ACTION on update/delete ('a'), MATCH SIMPLE ('s'), single-column key, and VALIDATED. A
+      // weakened FK (ON DELETE CASCADE, composite key, or — the round-4 gap — NOT VALID) is a
+      // different contract and fails closed.
       if (got.upd !== 'a' || got.del !== 'a' || got.mt !== 's' || got.keylen !== 1) {
         fksOk = false;
         mismatches.push(`fk:${want.table}.${want.column} upd=${got.upd} del=${got.del} match=${got.mt} keylen=${got.keylen} want a/a/s/1`);
       }
+      if (!got.validated) {
+        fksOk = false;
+        mismatches.push(`fk:${want.table}.${want.column} NOT VALIDATED`);
+      }
     }
 
+    // PK bound to fulfillment_occurrences itself (r.relname), so a decoy PK of the expected name on
+    // another public relation cannot satisfy pk_ok.
     const pkRows = await client<{ name: string; def: string }[]>`
       select con.conname as name, pg_get_constraintdef(con.oid) as def
       from pg_constraint con
       join pg_class r on r.oid = con.conrelid
       join pg_namespace n on n.oid = r.relnamespace
-      where n.nspname = 'public' and con.contype = 'p' and con.conname = any(${Object.keys(EXPECTED_PK)})
+      where n.nspname = 'public' and r.relname = 'fulfillment_occurrences'
+        and con.contype = 'p' and con.conname = any(${Object.keys(EXPECTED_PK)})
     `;
     let pkOk = true;
     for (const [name, want] of Object.entries(EXPECTED_PK)) {
@@ -281,6 +295,17 @@ async function main(): Promise<void> {
       if (!got) { pkOk = false; mismatches.push(`pk:${name} missing`); continue; }
       if (got.def !== want) { pkOk = false; mismatches.push(`pk:${name} def mismatch: ${got.def}`); }
     }
+
+    // The id column's default sequence must be OWNED BY public.fulfillment_occurrences.id, not just
+    // "some nextval". pg_get_serial_sequence returns the owned sequence (schema-qualified) or NULL.
+    const [seqRow] = await client<{ seq: string | null }[]>`
+      select case
+               when to_regclass('public.fulfillment_occurrences') is null then null
+               else pg_get_serial_sequence('public.fulfillment_occurrences', 'id')
+             end as seq
+    `;
+    const pkSeqOk = seqRow?.seq === 'public.fulfillment_occurrences_id_seq';
+    if (!pkSeqOk) mismatches.push(`sequence: id owned-sequence=${seqRow?.seq} want public.fulfillment_occurrences_id_seq`);
     return {
       state: {
         occurrences_table: has_table,
@@ -288,6 +313,7 @@ async function main(): Promise<void> {
         indexes_ok: indexesOk,
         checks_ok: checksOk,
         pk_ok: pkOk,
+        seq_ok: pkSeqOk,
         fks_ok: fksOk,
       },
       mismatches,
