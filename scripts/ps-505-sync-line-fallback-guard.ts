@@ -45,9 +45,12 @@ assert.notEqual(factsStart, -1, 'shipment-sync must build providerLines');
 const factsBlock = syncSource.slice(factsStart, factsStart + 1400);
 
 check('provider-supplied lines are still preferred', () => {
+  // PS-497 Release B: shipment-sync tags the provider-line branch with evidence='exact_shipment' (shipment-
+  // scoped lines deduct even for a split) and the fallback branch with whole_order_fallback + soleOutbound;
+  // the provider payload still wins when it has lines.
   assert.match(
     factsBlock,
-    /providerLines\s*\?\s*\{\s*kind:\s*'exact'\s*as const,\s*lines:\s*providerLines\s*\}/,
+    /providerLines\s*\?\s*\{\s*kind:\s*'exact'\s*as const,\s*evidence:\s*'exact_shipment'\s*as const,\s*lines:\s*providerLines\s*\}/,
     'the provider payload must win when it has lines'
   );
 });
