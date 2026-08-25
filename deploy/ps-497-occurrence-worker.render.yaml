@@ -1,0 +1,52 @@
+# PS-497 Slice 2 Release B — the DEDICATED, ISOLATED occurrence-deduction worker service.
+#
+# Per user override unlock shipped data on 2026-08-25: this is the checked-in, reviewable configuration for the
+# separate Render worker process that owns inventory movement (Hermes #6b). It is applied by the operator on
+# Render at execution-canary time; it is NOT on any auto-deploy path and moves nothing until DJ flips the flags.
+#
+# The critical invariant: the master switch INVENTORY_AUTO_DEDUCT is ON in THIS process only. Because
+# booleanFlag(true) means "unset resolves to ON", the API and the generic scheduler services MUST set
+# INVENTORY_AUTO_DEDUCT=false EXPLICITLY (see the second block) so the master is authoritative in exactly one
+# place — this worker.
+services:
+  # ── The occurrence-deduction worker (the ONLY process that moves stock) ──────────────────────────────────
+  - type: worker
+    name: ps497-occurrence-deduction-worker
+    env: node
+    plan: starter
+    autoDeploy: false            # never CI-auto-deploy the money-moving worker; operator promotes it explicitly
+    startCommand: npm run start:occurrence-worker
+    healthCheckPath: ""          # a worker has no HTTP port; health is the durable worker_status_events stream
+    envVars:
+      - key: INVENTORY_AUTO_DEDUCT          # master ON — HERE ONLY
+        value: "true"
+      - key: FULFILLMENT_OCCURRENCE_EXECUTION  # narrow execution canary ON
+        value: "true"
+      - key: FULFILLMENT_OCCURRENCE_PROJECTION # projection ON (identity + intent minting)
+        value: "true"
+      - key: FULFILLMENT_OCCURRENCE_SCOPE_MODE
+        value: canary            # canary first; broaden only after DJ verifies eligible movements
+      - key: FULFILLMENT_OCCURRENCE_PREPROJECTION_MAX_ID
+        sync: false              # operator freezes this to the pre-projection max occurrence id at cutover
+      - key: FULFILLMENT_OCCURRENCE_SCOPE_CLIENT_IDS
+        sync: false              # operator sets the approved client allowlist (fail-closed if empty)
+      - key: FULFILLMENT_OCCURRENCE_SCOPE_STORE_IDS
+        sync: false
+      - key: FULFILLMENT_OCCURRENCE_SCOPE_ORDER_IDS
+        sync: false
+      - key: WORKER_STATUS_EVENTS_DURABLE   # durable operational health (start/heartbeat/complete/failed)
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+
+# ── REQUIRED companion configuration on the EXISTING services (documented; applied on their own service) ─────
+# The API web service and the generic scheduler/worker service MUST set the master switch OFF explicitly, so the
+# occurrence worker above is the sole authority for movement:
+#
+#   prepship-api            : INVENTORY_AUTO_DEDUCT=false, FULFILLMENT_OCCURRENCE_EXECUTION=false
+#   prepship-generic-worker : INVENTORY_AUTO_DEDUCT=false, FULFILLMENT_OCCURRENCE_EXECUTION=false
+#
+# (FULFILLMENT_OCCURRENCE_PROJECTION may be ON everywhere — projection only stamps identity + mints durable,
+#  execution-gated intent; it never moves stock.)

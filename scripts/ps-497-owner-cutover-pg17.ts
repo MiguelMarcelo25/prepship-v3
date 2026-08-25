@@ -134,7 +134,12 @@ async function main(): Promise<void> {
   const occ3 = new Set(c3.map((c) => c.occurrence_id));
   assert.equal(occ3.size, 1, 'both converging writers share one occurrence');
   assert.equal(c3.filter((c) => c.direction === 'deduct').length, 1, 'the second writer collapses to the same claim (onConflict)');
-  ok('two converging writers on one occurrence -> single occurrence + single claim set (onConflictDoNothing)');
+  // Hermes #4: the SECOND (zero-winner) writer inserts nothing (onConflictDoNothing returns []), so it derives
+  // enqueue eligibility from ZERO returned winners and mints NO second occurrence intent.
+  const o3 = await outboxFor(3);
+  assert.equal(o3.filter((o) => o.event_type === 'fulfillment_occurrence_deduction_requested').length, 1,
+    'a zero-winner converging writer mints no additional occurrence intent (enqueue authority is the returned winners)');
+  ok('two converging writers on one occurrence -> single occurrence + single claim set + EXACTLY ONE intent (zero-winner mints nothing)');
 
   // 4) missing sku -> review, supply stays prepship, no intent (supply gates, does not annotate).
   await raw`insert into orders (id, client_id, store_id, order_status) values (4, 7, 3, 'awaiting_shipment')`;

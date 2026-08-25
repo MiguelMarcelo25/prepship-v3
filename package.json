@@ -1018,6 +1018,11 @@
     "ps-497:manifest": "tsx scripts/ps-497-recovery-manifest-generator.ts",
     "test:ps-497-owner-cutover-pg17": "tsx scripts/ps-497-owner-cutover-pg17.ts",
     "test:ps-497-occurrence-worker-pg17": "tsx scripts/ps-497-occurrence-worker-pg17.ts",
+    "test:ps-497-occurrence-worker-execoff-pg17": "tsx scripts/ps-497-occurrence-worker-execoff-pg17.ts",
+    "test:ps-497-review-resolver-pg17": "tsx scripts/ps-497-review-resolver-pg17.ts",
+    "test:ps-497-review-route-authz": "tsx scripts/ps-497-review-route-authz-guard.ts",
+    "test:ps-497-supersession-pg17": "tsx scripts/ps-497-supersession-pg17.ts",
+    "test:ps-497-flags-off-pg17": "tsx scripts/ps-497-flags-off-pg17.ts",
     "start:occurrence-worker": "tsx src/workers/occurrence-deduction-worker.ts",
     "test:ps-497-occurrence-worker-isolation": "tsx scripts/ps-497-occurrence-worker-isolation-guard.ts",
     "test:ps-497-shipped-outcome-invariant-pglite": "tsx scripts/ps-497-shipped-outcome-invariant-pglite.ts"

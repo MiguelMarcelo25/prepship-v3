@@ -19,18 +19,30 @@ import {
   assertExecutionScopeReady,
 } from '../services/fulfillment/occurrence-execution-scope.js';
 import { processFulfillmentOccurrenceOutboxOnce } from '../services/fulfillment/occurrence-deduction-outbox.js';
+// Durable operational health (Hermes #6b): the same worker-status-events convention the other workers use. It
+// is import-safe here — it pulls only the db client + env + the readiness gate, never the generic
+// scheduler/job-queue (the isolation guard confirms this). NO-OP until WORKER_STATUS_EVENTS_DURABLE is on.
+import { recordWorkerStatusEvent } from '../services/worker-status-events.js';
 
+const WORKER_SERVICE = 'occurrence-deduction-worker';
 const POLL_INTERVAL_MS = 5_000;
 const BATCH_LIMIT = 100;
+// Emit a durable heartbeat at most this often (independent of activity) so "was the worker stuck 14:32-15:17"
+// is answerable during an incident review, matching the worker-status retention rationale.
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 let running = true;
-let lastHeartbeat = { at: 0, claimed: 0, applied: 0, parked: 0, lockedDown: 0 };
+// Cumulative operational counters (processed/applied/parked/fenced/locked-down/eligible) since boot.
+const totals = { ticks: 0, claimed: 0, applied: 0, parked: 0, lockedDown: 0, fenced: 0 };
+let lastActivityAt = 0;
+let lastHeartbeatAt = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function main(): Promise<void> {
+  const pid = process.pid;
   // Startup refusal: an off flag or an invalid scope must not silently run.
   if (!env.FULFILLMENT_OCCURRENCE_EXECUTION) {
     console.log('[occurrence-worker] FULFILLMENT_OCCURRENCE_EXECUTION is OFF — the occurrence lane is parked; exiting.');
@@ -44,6 +56,10 @@ async function main(): Promise<void> {
   assertExecutionScopeReady(scope); // throws on empty/malformed scope or a missing canary floor
   await assertRuntimeSchemaReady(); // the executor needs the occurrence schema present; fail boot closed
   console.log(`[occurrence-worker] started: mode=${scope.mode} floor=${scope.preProjectionMaxId ?? 'n/a'} clients=${scope.clientIds.length} stores=${scope.storeIds.length} orders=${scope.orderIds.length}`);
+  await recordWorkerStatusEvent({
+    service: WORKER_SERVICE, pid, eventType: 'job_start',
+    details: { mode: scope.mode, floor: scope.preProjectionMaxId, clients: scope.clientIds.length, stores: scope.storeIds.length, orders: scope.orderIds.length },
+  });
 
   const onSignal = (signal: NodeJS.Signals) => { console.log(`[occurrence-worker] ${signal} received — draining current batch then stopping.`); running = false; };
   process.on('SIGTERM', onSignal);
@@ -52,16 +68,39 @@ async function main(): Promise<void> {
   while (running) {
     try {
       const result = await processFulfillmentOccurrenceOutboxOnce({ limit: BATCH_LIMIT });
-      lastHeartbeat = { at: Date.now(), ...result };
+      totals.ticks += 1;
+      totals.claimed += result.claimed;
+      totals.applied += result.applied;
+      totals.parked += result.parked;
+      totals.lockedDown += result.lockedDown;
+      totals.fenced += result.fenced;
+      const now = Date.now();
       if (result.claimed > 0) {
-        console.log(`[occurrence-worker] processed claimed=${result.claimed} applied=${result.applied} parked=${result.parked} lockedDown=${result.lockedDown}`);
+        lastActivityAt = now;
+        console.log(`[occurrence-worker] processed claimed=${result.claimed} applied=${result.applied} parked=${result.parked} fenced=${result.fenced} lockedDown=${result.lockedDown}`);
+        // eligible = rows the worker acted on this tick (claimed - lockedDown - fenced settle terminally or move).
+        await recordWorkerStatusEvent({
+          service: WORKER_SERVICE, pid, eventType: 'job_complete',
+          details: { claimed: result.claimed, applied: result.applied, parked: result.parked, fenced: result.fenced, lockedDown: result.lockedDown, totals },
+        });
+      }
+      // Durable heartbeat on a fixed cadence regardless of activity, so a stuck/idle worker is still observable.
+      if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+        lastHeartbeatAt = now;
+        await recordWorkerStatusEvent({
+          service: WORKER_SERVICE, pid, eventType: 'heartbeat',
+          details: { totals, lastActivityAt, mode: scope.mode },
+        });
       }
     } catch (error) {
-      console.error('[occurrence-worker] drain error:', error instanceof Error ? error.message : error);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[occurrence-worker] drain error:', message);
+      await recordWorkerStatusEvent({ service: WORKER_SERVICE, pid, eventType: 'job_failed', details: { message, totals } });
     }
     if (running) await sleep(POLL_INTERVAL_MS);
   }
-  console.log('[occurrence-worker] stopped. last heartbeat:', JSON.stringify(lastHeartbeat));
+  await recordWorkerStatusEvent({ service: WORKER_SERVICE, pid, eventType: 'heartbeat', details: { stopped: true, totals, lastActivityAt } });
+  console.log('[occurrence-worker] stopped. totals:', JSON.stringify(totals));
 }
 
 main().catch((error) => {

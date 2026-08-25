@@ -68,8 +68,23 @@ jobs:
       - name: Release B — owner cutover (real PG17)
         run: npm run -s test:ps-497-owner-cutover-pg17
 
-      - name: Release B — occurrence executor + worker MOVE STOCK (real PG17)
+      - name: Release B — FULL owner->outbox->worker->executor->ledger money path (real PG17, Hermes #2)
         run: npm run -s test:ps-497-occurrence-worker-pg17
+
+      - name: Release B — worker keeps intent retryable with execution OFF (real PG17, Hermes #2)
+        run: npm run -s test:ps-497-occurrence-worker-execoff-pg17
+
+      - name: Release B — review-resolver re-derivation matrix (real PG17, Hermes #3)
+        run: npm run -s test:ps-497-review-resolver-pg17
+
+      - name: Release B — review route authorization (inventory:write, Hermes #1)
+        run: npm run -s test:ps-497-review-route-authz
+
+      - name: Release B — supersession contention + rollback (real PG17, Hermes #6c)
+        run: npm run -s test:ps-497-supersession-pg17
+
+      - name: Release B — flags-off durable-intent contract (real PG17, Hermes #8)
+        run: npm run -s test:ps-497-flags-off-pg17
 
       - name: Release B — resolver-adapted Release A suite (real PG17)
         run: npm run -s test:ps-497-slice2-release-a-pg17
@@ -86,6 +101,9 @@ jobs:
           npm run -s test:inventory-auto-deduct
           npm run -s test:audit-pg-boss-inventory-outbox
           npm run -s test:ps-450-inventory-outbox
+          npm run -s test:ps-424-order-lifecycle
+          npm run -s test:ps-432-sync-fulfillment-resilience
+          npm run -s test:ps-497-shipment-fulfillment-lines
 
       - name: Release B — additive-only DDL (runtime DDL guard)
         run: node scripts/runtime-ddl-guard.mjs
@@ -100,5 +118,8 @@ jobs:
           src/services/fulfillment/resolve-occurrence-review.ts
           src/services/fulfillment/resolve-fulfillment-occurrence.ts
           src/services/fulfillment/line-supply-policy.ts
+          src/services/fulfillment/inventory-deduction-outbox.ts
+          src/services/fulfillment/inventory-deduction-report.ts
           src/workers/occurrence-deduction-worker.ts
+          src/routes/fulfillment-review.ts
           scripts/lib/ps-497-shipped-outcome-cases.ts

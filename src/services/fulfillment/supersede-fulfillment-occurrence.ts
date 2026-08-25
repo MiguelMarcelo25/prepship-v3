@@ -46,6 +46,12 @@ export async function supersedeFulfillmentOccurrence(
   if (Number(from.orderId) !== orderId || Number(to.orderId) !== orderId) {
     throw new Error(`supersession spans orders: occurrences must both belong to order ${orderId}`);
   }
+  // Competing-supersession safety (Hermes #6c): once locked, refuse an already-superseded `from` rather than
+  // last-writer-wins overwriting superseded_by. Two concurrent supersedes serialize on the FOR UPDATE lock;
+  // the first commits, the second sees supersededBy set and refuses — a single authoritative winner.
+  if (from.supersededBy != null) {
+    throw new Error(`occurrence ${fromOccurrenceId} is already superseded by ${from.supersededBy}`);
+  }
 
   // Cycle guard: walk the `to` supersession chain; refuse if it reaches `from`.
   let cursor: number | null = to.supersededBy;
