@@ -26,6 +26,8 @@ import ratesRoute from './routes/rates';
 import labelsRoute from './routes/labels';
 import syncRoute from './routes/sync';
 import inventoryRoute from './routes/inventory';
+// Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.6) operator review-resolver.
+import fulfillmentReviewRoute from './routes/fulfillment-review';
 import locationsRoute from './routes/locations';
 import settingsRoute from './routes/settings';
 import billingRoute from './routes/billing';
@@ -143,6 +145,8 @@ const protectedPrefixes = [
   '/replacements',
   '/shipments',
   '/packages',
+  // PS-497 Release B (S2.6): operator review-resolver requires auth like every other protected router.
+  '/fulfillment-review',
   '/clients',
   '/rates',
   '/labels',
@@ -203,6 +207,7 @@ app.route('/rates', ratesRoute);
 app.route('/labels', labelsRoute);
 app.route('/sync', syncRoute);
 app.route('/inventory', inventoryRoute);
+app.route('/fulfillment-review', fulfillmentReviewRoute);
 app.route('/locations', locationsRoute);
 app.route('/settings', settingsRoute);
 app.route('/billing', billingRoute);
