@@ -10,10 +10,20 @@ import { env } from '../lib/env';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { fulfillmentLineClaims, orderLifecycleEvents } from '../db/schema/order-lifecycle';
+import { fulfillmentOccurrences } from '../db/schema/fulfillment-occurrences';
 import { orders } from '../db/schema/orders';
+import { clients } from '../db/schema/clients';
 import { consumeOutboundPackage } from './package-consumption';
 import { applyInventoryMovementInTransaction } from './inventory-movement';
 import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
+// Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4e) narrow occurrence
+// executor. isInventoryAutoDeductEnabled() and its two call sites are LEFT BYTE-UNCHANGED so the narrow gate
+// cannot widen the legacy/package/bundle/replacement paths.
+import {
+  readOccurrenceExecutionScope,
+  assertExecutionScopeReady,
+  claimEligibleForExecution,
+} from './fulfillment/occurrence-execution-scope';
 
 type OrderForDeduction = {
   id: number;
@@ -331,6 +341,181 @@ export async function applyInventoryClaimsForLifecycleEvent(
       else applied += 1;
     }
 
+    return { applied, alreadyApplied, lockedDown: false };
+  });
+}
+
+// Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4e). The NARROW execution
+// gate: BOTH the broad master AND the occurrence-only canary must be ON. Distinct from
+// isInventoryAutoDeductEnabled() (byte-unchanged above) so the occurrence canary can never re-enable the
+// legacy mutable-order, package, bundle, or replacement deduction paths.
+let occurrenceExecutionLogged = false;
+function isOccurrenceExecutionEnabled(): boolean {
+  const enabled = env.INVENTORY_AUTO_DEDUCT && env.FULFILLMENT_OCCURRENCE_EXECUTION;
+  if (!occurrenceExecutionLogged) {
+    occurrenceExecutionLogged = true;
+    console.log(
+      `[fulfillment-deductions] FULFILLMENT_OCCURRENCE_EXECUTION resolved: ${enabled ? 'ON (occurrence-only canary active — master AND execution both ON)' : 'OFF (occurrence lane parked)'}`,
+    );
+  }
+  return enabled;
+}
+
+/**
+ * Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4e). Apply the pending
+ * claims for ONE occurrence. The SOLE caller is the dedicated occurrence worker (S2.4x). Movement flows only
+ * through the unchanged applyInventoryMovementInTransaction owner. The legacy executor above is untouched and
+ * is not refactored to share this path (lockdown discipline).
+ *
+ * Defense in depth, independent of the SELECT: the occurrence row is locked FOR UPDATE and re-verified
+ * not-superseded; every claim re-passes the full structural + scope fence (occurrence-execution-scope owner)
+ * under lock; the test-client no-movement rule is re-enforced; and the idempotency key is DERIVED + VERIFIED
+ * from occId+canonical_line_identity+direction so a lifecycle-scoped key can never reach a movement.
+ */
+export async function applyOccurrenceClaims(
+  occurrenceId: number,
+  conn: Pick<typeof db, 'transaction'> = db,
+): Promise<FulfillmentClaimApplicationResult> {
+  if (!isOccurrenceExecutionEnabled()) {
+    return { applied: 0, alreadyApplied: 0, lockedDown: true };
+  }
+  if (conn !== db && process.env.NODE_ENV !== 'test') {
+    throw new Error('Occurrence claim executor may only be injected in tests');
+  }
+  const scope = readOccurrenceExecutionScope();
+  assertExecutionScopeReady(scope);
+  if (conn === db) await ensureInventoryLedgerSchema();
+
+  return conn.transaction(async (tx) => {
+    const [occ] = await tx
+      .select({
+        id: fulfillmentOccurrences.id,
+        orderId: fulfillmentOccurrences.orderId,
+        supersededBy: fulfillmentOccurrences.supersededByOccurrenceId,
+        effectiveAt: fulfillmentOccurrences.effectiveAt,
+      })
+      .from(fulfillmentOccurrences)
+      .where(eq(fulfillmentOccurrences.id, occurrenceId))
+      .for('update')
+      .limit(1);
+    if (!occ) throw new Error(`Occurrence ${occurrenceId} does not exist`);
+    if (occ.supersededBy != null) return { applied: 0, alreadyApplied: 0, lockedDown: false };
+
+    const [order] = await tx
+      .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId, orderNumber: orders.orderNumber })
+      .from(orders)
+      .where(eq(orders.id, occ.orderId))
+      .limit(1);
+    if (!order) throw new Error(`Occurrence order ${occ.orderId} no longer exists`);
+
+    const isTestClient = order.clientId != null
+      ? ((await tx.select({ isTest: clients.isTest }).from(clients).where(eq(clients.id, order.clientId)).limit(1))[0]?.isTest === true)
+      : false;
+
+    const claims = await tx
+      .select()
+      .from(fulfillmentLineClaims)
+      .where(and(
+        eq(fulfillmentLineClaims.occurrenceId, occurrenceId),
+        eq(fulfillmentLineClaims.status, 'pending'),
+        eq(fulfillmentLineClaims.supply, 'prepship'),
+      ))
+      .orderBy(fulfillmentLineClaims.id)
+      .for('update');
+    if (claims.length === 0) return { applied: 0, alreadyApplied: 0, lockedDown: false };
+
+    let applied = 0;
+    let alreadyApplied = 0;
+    for (const claim of claims) {
+      const gate = claimEligibleForExecution({
+        occurrenceId: claim.occurrenceId,
+        canonicalLineIdentity: claim.canonicalLineIdentity,
+        supply: claim.supply,
+        status: claim.status,
+        superseded: false, // occurrence locked + verified not-superseded above
+        clientId: order.clientId,
+        storeId: order.storeId,
+        orderId: order.id,
+      }, scope);
+      const badQuantity = claim.quantity === null || !Number.isInteger(claim.quantity) || claim.quantity <= 0;
+      const dir = claim.direction === 'deduct' ? 'deduct' : 'reverse';
+      const expectedKey = `inventory:${dir}:occ:${claim.occurrenceId}:line:${claim.canonicalLineIdentity}`;
+      const keyMismatch = claim.idempotencyKey !== expectedKey;
+      if (!gate.eligible || isTestClient || badQuantity || keyMismatch) {
+        await tx
+          .update(fulfillmentLineClaims)
+          .set({
+            status: 'review',
+            lastError: isTestClient ? 'test_client_no_movement'
+              : keyMismatch ? 'non_occurrence_idempotency_key'
+              : badQuantity ? (claim.lastError ?? 'invalid_quantity')
+              : `fenced:${gate.reason}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(fulfillmentLineClaims.id, claim.id));
+        continue;
+      }
+
+      let inventoryId = claim.inventoryId;
+      if (claim.direction === 'deduct') {
+        if (!claim.sku) {
+          await tx.update(fulfillmentLineClaims).set({ status: 'review', lastError: 'missing_sku', updatedAt: new Date() }).where(eq(fulfillmentLineClaims.id, claim.id));
+          continue;
+        }
+        const skuMatches = sql`lower(${inventory.sku}) = lower(${claim.sku})`;
+        let row: { id: number } | null = null;
+        if (order.clientId != null) {
+          const [exact] = await tx.select({ id: inventory.id }).from(inventory)
+            .where(and(eq(inventory.clientId, order.clientId), skuMatches, eq(inventory.active, true))).limit(1);
+          row = exact ?? null;
+        }
+        if (!row) {
+          const [global] = await tx.select({ id: inventory.id }).from(inventory)
+            .where(and(isNull(inventory.clientId), skuMatches, eq(inventory.active, true))).limit(1);
+          row = global ?? null;
+        }
+        if (!row) {
+          const [created] = await tx.insert(inventory)
+            .values({ clientId: order.clientId ?? null, sku: claim.sku, name: claim.name, active: true })
+            .returning({ id: inventory.id });
+          if (!created) throw new Error(`Failed to create inventory row for ${claim.sku}`);
+          row = created;
+        }
+        inventoryId = row.id;
+      }
+      if (!inventoryId) {
+        await tx.update(fulfillmentLineClaims).set({ status: 'review', lastError: 'missing_inventory_identity', updatedAt: new Date() }).where(eq(fulfillmentLineClaims.id, claim.id));
+        continue;
+      }
+
+      // Proven a positive integer by the badQuantity guard above.
+      const quantity: number = claim.quantity as number;
+      const movement = await applyInventoryMovementInTransaction(tx, {
+        inventoryId,
+        type: claim.direction === 'deduct' ? 'ship' : 'return',
+        qty: claim.direction === 'deduct' ? -quantity : quantity,
+        orderId: order.id,
+        note:
+          `${claim.direction === 'deduct' ? 'Fulfill' : 'Void'} order ${order.orderNumber ?? order.id}` +
+          `${claim.shipmentId ? ` / shipment ${claim.shipmentId}` : ''} / occ ${occurrenceId} / line ${claim.lineKey}`,
+        createdBy: `occurrence_lifecycle:${claim.direction}`,
+        effectiveAt: occ.effectiveAt,
+        idempotencyKey: expectedKey,
+        sourceEntity: 'fulfillment_line_claim',
+        sourceId: String(claim.id),
+        nameIfMissing: claim.name,
+      });
+      const appliedAt = new Date();
+      await tx
+        .update(fulfillmentLineClaims)
+        .set({ inventoryId, status: 'applied', attempts: sql`${fulfillmentLineClaims.attempts} + 1`, lastError: null, appliedAt, updatedAt: appliedAt })
+        .where(eq(fulfillmentLineClaims.id, claim.id));
+      if (claim.direction === 'reverse' && claim.originalClaimId) {
+        await tx.update(fulfillmentLineClaims).set({ status: 'reversed', updatedAt: appliedAt }).where(eq(fulfillmentLineClaims.id, claim.originalClaimId));
+      }
+      if (movement.status === 'already_applied') alreadyApplied += 1;
+      else applied += 1;
+    }
     return { applied, alreadyApplied, lockedDown: false };
   });
 }
