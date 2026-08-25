@@ -47,7 +47,7 @@ npm ci --ignore-scripts
 Confirm the migration digest matches the pin before doing anything else:
 
 ```bash
-node -e "const {computeDigest,readVerifiedMigration}=await import('./scripts/ps-497-claim-status-migration-digest.js'); const {text,digest}=readVerifiedMigration(); if(digest!=='62a5b82de9985bc7c396a6b75f516fcd3ac671d507973a0f18088b8ceafddc6d'){console.error('DIGEST MISMATCH');process.exit(1)} console.log('digest OK', digest)"
+npx tsx -e "import { readVerifiedMigration } from './scripts/ps-497-claim-status-migration-digest.ts'; const { digest } = readVerifiedMigration(); if (digest !== '62a5b82de9985bc7c396a6b75f516fcd3ac671d507973a0f18088b8ceafddc6d') { console.error('DIGEST MISMATCH'); process.exit(1); } console.log('digest OK', digest);"
 ```
 
 The runner **refuses to run** if the file does not match this digest, so a tampered migration cannot be applied.

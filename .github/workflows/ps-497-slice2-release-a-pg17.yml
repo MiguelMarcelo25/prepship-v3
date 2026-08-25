@@ -76,6 +76,9 @@ jobs:
       - name: Release A — S2.0 runtime-schema-readiness enrollment fails boot on each missing object (pure)
         run: npm run -s test:ps-497-readiness-enrollment
 
+      - name: Release A — the 0105 operator runbook's mandatory digest command executes (credential-free smoke)
+        run: npm run -s test:ps-497-0105-runbook-smoke
+
       - name: Release A — additive-only DDL (runtime DDL guard)
         run: node scripts/runtime-ddl-guard.mjs
 
@@ -89,5 +92,6 @@ jobs:
           scripts/ps-497-0105-readback.ts
           scripts/ps-497-line-supply-policy-guard.ts
           scripts/ps-497-readiness-enrollment-guard.ts
+          scripts/ps-497-0105-runbook-smoke.ts
           src/services/fulfillment/resolve-fulfillment-occurrence.ts
           src/services/fulfillment/line-supply-policy.ts
