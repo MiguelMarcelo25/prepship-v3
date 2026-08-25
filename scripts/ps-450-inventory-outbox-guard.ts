@@ -41,7 +41,12 @@ assert.ok(
   'kill switch must return before the inventory transaction can write',
 );
 assert.match(claimOwner, /return \{ applied: 0, alreadyApplied: 0, lockedDown: true \}/);
-assert.match(deductionOutbox, /if \(result\.lockedDown\)[\s\S]*throw new Error\('INVENTORY_AUTO_DEDUCT is disabled/);
+// PS-497 Slice 2 Release B (S2.4x): the legacy processor no longer runs a lockedDown-retry — it is fully
+// quarantined (fail-closed throw), since the generic worker no longer claims legacy inventory events and
+// forward deduction runs through the dedicated occurrence lane. The occurrence worker preserves the
+// lockedDown-keeps-retryable semantics for the NEW lane instead.
+assert.match(deductionOutbox, /the legacy inventory_deduction_requested lane is quarantined \(fail-closed\)/);
+assert.match(read('src/services/fulfillment/occurrence-deduction-outbox.ts'), /result\.lockedDown[\s\S]*status = 'pending'/);
 assert.match(outbox, /status IN \('pending', 'failed'\)[\s\S]*next_run_at <= NOW\(\)/);
 assert.match(outbox, /status = 'processing'[\s\S]*updated_at < NOW\(\) -/);
 

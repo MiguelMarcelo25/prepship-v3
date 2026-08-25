@@ -54,12 +54,22 @@ assert(
   'order status catch-up must deduct inventory when it flips awaiting orders to shipped',
 );
 
+// PS-497 Slice 2 Release B (S2.4x): the legacy inventory_deduction_requested lane is QUARANTINED — the
+// generic worker no longer claims it (outbox.ts de-scoped to confirmation-only), the minters are no-ops, and
+// the processor fails closed. Forward deduction now runs through the dedicated, isolated occurrence lane that
+// delegates to the kill-switch-governed executor. Re-anchored to where the durable lane moved; the master
+// kill switch (asserted above) is unchanged.
+const occurrenceOutbox = readFileSync('src/services/fulfillment/occurrence-deduction-outbox.ts', 'utf8');
 assert(
-  deductionOutbox.includes('await applyInventoryClaimsForLifecycleEvent(') &&
-    deductionOutbox.includes('await deductInventoryForOrder(') &&
+  deductionOutbox.includes('quarantined (fail-closed)') &&
     deductionOutbox.includes('INVENTORY_DEDUCTION_OUTBOX_EVENT') &&
-    deductionOutbox.includes('enqueueMissingInventoryDeductions'),
-  'the durable lane must delegate to the kill-switched owner and repair missed events',
+    !deductionOutbox.includes('await deductInventoryForOrder('),
+  'the legacy durable inventory lane must be quarantined (fail-closed, no legacy deductInventoryForOrder execution)',
+);
+assert(
+  occurrenceOutbox.includes("FULFILLMENT_OCCURRENCE_DEDUCTION_OUTBOX_EVENT = 'fulfillment_occurrence_deduction_requested'") &&
+    occurrenceOutbox.includes('applyOccurrenceClaims'),
+  'forward deduction must run through the dedicated occurrence lane -> the kill-switch-governed occurrence executor',
 );
 
 assert(

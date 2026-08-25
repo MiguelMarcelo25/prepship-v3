@@ -73,17 +73,21 @@ assert.doesNotMatch(read('src/services/shipstation-carrier-account-snapshot-work
 assert.match(deductionOwner, /INVENTORY_AUTO_DEDUCT/);
 assert.match(deductionOwner, /inventory:ship:order:/);
 assert.match(deductionOwner, /export async function applyInventoryClaimsForLifecycleEvent/);
-assert.match(deductionOutbox, /await deductInventoryForOrder\(/);
+// PS-497 Slice 2 Release B (S2.4x): the legacy inventory_deduction_requested lane is QUARANTINED. The minters
+// + recovery are no-ops, the processor fails closed, and forward deduction moved to the dedicated occurrence
+// lane that delegates to the kill-switch-governed executor (applyOccurrenceClaims). The master kill switch +
+// legacy owner symbols asserted above are unchanged. Re-anchored to where the durable lane moved.
+const occurrenceOutbox = read('src/services/fulfillment/occurrence-deduction-outbox.ts');
+assert.match(deductionOutbox, /quarantined \(fail-closed\)/);
 assert.match(deductionOutbox, /export async function enqueueInventoryClaimDeduction/);
-assert.match(deductionOutbox, /await applyInventoryClaimsForLifecycleEvent\(lifecycleEventId\)/);
-assert.match(deductionOutbox, /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
-assert.match(deductionOutbox, /executor: InventoryDeductionOutboxExecutor = db/);
 assert.match(deductionOutbox, /export async function enqueueMissingInventoryDeductions/);
-assert.match(deductionOutbox, /o\.order_status = 'shipped'/);
-assert.match(deductionOutbox, /FROM order_lifecycle_events event/);
-assert.match(deductionOutbox, /FROM fulfillment_line_claims claim/);
-assert.match(deductionOutbox, /FROM order_lifecycle_events lifecycle[\s\S]*lifecycle\.transition IN \('shipped', 'external_shipped'\)/);
+assert.match(deductionOutbox, /export async function processInventoryDeductionOutboxEvent/);
+assert.doesNotMatch(deductionOutbox, /await deductInventoryForOrder\(/);
+assert.doesNotMatch(deductionOutbox, /await applyInventoryClaimsForLifecycleEvent\(/);
 assert.doesNotMatch(deductionOutbox, /UPDATE orders|UPDATE shipments|DELETE FROM/);
+assert.match(occurrenceOutbox, /export async function processFulfillmentOccurrenceOutboxOnce/);
+assert.match(occurrenceOutbox, /applyOccurrenceClaims/);
+assert.match(occurrenceOutbox, /FULFILLMENT_OCCURRENCE_DEDUCTION_OUTBOX_EVENT = 'fulfillment_occurrence_deduction_requested'/);
 
 for (const [path, ownerPattern] of [
   ['src/services/labels.ts', /applyOrderLifecycleCommandInTransaction/],
@@ -99,7 +103,9 @@ for (const [path, ownerPattern] of [
 assert.doesNotMatch(read('scripts/reconcile-orphan-shipstation-shipments.ts'), /enqueueInventoryDeduction/);
 assert.doesNotMatch(read('src/services/labels.ts'), /background\('inventory deduction'/);
 
-assert.match(fulfillmentOutbox, /event_type IN \('shipment_confirmation_requested', \$\{INVENTORY_DEDUCTION_OUTBOX_EVENT\}\)/);
+// PS-497 Slice 2 Release B (S2.4x): the generic claimer is de-scoped to confirmation-only, so it can never
+// claim the quarantined legacy inventory event nor the dedicated occurrence event.
+assert.match(fulfillmentOutbox, /WHERE event_type = 'shipment_confirmation_requested'/);
 assert.match(fulfillmentOutbox, /processInventoryDeductionOutboxEvent/);
 const complete = fulfillmentOutbox.slice(
   fulfillmentOutbox.indexOf('async function settleOutboxRowWithExecutor'),
