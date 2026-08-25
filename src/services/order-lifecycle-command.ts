@@ -32,6 +32,15 @@ import { enqueueInventoryClaimDeduction } from './fulfillment/inventory-deductio
 import { raiseReplacementOriginalOrderHoldsInTransaction } from './replacement-original-order-hold';
 import { replacementSchemaPresent } from './replacement-schema-readiness';
 import { resolveOrderLifecycleStatus } from './order-lifecycle-status.js';
+// Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4) occurrence cutover. All of the
+// following is gated behind env.FULFILLMENT_OCCURRENCE_PROJECTION (default OFF), so with the flag off this
+// owner behaves byte-identically to Release A (occurrence_id stays NULL, the legacy status/idempotency/enqueue
+// path runs). No shipped/cancelled protection is removed; supply GATES deductibility, it does not annotate.
+import { env } from '../lib/env.js';
+import { resolveFulfillmentOccurrence } from './fulfillment/resolve-fulfillment-occurrence.js';
+import { resolveOccurrenceSupply, decideClaimDisposition, type LineEvidence } from './fulfillment/line-supply-policy.js';
+import { readOccurrenceExecutionScope } from './fulfillment/occurrence-execution-scope.js';
+import { enqueueOccurrenceDeduction } from './fulfillment/occurrence-deduction-outbox.js';
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -43,7 +52,11 @@ export type OrderLifecycleTransition =
   | 'external_unmark';
 
 export type OrderLifecycleFulfillmentFacts =
-  | { kind: 'exact'; lines: unknown[] }
+  // PS-497 Release B (S2.4): `evidence` distinguishes per-shipment exact lines from a whole-order fallback
+  // (the fallback additionally requires the owner to prove sole-outbound before deducting). Absent => the
+  // Release A default 'exact_shipment'. `soleOutbound` is a caller corroboration only; the owner re-derives
+  // it authoritatively inside the transaction.
+  | { kind: 'exact'; lines: unknown[]; evidence?: 'exact_shipment' | 'whole_order_fallback'; soleOutbound?: boolean }
   | { kind: 'unavailable'; description: string }
   | { kind: 'none' };
 
@@ -341,6 +354,9 @@ export async function applyOrderLifecycleCommandInTransaction(
       orderStatus: orders.orderStatus,
       canonicalStatus: orders.canonicalStatus,
       externallyShipped: orders.externallyShipped,
+      // PS-497 Release B (S2.4): the occurrence execution scope is an approved client/store/order allowlist.
+      clientId: orders.clientId,
+      storeId: orders.storeId,
     })
     .from(orders)
     .where(eq(orders.id, input.orderId))
@@ -413,6 +429,9 @@ export async function applyOrderLifecycleCommandInTransaction(
     };
   }
 
+  // PS-497 Release B (S2.4): the locked shipment facts the occurrence resolver reads provider identity from
+  // (labelShipmentId + source). Populated under the same FOR UPDATE; NULL for shipment-less transitions.
+  let lockedShipment: { id: number; labelShipmentId: number | null; source: string | null } | null = null;
   if (input.shipmentId != null) {
     const [shipment] = await tx
       .select({
@@ -420,6 +439,8 @@ export async function applyOrderLifecycleCommandInTransaction(
         orderId: shipments.orderId,
         voided: shipments.voided,
         isReturn: shipments.isReturn,
+        labelShipmentId: shipments.labelShipmentId,
+        source: shipments.source,
       })
       .from(shipments)
       .where(eq(shipments.id, input.shipmentId))
@@ -434,6 +455,7 @@ export async function applyOrderLifecycleCommandInTransaction(
     ) {
       throw new Error(`Shipment ${input.shipmentId} is not an active outbound shipment`);
     }
+    lockedShipment = { id: shipment.id, labelShipmentId: shipment.labelShipmentId, source: shipment.source };
   }
 
   if (
@@ -470,6 +492,44 @@ export async function applyOrderLifecycleCommandInTransaction(
     throw new Error(`Order ${input.orderId} is terminal and cannot clear external fulfillment`);
   }
 
+  // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4). After BOTH FOR UPDATE locks
+  // (order + shipment), resolve the canonical physical occurrence and derive the occurrence supply + line
+  // evidence. Gated by PROJECTION (default OFF) — with the flag off, occurrenceId stays NULL and the legacy
+  // path below runs unchanged. Provider identity is read ONLY from the locked shipment (never provenance).
+  const isShippedTransition = transition === 'shipped' || transition === 'external_shipped';
+  const projectionOn = env.FULFILLMENT_OCCURRENCE_PROJECTION && isShippedTransition;
+  let resolvedOccurrence: Awaited<ReturnType<typeof resolveFulfillmentOccurrence>> | null = null;
+  let occurrenceSupply: 'prepship' | 'external' | 'unknown' | null = null;
+  let lineEvidence: LineEvidence = 'unavailable';
+  let soleOutbound = false;
+  if (projectionOn) {
+    resolvedOccurrence = await resolveFulfillmentOccurrence(tx, {
+      orderId: input.orderId,
+      transition: transition as 'shipped' | 'external_shipped',
+      source,
+      effectiveAt,
+      lockedShipment,
+      external: transition === 'external_shipped',
+    });
+    occurrenceSupply = resolveOccurrenceSupply({
+      discriminatorKind: resolvedOccurrence.discriminatorKind,
+      external: transition === 'external_shipped',
+    });
+    lineEvidence = input.fulfillmentFacts.kind === 'exact'
+      ? (input.fulfillmentFacts.evidence ?? 'exact_shipment')
+      : 'unavailable';
+    // Hermes #8: sole-outbound is established IN this transaction (after the locks) — the caller's
+    // soleOutbound only corroborates. Only the whole-order-fallback case consults it.
+    if (lineEvidence === 'whole_order_fallback' && input.shipmentId != null) {
+      const active = await tx
+        .select({ id: shipments.id })
+        .from(shipments)
+        .where(activeOutboundShipmentPredicate({ orderId: input.orderId }))
+        .limit(2);
+      soleOutbound = active.length === 1 && Number(active[0]?.id) === input.shipmentId;
+    }
+  }
+
   const [event] = await tx
     .insert(orderLifecycleEvents)
     .values({
@@ -481,6 +541,7 @@ export async function applyOrderLifecycleCommandInTransaction(
       provenance: input.provenance ?? {},
       fulfilledLines,
       effectiveAt,
+      occurrenceId: resolvedOccurrence?.occurrenceId ?? null,
     })
     .returning({ id: orderLifecycleEvents.id });
   if (!event) throw new Error('Failed to persist order lifecycle event');
@@ -578,28 +639,76 @@ export async function applyOrderLifecycleCommandInTransaction(
   maybeFault('state', input.faultAfter);
 
   const createsDeduction = transition === 'shipped' || transition === 'external_shipped';
-  const claimCount = createsDeduction ? fulfilledLines.length : 0;
+  let claimCount = 0;
+  let occurrenceEnqueueEligible = false;
   if (createsDeduction && fulfilledLines.length > 0) {
-    await tx.insert(fulfillmentLineClaims).values(
-      fulfilledLines.map((line) => ({
-        lifecycleEventId: event.id,
-        orderId: input.orderId,
-        shipmentId: input.shipmentId ?? null,
-        lineKey: line.lineKey,
-        sku: line.sku,
-        name: line.name,
-        quantity: line.quantity,
-        direction: 'deduct',
-        // PS-497: `quantity !== null` is part of the predicate, not an implication of it. A
-        // claim only becomes deductable work when this owner PROVED a positive integer, so a
-        // future snapshot variant cannot make a null-quantity line pending by omitting a
-        // reviewReason. The database constraint added in 0090 enforces the same rule.
-        status: line.sku && !line.reviewReason && line.quantity !== null ? 'pending' : 'review',
-        lastError: line.reviewReason ?? (line.sku ? null : 'missing_sku'),
-        idempotencyKey: `inventory:deduct:lifecycle:${event.id}:line:${line.lineKey}`,
-        updatedAt: effectiveAt,
-      })),
-    );
+    if (projectionOn && resolvedOccurrence) {
+      // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4). Supply GATES
+      // deductibility per line (external -> not_applicable, unknown -> review, prepship -> pending only with
+      // a trustworthy line). occurrence_id + canonical_line_identity are stamped and the idempotency key is
+      // occurrence-scoped (the lifecycle-event id is no longer authoritative). The TARGETLESS
+      // onConflictDoNothing + .returning() collapse the two converging writers to one claim set and give the
+      // true inserted count.
+      const supply = occurrenceSupply ?? 'unknown';
+      const occId = resolvedOccurrence.occurrenceId;
+      const inserted = await tx
+        .insert(fulfillmentLineClaims)
+        .values(fulfilledLines.map((line) => {
+          const disposition = decideClaimDisposition({
+            supply,
+            evidence: lineEvidence,
+            hasCanonicalSku: !!line.sku && !line.reviewReason,
+            quantity: line.quantity,
+            soleOutbound,
+          });
+          if (disposition.enqueue) occurrenceEnqueueEligible = true;
+          return {
+            lifecycleEventId: event.id,
+            orderId: input.orderId,
+            shipmentId: input.shipmentId ?? null,
+            lineKey: line.lineKey,
+            sku: line.sku,
+            name: line.name,
+            quantity: line.quantity,
+            direction: 'deduct' as const,
+            status: disposition.status,
+            supply: disposition.supply,
+            occurrenceId: occId,
+            canonicalLineIdentity: line.lineKey,
+            lastError: disposition.status === 'not_applicable'
+              ? 'external_not_applicable'
+              : (line.reviewReason ?? (line.sku ? null : 'missing_sku')),
+            idempotencyKey: `inventory:deduct:occ:${occId}:line:${line.lineKey}`,
+            updatedAt: effectiveAt,
+          };
+        }))
+        .onConflictDoNothing()
+        .returning({ id: fulfillmentLineClaims.id });
+      claimCount = inserted.length;
+    } else {
+      // Legacy path (PROJECTION off): byte-identical to Release A.
+      await tx.insert(fulfillmentLineClaims).values(
+        fulfilledLines.map((line) => ({
+          lifecycleEventId: event.id,
+          orderId: input.orderId,
+          shipmentId: input.shipmentId ?? null,
+          lineKey: line.lineKey,
+          sku: line.sku,
+          name: line.name,
+          quantity: line.quantity,
+          direction: 'deduct',
+          // PS-497: `quantity !== null` is part of the predicate, not an implication of it. A
+          // claim only becomes deductable work when this owner PROVED a positive integer, so a
+          // future snapshot variant cannot make a null-quantity line pending by omitting a
+          // reviewReason. The database constraint added in 0090 enforces the same rule.
+          status: line.sku && !line.reviewReason && line.quantity !== null ? 'pending' : 'review',
+          lastError: line.reviewReason ?? (line.sku ? null : 'missing_sku'),
+          idempotencyKey: `inventory:deduct:lifecycle:${event.id}:line:${line.lineKey}`,
+          updatedAt: effectiveAt,
+        })),
+      );
+      claimCount = fulfilledLines.length;
+    }
   }
   maybeFault('claims', input.faultAfter);
 
@@ -610,16 +719,31 @@ export async function applyOrderLifecycleCommandInTransaction(
     await consumeOutboundPackageInTransaction(input.packageConsumption, tx);
   }
 
-  // PS-497: the same three-part test as the claim status above. Review-only lines must never
-  // enqueue inventory work.
-  if (createsDeduction
-    && fulfilledLines.some((line) => line.sku && !line.reviewReason && line.quantity !== null)) {
-    await enqueueInventoryClaimDeduction({
-      lifecycleEventId: event.id,
-      orderId: input.orderId,
-      shipmentId: input.shipmentId ?? null,
-      source,
-    }, tx);
+  if (createsDeduction) {
+    if (projectionOn && resolvedOccurrence) {
+      // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4). Mint ONE occurrence
+      // intent ONLY when a just-inserted claim is deductible (supply=prepship + pending) AND the occurrence
+      // is within the execution scope (the enqueuer proves the scope/floor half; disposition proved the
+      // per-line half — Hermes #4). Review / not_applicable mint nothing.
+      if (occurrenceEnqueueEligible) {
+        await enqueueOccurrenceDeduction({
+          occurrenceId: resolvedOccurrence.occurrenceId,
+          orderId: input.orderId,
+          shipmentId: input.shipmentId ?? null,
+          clientId: order.clientId ?? null,
+          storeId: order.storeId ?? null,
+          source,
+        }, readOccurrenceExecutionScope(), tx);
+      }
+    } else if (fulfilledLines.some((line) => line.sku && !line.reviewReason && line.quantity !== null)) {
+      // Legacy enqueue (PROJECTION off): byte-identical to Release A. Review-only lines never enqueue.
+      await enqueueInventoryClaimDeduction({
+        lifecycleEventId: event.id,
+        orderId: input.orderId,
+        shipmentId: input.shipmentId ?? null,
+        source,
+      }, tx);
+    }
   }
 
   return {
@@ -663,6 +787,9 @@ export async function voidOrderShipmentLifecycleInTransaction(
       orderStatus: orders.orderStatus,
       canonicalStatus: orders.canonicalStatus,
       externallyShipped: orders.externallyShipped,
+      // PS-497 Release B (S2.4): occurrence execution scope for the reverse (void) enqueue.
+      clientId: orders.clientId,
+      storeId: orders.storeId,
     })
     .from(orders)
     .where(eq(orders.id, input.orderId))
@@ -745,30 +872,64 @@ export async function voidOrderShipmentLifecycleInTransaction(
 
   const appliedClaims = originalClaims.filter((claim) => claim.status === 'applied');
   if (appliedClaims.length > 0) {
+    // Per user override unlock shipped data on 2026-08-25: PS-497 Release B (S2.4). The reverse claim INHERITS
+    // the original applied claim's occurrence/canonical-identity/supply lineage — it never re-derives an
+    // occurrence from the (possibly provider-enriched) shipment (Hermes #7). A Release-B claim (occurrence_id
+    // present) recuts its reverse idempotency to the occurrence form; a legacy claim keeps the ':void' key.
     await tx
       .insert(fulfillmentLineClaims)
-      .values(appliedClaims.map((claim) => ({
+      .values(appliedClaims.map((claim) => {
+        const occScoped = claim.occurrenceId != null && claim.canonicalLineIdentity != null;
+        return {
+          lifecycleEventId: event.id,
+          orderId: input.orderId,
+          shipmentId: input.shipmentId,
+          lineKey: claim.lineKey,
+          sku: claim.sku,
+          name: claim.name,
+          quantity: claim.quantity,
+          direction: 'reverse' as const,
+          originalClaimId: claim.id,
+          inventoryId: claim.inventoryId,
+          occurrenceId: claim.occurrenceId,
+          canonicalLineIdentity: claim.canonicalLineIdentity,
+          supply: claim.supply,
+          status: claim.inventoryId ? 'pending' : 'review',
+          idempotencyKey: occScoped
+            ? `inventory:reverse:occ:${claim.occurrenceId}:line:${claim.canonicalLineIdentity}`
+            : `${claim.idempotencyKey}:void`,
+          updatedAt: now,
+        };
+      }))
+      .onConflictDoNothing({ target: fulfillmentLineClaims.idempotencyKey });
+
+    // Occurrence-bearing reverses go to the dedicated occurrence lane (reverse-discriminated so a prior
+    // forward event on the same occurrence does not dedup this away); legacy claims keep the legacy lane.
+    const occurrenceIds = Array.from(new Set(
+      appliedClaims.filter((c) => c.occurrenceId != null).map((c) => c.occurrenceId as number),
+    ));
+    if (occurrenceIds.length > 0) {
+      const scope = readOccurrenceExecutionScope();
+      for (const occurrenceId of occurrenceIds) {
+        await enqueueOccurrenceDeduction({
+          occurrenceId,
+          orderId: input.orderId,
+          shipmentId: input.shipmentId,
+          clientId: order.clientId ?? null,
+          storeId: order.storeId ?? null,
+          source: `${input.source}:void`,
+          dedupeDiscriminator: `reverse:${event.id}`,
+        }, scope, tx);
+      }
+    }
+    if (appliedClaims.some((c) => c.occurrenceId == null)) {
+      await enqueueInventoryClaimDeduction({
         lifecycleEventId: event.id,
         orderId: input.orderId,
         shipmentId: input.shipmentId,
-        lineKey: claim.lineKey,
-        sku: claim.sku,
-        name: claim.name,
-        quantity: claim.quantity,
-        direction: 'reverse',
-        originalClaimId: claim.id,
-        inventoryId: claim.inventoryId,
-        status: claim.inventoryId ? 'pending' : 'review',
-        idempotencyKey: `${claim.idempotencyKey}:void`,
-        updatedAt: now,
-      })))
-      .onConflictDoNothing({ target: fulfillmentLineClaims.idempotencyKey });
-    await enqueueInventoryClaimDeduction({
-      lifecycleEventId: event.id,
-      orderId: input.orderId,
-      shipmentId: input.shipmentId,
-      source: `${input.source}:void`,
-    }, tx);
+        source: `${input.source}:void`,
+      }, tx);
+    }
   }
 
   if (input.reversePackage !== false) {
