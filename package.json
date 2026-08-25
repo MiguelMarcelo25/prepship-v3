@@ -1017,7 +1017,9 @@
     "test:ps-489-external-fulfillment-contract": "tsx scripts/ps-489-external-fulfillment-contract.ts",
     "ps-497:manifest": "tsx scripts/ps-497-recovery-manifest-generator.ts",
     "test:ps-497-owner-cutover-pg17": "tsx scripts/ps-497-owner-cutover-pg17.ts",
-    "test:ps-497-occurrence-worker-pg17": "tsx scripts/ps-497-occurrence-worker-pg17.ts"
+    "test:ps-497-occurrence-worker-pg17": "tsx scripts/ps-497-occurrence-worker-pg17.ts",
+    "start:occurrence-worker": "tsx src/workers/occurrence-deduction-worker.ts",
+    "test:ps-497-occurrence-worker-isolation": "tsx scripts/ps-497-occurrence-worker-isolation-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
