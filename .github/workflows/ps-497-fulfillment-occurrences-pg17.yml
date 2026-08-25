@@ -1,0 +1,74 @@
+# PS-497 / PS-489 Slice 1 — the fulfillment_occurrences identity against REAL PostgreSQL 17.
+#
+# The offline guards (PGlite) are single-connection and cannot prove that two writers racing one
+# identity collapse to one row. This job runs two INDEPENDENT connections and proves the
+# ON CONFLICT single winner, both PARTIAL uniqueness indexes (the double-deduct fix and the reverse
+# uniqueness), the expand-only inserts, the occ-identity CHECK, and that 0090's quantity_state_check
+# is intact — all on 0104 composed atop the real 0070 + 0090 migrations.
+name: PS-497 fulfillment_occurrences PG17 proofs
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'review/ps-497-**'
+      - 'ps-497-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-497-occurrences-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg17-proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps497
+          POSTGRES_PASSWORD: ps497
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps497"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable.
+      PS497_PG17_ADMIN_URL: postgres://ps497:ps497@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          node -e "const p=require('postgres');const s=p(process.env.PS497_PG17_ADMIN_URL,{max:1});s\`select current_setting('server_version_num')::int as v\`.then(r=>{const v=r[0].v;if(v<170000||v>=180000){console.error('not PG17: '+v);process.exit(1)}console.log('server_version_num='+v);return s.end()}).catch(e=>{console.error(e);process.exit(1)})"
+
+      - name: PS-497 fulfillment_occurrences concurrency + uniqueness (two connections, real PG17)
+        run: npm run -s test:ps-497-fulfillment-occurrences-concurrency-pg17
+
+      - name: PS-497 0104 is additive-only DDL (runtime DDL guard)
+        run: node scripts/runtime-ddl-guard.mjs
+
+      - name: PS-497 Slice 1 scripts pass repo-strict TypeScript
+        run: >-
+          npx tsc --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride --skipLibCheck
+          --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
+          scripts/ps-497-fulfillment-occurrences-concurrency-pg17.ts
+          scripts/apply-ps-497-fulfillment-occurrences.ts

@@ -196,6 +196,22 @@ const migrationOwnership = [
       'csm_receipt_revisions_no_truncate',
     ],
   ],
+  [
+    'drizzle/0104_ps497_fulfillment_occurrences.sql',
+    [
+      'fulfillment_occurrences',
+      'fulfillment_occurrences_key_unq',
+      'fulfillment_occurrences_order_idx',
+      'fulfillment_occurrences_shipment_unq',
+      'fulfillment_line_claims_occ_line_dir_unq',
+      'fulfillment_line_claims_reverse_original_unq',
+      'fulfillment_line_claims_occ_identity_present_chk',
+      'fulfillment_line_claims_supply_chk',
+      'occurrence_id',
+      'canonical_line_identity',
+      'supply',
+    ],
+  ],
 ];
 
 for (const [file, tokens] of migrationOwnership) {
@@ -300,6 +316,17 @@ assert(
   !/\b(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO|TRUNCATE)\b/i.test(storageMonthMigration) &&
     !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(storageMonthMigration),
   '0077 adds a fail-closed monthly storage identity without mutating billing, orders, or shipments',
+);
+// PS-497 / PS-489 Slice 1: 0104 adds the fulfillment_occurrences relation and additive nullable
+// projection columns to the lifecycle sidecars only. It never mutates rows, never touches
+// orders/shipments, and never drops. (It DOES alter fulfillment_line_claims / order_lifecycle_events
+// additively — those are not the locked orders/shipments tables.)
+const fulfillmentOccurrencesMigration = read('drizzle/0104_ps497_fulfillment_occurrences.sql');
+assert(
+  !/\b(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO|TRUNCATE)\b/i.test(fulfillmentOccurrencesMigration) &&
+    !/\bDROP\s+(?:TABLE|COLUMN)\b/i.test(fulfillmentOccurrencesMigration) &&
+    !/ALTER\s+TABLE\s+(?:public\.)?(?:orders|shipments)\b/i.test(fulfillmentOccurrencesMigration),
+  '0104 adds the fulfillment_occurrences identity additively and never mutates or destructively alters orders/shipments',
 );
 
 const readiness = read('src/services/runtime-schema-readiness.ts');
