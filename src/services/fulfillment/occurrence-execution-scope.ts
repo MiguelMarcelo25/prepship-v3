@@ -150,3 +150,25 @@ export function claimEligibleForExecution(candidate: FenceCandidate, scope: Occu
   }
   return { eligible: true, reason: 'ok' };
 }
+
+/**
+ * The occurrence-level half of the enqueue fence: scope allowlist + canary floor + occurrence present. The
+ * per-line structural half (supply='prepship' + status='pending' + canonical identity) is proven by the
+ * owner's disposition BEFORE minting an intent; together they are the full enqueue predicate (Hermes #4). The
+ * worker/executor re-run the complete `claimEligibleForExecution` per claim under lock before any movement.
+ */
+export function occurrenceInExecutionScope(
+  input: { occurrenceId: number | null; clientId: number | null; storeId: number | null; orderId: number | null },
+  scope: OccurrenceExecutionScope,
+): { eligible: boolean; reason: string } {
+  return claimEligibleForExecution({
+    occurrenceId: input.occurrenceId,
+    canonicalLineIdentity: 'occurrence-scope-probe', // structural-identity presence is proven per-line by the owner
+    supply: 'prepship',
+    status: 'pending',
+    superseded: false,
+    clientId: input.clientId,
+    storeId: input.storeId,
+    orderId: input.orderId,
+  }, scope);
+}
