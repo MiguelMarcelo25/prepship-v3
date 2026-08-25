@@ -14,6 +14,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import * as schema from '../src/db/schema/index.js';
 import { readVerifiedMigration, splitMigration } from './ps-497-fulfillment-occurrences-digest.js';
 import { computeDigest, EXPECTED_MIGRATION_SHA256, readVerifiedMigration as read0105Migration } from './ps-497-claim-status-migration-digest.js';
 import { resolveFulfillmentOccurrence, deriveOccurrenceKey } from '../src/services/fulfillment/resolve-fulfillment-occurrence.js';
@@ -51,6 +53,10 @@ function runRunner(dbUrl: string, args: string[], extraEnv: Record<string, strin
 
 const APPLY_ARGS = ['--apply', '--confirm=apply-ps-497-claim-not-applicable-status-0105'];
 
+// PS-497 Release B: the resolver is now drizzle-tx-native, so the test drives it through a drizzle handle
+// wrapping the raw postgres-js connection (same connection => same transaction/session semantics).
+const dz = (client: postgres.Sql) => drizzle(client, { schema, casing: 'snake_case' });
+
 function runReadback(dbUrl: string): Promise<{ code: number; out: string; err: string }> {
   return new Promise((resolve) => {
     const child = spawn('npx', ['tsx', 'scripts/ps-497-0105-readback.ts'], {
@@ -74,6 +80,7 @@ async function main(): Promise<void> {
   await admin.unsafe(`create database "${dbName}"`);
   const base = ADMIN.replace(/\/[^/]*$/, `/${dbName}`);
   const sql = postgres(base, { max: 1, prepare: false, onnotice: () => {} });
+  const dsql = dz(sql);
   await setupSchema(sql);
 
   // A fresh phase_0104 database per adversarial case (isolated catalog manipulation).
@@ -118,15 +125,15 @@ async function main(): Promise<void> {
   ok('key derivation: provider_shipment / local_shipment / |ext / |whole all correct; provider from the locked shipment source');
 
   // 2) provider_shipment resolve creates one occurrence with the derived key + kind.
-  const r1 = await resolveFulfillmentOccurrence(sql, { ...ctxBase, external: false, lockedShipment: { id: 10, labelShipmentId: 555, source: 'shipstation' } });
+  const r1 = await resolveFulfillmentOccurrence(dsql, { ...ctxBase, external: false, lockedShipment: { id: 10, labelShipmentId: 555, source: 'shipstation' } });
   assert.equal(r1.created, true);
   assert.equal(r1.occurrenceKey, 'ord:1|pship:shipstation:555');
   assert.equal(r1.discriminatorKind, 'provider_shipment');
   ok('resolve: a shipment-backed writer creates a provider_shipment occurrence');
 
   // 3) shipment-less split -> two DISTINCT occurrences (|ext external, |whole unknown).
-  const rExt = await resolveFulfillmentOccurrence(sql, { ...ctxBase, transition: 'external_shipped', external: true, lockedShipment: null });
-  const rWhole = await resolveFulfillmentOccurrence(sql, { ...ctxBase, external: false, lockedShipment: null });
+  const rExt = await resolveFulfillmentOccurrence(dsql, { ...ctxBase, transition: 'external_shipped', external: true, lockedShipment: null });
+  const rWhole = await resolveFulfillmentOccurrence(dsql, { ...ctxBase, external: false, lockedShipment: null });
   assert.notEqual(rExt.occurrenceId, rWhole.occurrenceId);
   assert.equal(rExt.occurrenceKey, 'ord:1|ext');
   assert.equal(rWhole.occurrenceKey, 'ord:1|whole');
@@ -139,8 +146,8 @@ async function main(): Promise<void> {
   // seed a fresh order to avoid colliding with rExt
   await sql`insert into orders (id) values (2)`;
   const [ra, rb] = await Promise.all([
-    resolveFulfillmentOccurrence(cA, { ...raceCtx, orderId: 2 }),
-    resolveFulfillmentOccurrence(cB, { ...raceCtx, orderId: 2 }),
+    resolveFulfillmentOccurrence(dz(cA), { ...raceCtx, orderId: 2 }),
+    resolveFulfillmentOccurrence(dz(cB), { ...raceCtx, orderId: 2 }),
   ]);
   assert.equal(ra.occurrenceId, rb.occurrenceId, 'both racers resolve the same occurrence id');
   const [nRow] = await sql<{ n: number }[]>`select count(*)::int as n from fulfillment_occurrences where occurrence_key = 'ord:2|ext'`;
@@ -150,8 +157,8 @@ async function main(): Promise<void> {
   // 5) provider-collapse: two DIFFERENT shipments sharing one provider label -> one occurrence.
   await sql`insert into orders (id) values (3)`;
   const cShip = { orderId: 3, transition: 'shipped' as const, source: 'shipstation', effectiveAt: new Date(), external: false };
-  const pc1 = await resolveFulfillmentOccurrence(sql, { ...cShip, lockedShipment: { id: 71, labelShipmentId: 999, source: 'shipstation' } });
-  const pc2 = await resolveFulfillmentOccurrence(sql, { ...cShip, lockedShipment: { id: 72, labelShipmentId: 999, source: 'shipstation' } });
+  const pc1 = await resolveFulfillmentOccurrence(dsql, { ...cShip, lockedShipment: { id: 71, labelShipmentId: 999, source: 'shipstation' } });
+  const pc2 = await resolveFulfillmentOccurrence(dsql, { ...cShip, lockedShipment: { id: 72, labelShipmentId: 999, source: 'shipstation' } });
   assert.equal(pc1.occurrenceId, pc2.occurrenceId, 'two shipments with one provider label collapse to one occurrence');
   assert.equal(pc2.created, false);
   ok('provider-collapse: two local shipment rows sharing one labelShipmentId -> one provider_shipment occurrence');
@@ -159,9 +166,9 @@ async function main(): Promise<void> {
   // 6) key stability under provider enrichment: local-key first, then enriched -> same occurrence.
   await sql`insert into orders (id) values (4)`;
   const cEnr = { orderId: 4, transition: 'shipped' as const, source: 'shipstation', effectiveAt: new Date(), external: false };
-  const before = await resolveFulfillmentOccurrence(sql, { ...cEnr, lockedShipment: { id: 88, labelShipmentId: null, source: 'shipstation' } });
+  const before = await resolveFulfillmentOccurrence(dsql, { ...cEnr, lockedShipment: { id: 88, labelShipmentId: null, source: 'shipstation' } });
   assert.equal(before.discriminatorKind, 'local_shipment');
-  const afterEnrich = await resolveFulfillmentOccurrence(sql, { ...cEnr, lockedShipment: { id: 88, labelShipmentId: 4242, source: 'shipstation' } });
+  const afterEnrich = await resolveFulfillmentOccurrence(dsql, { ...cEnr, lockedShipment: { id: 88, labelShipmentId: 4242, source: 'shipstation' } });
   assert.equal(afterEnrich.occurrenceId, before.occurrenceId, 'enrichment resolves the ORIGINAL occurrence (shipment-first lookup)');
   assert.equal(afterEnrich.created, false);
   const [cRow] = await sql<{ c: number }[]>`select count(*)::int as c from fulfillment_occurrences where shipment_id = 88`;
@@ -362,12 +369,12 @@ async function main(): Promise<void> {
       orderId: 7, transition: 'shipped' as const, source: 'shipstation', effectiveAt: new Date('2026-08-25T00:00:00Z'), external: false, lockedShipment,
     });
     // A owns the provider key ord:7|pship:shipstation:999 (via shipment 91); B owns the local key ord:7|ship:72.
-    await resolveFulfillmentOccurrence(c.sql, rctx({ id: 91, labelShipmentId: 999, source: 'shipstation' }));
-    await resolveFulfillmentOccurrence(c.sql, rctx({ id: 72, labelShipmentId: null, source: 'shipstation' }));
+    await resolveFulfillmentOccurrence(dz(c.sql), rctx({ id: 91, labelShipmentId: 999, source: 'shipstation' }));
+    await resolveFulfillmentOccurrence(dz(c.sql), rctx({ id: 72, labelShipmentId: null, source: 'shipstation' }));
     // Enriching shipment 72 with provider 999: derived key -> A, shipment 72 -> B => contradiction, must throw.
     let threw = false;
     try {
-      await resolveFulfillmentOccurrence(c.sql, rctx({ id: 72, labelShipmentId: 999, source: 'shipstation' }));
+      await resolveFulfillmentOccurrence(dz(c.sql), rctx({ id: 72, labelShipmentId: 999, source: 'shipstation' }));
     } catch (e) { threw = /identity conflict/.test(String(e)); if (!threw) throw e; }
     assert.ok(threw, 'contradictory key-vs-shipment winners are rejected fail-closed (8m)');
   }
