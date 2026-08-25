@@ -3394,12 +3394,17 @@ console.log('\nordinary readers exclude source = replacement');
     // shipment-aggregate.ts, and binds only BECAUSE the argument is passed. Pinned per site so
     // dropping that argument changes the digest and fails here.
     'src/services/order-lifecycle-command.ts': {
+      // Per user override unlock shipped data on 2026-08-25: PS-497 Slice 2 Release B (S2.4) added
+      // occurrence-projection reads bound by orderId / shipmentId (the order select now reads clientId+storeId
+      // for the execution scope; the shipment FOR UPDATE now reads labelShipmentId+source for the resolver).
+      // Re-pinned to the current bound read-sites; all remain order/shipment-scoped, none unbound.
       sites: [
         'src/services/order-lifecycle-command.ts#0:08868cc4117dfb43',
         'src/services/order-lifecycle-command.ts#1:edf953b981770710',
-        'src/services/order-lifecycle-command.ts#4:9f8936e9e04326d4',
+        'src/services/order-lifecycle-command.ts#3:93f9536b717165bc',
+        'src/services/order-lifecycle-command.ts#5:9f8936e9e04326d4',
       ],
-      why: 'imported activeOutboundShipmentPredicate binds shipments.orderId at each of these sites',
+      why: 'imported activeOutboundShipmentPredicate binds shipments.orderId; PS-497 occurrence reads bound by orderId/shipmentId',
     },
     // Genuinely unbound and genuinely inert: this Drizzle query carries limit(0). The OPERATIVE
     // rate-reference query joins shipments to orders, where an order-less vessel cannot survive.

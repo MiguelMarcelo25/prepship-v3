@@ -58,8 +58,11 @@ assert.match(deductions, /claim\.direction === 'deduct' \? 'ship' : 'return'/);
 assert.match(deductions, /idempotencyKey: claim\.idempotencyKey/);
 assert.match(deductions, /Per user override unlock shipped data on 2026-07-16/);
 assert.match(inventoryOutbox, /lifecycleEventId/);
-assert.match(inventoryOutbox, /order_lifecycle_events lifecycle/,
-  'legacy recovery must exclude orders already owned by lifecycle claims');
+// PS-497 Slice 2 Release B (S2.4x): the legacy recovery re-minter is retired and the whole legacy lane is
+// quarantined (fail-closed); forward deduction recovery is owned by the dedicated occurrence lane. Re-anchored
+// from the retired recovery SQL to the quarantine marker.
+assert.match(inventoryOutbox, /quarantined \(fail-closed\)/,
+  'the legacy inventory recovery lane must be quarantined (fail-closed), not re-minting');
 
 for (const [path, source] of [
   ['labels.ts', labels],

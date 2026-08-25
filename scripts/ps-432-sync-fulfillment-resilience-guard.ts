@@ -40,7 +40,10 @@ const packageJson = read('package.json');
 const guardPack = read('scripts/sot-guard-pack.mjs');
 
 assert.match(inventoryOutbox, /executor: InventoryDeductionOutboxExecutor = db/);
-assert.match(inventoryOutbox, /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
+// PS-497 Slice 2 Release B (S2.4x): the durable, idempotent (onConflictDoNothing) intent insert moved to the
+// dedicated occurrence lane; the legacy minter is a quarantined no-op. Re-anchored to where the durable insert
+// lives, so the idempotent-enqueue protection is still proven.
+assert.match(read('src/services/fulfillment/occurrence-deduction-outbox.ts'), /executor[\s\S]*\.insert\(fulfillmentOutbox\)[\s\S]*\.onConflictDoNothing/);
 assert.match(shipmentSync, /db\.transaction\(async \(tx\)[\s\S]*applyOrderLifecycleCommandInTransaction\(tx,[\s\S]*fulfillmentFacts[\s\S]*packageConsumption/);
 assert.match(orderSync, /inventoryDeductionSource: 'order_sync_status'/);
 assert.match(orderSync, /applyOrderLifecycleCommand\(\{[\s\S]*source: 'order_sync_status'/);

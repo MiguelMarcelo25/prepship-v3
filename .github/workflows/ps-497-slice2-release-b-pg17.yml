@@ -1,0 +1,104 @@
+# PS-497 Slice 2 Release B — the behavioral cutover proven against REAL PostgreSQL 17 on the release branch.
+# Reachable exact-SHA CI: reports the SHA under test and runs the full Release B proof set — the shipped-outcome
+# invariant (real-PG17 + PGlite twin), the owner cutover, the occurrence executor+worker live movement, the
+# resolver-adapted Release A suite, the pure unit guards, the worker isolation guard, the DDL guard, and strict
+# TypeScript over every new/changed Release B file.
+name: PS-497 Slice 2 Release B PG17 proofs
+
+on:
+  push:
+    branches:
+      - 'release/ps-497-slice2-release-b'
+      - 'review/ps-497-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-497-slice2-release-b-pg17-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-b-pg17:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps497
+          POSTGRES_PASSWORD: ps497
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps497"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PS497_PG17_ADMIN_URL: postgres://ps497:ps497@127.0.0.1:5432/postgres
+      PS497_PG_ADMIN_URL: postgres://ps497:ps497@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report the exact commit under test
+        run: |
+          echo "ref=${{ github.ref }} sha=${{ github.sha }}"
+          git rev-parse HEAD
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          node -e "const p=require('postgres');const s=p(process.env.PS497_PG17_ADMIN_URL,{max:1});s\`select current_setting('server_version_num')::int as v\`.then(r=>{const v=r[0].v;if(v<170000||v>=180000){console.error('not PG17: '+v);process.exit(1)}console.log('server_version_num='+v);return s.end()}).catch(e=>{console.error(e);process.exit(1)})"
+
+      - name: Release B — shipped-outcome invariant GREEN (real PG17, drives the real owner+executor+resolver)
+        run: npm run -s test:ps-497-shipped-outcome-invariant
+
+      - name: Release B — shipped-outcome invariant PGlite twin (the pack member)
+        run: npm run -s test:ps-497-shipped-outcome-invariant-pglite
+
+      - name: Release B — owner cutover (real PG17)
+        run: npm run -s test:ps-497-owner-cutover-pg17
+
+      - name: Release B — occurrence executor + worker MOVE STOCK (real PG17)
+        run: npm run -s test:ps-497-occurrence-worker-pg17
+
+      - name: Release B — resolver-adapted Release A suite (real PG17)
+        run: npm run -s test:ps-497-slice2-release-a-pg17
+
+      - name: Release B — pure unit guards (scope / readiness / supply / worker isolation)
+        run: |
+          npm run -s test:ps-497-occurrence-execution-scope
+          npm run -s test:ps-497-readiness-enrollment
+          npm run -s test:ps-497-line-supply-policy
+          npm run -s test:ps-497-occurrence-worker-isolation
+
+      - name: Release B — re-anchored legacy-lane guards (quarantine, zero-new-reds)
+        run: |
+          npm run -s test:inventory-auto-deduct
+          npm run -s test:audit-pg-boss-inventory-outbox
+          npm run -s test:ps-450-inventory-outbox
+
+      - name: Release B — additive-only DDL (runtime DDL guard)
+        run: node scripts/runtime-ddl-guard.mjs
+
+      - name: Release B — new/changed files pass repo-strict TypeScript
+        run: >-
+          npx tsc --noEmit --strict --noUncheckedIndexedAccess --noImplicitOverride --skipLibCheck
+          --moduleResolution bundler --module esnext --target es2022 --esModuleInterop
+          src/services/fulfillment/occurrence-execution-scope.ts
+          src/services/fulfillment/occurrence-deduction-outbox.ts
+          src/services/fulfillment/supersede-fulfillment-occurrence.ts
+          src/services/fulfillment/resolve-occurrence-review.ts
+          src/services/fulfillment/resolve-fulfillment-occurrence.ts
+          src/services/fulfillment/line-supply-policy.ts
+          src/workers/occurrence-deduction-worker.ts
+          scripts/lib/ps-497-shipped-outcome-cases.ts
