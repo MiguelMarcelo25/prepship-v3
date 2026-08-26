@@ -26,6 +26,10 @@ on:
       - 'package-lock.json'
       - 'tsconfig.json'
       - '.github/workflows/render-auto-deploy.yml'
+      # Same "let edits to this gate verify themselves" rule, extended from the workflow file to a
+      # harness the gate EXECUTES: a fix to the PS-507 QA stack (npm run test:ps-507) must re-run the
+      # gate, or a harness bug that only surfaces in this gate can never be re-verified through it.
+      - 'scripts/ps-507-qa-stack.mjs'
 
 concurrency:
   # Never run two deploys for this branch at once; let an in-flight one finish.
