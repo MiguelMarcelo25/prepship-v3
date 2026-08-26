@@ -109,6 +109,56 @@ async function main(): Promise<void> {
   assert.equal(await ledgerQty('A'), -2, 'no additional movement');
   ok('a subsequent drain re-claims nothing — malformed rows do not return every poll');
 
+  // Helpers to drive a single row through repeated attempts. Between drains the row's next_run_at is reset to
+  // NOW() to simulate the backoff window elapsing, so each drain re-claims it and increments attempts.
+  const rowState = async (dedupe: string) =>
+    (await raw<{ attempts: number; status: string; next_run_at: string }[]>`select attempts, status, next_run_at::text as next_run_at from fulfillment_outbox where dedupe_key = ${dedupe}`)[0];
+  const makeDue = async (dedupe: string) => { await raw`update fulfillment_outbox set next_run_at = NOW() where dedupe_key = ${dedupe} and next_run_at <> 'infinity'::timestamptz`; };
+
+  // Case B: MISSING OCCURRENCE through the retry budget -> terminal (next_run_at='infinity') at attempt 12.
+  const missDk = EVT + ':occ:88888'; // occurrenceId 88888 has NO occurrence row
+  await raw`insert into fulfillment_outbox (order_id, event_type, provider, dedupe_key, payload, status, next_run_at)
+    values (1, ${EVT}, 'inventory_occurrence', ${missDk}, ${JSON.stringify({ occurrenceId: 88888, orderId: 1, source: 'seed' })}::jsonb, 'pending', now())`;
+  let missTerminalAt = 0;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    await makeDue(missDk);
+    await processFulfillmentOccurrenceOutboxOnce({ executor: testDb, limit: 100 });
+    const st = await rowState(missDk);
+    assert.equal(st?.attempts, attempt, `missing-occurrence attempts increments to ${attempt}`);
+    assert.equal(st?.status, 'failed', 'missing-occurrence row is failed while retrying');
+    if (String(st?.next_run_at).toLowerCase() === 'infinity') { missTerminalAt = attempt; break; }
+    assert.ok(attempt < 12, `missing-occurrence should not still be retryable at attempt ${attempt}`);
+  }
+  assert.equal(missTerminalAt, 12, 'missing occurrence terminalizes (next_run_at=infinity) exactly at attempt 12');
+  await makeDue(missDk); // no effect — the row is 'infinity', makeDue skips it
+  const missAfter = await rowState(missDk);
+  assert.equal(String(missAfter?.next_run_at).toLowerCase(), 'infinity', 'a terminal missing-occurrence row stays infinity (never re-due)');
+  ok('missing occurrence: bounded backoff, attempts 1..12, then terminal next_run_at=infinity (no further claim)');
+
+  // Case C: EXECUTOR ERROR through the retry budget -> terminal at attempt 12. A valid in-scope occurrence
+  // (passes the worker scope pre-check) dispatched to a FAULTY executor whose transaction always throws.
+  await raw`insert into orders (id, client_id, store_id, order_status, order_number) values (901, 7, 3, 'shipped', 'ORD-901')`;
+  await raw`insert into fulfillment_occurrences (id, order_id, occurrence_key, discriminator_kind, first_seen_source, effective_at) values (9001, 901, 'ord:901|pship:s:9001', 'provider_shipment', 's', now())`;
+  await raw`insert into order_lifecycle_events (id, order_id, command_key, transition, source, effective_at, occurrence_id) values (9001, 901, 'ck:9001', 'shipped', 't', now(), 9001)`;
+  await raw`insert into fulfillment_line_claims (lifecycle_event_id, order_id, line_key, sku, name, quantity, direction, status, supply, occurrence_id, canonical_line_identity, idempotency_key)
+    values (9001, 901, 'sku:A', 'A', 'A', 2, 'deduct', 'pending', 'prepship', 9001, 'sku:A', 'inventory:deduct:occ:9001:line:sku:A')`;
+  const errDk = EVT + ':occ:9001';
+  await raw`insert into fulfillment_outbox (order_id, event_type, provider, dedupe_key, payload, status, next_run_at)
+    values (901, ${EVT}, 'inventory_occurrence', ${errDk}, ${JSON.stringify({ occurrenceId: 9001, orderId: 901, source: 'seed' })}::jsonb, 'pending', now())`;
+  const faultyExecutor = { transaction: async () => { throw new Error('injected executor failure'); } } as unknown as Pick<typeof db, 'transaction'>;
+  let errTerminalAt = 0;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    await makeDue(errDk);
+    await processFulfillmentOccurrenceOutboxOnce({ executor: faultyExecutor, limit: 100 });
+    const st = await rowState(errDk);
+    assert.equal(st?.attempts, attempt, `executor-error attempts increments to ${attempt}`);
+    assert.match(String((await raw<{ last_error: string }[]>`select last_error from fulfillment_outbox where dedupe_key = ${errDk}`)[0]?.last_error), /injected executor failure/);
+    if (String(st?.next_run_at).toLowerCase() === 'infinity') { errTerminalAt = attempt; break; }
+  }
+  assert.equal(errTerminalAt, 12, 'executor error terminalizes (next_run_at=infinity) exactly at attempt 12');
+  assert.equal(await ledgerQty('A'), -2, 'a persistently-failing executor moved NO stock');
+  ok('executor error: bounded backoff, attempts 1..12, then terminal next_run_at=infinity, zero movement');
+
   clearTimeout(hard);
   await raw.end({ timeout: 5 });
   await admin.unsafe(`drop database "${dbName}" with (force)`);

@@ -1021,6 +1021,7 @@
     "test:ps-497-occurrence-worker-execoff-pg17": "tsx scripts/ps-497-occurrence-worker-execoff-pg17.ts",
     "test:ps-497-review-resolver-pg17": "tsx scripts/ps-497-review-resolver-pg17.ts",
     "test:ps-497-worker-retry-hardening-pg17": "tsx scripts/ps-497-worker-retry-hardening-pg17.ts",
+    "test:ps-497-owner-resolver-e2e-pg17": "tsx scripts/ps-497-owner-resolver-e2e-pg17.ts",
     "test:ps-497-review-route-authz": "tsx scripts/ps-497-review-route-authz-guard.ts",
     "test:ps-497-supersession-pg17": "tsx scripts/ps-497-supersession-pg17.ts",
     "test:ps-497-flags-off-pg17": "tsx scripts/ps-497-flags-off-pg17.ts",
