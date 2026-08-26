@@ -239,6 +239,30 @@ const TOLERATED_MIGRATION_FAILURES = new Map([
 ]);
 
 /**
+ * 0104/0105 split their non-transactional tail (CREATE INDEX CONCURRENTLY, ADD CONSTRAINT
+ * ... NOT VALID, VALIDATE CONSTRAINT) across a transaction boundary in production. PGlite runs
+ * each `exec` in one implicit transaction and cannot take that split, but — unlike the
+ * tolerated-and-skipped performance indexes of 0018e/0039 — the API this stack boots asserts
+ * every one of these objects at readiness (the occurrence table/columns, its 5 indexes, and the
+ * two claim CHECKs), so they cannot be skipped. On this fresh, empty in-memory database a plain
+ * CREATE INDEX and an immediately-validated CHECK are outcome-identical to the concurrent/deferred
+ * production forms, and the now-redundant standalone VALIDATE has nothing to do — so rewrite
+ * exactly those two named files (and no others) to their transaction-safe equivalent.
+ */
+const PGLITE_TXN_SAFE_REWRITES = new Set([
+  '0104_ps497_fulfillment_occurrences.sql',
+  '0105_ps497_claim_not_applicable_status.sql',
+]);
+
+function toPgliteTransactionSafe(file, sql) {
+  if (!PGLITE_TXN_SAFE_REWRITES.has(file)) return sql;
+  return sql
+    .replace(/\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/gi, 'CREATE $1INDEX')
+    .replace(/\s+NOT\s+VALID\b/gi, '')
+    .replace(/ALTER\s+TABLE[^;]*?\bVALIDATE\s+CONSTRAINT\b[^;]*?;/gi, '');
+}
+
+/**
  * Apply every migration in ./drizzle, in filename order.
  *
  * NOT the drizzle migrator. The journal (drizzle/meta/_journal.json) holds 16 entries
@@ -258,7 +282,7 @@ export async function applyAllMigrations(pg, log = console.log) {
   for (const file of files) {
     const sql = readFileSync(`drizzle/${file}`, 'utf8');
     try {
-      await pg.exec(sql.replace(/-->\s*statement-breakpoint/g, ';'));
+      await pg.exec(toPgliteTransactionSafe(file, sql).replace(/-->\s*statement-breakpoint/g, ';'));
       applied.push(file);
     } catch (error) {
       const entry = TOLERATED_MIGRATION_FAILURES.get(file);
