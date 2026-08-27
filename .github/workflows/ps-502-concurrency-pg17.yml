@@ -19,6 +19,12 @@ on:
     branches:
       - prepshipv4-stable
       - 'review/ps-502-**'
+  # Hermes ruling 2026-08-27: a production-target merge needs exact-head HOSTED evidence, and
+  # the reason-contract guard had no hosted lane at all. A PR into stable now runs this job so
+  # the guard, the route boundary and the typecheck all execute on the exact head being merged.
+  pull_request:
+    branches:
+      - prepshipv4-stable
   workflow_dispatch:
 
 permissions:
@@ -133,6 +139,7 @@ jobs:
           npm run test:ps-502-integration
           npm run test:ps-502-route-boundary
           npm run test:ps-502-runtime-version
+          npm run test:ps-502-reason-contract
 
       - name: Typecheck
         run: npm run typecheck
