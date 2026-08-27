@@ -18,6 +18,7 @@ import {
 } from '../middleware/auth';
 import { isOrderRowInScope, orderScopePredicate, scopeFromContext } from '../lib/order-scope';
 import { createReplacement } from '../services/replacement-create-command';
+import { getReplacementReasonContract } from '../services/replacement-reason-contract';
 import {
   processReplacementFinancialAction,
   readReplacementFinancialAction,
@@ -183,6 +184,19 @@ async function loadInScope(c: Parameters<typeof scopeFromContext>[0], replacemen
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The customer-safe reason contract — the four codes, their labels, and a version. CP-061
+ * renders these labels instead of keeping its own map (DJ 2026-08-12); the Client Portal
+ * consumes it through its bearer-forwarding proxy.
+ *
+ * Deliberately NOT `requireInternalPermission`: a portal (client_user) session must reach it to
+ * render the labels, and it discloses only four static product strings — no order, tenant, or
+ * shipped-data read — so any authenticated session may read it. It still sits behind the
+ * router-wide REPLACEMENTS_ENABLED gate, so it lights up with the rest of the surface and fails
+ * closed (403 REPLACEMENTS_DISABLED) while the feature is off.
+ */
+app.get('/reason-contract', (c) => c.json(getReplacementReasonContract()));
 
 app.get('/', requireInternalPermission('replacements:read'), async (c) => {
   const scope = scopeFromContext(c);
