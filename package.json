@@ -877,6 +877,7 @@
     "test:ps-499-order-rate-display-contract": "tsx scripts/ps-499-order-rate-display-contract-guard.ts",
     "test:ps-502-replacement-contract": "tsx scripts/ps-502-replacement-contract-guard.ts",
     "test:ps-502-route-boundary": "tsx scripts/ps-502-replacement-route-boundary.ts",
+    "test:ps-502-reason-contract": "tsx scripts/replacement-reason-contract-guard.ts",
     "test:ps-502-runtime-version": "tsx scripts/ps-502-runtime-version-guard.ts",
     "test:ps-508-outbound-freeze": "tsx scripts/ps-508-outbound-freeze-guard.ts",
     "test:ps-508-billing-consumes-frozen-tuple": "tsx scripts/ps-508-billing-consumes-frozen-tuple-guard.ts",

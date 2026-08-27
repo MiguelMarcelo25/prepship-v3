@@ -1,0 +1,71 @@
+# PS-502 — the customer-safe replacement reason contract.
+#
+# WHY THIS IS ITS OWN WORKFLOW
+#
+# The guard originally rode the fast-lane step of ps-502-concurrency-pg17.yml, on the
+# reasoning that a change satisfying concurrency by weakening a contract should still be
+# caught in the same run. Hosted execution proved that placement unusable: that job has
+# been RED on prepshipv4-stable since 2026-08-26 (2c15a844 onward, production head
+# ba9afaf1 included) because the PS-494 joined-origin proof cannot apply migration
+# 0104_ps497_fulfillment_occurrences.sql — "CREATE INDEX CONCURRENTLY cannot run inside a
+# transaction block". That is PS-497's defect, not this contract's, but the reason guard
+# sits after that step and therefore never executes at all.
+#
+# Evidence that cannot run is not evidence. This contract is four static strings, a route,
+# and a version — it needs no PostgreSQL service, no migrations and no fixtures, so it has
+# no business being gated behind a twenty-minute database lane it does not use. The guard
+# line in the PG17 fast lane is kept for the day that lane is green again; this workflow is
+# what actually produces exact-head proof in the meantime.
+#
+# It must FAIL, never skip.
+name: PS-502 reason contract
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'review/ps-502-**'
+  pull_request:
+    branches:
+      - prepshipv4-stable
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-502-reason-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reason-contract:
+    name: Reason contract guard + route boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install deps
+        run: npm ci --ignore-scripts
+
+      # Eight checks, including a real 200 from the registered route with no internal
+      # permission on the request, and a 404 on an unregistered path so the route-wiring
+      # proof cannot pass against a handler that was never mounted.
+      - name: PS-502 reason-contract guard
+        run: npm run test:ps-502-reason-contract
+
+      # The reason contract widens what the replacement router serves to a portal session.
+      # The boundary guard is what proves that widening did not carry anything else with it.
+      - name: PS-502 replacement route boundary
+        run: npm run test:ps-502-route-boundary
+
+      - name: Typecheck
+        run: npm run typecheck

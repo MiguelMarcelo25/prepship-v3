@@ -133,6 +133,7 @@ jobs:
           npm run test:ps-502-integration
           npm run test:ps-502-route-boundary
           npm run test:ps-502-runtime-version
+          npm run test:ps-502-reason-contract
 
       - name: Typecheck
         run: npm run typecheck
