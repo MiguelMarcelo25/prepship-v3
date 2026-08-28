@@ -290,27 +290,44 @@ const PGLITE_DOWNGRADES = [
  * re-applying both files verbatim, one statement per exec: 0105 applies COMPLETELY with no
  * downgrade at all, and 0104 fails on exactly one statement — its CONCURRENTLY index.
  *
- * Consequences, and they strengthen what this stack proves:
+ * Consequences:
  *   - 0105 is no longer registered for rewriting. It runs verbatim.
- *   - The constraints now follow the REAL production two-phase path: created NOT VALID, then
- *     VALIDATEd by the migration's own statement. That was previously disclaimed as
- *     "NOT PROVEN here"; it is now actually exercised.
- *   - One downgrade remains, for one statement, and it is reported.
+ *   - ONE downgrade class remains — `concurrent-index` — affecting THREE statements in 0104.
+ *
+ * WHAT THE RETAINED NOT VALID / VALIDATE STATEMENTS DO AND DO NOT PROVE.
+ *
+ * An earlier revision of this comment claimed the constraints "now follow the REAL production
+ * two-phase path". That is overstated and is withdrawn. A migration is still applied as one
+ * multi-command exec, so the two statements do not sit either side of a real transaction
+ * boundary.
+ *
+ * Proven here: the original `ADD CONSTRAINT ... NOT VALID` executes, the original
+ * `VALIDATE CONSTRAINT` executes afterwards in its migration-defined order, the resulting
+ * constraints are `convalidated = true` with exactly the predicates the migration declares, and
+ * those predicates reject the rows they should — on a fresh, empty PGlite database.
+ *
+ * NOT proven here, and owned by the named real-PostgreSQL lanes: separate transaction commits
+ * between the two phases, lock release between them, validation against preexisting rows, lock
+ * duration or contention, failure and recovery at a phase boundary, and behaviour under live
+ * writes.
  *
  * Do not reintroduce a downgrade without probing first. Two of the three here existed only
  * because nobody had.
  */
 
 /**
- * PS-511 requirement 6 — capability-probe PGlite before DELETING anything.
+ * PS-511 requirement 6 — capability-probe PGlite, and FAIL CLOSED if the capability is absent.
  *
- * The standalone `VALIDATE CONSTRAINT` was previously deleted unconditionally, on the
- * assumption PGlite cannot run it. That assumption was never tested. If PGlite can validate an
- * eagerly-created constraint, the statement is kept and runs for real.
+ * The standalone `VALIDATE CONSTRAINT` was once deleted unconditionally, on an assumption that
+ * had never been tested. It is false: PGlite runs the statement. So the deletion mechanism was
+ * removed entirely, and no code deletes anything any more.
  *
- * Returns true when the deletion is genuinely required.
+ * This function therefore must NOT report a deletion on the failure branch. An earlier revision
+ * did — it printed "the statement is DELETED" while returning a boolean nothing read, describing
+ * a deletion that could not occur. A disclosure mechanism that narrates work it does not do is
+ * the exact defect this card exists to remove, so the branch now aborts instead.
  */
-async function pgliteNeedsValidateDeletion(pg, log) {
+async function assertPgliteSupportsValidateConstraint(pg, log) {
   try {
     await pg.exec(`
       create table __ps511_probe (id integer);
@@ -319,14 +336,19 @@ async function pgliteNeedsValidateDeletion(pg, log) {
       drop table __ps511_probe;
     `);
     log('[ps-511] capability probe: PGlite SUPPORTS standalone VALIDATE CONSTRAINT '
-      + '— the statement is KEPT, not deleted');
-    return false;
+      + '— 0104/0105 run their VALIDATE statements unmodified');
+    return;
   } catch (error) {
     const message = String((error && error.message) || error).split('\n')[0];
-    log(`[ps-511] capability probe: PGlite cannot run standalone VALIDATE CONSTRAINT (${message})`);
-    log('[ps-511]   -> the statement is DELETED. This is a deletion, not a downgrade.');
     try { await pg.exec('drop table if exists __ps511_probe;'); } catch { /* probe cleanup */ }
-    return true;
+    throw new Error(
+      'STOP: PGlite no longer supports standalone VALIDATE CONSTRAINT.\n'
+      + `  probe error: ${message}\n`
+      + '  0104/0105 rely on running that statement unmodified. There is deliberately no\n'
+      + '  deletion fallback: silently dropping it would make the constraints unvalidated while\n'
+      + '  the stack still reported success. Decide explicitly — register a downgrade with a\n'
+      + '  stated reason, or pin the PGlite version — rather than letting this degrade quietly.',
+    );
   }
 }
 
@@ -377,7 +399,7 @@ function assertNoUnregisteredDowngradePatterns(files, readFile) {
   }
 }
 
-function toPgliteTransactionSafe(file, sql, { deleteValidate = true } = {}) {
+function toPgliteTransactionSafe(file, sql) {
   if (!PGLITE_TXN_SAFE_REWRITES.has(file)) return { sql, downgrades: [] };
 
   let out = sql;
@@ -420,7 +442,7 @@ export async function applyAllMigrations(pg, log = console.log) {
   // PS-511 req 2: no migration may carry a downgrade pattern without being declared.
   assertNoUnregisteredDowngradePatterns(files, (f) => readFileSync(`drizzle/${f}`, 'utf8'));
   // PS-511 req 6: probe the capability before deleting anything, rather than assuming.
-  const deleteValidate = await pgliteNeedsValidateDeletion(pg, log);
+  await assertPgliteSupportsValidateConstraint(pg, log);
 
   for (const file of files) {
     const sql = readFileSync(`drizzle/${file}`, 'utf8');
@@ -428,7 +450,7 @@ export async function applyAllMigrations(pg, log = console.log) {
     // migration failure, and must not be caught by the tolerance handler below. Inside the try
     // it surfaced as "migration X failed for an untolerated reason", blaming the migration for
     // a bug in the rewrite registry.
-    const rewritten = toPgliteTransactionSafe(file, sql, { deleteValidate });
+    const rewritten = toPgliteTransactionSafe(file, sql);
     downgrades.push(...rewritten.downgrades);
     try {
       await pg.exec(rewritten.sql.replace(/-->\s*statement-breakpoint/g, ';'));
@@ -471,6 +493,18 @@ export async function applyAllMigrations(pg, log = console.log) {
     log('[ps-511]   A green result here is valid application and persistence evidence. It is NOT');
     log('[ps-511]   exact 0104/0105 migration proof.');
   }
+
+  // Stated on EVERY run, downgrade or not. 0104/0105 keep their NOT VALID and VALIDATE
+  // statements and both execute — but a migration is applied as one multi-command exec, so the
+  // two phases do not sit either side of a real transaction boundary. Printing what the
+  // retained statements do prove, without printing the operational semantics they do not, is
+  // the whole point of this card.
+  log('[ps-511] two-phase constraints: NOT VALID then VALIDATE both EXECUTE unmodified, in');
+  log('[ps-511]   migration order, ending convalidated with exact predicates on a fresh empty');
+  log('[ps-511]   database. NOT PROVEN here: separate transaction commits between the phases,');
+  log('[ps-511]   lock release between them, validation against preexisting rows, lock duration');
+  log('[ps-511]   or contention, failure/recovery at a phase boundary, behaviour under live');
+  log(`[ps-511]   writes. Those belong to: ${REAL_PG_LANES.join(', ')}`);
 
   assertDowngradeReportMatchesExpectation(downgrades);
   await assertOccurrenceCatalog(pg, log);
@@ -575,9 +609,8 @@ async function assertOccurrenceCatalog(pg, log) {
     }
   }
 
-  // PS-511 req 3 + req 4 — the 0105 CHECKs are DOWNGRADED (NOT VALID stripped) but were
-  // previously neither definition-asserted nor behaviour-tested, so a widened status domain
-  // passed unnoticed. Both are now pinned exactly.
+  // PS-511 req 3 + req 4 — the two 0105 CHECKs were previously neither definition-asserted
+  // nor behaviour-tested, so a widened status domain passed unnoticed. Both are now pinned.
   const EXPECTED_CHECKS = new Map([
     ['fulfillment_line_claims_occ_identity_present_chk',
       'CHECK (((occurrence_id IS NULL) OR (canonical_line_identity IS NOT NULL)))'],
@@ -651,10 +684,10 @@ async function assertCheckConstraintsRejectBadRows(pg, log) {
                     'ps511:identity:probe', 999902, null)`,
       expect: /fulfillment_line_claims_occ_identity_present_chk/i,
     },
-    // PS-511 req 4 — the two 0105 CHECKs. Both are DOWNGRADED here (NOT VALID stripped), and
-    // both were previously outside behavioural coverage: a widened status domain kept the
-    // constraint name, stayed convalidated, and passed. A downgraded constraint is exactly the
-    // one that most needs proving it still rejects.
+    // PS-511 req 4 — the two 0105 CHECKs. 0105 is NOT rewritten: it applies verbatim, so
+    // these run their real NOT VALID + VALIDATE statements. Both were previously outside
+    // behavioural coverage: a widened status domain kept the constraint name, stayed
+    // convalidated, and passed. A constraint nothing inserts against proves only a name.
     {
       label: 'status-domain CHECK rejects a status outside the 0105 domain',
       sql: `insert into fulfillment_line_claims
