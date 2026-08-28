@@ -251,7 +251,6 @@ const TOLERATED_MIGRATION_FAILURES = new Map([
  */
 const PGLITE_TXN_SAFE_REWRITES = new Set([
   '0104_ps497_fulfillment_occurrences.sql',
-  '0105_ps497_claim_not_applicable_status.sql',
 ]);
 
 /**
@@ -271,25 +270,36 @@ const PGLITE_DOWNGRADES = [
       + 'empty database the plain form is outcome-identical.',
     notProven: 'production concurrent index build behaviour under live writes',
   },
-  {
-    id: 'not-valid',
-    drop: false,
-    pattern: /\s+NOT\s+VALID\b/gi,
-    replacement: '',
-    why: 'the constraint is created eagerly-validated instead of deferred. On an empty table '
-      + 'there are no preexisting rows to validate, so the end state is the same.',
-    notProven: 'production NOT VALID -> VALIDATE sequencing, and validation against preexisting rows',
-  },
-  {
-    id: 'standalone-validate',
-    drop: true,
-    pattern: /ALTER\s+TABLE[^;]*?\bVALIDATE\s+CONSTRAINT\b[^;]*?;/gi,
-    replacement: '',
-    why: 'redundant once NOT VALID is removed — the constraint is already validated. Applied '
-      + 'ONLY when the PGlite capability probe shows standalone VALIDATE is unsupported.',
-    notProven: 'the two-phase validation step itself',
-  },
 ];
+
+/*
+ * PS-511 — TWO DOWNGRADES WERE REMOVED BECAUSE THEY WERE NEVER NECESSARY.
+ *
+ * The stack previously also stripped `NOT VALID` and deleted standalone
+ * `ALTER TABLE ... VALIDATE CONSTRAINT`. Both were justified by an assumption about PGlite's
+ * capabilities that had never been tested. Probed directly:
+ *
+ *   SUPPORTED   ADD CONSTRAINT ... NOT VALID
+ *   SUPPORTED   VALIDATE CONSTRAINT (after NOT VALID)
+ *   SUPPORTED   CREATE INDEX CONCURRENTLY          <- when sent as its OWN command
+ *   SUPPORTED   CREATE UNIQUE INDEX CONCURRENTLY   <- when sent as its OWN command
+ *
+ * PGlite supports all four. Only `CREATE INDEX CONCURRENTLY` fails here, and not because
+ * PGlite lacks it: a migration file is applied as ONE multi-command exec, which PostgreSQL
+ * wraps in an IMPLICIT transaction, and CONCURRENTLY cannot run inside one. Confirmed by
+ * re-applying both files verbatim, one statement per exec: 0105 applies COMPLETELY with no
+ * downgrade at all, and 0104 fails on exactly one statement — its CONCURRENTLY index.
+ *
+ * Consequences, and they strengthen what this stack proves:
+ *   - 0105 is no longer registered for rewriting. It runs verbatim.
+ *   - The constraints now follow the REAL production two-phase path: created NOT VALID, then
+ *     VALIDATEd by the migration's own statement. That was previously disclaimed as
+ *     "NOT PROVEN here"; it is now actually exercised.
+ *   - One downgrade remains, for one statement, and it is reported.
+ *
+ * Do not reintroduce a downgrade without probing first. Two of the three here existed only
+ * because nobody had.
+ */
 
 /**
  * PS-511 requirement 6 — capability-probe PGlite before DELETING anything.
@@ -329,13 +339,50 @@ async function pgliteNeedsValidateDeletion(pg, log) {
  * and the run proceeded as though the downgrade had been applied. That is the same shape as a
  * stale mutation that quietly passes — it proves nothing while looking like it proved something.
  */
+/**
+ * PS-511 requirement 2, CORRECTED. The frozen wording is "a rewrite reaching a file not in the
+ * registered set must abort" — the UNREGISTERED direction. An earlier implementation checked
+ * only the inverse (a registered file that matches nothing), which left the real hole open:
+ * removing 0105 from the registry made the stack silently apply and report TWO downgrades
+ * instead of three and stay green, because unregistered files returned early and were never
+ * examined.
+ *
+ * This scans every migration for downgrade patterns. A file that WOULD be rewritten must be
+ * either registered (we rewrite it deliberately) or tolerated (we accept its failure for a
+ * named reason). Anything else is an undeclared downgrade and is fatal.
+ */
+function assertNoUnregisteredDowngradePatterns(files, readFile) {
+  const undeclared = [];
+  for (const file of files) {
+    if (PGLITE_TXN_SAFE_REWRITES.has(file)) continue;
+    if (TOLERATED_MIGRATION_FAILURES.has(file)) continue;
+    // Comments stripped first. 0057 and 0092 both DESCRIBE CREATE INDEX CONCURRENTLY in prose
+    // ("this file is the idempotent record", "built NON-CONCURRENTLY on purpose"), and a
+    // pattern match against raw text flagged both as undeclared downgrades. A guard that reads
+    // commentary as code reports files that are behaving correctly.
+    const sql = readFile(file)
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[\s;)])--[^\n]*/g, '$1 ');
+    const hit = PGLITE_DOWNGRADES.filter((d) => new RegExp(d.pattern.source, 'i').test(sql));
+    if (hit.length > 0) undeclared.push({ file, ids: hit.map((h) => h.id) });
+  }
+  if (undeclared.length > 0) {
+    throw new Error(
+      'STOP: migration(s) contain PGlite downgrade patterns but are neither registered in\n'
+      + 'PGLITE_TXN_SAFE_REWRITES nor tolerated. An undeclared downgrade is exactly what this\n'
+      + 'card exists to stop — the stack would silently apply a weaker form and report nothing.\n'
+      + undeclared.map((u) => `  ${u.file} — ${u.ids.join(', ')}`).join('\n')
+      + '\n  Register the file (and state why the downgrade is safe) or tolerate it by name.',
+    );
+  }
+}
+
 function toPgliteTransactionSafe(file, sql, { deleteValidate = true } = {}) {
   if (!PGLITE_TXN_SAFE_REWRITES.has(file)) return { sql, downgrades: [] };
 
   let out = sql;
   const downgrades = [];
   for (const d of PGLITE_DOWNGRADES) {
-    if (d.id === 'standalone-validate' && !deleteValidate) continue;
     const matches = out.match(d.pattern);
     if (!matches || matches.length === 0) continue;
     out = out.replace(d.pattern, d.replacement);
@@ -370,6 +417,8 @@ export async function applyAllMigrations(pg, log = console.log) {
   const applied = [];
   const tolerated = [];
   const downgrades = [];
+  // PS-511 req 2: no migration may carry a downgrade pattern without being declared.
+  assertNoUnregisteredDowngradePatterns(files, (f) => readFileSync(`drizzle/${f}`, 'utf8'));
   // PS-511 req 6: probe the capability before deleting anything, rather than assuming.
   const deleteValidate = await pgliteNeedsValidateDeletion(pg, log);
 
@@ -423,10 +472,39 @@ export async function applyAllMigrations(pg, log = console.log) {
     log('[ps-511]   exact 0104/0105 migration proof.');
   }
 
+  assertDowngradeReportMatchesExpectation(downgrades);
   await assertOccurrenceCatalog(pg, log);
   await assertCheckConstraintsRejectBadRows(pg, log);
 
   return { applied: applied.length, tolerated, downgrades };
+}
+
+/**
+ * PS-511 — the downgrade report is itself pinned.
+ *
+ * Reporting without asserting is not a disclosure mechanism, it is a log line. The report could
+ * shrink from three entries to one — as it legitimately did when two unnecessary downgrades were
+ * removed — and nothing would have noticed. Here the expected shape is declared, so a future
+ * change that silently stops reporting, adds an undeclared downgrade, or changes how many
+ * statements one affects, fails closed and has to be acknowledged.
+ */
+const EXPECTED_DOWNGRADE_REPORT = [
+  { file: '0104_ps497_fulfillment_occurrences.sql', id: 'concurrent-index', count: 3 },
+];
+
+function assertDowngradeReportMatchesExpectation(downgrades) {
+  const key = (d) => `${d.file}|${d.id}|${d.count}`;
+  const got = downgrades.map(key).sort();
+  const want = EXPECTED_DOWNGRADE_REPORT.map(key).sort();
+  if (got.join('\n') !== want.join('\n')) {
+    throw new Error(
+      'STOP: the PGlite downgrade report does not match its declared shape.\n'
+      + `  expected: ${want.join(' , ') || '(none)'}\n`
+      + `  actual  : ${got.join(' , ') || '(none)'}\n`
+      + '  A downgrade appearing, disappearing, or changing scope is a change to what this\n'
+      + '  stack proves. Update EXPECTED_DOWNGRADE_REPORT deliberately, with the reason.',
+    );
+  }
 }
 
 /**
@@ -458,28 +536,59 @@ async function assertOccurrenceCatalog(pg, log) {
   // hazard does not apply — but the ban is honoured rather than amended, because a guard
   // relaxed to accommodate the first caller who finds it inconvenient stops being a guard.
   // Every name below is a hardcoded constant; there is no interpolated input.
-  const INDEXES = [
-    'fulfillment_line_claims_occ_line_dir_unq',
-    'fulfillment_line_claims_reverse_original_unq',
-    'fulfillment_occurrences_key_unq',
-    'fulfillment_occurrences_shipment_unq',
-  ];
+  // PS-511 req 3, CORRECTED — the EXACT normalized definition, not name+flags.
+  //
+  // Name, indisvalid and indisunique are all preserved by an index whose predicate has been
+  // neutered. `... WHERE direction = 'reverse' AND original_claim_id IS NOT NULL AND false`
+  // keeps every one of those properties while making the uniqueness protection inert. The
+  // earlier version selected pg_get_indexdef and never compared it, so that index passed.
+  // Comparison is on the whole normalized definition string from pg_get_indexdef, which pins
+  // columns, their order, and the predicate together.
+  const EXPECTED_INDEXES = new Map([
+    ['fulfillment_line_claims_occ_line_dir_unq',
+      'CREATE UNIQUE INDEX fulfillment_line_claims_occ_line_dir_unq ON public.fulfillment_line_claims USING btree (occurrence_id, canonical_line_identity, direction) WHERE (occurrence_id IS NOT NULL)'],
+    ['fulfillment_line_claims_reverse_original_unq',
+      "CREATE UNIQUE INDEX fulfillment_line_claims_reverse_original_unq ON public.fulfillment_line_claims USING btree (original_claim_id) WHERE ((direction = 'reverse'::text) AND (original_claim_id IS NOT NULL))"],
+    ['fulfillment_occurrences_key_unq',
+      'CREATE UNIQUE INDEX fulfillment_occurrences_key_unq ON public.fulfillment_occurrences USING btree (occurrence_key)'],
+    ['fulfillment_occurrences_shipment_unq',
+      'CREATE UNIQUE INDEX fulfillment_occurrences_shipment_unq ON public.fulfillment_occurrences USING btree (shipment_id) WHERE (shipment_id IS NOT NULL)'],
+  ]);
+  const INDEXES = [...EXPECTED_INDEXES.keys()];
   const idx = await pg.exec(`
     select c.relname as name, i.indisvalid, i.indisunique, pg_get_indexdef(i.indexrelid) as def
     from pg_class c join pg_index i on i.indexrelid = c.oid
     where c.relname in (${INDEXES.map((n) => `'${n}'`).join(', ')});`);
   const byName = new Map(((idx[0] && idx[0].rows) || []).map((r) => [r.name, r]));
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   for (const name of INDEXES) {
     const row = byName.get(name);
     if (!row) { problems.push(`index ${name}: missing entirely`); continue; }
     if (row.indisvalid === false) problems.push(`index ${name}: exists but indisvalid = false`);
     if (row.indisunique === false) problems.push(`index ${name}: expected UNIQUE, definition is ${row.def}`);
+    const want = norm(EXPECTED_INDEXES.get(name));
+    const got = norm(row.def);
+    if (got !== want) {
+      problems.push(
+        `index ${name}: definition does not match 0104\n      expected: ${want}\n      actual  : ${got}`,
+      );
+    }
   }
 
-  const CHECKS = [
-    'fulfillment_line_claims_occ_identity_present_chk',
-    'fulfillment_line_claims_supply_chk',
-  ];
+  // PS-511 req 3 + req 4 — the 0105 CHECKs are DOWNGRADED (NOT VALID stripped) but were
+  // previously neither definition-asserted nor behaviour-tested, so a widened status domain
+  // passed unnoticed. Both are now pinned exactly.
+  const EXPECTED_CHECKS = new Map([
+    ['fulfillment_line_claims_occ_identity_present_chk',
+      'CHECK (((occurrence_id IS NULL) OR (canonical_line_identity IS NOT NULL)))'],
+    ['fulfillment_line_claims_supply_chk',
+      "CHECK (((supply IS NULL) OR (supply = ANY (ARRAY['prepship'::text, 'external'::text, 'unknown'::text]))))"],
+    ['fulfillment_line_claims_quantity_state_v2_check',
+      "CHECK ((((quantity IS NOT NULL) AND (quantity > 0)) OR ((quantity IS NULL) AND (status = ANY (ARRAY['review'::text, 'not_applicable'::text, 'superseded'::text])))))"],
+    ['fulfillment_line_claims_status_domain_check',
+      "CHECK ((status = ANY (ARRAY['pending'::text, 'applied'::text, 'superseded'::text, 'reversed'::text, 'review'::text, 'not_applicable'::text])))"],
+  ]);
+  const CHECKS = [...EXPECTED_CHECKS.keys()];
   const chk = await pg.exec(`
     select conname as name, convalidated, pg_get_constraintdef(oid) as def
     from pg_constraint
@@ -492,10 +601,13 @@ async function assertOccurrenceCatalog(pg, log) {
     // not, the downgrade did not do what it claims and the stack is asserting against a
     // constraint that enforces nothing on existing rows.
     if (row.convalidated === false) problems.push(`check ${name}: exists but convalidated = false`);
-  }
-  const supply = chkByName.get('fulfillment_line_claims_supply_chk');
-  if (supply && !/prepship/i.test(supply.def)) {
-    problems.push(`check fulfillment_line_claims_supply_chk: definition does not mention the expected values — ${supply.def}`);
+    const want = norm(EXPECTED_CHECKS.get(name));
+    const got = norm(row.def);
+    if (got !== want) {
+      problems.push(
+        `check ${name}: definition does not match its migration\n      expected: ${want}\n      actual  : ${got}`,
+      );
+    }
   }
 
   if (problems.length > 0) {
@@ -505,7 +617,11 @@ async function assertOccurrenceCatalog(pg, log) {
       + problems.map((p) => `  ${p}`).join('\n'),
     );
   }
-  log('[ps-511] catalog: 4 indexes valid+unique, 2 CHECKs present and convalidated');
+  // Counts computed, never written as prose. A hardcoded "2 CHECKs" survived the addition of
+  // two more and understated coverage — a report that cannot follow the thing it reports on is
+  // the failure mode this whole card is about.
+  log(`[ps-511] catalog: ${INDEXES.length} indexes valid+unique with exact definitions, `
+    + `${CHECKS.length} CHECKs present, convalidated and definition-pinned`);
 }
 
 /**
@@ -534,6 +650,29 @@ async function assertCheckConstraintsRejectBadRows(pg, log) {
             values (999902, 999902, 'sku:PS511', 'X', 'X', 1, 'deduct', 'pending',
                     'ps511:identity:probe', 999902, null)`,
       expect: /fulfillment_line_claims_occ_identity_present_chk/i,
+    },
+    // PS-511 req 4 — the two 0105 CHECKs. Both are DOWNGRADED here (NOT VALID stripped), and
+    // both were previously outside behavioural coverage: a widened status domain kept the
+    // constraint name, stayed convalidated, and passed. A downgraded constraint is exactly the
+    // one that most needs proving it still rejects.
+    {
+      label: 'status-domain CHECK rejects a status outside the 0105 domain',
+      sql: `insert into fulfillment_line_claims
+              (lifecycle_event_id, order_id, line_key, sku, name, quantity, direction, status,
+               idempotency_key)
+            values (999903, 999903, 'sku:PS511', 'X', 'X', 1, 'deduct', 'bogus_status',
+                    'ps511:statusdomain:probe')`,
+      expect: /fulfillment_line_claims_status_domain_check/i,
+    },
+    {
+      label: 'quantity-state CHECK rejects a NULL quantity on a status that requires one',
+      // quantity may be NULL only for review / not_applicable / superseded.
+      sql: `insert into fulfillment_line_claims
+              (lifecycle_event_id, order_id, line_key, sku, name, quantity, direction, status,
+               idempotency_key)
+            values (999904, 999904, 'sku:PS511', 'X', 'X', null, 'deduct', 'pending',
+                    'ps511:quantitystate:probe')`,
+      expect: /fulfillment_line_claims_quantity_state_v2_check/i,
     },
   ];
 
