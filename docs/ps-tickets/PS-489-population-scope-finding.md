@@ -3,16 +3,39 @@
 **Status:** read-only classification evidence. No decision, no recommendation, no code change.
 No chargeability, representation, remediation, or red-contract completion is claimed.
 
-## Snapshot identity
+## ⚠ This document is not yet a captured runner artifact
+
+The figures below were measured **2026-08-22 05:11–05:40 UTC** through a read-only
+administrative channel, across **several separate statements**, before the current runner
+existed. They are **not** the captured output of one execution of
+[`scripts/ps-489-phase0-evidence.ts`](../../scripts/ps-489-phase0-evidence.ts).
+
+Every query in this document has been individually validated against production read-only, and
+the runner reproduces them. But **no single-transaction captured artifact exists yet**, because
+executing the runner needs database credentials this working environment does not hold — the
+local `DATABASE_URL` fails authentication (`28P01`).
+
+**Owed before this qualifies as an accepted evidence appendix:** one run of the runner inside its
+single repeatable-read read-only transaction, with the complete unedited output committed as
+`docs/ps-tickets/evidence/PS-489-phase0-<UTC>.txt` plus its SHA-256, and this document reduced to
+linking that artifact rather than restating tables.
+
+Until then, treat the tables here as **individually verified measurements, not a single-snapshot
+capture.**
+
+## Run identity
 
 | | |
 |---|---|
-| Query window | **2026-08-22 05:11:23 UTC** (measurement), single repeatable-read snapshot on re-run |
+| Measurement window | 2026-08-22 05:11–05:40 UTC (multi-statement, see above) |
 | Database | `postgres`, PostgreSQL **17.6** |
-| Application SHA | `10d87ccd` (`prepshipv4-stable`) |
+| Application SHA | `5cc1ef56` → this revision |
 | Runner | [`scripts/ps-489-phase0-evidence.ts`](../../scripts/ps-489-phase0-evidence.ts) |
-| Isolation | `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` — one snapshot for every section; `READ ONLY` is enforced by Postgres, so any DDL/DML in the file would abort the transaction |
-| Exit contract | **exits nonzero if any assertion reports FAIL** |
+| Isolation | `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` — one snapshot for every section; `READ ONLY` is enforced by Postgres, so any DDL/DML would abort the transaction |
+| Timing | wall clock via `clock_timestamp()`; `now()`/`transaction_timestamp()` are fixed at transaction start and cannot measure elapsed time |
+| Snapshot id | `pg_current_snapshot()` — a **consistent transaction snapshot identifier**, not an immutable or restorable database snapshot; meaningful only while the transaction is open |
+| Exit contract | nonzero if any **integrity** assertion fails. Open boundaries may be red without invalidating the appendix. `--require-exact-population` additionally fails on unresolved open boundaries |
+| Baseline policy | asserts **relationships only**; never hard-codes an observed production count, so normal drift is not mistaken for broken evidence logic |
 | Row grain | one `orders` row = one order. **Never** a billing line, never a shipment. |
 
 **Denominator caveat.** The population uses **literal `orders.order_status = 'shipped'`**. It does
@@ -22,13 +45,33 @@ denominator. The term "lifecycle-shipped" is withdrawn from this document.
 
 ---
 
-## One assertion currently FAILS. It is reported, not weakened.
+## Headline
 
-> **`orphan-arm exclusions are identity-qualified (unique order_number)` — FAIL.**
-> 20 of 20 exclusions rest on a non-unique `order_number`.
+> **Population boundary: 18,335–18,355 literal-shipped orders lack an identity-qualified active
+> ordinary outbound shipment determination.**
+>
+> - **18,335** under the current watchdog predicate, trusting all orphan-number exclusions.
+> - **18,355** when none of the identity-ambiguous orphan exclusions is trusted.
+> - The exact count within that interval requires account/client/store-qualified identity
+>   resolution.
 
-Consequence: the population boundary of **18,335** is not fully identity-qualified. See
-§5. The assertion is left failing rather than relaxed to produce a green pack.
+**The interval concerns an identity-qualified predicate determination — not proof of physical
+shipment absence.** It must not be shortened to "18,335–18,355 orders have no shipment."
+
+18,335 remains the exact current-watchdog result and is useful as such, but it is not the
+unqualified headline.
+
+## Open boundaries
+
+These are honestly discovered unresolved questions, **not** integrity failures. They are reported
+prominently and never weakened, but they do not invalidate the measurements.
+
+| open boundary | state |
+|---|---|
+| orphan-arm exclusions are identity-qualified | **OPEN** — 20 exclusions across 10 identity decisions, every one cross-client. See §5 |
+| true production cutover boundary is proven | **OPEN** — `updated_at` proxy only; see §7 |
+| source-verified external evidence exists | **OPEN** — 0 orders meet the category-1 standard; provider probe not yet designed or reviewed |
+| commercial policy is known | **OPEN** — client contracts not held |
 
 ---
 
@@ -139,23 +182,41 @@ misfiled, exactly the linkage inconsistency this dimension was rebuilt to expose
 
 | | |
 |---|---:|
-| excluded by orphan arm | 20 |
-| **whose `order_number` is ambiguous across orders** | **20** |
-| matching multiple orphan shipment rows | 0 |
+| excluded orders | 20 |
+| **distinct `order_number` values among them** | **10** |
+| **excluded orders per ambiguous number** | **2 (max and uniform)** |
+| **orphan shipment rows per ambiguous number** | **1 (max)** |
+| numbers carrying more than one excluded order | 10 |
+| **excluded orders whose sharer disagrees on client** | **20** |
+| …disagrees on store | 20 |
+| …disagrees on source account | 20 |
+| `order_number` with whitespace / lowercase variance | 0 / 0 |
 | shipped orders with NULL `order_number` | 0 |
 | orphan shipment rows in table | 4,004 |
 
-**Every one of the 20 exclusions rests on an `order_number` shared by more than one order.**
-`orders.order_number` carries indexes but no global unique constraint, so the watchdog's orphan
-arm cannot attribute an orphan shipment to a specific order.
+**20 excluded orders are not 20 independent identity decisions. They are 10.**
 
-Therefore the population is bounded, not exact:
+Each of the 10 ambiguous `order_number` values carries **exactly one** orphan shipment row and is
+shared by **exactly two** literal-shipped orders — and in all 20 cases the two orders belong to
+**different clients, different stores, and different source accounts.**
 
-- **18,335** under watchdog semantics (orphan matches trusted)
-- **18,355** if orphan matches are not trusted
+So a single orphan shipment row is currently excluding two orders from two different clients.
+**At most one of each pair can be correct; at least one of each pair is wrong.** The watchdog's
+orphan arm matches across client boundaries, which no correct linkage rule would do.
 
-Resolving this needs account/client/store-qualified linkage, which belongs to the classification
-successor's identity partitioning.
+Consequences:
+
+- At most **10** of the 20 exclusions can be legitimate; at least **10** are not.
+- The population interval is therefore **18,335 – 18,355**, with **18,345** the value if exactly
+  one exclusion per pair is correct. None of the three is currently provable.
+- `orders.order_number` carries indexes but **no global unique constraint**, so the arm cannot
+  attribute an orphan shipment to a specific order by number alone.
+
+Resolving it needs account/client/store-qualified linkage, which belongs to the classification
+successor's identity partitioning. This finding is a concrete input to that work.
+
+Not established: no normalisation variants (whitespace, case) were found, but punctuation,
+leading-zero and marketplace-prefix collision classes were **not** tested and are owed.
 
 ## §6 — full ordered lifecycle history
 
@@ -216,24 +277,40 @@ additive, history not backfilled.
 
 **"No fourth ticket required" remains provisional, not closed.**
 
-## Assertions
+## Integrity assertions
 
-Recomputed from the source CTE. No hard-coded constants. The runner exits nonzero on any FAIL.
+These say the measurement machinery is sound. They must all pass, and they alone control the exit
+code. Every count is recomputed from the source CTE; no observed production constant is
+hard-coded, so ordinary data drift cannot be mistaken for broken evidence logic.
 
-| assertion | result |
+| integrity assertion | result |
 |---|---|
 | population rows are distinct orders | PASS |
 | transition matrix sums to literal shipped denominator | PASS |
-| corrected population is derived from the matrix | PASS |
-| naive total is derived from the matrix | PASS |
+| corrected population derived from matrix equals measured population | PASS |
+| **matrix naive total equals independent direct naive count** | PASS |
 | flagged + unflagged = corrected population | PASS |
 | provenance partition sums to population | PASS |
-| every classifier-declared order carries a source-specific receipt | PASS |
+| classifier-declared class is source-qualified, not transition-only | PASS |
 | shipment-history attribute sums to population | PASS |
 | raw combination cross-tab sums to population | PASS |
 | event-bearing + no-receipt = population | PASS |
 | §6 grouped output sums to event-bearing count | PASS |
-| **orphan-arm exclusions are identity-qualified** | **FAIL** — 20 of 20 rest on a non-unique `order_number` |
+
+The previous *"naive total is derived from the matrix"* check was **tautological** — it compared a
+variable against the expression that had just assigned it, so it could never fail. Replaced with a
+comparison against an independently computed direct naive-predicate count.
+
+Open boundaries are listed at the top of this document. They do **not** appear here and do **not**
+fail the run: an appendix that discovers an unresolved boundary is doing its job, and a runner
+that declares itself unacceptable over an honest finding would discourage recording them.
+
+### Explicit zeros
+
+The zero rows in §3 and §4b are emitted by the queries themselves, via a fixed class domain
+(`VALUES` left-joined to measured counts). They are **query output, not hand-inserted rows**. A
+plain `GROUP BY` cannot emit an absent category, and presenting a manually added zero as verbatim
+output would be a false claim.
 
 ## Evidence confidence and observation time
 
