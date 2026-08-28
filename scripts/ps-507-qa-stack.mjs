@@ -254,12 +254,103 @@ const PGLITE_TXN_SAFE_REWRITES = new Set([
   '0105_ps497_claim_not_applicable_status.sql',
 ]);
 
-function toPgliteTransactionSafe(file, sql) {
-  if (!PGLITE_TXN_SAFE_REWRITES.has(file)) return sql;
-  return sql
-    .replace(/\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/gi, 'CREATE $1INDEX')
-    .replace(/\s+NOT\s+VALID\b/gi, '')
-    .replace(/ALTER\s+TABLE[^;]*?\bVALIDATE\s+CONSTRAINT\b[^;]*?;/gi, '');
+/**
+ * PS-511 — the individual capability downgrades, each named so the run can report it.
+ *
+ * `drop` distinguishes a DOWNGRADE (a weaker but outcome-equivalent form on a fresh empty
+ * database) from a DELETION (the statement does not run at all). Those are different claims
+ * and were previously indistinguishable in the output.
+ */
+const PGLITE_DOWNGRADES = [
+  {
+    id: 'concurrent-index',
+    drop: false,
+    pattern: /\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/gi,
+    replacement: 'CREATE $1INDEX',
+    why: 'PGlite runs each exec in one implicit transaction; CONCURRENTLY cannot. On a fresh '
+      + 'empty database the plain form is outcome-identical.',
+    notProven: 'production concurrent index build behaviour under live writes',
+  },
+  {
+    id: 'not-valid',
+    drop: false,
+    pattern: /\s+NOT\s+VALID\b/gi,
+    replacement: '',
+    why: 'the constraint is created eagerly-validated instead of deferred. On an empty table '
+      + 'there are no preexisting rows to validate, so the end state is the same.',
+    notProven: 'production NOT VALID -> VALIDATE sequencing, and validation against preexisting rows',
+  },
+  {
+    id: 'standalone-validate',
+    drop: true,
+    pattern: /ALTER\s+TABLE[^;]*?\bVALIDATE\s+CONSTRAINT\b[^;]*?;/gi,
+    replacement: '',
+    why: 'redundant once NOT VALID is removed — the constraint is already validated. Applied '
+      + 'ONLY when the PGlite capability probe shows standalone VALIDATE is unsupported.',
+    notProven: 'the two-phase validation step itself',
+  },
+];
+
+/**
+ * PS-511 requirement 6 — capability-probe PGlite before DELETING anything.
+ *
+ * The standalone `VALIDATE CONSTRAINT` was previously deleted unconditionally, on the
+ * assumption PGlite cannot run it. That assumption was never tested. If PGlite can validate an
+ * eagerly-created constraint, the statement is kept and runs for real.
+ *
+ * Returns true when the deletion is genuinely required.
+ */
+async function pgliteNeedsValidateDeletion(pg, log) {
+  try {
+    await pg.exec(`
+      create table __ps511_probe (id integer);
+      alter table __ps511_probe add constraint __ps511_probe_chk check (id > 0);
+      alter table __ps511_probe validate constraint __ps511_probe_chk;
+      drop table __ps511_probe;
+    `);
+    log('[ps-511] capability probe: PGlite SUPPORTS standalone VALIDATE CONSTRAINT '
+      + '— the statement is KEPT, not deleted');
+    return false;
+  } catch (error) {
+    const message = String((error && error.message) || error).split('\n')[0];
+    log(`[ps-511] capability probe: PGlite cannot run standalone VALIDATE CONSTRAINT (${message})`);
+    log('[ps-511]   -> the statement is DELETED. This is a deletion, not a downgrade.');
+    try { await pg.exec('drop table if exists __ps511_probe;'); } catch { /* probe cleanup */ }
+    return true;
+  }
+}
+
+/**
+ * Apply the registered downgrades, returning the rewritten SQL and an explicit record of what
+ * was changed.
+ *
+ * PS-511 requirement 2 — a registered file whose rewrites ALL no-op is fatal. Previously a
+ * stale registration passed silently: the file was declared to need rewriting, nothing matched,
+ * and the run proceeded as though the downgrade had been applied. That is the same shape as a
+ * stale mutation that quietly passes — it proves nothing while looking like it proved something.
+ */
+function toPgliteTransactionSafe(file, sql, { deleteValidate = true } = {}) {
+  if (!PGLITE_TXN_SAFE_REWRITES.has(file)) return { sql, downgrades: [] };
+
+  let out = sql;
+  const downgrades = [];
+  for (const d of PGLITE_DOWNGRADES) {
+    if (d.id === 'standalone-validate' && !deleteValidate) continue;
+    const matches = out.match(d.pattern);
+    if (!matches || matches.length === 0) continue;
+    out = out.replace(d.pattern, d.replacement);
+    downgrades.push({ file, id: d.id, drop: d.drop, count: matches.length, why: d.why, notProven: d.notProven });
+  }
+
+  if (downgrades.length === 0) {
+    throw new Error(
+      `STOP: ${file} is registered in PGLITE_TXN_SAFE_REWRITES but no downgrade matched it.\n`
+      + '  The registration is stale. Fix it or remove the file from the set — do not leave a\n'
+      + '  declared rewrite that silently does nothing, because the run would then claim a\n'
+      + '  downgrade it never applied.',
+    );
+  }
+  return { sql: out, downgrades };
 }
 
 /**
@@ -278,11 +369,20 @@ export async function applyAllMigrations(pg, log = console.log) {
   const files = readdirSync('drizzle').filter((f) => f.endsWith('.sql')).sort();
   const applied = [];
   const tolerated = [];
+  const downgrades = [];
+  // PS-511 req 6: probe the capability before deleting anything, rather than assuming.
+  const deleteValidate = await pgliteNeedsValidateDeletion(pg, log);
 
   for (const file of files) {
     const sql = readFileSync(`drizzle/${file}`, 'utf8');
+    // Rewritten OUTSIDE the try: a stale registration is a defect in THIS script, not a
+    // migration failure, and must not be caught by the tolerance handler below. Inside the try
+    // it surfaced as "migration X failed for an untolerated reason", blaming the migration for
+    // a bug in the rewrite registry.
+    const rewritten = toPgliteTransactionSafe(file, sql, { deleteValidate });
+    downgrades.push(...rewritten.downgrades);
     try {
-      await pg.exec(toPgliteTransactionSafe(file, sql).replace(/-->\s*statement-breakpoint/g, ';'));
+      await pg.exec(rewritten.sql.replace(/-->\s*statement-breakpoint/g, ';'));
       applied.push(file);
     } catch (error) {
       const entry = TOLERATED_MIGRATION_FAILURES.get(file);
@@ -306,7 +406,169 @@ export async function applyAllMigrations(pg, log = console.log) {
 
   log(`[ps-507] migrations: ${applied.length} applied, ${tolerated.length} tolerated`);
   for (const t of tolerated) log(`[ps-507]   skipped ${t.file} — ${t.reason}`);
-  return { applied: applied.length, tolerated };
+
+  // PS-511 req 1 — every downgrade is reported in the run output, not hidden in a helper.
+  // PS-511 req 5 — and the boundary of what this stack proves is stated here, in the run,
+  // rather than left to be inferred from a green tick.
+  log(`[ps-511] PGlite capability downgrades applied: ${downgrades.length}`);
+  for (const d of downgrades) {
+    log(`[ps-511]   ${d.drop ? 'DELETED ' : 'DOWNGRADE'} ${d.file} [${d.id}] x${d.count}`);
+    log(`[ps-511]     why: ${d.why}`);
+    log(`[ps-511]     NOT PROVEN here: ${d.notProven}`);
+  }
+  if (downgrades.length > 0) {
+    log('[ps-511]   Those properties are proven by the real-PostgreSQL lanes, NOT by this stack:');
+    log(`[ps-511]     ${REAL_PG_LANES.join(', ')}`);
+    log('[ps-511]   A green result here is valid application and persistence evidence. It is NOT');
+    log('[ps-511]   exact 0104/0105 migration proof.');
+  }
+
+  await assertOccurrenceCatalog(pg, log);
+  await assertCheckConstraintsRejectBadRows(pg, log);
+
+  return { applied: applied.length, tolerated, downgrades };
+}
+
+/**
+ * PS-511 — the real-PostgreSQL lanes that DO prove what this stack downgrades away.
+ * Named here so the boundary lives in code rather than in a reviewer's head.
+ * Both were red before PS-510 (merged 76e42fc3) and are green at that SHA.
+ */
+const REAL_PG_LANES = [
+  'PS-502 concurrency PG17 proofs',
+  'PS-508 PG17 proofs',
+  'PS-497 Slice 2 Release B PG17 proofs',
+];
+
+/**
+ * PS-511 req 3 — assert EXACT index and constraint definitions, not just that a name exists.
+ *
+ * Readiness already fails if a required constraint name is missing, so name-existence was
+ * genuinely proven before. What was not proven is that the object means what the migration
+ * says: a CHECK created with the wrong predicate, or left unvalidated, has the right name and
+ * the wrong behaviour.
+ */
+async function assertOccurrenceCatalog(pg, log) {
+  const problems = [];
+
+  // Reads go through pg.exec, the provisioning idiom already used for every migration in this
+  // file — NOT pg.query. ps-507-qa-harness-guard.ts bans pg.query() in this stack because an
+  // in-process query interleaves with whatever the socket server is serving, and PGlite is
+  // single-threaded. This code runs during provisioning, before that server exists, so the
+  // hazard does not apply — but the ban is honoured rather than amended, because a guard
+  // relaxed to accommodate the first caller who finds it inconvenient stops being a guard.
+  // Every name below is a hardcoded constant; there is no interpolated input.
+  const INDEXES = [
+    'fulfillment_line_claims_occ_line_dir_unq',
+    'fulfillment_line_claims_reverse_original_unq',
+    'fulfillment_occurrences_key_unq',
+    'fulfillment_occurrences_shipment_unq',
+  ];
+  const idx = await pg.exec(`
+    select c.relname as name, i.indisvalid, i.indisunique, pg_get_indexdef(i.indexrelid) as def
+    from pg_class c join pg_index i on i.indexrelid = c.oid
+    where c.relname in (${INDEXES.map((n) => `'${n}'`).join(', ')});`);
+  const byName = new Map(((idx[0] && idx[0].rows) || []).map((r) => [r.name, r]));
+  for (const name of INDEXES) {
+    const row = byName.get(name);
+    if (!row) { problems.push(`index ${name}: missing entirely`); continue; }
+    if (row.indisvalid === false) problems.push(`index ${name}: exists but indisvalid = false`);
+    if (row.indisunique === false) problems.push(`index ${name}: expected UNIQUE, definition is ${row.def}`);
+  }
+
+  const CHECKS = [
+    'fulfillment_line_claims_occ_identity_present_chk',
+    'fulfillment_line_claims_supply_chk',
+  ];
+  const chk = await pg.exec(`
+    select conname as name, convalidated, pg_get_constraintdef(oid) as def
+    from pg_constraint
+    where contype = 'c' and conname in (${CHECKS.map((n) => `'${n}'`).join(', ')});`);
+  const chkByName = new Map((((chk[0] && chk[0].rows) || [])).map((r) => [r.name, r]));
+  for (const name of CHECKS) {
+    const row = chkByName.get(name);
+    if (!row) { problems.push(`check ${name}: missing entirely`); continue; }
+    // The downgrade removes NOT VALID, so the constraint must come out VALIDATED. If it does
+    // not, the downgrade did not do what it claims and the stack is asserting against a
+    // constraint that enforces nothing on existing rows.
+    if (row.convalidated === false) problems.push(`check ${name}: exists but convalidated = false`);
+  }
+  const supply = chkByName.get('fulfillment_line_claims_supply_chk');
+  if (supply && !/prepship/i.test(supply.def)) {
+    problems.push(`check fulfillment_line_claims_supply_chk: definition does not mention the expected values — ${supply.def}`);
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      'STOP: PS-511 catalog assertion failed — the schema is not what 0104/0105 define, so any\n'
+      + 'assertion made against it below this point would be evidence about a different database.\n'
+      + problems.map((p) => `  ${p}`).join('\n'),
+    );
+  }
+  log('[ps-511] catalog: 4 indexes valid+unique, 2 CHECKs present and convalidated');
+}
+
+/**
+ * PS-511 req 4 — behaviour-test the CHECKs. A name in pg_constraint proves a name. Only a
+ * rejected INSERT proves the constraint enforces anything.
+ */
+async function assertCheckConstraintsRejectBadRows(pg, log) {
+  const cases = [
+    {
+      label: 'supply CHECK rejects an unknown supply value',
+      // supply must be one of prepship/external/unknown, or NULL.
+      // Every NOT NULL column is supplied so the CHECK is the only thing that can reject this.
+      // A row failing on a missing column would prove nothing about the constraint under test.
+      sql: `insert into fulfillment_line_claims
+              (lifecycle_event_id, order_id, line_key, sku, name, quantity, direction, status,
+               idempotency_key, supply)
+            values (999901, 999901, 'sku:PS511', 'X', 'X', 1, 'deduct', 'pending',
+                    'ps511:supply:probe', 'not_a_supply')`,
+      expect: /fulfillment_line_claims_supply_chk/i,
+    },
+    {
+      label: 'occurrence-identity CHECK rejects an occurrence without canonical_line_identity',
+      sql: `insert into fulfillment_line_claims
+              (lifecycle_event_id, order_id, line_key, sku, name, quantity, direction, status,
+               idempotency_key, occurrence_id, canonical_line_identity)
+            values (999902, 999902, 'sku:PS511', 'X', 'X', 1, 'deduct', 'pending',
+                    'ps511:identity:probe', 999902, null)`,
+      expect: /fulfillment_line_claims_occ_identity_present_chk/i,
+    },
+  ];
+
+  for (const c of cases) {
+    let rejected = false;
+    let message = '';
+    // Each pg.exec is its own implicit transaction, so a failing INSERT rolls itself back and
+    // no savepoint is needed. (SAVEPOINT is in fact rejected here — "can only be used in
+    // transaction blocks" — which is why this does not use one.) If the row is wrongly
+    // ACCEPTED it is deleted below, so the probe leaves no residue either way.
+    try {
+      await pg.exec(`${c.sql};`);
+    } catch (error) {
+      rejected = true;
+      message = String((error && error.message) || error).split('\n')[0];
+    }
+    if (!rejected) {
+      try { await pg.exec(`delete from fulfillment_line_claims where line_key = 'sku:PS511';`); }
+      catch { /* the failing case is reported below regardless */ }
+    }
+    if (!rejected) {
+      throw new Error(
+        `STOP: PS-511 behaviour test failed — ${c.label}. The INSERT was ACCEPTED.\n`
+        + '  The constraint name exists in the catalog but enforces nothing. Name-existence is\n'
+        + '  not enforcement, which is exactly the gap this check was added to close.',
+      );
+    }
+    if (!c.expect.test(message)) {
+      throw new Error(
+        `STOP: PS-511 behaviour test — ${c.label} was rejected, but by the WRONG constraint.\n`
+        + `  expected: ${c.expect}\n  actual  : ${message}`,
+      );
+    }
+    log(`[ps-511] behaviour: ${c.label} — rejected as required`);
+  }
 }
 
 /**
