@@ -81,8 +81,13 @@
  *
  * No writes happen outside the throwaway database. No postage. Nothing real is contacted.
  */
-import { readFileSync, readdirSync } from 'node:fs';
 import postgres from 'postgres';
+import { applyMigrations, requireCatalog, PS497_0104_CATALOG } from './lib/migration-execution-pg.js';
+import type { ToleranceRule } from './lib/migration-execution-plan.js';
+import nodePath from 'node:path';
+import { fileURLToPath as toPath494 } from 'node:url';
+const REPO_ROOT_494 = nodePath.resolve(nodePath.dirname(toPath494(import.meta.url)), '..');
+const path = nodePath;
 // Exported by the PS-507 QA stack; executes nothing at import (its CLI gate checks argv).
 import { bootstrapForeignOwnedTables } from './ps-507-qa-stack.mjs';
 
@@ -243,78 +248,79 @@ const DB_NAME = `ps494_joined_${process.pid}`;
  * as the original: a tolerated file failing for a DIFFERENT reason than the one on record
  * is fatal, so a migration that starts failing a new way cannot be silently absorbed.
  */
-const TOLERATED_MIGRATION_FAILURES = new Map<string, { reason: string; expect: RegExp }>([
-  ['0018e_indexes.sql', {
-    reason: 'CREATE INDEX CONCURRENTLY cannot run in a multi-statement implicit transaction; indexes are performance, not correctness',
-    expect: /CONCURRENTLY cannot run inside a transaction block/i,
-  }],
-  ['0039_fk_covering_indexes.sql', {
-    reason: 'same CONCURRENTLY constraint',
-    expect: /CONCURRENTLY cannot run inside a transaction block/i,
-  }],
-  ['0037_rls_reporting_metrics_inbound.sql', {
+/**
+ * PS-510: tolerated failures, now scoped by exact migration file + exact SQLSTATE + reason,
+ * and applied by the canonical owner rather than by a local chain walker.
+ *
+ * WHAT CHANGED AND WHY IT MATTERS
+ *
+ * The previous implementation applied each migration as ONE statement, with
+ * `--> statement-breakpoint` turned into `;`. A single CONCURRENTLY statement failing
+ * therefore took the WHOLE FILE down, and the file was then tolerated. That is why
+ * 0018e, 0039, 0057 and 0058 appeared on the allowlist: not because their indexes were
+ * optional, but because the applier could not express "run this one statement outside the
+ * transaction". Every other object in those four files was silently skipped too.
+ *
+ * The canonical owner plans per statement and routes CONCURRENTLY into the autocommit
+ * phase, so those four files now apply in full. Their entries are deliberately GONE. If a
+ * CONCURRENTLY statement fails again (SQLSTATE 25001, active_sql_transaction) it is fatal —
+ * that would mean the execution plan is wrong, and it must not be absorbed.
+ *
+ * What remains is genuinely environmental: a vanilla PostgreSQL 17 server is not Supabase
+ * and has no `anon` role, does not own `inbound_shipments`, and has no `pgboss` schema
+ * until the library creates it at runtime.
+ */
+const PG17_TOLERATED: ToleranceRule[] = [
+  {
+    file: '0037_rls_reporting_metrics_inbound.sql',
+    sqlstate: '42P01', // undefined_table
     reason: 'RLS over inbound_shipments, a table this repo does not own',
-    expect: /relation "(?:public\.)?inbound_shipments" does not exist/i,
-  }],
-  ['0045_revoke_public_api_grants.sql', {
-    reason: 'revokes from the Supabase `anon` role, which does not exist on a vanilla server',
-    expect: /role "anon" does not exist/i,
-  }],
-  ['0069_public_billing_rls_hardening.sql', {
-    reason: 'same Supabase-only role',
-    expect: /role "anon" does not exist/i,
-  }],
-  ['0057_perf_indexes_api_audit.sql', {
-    reason: 'same CONCURRENTLY constraint (perf indexes only)',
-    expect: /CONCURRENTLY cannot run inside a transaction block/i,
-  }],
-  ['0058_search_trgm_indexes.sql', {
-    reason: 'CONCURRENTLY trgm indexes; on PG17-with-contrib the extension creates and the CONCURRENTLY index then fails, on PGlite the extension itself is unavailable',
-    expect: /CONCURRENTLY cannot run inside a transaction block|could not open extension control file|extension "pg_trgm" is not available/i,
-  }],
-  ['0094_pin_function_search_path.sql', {
+  },
+  {
+    file: '0045_revoke_public_api_grants.sql',
+    sqlstate: '42704', // undefined_object
+    reason: 'revokes from the Supabase anon role, which does not exist on a vanilla server',
+  },
+  {
+    file: '0069_public_billing_rls_hardening.sql',
+    sqlstate: '42704', // undefined_object
+    reason: 'same Supabase-only anon role',
+  },
+  {
+    file: '0094_pin_function_search_path.sql',
+    sqlstate: '3F000', // invalid_schema_name
     reason: 'pgboss schema is created by the pg-boss library at runtime; this harness never starts the worker',
-    expect: /schema "pgboss" does not exist/i,
-  }],
-]);
+  },
+  {
+    file: '0058_search_trgm_indexes.sql',
+    sqlstate: '58P01', // undefined_file — extension control file absent
+    reason: 'pg_trgm contrib may be absent depending on image; the trgm indexes are search performance, not correctness',
+  },
+];
 
 async function applyAllMigrationsPg17(throwawayUrl: string): Promise<{ applied: number; tolerated: string[] }> {
   // ONE dedicated session (max: 1), like a real migration runner: some hand-written files
   // (apply-test-client-purge.sql) open their own BEGIN/COMMIT, which postgres.js refuses to
   // pass through a pooled connection (UNSAFE_TRANSACTION).
   const migrator = postgres(throwawayUrl, { max: 1, prepare: false, onnotice: () => {} });
-  const applied: string[] = [];
-  const tolerated: string[] = [];
   try {
     // The Client-Portal-owned tables migrations 0088/0089/0092 extend (ps-507 exports this).
     await bootstrapForeignOwnedTables({ exec: (sql: string) => migrator.unsafe(sql) }, () => {});
-    const files = readdirSync('drizzle').filter((f) => f.endsWith('.sql')).sort();
-    for (const file of files) {
-      const sql = readFileSync(`drizzle/${file}`, 'utf8');
-      try {
-        await migrator.unsafe(sql.replace(/-->\s*statement-breakpoint/g, ';'));
-        applied.push(file);
-      } catch (error) {
-        const entry = TOLERATED_MIGRATION_FAILURES.get(file);
-        const message = String((error as Error | null)?.message ?? error).split('\n')[0]!;
-        if (!entry) {
-          throw new Error(`STOP: migration ${file} failed for an untolerated reason:\n  ${message}`);
-        }
-        if (!entry.expect.test(message)) {
-          throw new Error(
-            `STOP: migration ${file} is tolerated, but failed for a DIFFERENT reason than the one on record.\n`
-            + `  expected: ${entry.expect}\n  actual  : ${message}`,
-          );
-        }
-        tolerated.push(`${file} — ${entry.reason}`);
-      }
-    }
+    const report = await applyMigrations({
+      sql: migrator,
+      dir: path.join(REPO_ROOT_494, 'drizzle'),
+      tolerate: PG17_TOLERATED,
+      report: false,
+    });
+    // Schema gate: the behaviour assertions below are only evidence if the schema is real.
+    await requireCatalog(migrator, PS497_0104_CATALOG);
+    const tolerated = report.tolerated.map((t) => `${t.statement.file} [${t.sqlstate}] — ${t.rule.reason}`);
+    console.log(`ok   migration chain applied by the canonical owner (${report.applied.length} statements applied, ${tolerated.length} tolerated)`);
+    for (const entry of tolerated) console.log(`     tolerated ${entry}`);
+    return { applied: report.applied.length, tolerated };
   } finally {
     await migrator.end({ timeout: 5 }).catch(() => {});
   }
-  console.log(`ok   migration chain applied verbatim (${applied.length} applied, ${tolerated.length} tolerated)`);
-  for (const entry of tolerated) console.log(`     skipped ${entry}`);
-  return { applied: applied.length, tolerated };
 }
 
 // Client 77 owns the Shipp account and the browse-scenario orders; client 88 owns the

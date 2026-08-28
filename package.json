@@ -896,6 +896,7 @@
     "test:ps-502-integration": "tsx scripts/ps-502-replacement-integration.ts",
     "test:ps-502-concurrency-pg17": "tsx scripts/ps-502-replacement-concurrency-pg17.ts",
     "test:ps-502-migration-state-pg17": "tsx scripts/ps-502-migration-state-pg17.ts",
+    "test:ps-510-prefix-catalog-pg17": "tsx scripts/ps-510-prefix-catalog-reproduction-pg17.ts",
     "test:ps-507-persistence": "node scripts/ps-507-qa-stack.mjs -- npx playwright test -c playwright.ps507.config.js",
     "qa:ps-507-stack": "node scripts/ps-507-qa-stack.mjs",
     "status:sync": "tsx scripts/status-sync.ts",
@@ -1028,7 +1029,9 @@
     "test:ps-497-flags-off-pg17": "tsx scripts/ps-497-flags-off-pg17.ts",
     "start:occurrence-worker": "tsx src/workers/occurrence-deduction-worker.ts",
     "test:ps-497-occurrence-worker-isolation": "tsx scripts/ps-497-occurrence-worker-isolation-guard.ts",
-    "test:ps-497-shipped-outcome-invariant-pglite": "tsx scripts/ps-497-shipped-outcome-invariant-pglite.ts"
+    "test:ps-497-shipped-outcome-invariant-pglite": "tsx scripts/ps-497-shipped-outcome-invariant-pglite.ts",
+    "test:ps-510-plan": "tsx scripts/ps-510-migration-plan-contract.ts",
+    "test:ps-510-guard": "tsx scripts/ps-510-no-local-appliers-guard.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

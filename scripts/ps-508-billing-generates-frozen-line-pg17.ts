@@ -22,12 +22,16 @@
  *
  * UNSKIPPABLE: absent PS508_PG17_ADMIN_URL this FAILS rather than skipping.
  */
-import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import { applyMigrations, requireCatalog, PS497_0104_CATALOG } from './lib/migration-execution-pg.js';
+import { PG17_HOSTED_TOLERANCE } from './lib/pg17-hosted-tolerance.js';
 // The QA stack owns the DDL for tables production created outside drizzle (returns etc.),
 // deliberately in their PRE-0088 shape so the real migrations apply on top of them.
 import { bootstrapForeignOwnedTables } from './ps-507-qa-stack.mjs';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const ADMIN_URL = process.env.PS508_PG17_ADMIN_URL;
 if (!ADMIN_URL) {
@@ -88,38 +92,17 @@ const EXPECTED_MIGRATION_FAILURES: Array<{ filePrefix: RegExp; sqlState: string;
 ];
 
 async function migrate(sql: postgres.Sql): Promise<void> {
-  const dir = 'drizzle';
-  const unexpected: string[] = [];
-  // ONLY the numbered migrations. The directory also holds operator scripts
-  // (apply-test-client-purge.sql etc.) that are not part of the schema lineage — the old
-  // swallow-everything loop was silently attempting to EXECUTE those against the test
-  // database, which is exactly the class of hidden signal correction C existed to surface.
-  for (const file of fs.readdirSync(dir).filter((f) => /^\d{4}.*\.sql$/.test(f)).sort()) {
-    const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    for (const raw of body.split('--> statement-breakpoint')) {
-      let stmt = raw.trim();
-      if (!stmt) continue;
-      stmt = stmt
-        .replace(/CREATE\s+INDEX\s+CONCURRENTLY/gi, 'CREATE INDEX')
-        .replace(/DROP\s+INDEX\s+CONCURRENTLY/gi, 'DROP INDEX');
-      try {
-        await sql.unsafe(stmt);
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        const code = String((error as { code?: string }).code ?? '');
-        const expected = EXPECTED_MIGRATION_FAILURES.some((e) =>
-          e.filePrefix.test(file) && e.sqlState === code && e.pattern.test(msg));
-        if (!expected) {
-          unexpected.push(file + ' [' + code + ']: ' + msg.slice(0, 140));
-        }
-      }
-    }
-  }
-  if (unexpected.length > 0) {
-    console.error('FAIL: ' + unexpected.length + ' UNEXPECTED migration failure(s):');
-    for (const u of unexpected) console.error('  - ' + u);
-    process.exit(1);
-  }
+  // PS-510: the canonical owner plans and applies the chain. This caller no longer walks the
+  // migration directory, no longer rewrites CONCURRENTLY, and no longer swallows errors.
+  // CONCURRENTLY statements are executed outside a transaction as written.
+  await applyMigrations({
+    sql,
+    dir: path.join(REPO_ROOT, 'drizzle'),
+    tolerate: PG17_HOSTED_TOLERANCE,
+  });
+  // The schema gate runs BEFORE any behaviour assertion below. Asserting behaviour against a
+  // schema-fidelity-compromised database is the defect PS-510 exists to remove.
+  await requireCatalog(sql, PS497_0104_CATALOG);
 }
 
 const TUPLE = {

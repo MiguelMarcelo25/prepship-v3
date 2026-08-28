@@ -6,16 +6,16 @@
 // Nothing executes it (the generic worker is de-scoped + the processor fails closed), so no stock moves. This
 // is the corrected, Release-A-compatible flags-off contract — NOT the false "byte-identical" claim.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
+import { applyMigrations, requireCatalog, PS497_0104_CATALOG } from './lib/migration-execution-pg.js';
+import { PG17_HOSTED_TOLERANCE } from './lib/pg17-hosted-tolerance.js';
 
 const ADMIN_URL = process.env.PS497_PG17_ADMIN_URL || process.env.PS487_PG17_ADMIN_URL || process.env.PS508_PG17_ADMIN_URL;
 if (!ADMIN_URL) { console.error('FAIL: PS497_PG17_ADMIN_URL not set. Unskippable.'); process.exit(1); }
 const ADMIN: string = ADMIN_URL;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const mig = (p: string) => readFileSync(path.join(REPO_ROOT, p), 'utf8');
 
 process.env.VERCEL ??= '1';
 process.env.SUPABASE_URL ??= 'http://localhost';
@@ -42,14 +42,24 @@ async function setupTables(db: postgres.Sql): Promise<void> {
       externally_shipped_source text, recipient_override jsonb, updated_at timestamptz);
     insert into clients (id, is_test) values (7, false);
   `);
-  await db.unsafe(mig('drizzle/0070_order_lifecycle_commands.sql'));
-  await db.unsafe(mig('drizzle/0090_fulfillment_claim_nullable_quantity.sql'));
-  for (const s of mig('drizzle/0104_ps497_fulfillment_occurrences.sql').split('--> statement-breakpoint').map((x) => x.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim()).filter(Boolean)) {
-    await db.unsafe(s.replace(/ concurrently/ig, ''));
-  }
-  for (const s of mig('drizzle/0105_ps497_claim_not_applicable_status.sql').split('--> statement-breakpoint').map((x) => x.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim()).filter(Boolean)) {
-    await db.unsafe(s);
-  }
+  // PS-510: selected-file application delegated to the canonical owner. This caller previously
+  // stripped concurrency with `.replace(/ concurrently/ig, '')`, which is local rewrite
+  // authority over 0104 — it produced a schema that differs from the one migrations define.
+  // The owner keeps every statement verbatim and routes CONCURRENTLY into the autocommit phase.
+  await applyMigrations({
+    sql: db,
+    dir: path.join(REPO_ROOT, 'drizzle'),
+    only: [
+      '0070_order_lifecycle_commands.sql',
+      '0090_fulfillment_claim_nullable_quantity.sql',
+      '0104_ps497_fulfillment_occurrences.sql',
+      '0105_ps497_claim_not_applicable_status.sql',
+    ],
+    tolerate: PG17_HOSTED_TOLERANCE,
+    report: false,
+  });
+  // Schema gate before any behaviour assertion.
+  await requireCatalog(db, PS497_0104_CATALOG);
   await db.unsafe(`
     create table fulfillment_outbox (
       id serial primary key, order_id integer not null, shipment_id integer,

@@ -1,0 +1,65 @@
+# PS-510 — PRE-FIX catalog reproduction, real PostgreSQL 17.
+#
+# Runs BEFORE any applier is changed, because the claim it settles is currently inferred from
+# source rather than observed: that the full-chain PS-497 lanes silently fail to create 0104's
+# occurrence-identity indexes and constraints.
+#
+# This lane is an OBSERVATION, not a guard. The script exits 0 whether the objects turn out
+# absent or present — a non-zero exit means the reproduction could not run at all. Do not add
+# it to a gate and do not read a green tick here as "the schema is fine"; read the VERDICT
+# block in the log.
+name: PS-510 pre-fix catalog reproduction
+
+on:
+  push:
+    branches:
+      - 'review/ps-510-**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps-510-prefix-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prefix-catalog:
+    name: Pre-fix catalog readback (PG17)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps510
+          POSTGRES_PASSWORD: ps510
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps510"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only. No production database is reachable from this job and
+      # no deploy secret is exposed to it.
+      PS510_PG17_ADMIN_URL: postgres://ps510:ps510@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Pre-fix catalog reproduction
+        run: npm run test:ps-510-prefix-catalog-pg17

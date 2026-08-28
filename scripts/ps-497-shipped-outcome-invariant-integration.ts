@@ -15,9 +15,11 @@
  * Enrolled in the guard pack as its PGlite twin (this real-PG17 runner stays in CI, never in the pack —
  * OFFLINE_GUARD_ENV gives it no PS497_PG_ADMIN_URL). UNSKIPPABLE: absent PS497_PG_ADMIN_URL this FAILS.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import postgres from 'postgres';
+import { applyMigrations, requireCatalog, PS497_0104_CATALOG } from './lib/migration-execution-pg.js';
+import { PG17_HOSTED_TOLERANCE } from './lib/pg17-hosted-tolerance.js';
+import { bootstrapForeignOwnedTables } from './ps-507-qa-stack.mjs';
 import type { ShippedOutcomeClaim } from './lib/ps-497-shipped-outcome-cases.js';
 
 const ADMIN_URL = process.env.PS497_PG_ADMIN_URL;
@@ -54,16 +56,23 @@ process.env.FULFILLMENT_OCCURRENCE_SCOPE_CLIENT_IDS = '7';
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1'), '..');
 
 async function migrate(sql: postgres.Sql): Promise<void> {
-  const dir = path.join(REPO_ROOT, 'drizzle');
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
-    const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    for (const raw of body.split('--> statement-breakpoint')) {
-      let stmt = raw.trim();
-      if (!stmt) continue;
-      stmt = stmt.replace(/CREATE\s+INDEX\s+CONCURRENTLY/gi, 'CREATE INDEX').replace(/DROP\s+INDEX\s+CONCURRENTLY/gi, 'DROP INDEX');
-      try { await sql.unsafe(stmt); } catch { /* supabase grants / ordering artefacts are non-fatal here */ }
-    }
-  }
+  // PS-510: the canonical owner plans and applies the chain. This caller no longer walks the
+  // migration directory, no longer rewrites CONCURRENTLY, and no longer swallows errors.
+  // CONCURRENTLY statements are executed outside a transaction as written.
+  // 0088/0089/0092/0102 extend `returns`, a Client-Portal-owned table this repo does not
+  // create. On a bare PG17 server it does not exist, so those migrations fail with 42P01.
+  // Creating it here is what ps-494 and ps-508 already do. The alternative — tolerating the
+  // failure — would SKIP four real migrations and leave the schema incomplete, which is the
+  // defect PS-510 exists to remove.
+  await bootstrapForeignOwnedTables({ exec: (text: string) => sql.unsafe(text) }, () => {});
+  await applyMigrations({
+    sql,
+    dir: path.join(REPO_ROOT, 'drizzle'),
+    tolerate: PG17_HOSTED_TOLERANCE,
+  });
+  // The schema gate runs BEFORE any behaviour assertion below. Asserting behaviour against a
+  // schema-fidelity-compromised database is the defect PS-510 exists to remove.
+  await requireCatalog(sql, PS497_0104_CATALOG);
 }
 
 async function main(): Promise<void> {
