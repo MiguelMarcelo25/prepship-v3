@@ -173,14 +173,25 @@ console.log('\nbackend producers emit returnTotal');
 
 const billingSvc = read('src/services/billing.ts');
 const metrics = read('src/services/reporting-metrics.ts');
+// PS-515: the invoice header totals owner is the THIRD return-bucket producer (added by PS-514
+// for the FE invoice summary categories). It must delegate to the same vocabulary owner, or a
+// spelling added to BILLING_RETURN_LINE_TYPES reaches the live summary + cached metrics but
+// silently misses the invoice summary, and the FE invoice category cards stop reconciling to
+// grandTotal with no error.
+const invoiceTotals = read('src/services/billing-invoice-totals.ts');
 
 check('the live summary SQL has a return_total bucket', /as return_total/.test(billingSvc));
 check('the zero-volume summary branch emits returnTotal', /returnTotal: 0,/.test(billingSvc));
 check('the CACHED metrics read model emits returnTotal', /returnTotal,/.test(metrics));
 check('the cached metrics upsert persists return_total',
   /return_total = excluded\.return_total/.test(metrics));
-check('both SQL buckets come from the ONE vocabulary owner, not a hand-written list',
-  /billingReturnLineTypesSql\(\)/.test(billingSvc) && /billingReturnLineTypesSql\(\)/.test(metrics));
+check('the invoice header totals owner has a return_total bucket', /as return_total/.test(invoiceTotals));
+check('ALL THREE return-bucket producers come from the ONE vocabulary owner, not a hand-written list',
+  /billingReturnLineTypesSql\(\)/.test(billingSvc)
+  && /billingReturnLineTypesSql\(\)/.test(metrics)
+  && /billingReturnLineTypesSql\(\)/.test(invoiceTotals));
+check('the invoice header totals owner does NOT re-spell the return vocabulary inline',
+  !/line_type in \('return'/.test(invoiceTotals));
 
 {
   // A second hand-written list is exactly how return_processing_fee once went missing from

@@ -5,6 +5,7 @@ import { intArraySql } from '../lib/scope-sql.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
 import { billingLineItemsHasReplacementIdColumn } from './billing-column-presence.js';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
+import { billingReturnLineTypesSql } from './billing-row-status.js';
 import {
   nonBillableDuplicateOrderIds,
   type DuplicateOrderDecisions,
@@ -98,6 +99,13 @@ export async function billingInvoiceHeaderTotals(
     sql`b.billing_effective_date`,
     sql`b.ship_date`,
   );
+  // PS-515: the return bucket's vocabulary comes from the ONE owner (BILLING_RETURN_LINE_TYPES
+  // via billingReturnLineTypesSql), exactly as the live summary (billing.ts) and the cached
+  // metrics upsert (reporting-metrics.ts) already do. A hand-written list here was a third copy
+  // of the same fact; its failure mode is silent — a spelling added to the owner but missed here
+  // would drop return money out of this bucket while leaving it in grandTotal, so the invoice
+  // summary would stop reconciling with no error.
+  const returnLineTypesSql = billingReturnLineTypesSql();
   const summaryRow = await conn.execute<{
     pickpack_total: string;
     additional_total: string;
@@ -123,7 +131,9 @@ export async function billingInvoiceHeaderTotals(
       coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${invoiceAmount} else 0 end), 0)::text as replace_pick_pack_total,
       -- PS-514: return money (postage + processing + legacy) as its own category, so the summary
       -- reconciles. Same discipline as the adjustment/replace sums above; kept out of Fulfillment Fee.
-      coalesce(sum(case when b.line_type in ('return', 'return_label', 'return_processing', 'return_postage', 'return_processing_fee') then ${invoiceAmount} else 0 end), 0)::text as return_total,
+      -- PS-515: spellings come from BILLING_RETURN_LINE_TYPES via billingReturnLineTypesSql(), so this
+      -- bucket cannot disagree with isBillingReturnLineType / grandTotal (was a hand-written third copy).
+      coalesce(sum(case when b.line_type in ${returnLineTypesSql} then ${invoiceAmount} else 0 end), 0)::text as return_total,
       count(distinct b.order_id)::int as order_count,
       ${replacementCountSql} as replacement_count,
       coalesce(sum(${invoiceAmount}), 0)::text as grand_total
