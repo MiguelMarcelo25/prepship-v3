@@ -161,3 +161,49 @@ jobs:
           path: test-results/
           retention-days: 7
 
+
+  # PS-520. The customer invoice query, executed — HTML + XLSX + CSV — against real PostgreSQL.
+  #
+  # PS-513 broke billingInvoiceData's SQL and all three invoice routes failed for every client for
+  # ~6 hours while CI stayed green, because nothing in the suite ran the query: typecheck cannot
+  # see inside a sql`` template, the invoice guards feed the RENDERERS a fixture DTO, and ps-433
+  # exercises a different owner. This job is the lane that would have caught it.
+  invoice-routes-pg17:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ps520
+          POSTGRES_PASSWORD: ps520
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ps520"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # Loopback service container only; no production database is reachable from this job.
+      PS520_PG17_ADMIN_URL: postgres://ps520:ps520@127.0.0.1:5432/postgres
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: offline-dummy
+      SUPABASE_SERVICE_ROLE_KEY: offline-dummy
+      SUPABASE_JWT_SECRET: offline-dummy
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Confirm PostgreSQL 17 is the server under test
+        run: |
+          node -e "const p=require('postgres');const s=p(process.env.PS520_PG17_ADMIN_URL,{max:1});s\`select current_setting('server_version_num')::int as v\`.then(r=>{const v=r[0].v;if(v<170000||v>=180000){console.error('not PG17: '+v);process.exit(1)}console.log('server_version_num='+v);return s.end()}).catch(e=>{console.error(e);process.exit(1)})"
+      - name: PS-520 invoice routes execute against real PostgreSQL (HTML + XLSX + CSV)
+        run: npm run -s test:ps-520-invoice-routes-pg17
