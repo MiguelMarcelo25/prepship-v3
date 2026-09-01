@@ -205,6 +205,92 @@ const moneySet = (text: string): Set<string> => new Set(
   [...text.matchAll(/-?\$?(\d+(?:\.\d{1,2})?)/g)].map((m) => Number(m[1]).toFixed(2)),
 );
 
+/**
+ * The invoice's money components, and what each format calls them.
+ *
+ * FIELD-BOUND on purpose. The first version of this proof compared unstructured SETS of numbers,
+ * which is far weaker than it reads: a value satisfies the check by appearing ANYWHERE in the
+ * document, in any column. Review then showed the XLSX was not compared at all — changing the
+ * workbook's Shipping cell to 999.99 left the whole suite green. Binding by header means a value
+ * has to be in the RIGHT COLUMN of the RIGHT ROW in every format.
+ *
+ * The header text genuinely differs between the two exports, which is exactly why a shared field
+ * key is needed rather than matching on the label.
+ */
+// The three formats spell the SAME column differently, so binding by header text means
+// binding per format. `dash` is what an em-dash means in the HTML for that column: the base
+// columns render `x > 0 ? fmt(x) : '—'` and the CSV writes a numeric 0 there, while the
+// return/replace columns are blank-when-absent in every format. Getting this wrong would
+// make the formats disagree for a formatting reason and hide a real disagreement in the noise.
+const MONEY_FIELDS = [
+  { field: 'pickPack', csv: 'Pick & Pack Fee', xlsx: 'Pick & Pack', html: 'Pick & Pack', dash: 0 },
+  { field: 'additional', csv: 'Additional Units', xlsx: 'Addl Units', html: "Add'l Units", dash: 0 },
+  { field: 'boxCost', csv: 'Box Cost', xlsx: 'Box Cost', html: 'Box Cost', dash: 0 },
+  { field: 'shipping', csv: 'Shipping', xlsx: 'Shipping', html: 'Shipping', dash: 0 },
+  { field: 'storage', csv: 'Storage', xlsx: 'Storage', html: 'Storage', dash: 0 },
+  { field: 'total', csv: 'Total', xlsx: 'Total', html: 'Total', dash: 0 },
+  { field: 'returnPostage', csv: 'Return Postage', xlsx: 'Return Postage', html: 'Return Postage', dash: null },
+  { field: 'returnProcessing', csv: 'Return Processing', xlsx: 'Return Processing', html: 'Return Processing', dash: null },
+  { field: 'replacePostage', csv: 'Replace Postage', xlsx: 'Replace Postage', html: 'Replace Postage', dash: null },
+  { field: 'replacePickPack', csv: 'Replace Pick&Pack', xlsx: 'Replace Pick&Pack', html: 'Replace Pick&Pack', dash: null },
+] as const;
+
+type MoneyRow = Record<string, number | null>;
+
+/** null means the cell is EMPTY (never charged); 0 means an explicit charged-zero. PS-488 M3. */
+const cellNumber = (raw: unknown): number | null => {
+  if (raw === null || raw === undefined) return null;
+  const text = String(typeof raw === 'object' && raw !== null && 'result' in raw
+    ? (raw as { result: unknown }).result
+    : raw).trim();
+  if (text === '') return null;
+  const n = Number(text.replace(/[$,]/g, ''));
+  return Number.isFinite(n) ? n : null;
+};
+
+function csvMoneyRows(csv: string, orderNumber: string): MoneyRow[] {
+  const lines = csv.split('\n').filter((l) => l.trim() !== '');
+  const header = lines[0]!.split(',').map((h) => h.trim());
+  return lines.slice(1)
+    .filter((l) => l.includes(orderNumber))
+    .map((line) => {
+      const cells = line.split(',');
+      const row: MoneyRow = {};
+      for (const f of MONEY_FIELDS) row[f.field] = cellNumber(cells[header.indexOf(f.csv)]);
+      return row;
+    });
+}
+
+/**
+ * The operator-facing HTML invoice, read the same way — by column header, into the same
+ * field-keyed shape as the CSV and the workbook.
+ *
+ * Checking that the HTML merely CONTAINS "$8.25" somewhere is what let a wrong workbook stay
+ * green: a value present in the document says nothing about which column it landed in. All
+ * three formats are parsed into comparable rows so the assertion can be about the same
+ * FIELD of the same ROW in each.
+ */
+const unescapeHtml = (s: string) =>
+  s.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+const tagText = (cell: string) => unescapeHtml(cell.replace(/<[^>]*>/g, '')).trim();
+
+function htmlMoneyRows(html: string, orderNumber: string): MoneyRow[] {
+  const header = [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => tagText(m[1]!));
+  const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
+  return [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+    .map((m) => m[1]!)
+    .filter((tr) => tr.includes(orderNumber))
+    .map((tr) => {
+      const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => tagText(m[1]!));
+      const row: MoneyRow = {};
+      for (const f of MONEY_FIELDS) {
+        const text = cells[header.indexOf(f.html)] ?? '';
+        row[f.field] = text === '—' || text === '' ? f.dash : cellNumber(text);
+      }
+      return row;
+    });
+}
+
 async function main(): Promise<void> {
   const admin = postgres(ADMIN_URL!, { max: 1, prepare: false, onnotice: () => {} });
   try {
@@ -259,7 +345,7 @@ async function main(): Promise<void> {
       htmlRes.headers.get('content-type') ?? '(none)');
     check('the HTML invoice renders the seeded client', html.includes('PS-520 Invoice Client'));
     if (process.env.PS520_DEBUG === '1') {
-      console.log('--- HTML money values ---', [...new Set(numbersIn(html).map((n) => n.toFixed(2)))].join(' '));
+      console.log('--- HTML money values ---', [...moneySet(html)].join(' '));
     }
 
     // ── CSV ─────────────────────────────────────────────────────────────────
@@ -271,7 +357,7 @@ async function main(): Promise<void> {
       /csv/i.test(csvRes.headers.get('content-type') ?? ''),
       csvRes.headers.get('content-type') ?? '(none)');
     if (process.env.PS520_DEBUG === '1') {
-      console.log('--- CSV money values ---', [...new Set(numbersIn(csv).map((n) => n.toFixed(2)))].join(' '));
+      console.log('--- CSV money values ---', [...moneySet(csv)].join(' '));
       console.log('--- CSV head ---\n' + csv.split('\n').slice(0, 4).join('\n'));
     }
 
@@ -285,6 +371,116 @@ async function main(): Promise<void> {
     check('the XLSX body is a real workbook (ZIP magic, non-trivial)',
       xlsxBuf.length > 1000 && xlsxBuf[0] === 0x50 && xlsxBuf[1] === 0x4b,
       `bytes=${xlsxBuf.length} magic=${xlsxBuf.subarray(0, 2).toString('hex')}`);
+
+    // ── Parse the workbook. Status + ZIP magic prove a file arrived, NOT that its numbers are
+    //    right: review changed the Shipping cell to 999.99 and this suite stayed green.
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    // When the route 500s, the body is an error page and ExcelJS reports "can't find end of
+    // central directory" — true, useless, and three steps from the cause. Say what arrived.
+    let loadError: string | null = null;
+    try {
+      await workbook.xlsx.load(xlsxBuf as unknown as ArrayBuffer);
+    } catch (error) {
+      loadError = `${String(error).split('\n')[0]} — body began: ${xlsxBuf.subarray(0, 160).toString('utf8')}`;
+    }
+    check('the XLSX body parses as a workbook', loadError === null, loadError ?? '');
+    const sheet = workbook.getWorksheet('Invoice');
+    check('the XLSX contains an "Invoice" worksheet', sheet !== undefined,
+      `sheets: ${workbook.worksheets.map((w) => w.name).join(', ')}`);
+
+    let xlsxRows: MoneyRow[] = [];
+    if (sheet) {
+      // Bind columns by HEADER TEXT, not position — a reordered export must not silently pass.
+      let headerRowNumber = 0;
+      const headerIndex = new Map<string, number>();
+      sheet.eachRow((row, n) => {
+        if (headerRowNumber) return;
+        const labels = (row.values as unknown[]).map((v) => (v == null ? '' : String(v).trim()));
+        if (labels.includes('Shipping') && labels.includes('Total')) {
+          headerRowNumber = n;
+          labels.forEach((label, i) => { if (label) headerIndex.set(label, i); });
+        }
+      });
+      check('the XLSX header row binds every money column by name',
+        headerRowNumber > 0 && MONEY_FIELDS.every((f) => headerIndex.has(f.xlsx)),
+        `missing: ${MONEY_FIELDS.filter((f) => !headerIndex.has(f.xlsx)).map((f) => f.xlsx).join(', ')}`);
+
+      const orderCol = headerIndex.get('Order #');
+      sheet.eachRow((row, n) => {
+        if (n <= headerRowNumber || orderCol === undefined) return;
+        if (String(row.getCell(orderCol).value ?? '').trim() !== 'PS520-1001') return;
+        const parsed: MoneyRow = {};
+        for (const f of MONEY_FIELDS) parsed[f.field] = cellNumber(row.getCell(headerIndex.get(f.xlsx)!).value);
+        xlsxRows.push(parsed);
+      });
+    }
+
+    const csvRows = csvMoneyRows(csv, 'PS520-1001');
+    const htmlRows = htmlMoneyRows(html, 'PS520-1001');
+    if (process.env.PS520_DEBUG === '1') {
+      console.log('--- CSV rows ---', JSON.stringify(csvRows));
+      console.log('--- XLSX rows ---', JSON.stringify(xlsxRows));
+      console.log('--- HTML rows ---', JSON.stringify(htmlRows));
+    }
+
+    // ── THE three-format claim, actually tested ─────────────────────────────
+    check('all three formats carry the same number of billing rows',
+      xlsxRows.length === csvRows.length && htmlRows.length === csvRows.length && csvRows.length === 3,
+      `html=${htmlRows.length} csv=${csvRows.length} xlsx=${xlsxRows.length}`);
+
+    const byTotal = (rows: MoneyRow[]) => [...rows].sort((a, b) => (a.total ?? 0) - (b.total ?? 0));
+    const csvSorted = byTotal(csvRows);
+    const xlsxSorted = byTotal(xlsxRows);
+    const htmlSorted = byTotal(htmlRows);
+    const disagree = (other: MoneyRow[], label: string) => {
+      const out: string[] = [];
+      csvSorted.forEach((csvRow, i) => {
+        const row = other[i];
+        if (!row) { out.push(`row ${i} missing in ${label}`); return; }
+        for (const f of MONEY_FIELDS) {
+          if (csvRow[f.field] !== row[f.field]) {
+            out.push(`row ${i} ${f.field}: csv=${csvRow[f.field]} ${label}=${row[f.field]}`);
+          }
+        }
+      });
+      return out;
+    };
+    const xlsxMismatches = disagree(xlsxSorted, 'xlsx');
+    const htmlMismatches = disagree(htmlSorted, 'html');
+    check('EVERY money cell agrees between CSV and XLSX, field by field',
+      xlsxMismatches.length === 0, xlsxMismatches.slice(0, 6).join(' | '));
+    check('EVERY money cell agrees between CSV and the operator HTML, field by field',
+      htmlMismatches.length === 0, htmlMismatches.slice(0, 6).join(' | '));
+
+    // ── The seeded components, asserted in the WORKBOOK itself ──────────────
+    const xOutbound = xlsxSorted.find((r) => r.storage === money.storage);
+    const xReturn = xlsxSorted.find((r) => r.returnPostage === money.returnPostage);
+    const xReplace = xlsxSorted.find((r) => r.replacePostage === money.replacePostage);
+    check('the XLSX outbound row carries every seeded outbound component',
+      xOutbound !== undefined
+      && xOutbound.pickPack === money.pickPack + money.additional
+      && xOutbound.additional === money.additional
+      && xOutbound.boxCost === money.packageCost
+      && xOutbound.shipping === money.shipping
+      && xOutbound.storage === money.storage
+      && xOutbound.total === money.pickPack + money.additional + money.packageCost
+        + money.shipping + money.storage,
+      JSON.stringify(xOutbound));
+    check('the XLSX replacement row carries both replacement components',
+      xReplace !== undefined
+      && xReplace.replacePostage === money.replacePostage
+      && xReplace.replacePickPack === money.replacePickPack,
+      JSON.stringify(xReplace));
+    // PS-488 M3 in the WORKBOOK: charged-zero is a numeric 0, never-charged is an EMPTY cell.
+    check('the XLSX return row shows postage AND an explicit numeric zero processing fee',
+      xReturn !== undefined && xReturn.returnPostage === money.returnPostage
+      && xReturn.returnProcessing === 0,
+      JSON.stringify(xReturn));
+    check('the XLSX outbound row leaves BOTH return cells empty (never charged is not zero)',
+      xOutbound !== undefined
+      && xOutbound.returnPostage === null && xOutbound.returnProcessing === null,
+      `postage=${xOutbound?.returnPostage} processing=${xOutbound?.returnProcessing}`);
 
     // ── Every bucket actually reached BOTH documents ────────────────────────
     //
@@ -354,7 +550,11 @@ async function main(): Promise<void> {
     check('a caller scoped to ANOTHER client cannot read this invoice',
       scopedRes.status === 404, `got ${scopedRes.status}`);
     check("the refusal leaks no other client's billing", !scopedBody.includes('PS-520 Invoice Client'));
-    check("the invoice never contains the other client's money (99.99)", !html.includes('99.99'));
+    // Anchored, not a bare substring: `includes('99.99')` also matches 999.99, so a mutation
+    // that inflated a legitimate cell tripped this as a cross-client LEAK. A scope check that
+    // fires on the wrong evidence is a scope check nobody can read.
+    check("the invoice never contains the other client's money (99.99)",
+      !/(^|[^\d])99\.99([^\d]|$)/.test(html));
 
     // Its OWN invoice still works, so the 404 above is scoping and not a broken route.
     const ownRes = await foreign.request(
