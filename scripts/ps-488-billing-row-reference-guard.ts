@@ -406,10 +406,25 @@ check('the invoice xlsx carries Return Postage and Return Processing', () => {
   assert.ok(/header: 'Return Postage'/.test(billing));
   assert.ok(/header: 'Return Processing'/.test(billing));
   // Both vocabularies, or frozen rows carrying the old spelling export as 0.00.
-  assert.ok(/'return_postage', 'return_label'/.test(billing),
-    'the export aggregate must accept both return-postage spellings');
-  assert.ok(/'return_processing_fee', 'return_processing'/.test(billing),
-    'the export aggregate must accept both return-processing spellings');
+  //
+  // PS-517 moved the spellings OUT of this file and into the one vocabulary owner, so pinning
+  // the literals here would now assert the opposite of what the repo wants — it would fail the
+  // build for removing a duplicated list. What this check has always MEANT is "the export
+  // aggregate accepts both spellings", so it is asserted where each half of that now lives:
+  // the export delegates to the owner, and the owner names both spellings.
+  assert.ok(/billingReturnPostageLineTypesSql\(\)/.test(billing),
+    'the export aggregate must take its return-postage vocabulary from the canonical owner');
+  assert.ok(/billingReturnProcessingLineTypesSql\(\)/.test(billing),
+    'the export aggregate must take its return-processing vocabulary from the canonical owner');
+  const owner = readFileSync('src/services/billing-row-status.ts', 'utf8');
+  for (const spelling of ['return_postage', 'return_label']) {
+    assert.ok(new RegExp(`BILLING_RETURN_POSTAGE_LINE_TYPES[\\s\\S]{0,160}'${spelling}'`).test(owner),
+      `the return-postage vocabulary must still accept '${spelling}'`);
+  }
+  for (const spelling of ['return_processing_fee', 'return_processing']) {
+    assert.ok(new RegExp(`BILLING_RETURN_PROCESSING_LINE_TYPES[\\s\\S]{0,160}'${spelling}'`).test(owner),
+      `the return-processing vocabulary must still accept '${spelling}'`);
+  }
 });
 
 check('AC-6 CLOSED: the invoice reconciles from the canonical DTO', () => {

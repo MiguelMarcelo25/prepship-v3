@@ -126,6 +126,14 @@ export function billingReturnLineTypesSql(): SQL {
  * place.
  */
 /**
+ * DOWNSTREAM COUPLING — the Client Portal SCRAPES these declarations.
+ *
+ * client-portal-prepship pins this file in contracts/prepship-billing-return-line-types.json
+ * and re-derives the vocabulary from it in scripts/prepship-return-vocabulary-parity.mjs.
+ * Renaming or restructuring the consts below (or BILLING_RETURN_LINE_TYPES above) means
+ * re-pinning that contract in the same breath, or the portal's gate fails on its next re-pin.
+ * Nothing else here hints at that, which is why it is written down.
+ *
  * PS-517: the SPLIT vocabularies, exported for the same reason BILLING_RETURN_LINE_TYPES is.
  *
  * The predicates below and the invoice DETAIL query's SQL both answer "is this line return

@@ -223,10 +223,25 @@ check('the invoice header totals owner does NOT re-spell the return vocabulary i
   check('the invoice DETAIL query consumes the SQL owners',
     /billingReturnPostageLineTypesSql\(\)/.test(detailRoute)
     && /billingReturnProcessingLineTypesSql\(\)/.test(detailRoute));
-  // The four arms this replaced: two amount sums + two bool_or presence flags.
-  check('the invoice DETAIL query does NOT re-spell the split vocabulary inline',
-    !/line_type in \('return_postage'/.test(detailRoute)
-    && !/line_type in \('return_processing_fee'/.test(detailRoute));
+
+  // ALL FOUR arms must delegate: two amount sums + two bool_or presence flags. Counting the
+  // fragment uses is what proves it — an earlier version pinned two fixed substrings
+  // (`line_type in ('return_postage'`), which a PARTIAL revert of just the two bool_or arms
+  // walks straight past. Those two arms are the PS-488 M3 absent-vs-charged-zero flags printed
+  // on customer invoice HTML and XLSX, so a silent revert there is customer-visible.
+  const postageUses = (detailRoute.match(/\$\{returnPostageLineTypesSql\}/g) ?? []).length;
+  const processingUses = (detailRoute.match(/\$\{returnProcessingLineTypesSql\}/g) ?? []).length;
+  check('all FOUR split arms delegate (2 postage + 2 processing: a sum and a presence flag each)',
+    postageUses === 2 && processingUses === 2,
+    `postage=${postageUses} processing=${processingUses}`);
+
+  // Order- and whitespace-independent, unlike the substring pin it replaces: ANY re-spelling
+  // reintroduces one of these quoted literals, whatever the element order, spacing, or whether
+  // it is written as `in (...)` or `= 'x' or = 'y'`. The detail route carries none of them.
+  const respelled = ['return_postage', 'return_label', 'return_processing_fee', 'return_processing']
+    .filter((spelling) => detailRoute.includes(`'${spelling}'`));
+  check('the invoice DETAIL query does NOT re-spell the split vocabulary inline, in any form',
+    respelled.length === 0, `found inline: ${respelled.join(', ')}`);
 
   // The split buckets must stay SUBSETS of the aggregate. If a spelling is added to a split
   // list but not to BILLING_RETURN_LINE_TYPES, its money lands in a named part while dropping
