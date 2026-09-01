@@ -866,6 +866,9 @@ export default function BillingView() {
       additional: number
       packageCost: number
       shipping: number
+      // PS-512: replacement re-ship money footers, so the columns still sum to Row Total.
+      replacePostage: number
+      replacePickPack: number
       fulfillmentFee: number
       returnTotal: number
       // PS-501: null when any row failed the grandTotal contract.
@@ -881,6 +884,9 @@ export default function BillingView() {
         additional: acc.additional + metrics.additional,
         packageCost: acc.packageCost + metrics.packageCost,
         shipping: acc.shipping + metrics.shipping,
+        // PS-512: replacement re-ship money, so the replacement column footers reconcile.
+        replacePostage: acc.replacePostage + metrics.replacePostage,
+        replacePickPack: acc.replacePickPack + metrics.replacePickPack,
         // PS-505 corrective: Fulfillment Fee and Row Total are DIFFERENT totals and each
         // now has its own footer. Previously the Fulfillment Fee column's cells summed
         // one concept while its footer summed another.
@@ -898,6 +904,7 @@ export default function BillingView() {
       }
     }, {
       pickPack: 0, additional: 0, packageCost: 0, shipping: 0,
+      replacePostage: 0, replacePickPack: 0,
       fulfillmentFee: 0, returnTotal: 0, total: 0 as number | null,
       margin: null as number | null,
     })
