@@ -127,9 +127,12 @@ check('the CSV serializer stays pure — it renders destination, never classifie
 
 // ── the XLSX/HTML columns are appended last too ────────────────────────────
 const xlsxColumns = [...route.matchAll(/{ header: '([^']+)', key:/g)].map((m) => m[1]);
-check('XLSX Destination is the LAST invoice column, after the AC-6 return columns',
-  xlsxColumns[xlsxColumns.length - 1] === 'Destination'
-  && xlsxColumns.indexOf('Destination') > xlsxColumns.indexOf('Return Processing'),
+// PS-513 appended Replace Postage / Replace Pick&Pack AFTER Destination, so Destination is no
+// longer the LAST column. What this guard actually protects is the appended-last discipline —
+// Destination stays after the AC-6 return columns and no earlier column shifted. Relaxed the
+// same way ps-468 / ps-488 were when the Replace columns landed.
+check('XLSX Destination stays after the AC-6 return columns (appended-last discipline preserved)',
+  xlsxColumns.indexOf('Destination') > xlsxColumns.indexOf('Return Processing'),
   xlsxColumns.slice(-5));
 check('HTML appends a Destination header after Shipment #',
   /<th>Shipment #<\/th>[\s\S]{0,300}?<th>Destination<\/th>/.test(route));

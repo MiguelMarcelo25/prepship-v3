@@ -2186,11 +2186,12 @@ type InvoiceDetailRow = {
   return_postage_amt: string;
   return_processing_amt: string;
   /**
-   * PS-513 — replacement re-ship money on the invoice export. A replacement carries the
-   * ORIGINAL order id (no return_id), so it folds onto the outbound row; its money is already
-   * in row_total (and the header grandTotal via billing-invoice-totals.ts, PS-502 AC-18), but
-   * before this card no invoice column showed it, so a replacement row exported a nonzero
-   * Total with every visible component blank.
+   * PS-513 — replacement re-ship money on the invoice export. A replacement's money is already
+   * in this row's row_total (and the header grandTotal via billing-invoice-totals.ts, PS-502
+   * AC-18), but before this card no invoice column showed it, so a replacement row exported a
+   * nonzero Total with every visible component blank. (On the invoice a replacement is its OWN
+   * row — it carries a distinct replacement reference + shipment id — unlike the operator
+   * detail view, which groups by order id and folds it onto the outbound order.)
    */
   replace_postage_amt: string;
   replace_pick_pack_amt: string;

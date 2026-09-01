@@ -48,7 +48,7 @@ const TOTALS = {
 };
 
 /** A replacement row in the shape billingInvoiceData hands the renderers: replacement money
- *  only, folded onto the outbound order row (no return_id). */
+ *  only, on its OWN invoice row (distinct replacement reference + shipment id, no return_id). */
 function replacementRow(over: Record<string, unknown> = {}) {
   return {
     order_id: 5252, order_number: '2200', shipment_id: 52521, return_id: null,
