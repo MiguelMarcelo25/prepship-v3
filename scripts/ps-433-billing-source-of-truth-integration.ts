@@ -83,6 +83,10 @@ async function main(): Promise<void> {
     shippingTotal: 8,
     storageTotal: 4,
     adjustmentTotal: 0,
+    // PS-514: order 102 is cancelled but its return_label survives (return is excluded from
+    // no-charge), so the return category is 5 — the same money the residual assertion below
+    // independently isolates.
+    returnTotal: 5,
     grandTotal: 23,
     // PS-505 corrective: fulfillment SERVICE fees only — pickPackFee 3 + package 3 = 6.
     // Previously 18 (all five buckets), which made this field a second row total.

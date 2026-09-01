@@ -308,6 +308,7 @@
     "test:billing-invoice-xlsx-layout": "tsx scripts/billing-invoice-xlsx-layout-guard.ts",
     "test:ps-468-invoice-csv": "tsx scripts/ps-468-invoice-csv-guard.ts",
     "test:ps-513-invoice-replacement-parity": "tsx scripts/ps-513-invoice-replacement-parity-guard.ts",
+    "test:ps-514-invoice-summary-reconcile": "tsx scripts/ps-514-invoice-summary-reconcile-guard.ts",
     "test:ps-206-rate-browser-full-coverage": "tsx scripts/ps-206-rate-browser-full-coverage-guard.ts",
     "test:ps-216-rate-browser-account-labels": "tsx scripts/ps-216-rate-browser-account-labels-guard.ts",
     "test:dashboard-client-sku-filter": "tsx scripts/dashboard-client-sku-filter-guard.ts",
