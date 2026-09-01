@@ -2186,6 +2186,15 @@ type InvoiceDetailRow = {
   return_postage_amt: string;
   return_processing_amt: string;
   /**
+   * PS-513 — replacement re-ship money on the invoice export. A replacement carries the
+   * ORIGINAL order id (no return_id), so it folds onto the outbound row; its money is already
+   * in row_total (and the header grandTotal via billing-invoice-totals.ts, PS-502 AC-18), but
+   * before this card no invoice column showed it, so a replacement row exported a nonzero
+   * Total with every visible component blank.
+   */
+  replace_postage_amt: string;
+  replace_pick_pack_amt: string;
+  /**
    * PS-488 M3 — PRESENCE, distinct from amount. `return_postage_amt === '0'` cannot say
    * whether the return was charged nothing or was never charged at all; these can. Every
    * serializer branches on these rather than on the number, so an absent fee renders
@@ -2343,6 +2352,11 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type = 'storage' then ${detailAmount} else 0 end), 0)::text as storage_amt,
       coalesce(sum(case when b.line_type in ('return_postage', 'return_label') then ${detailAmount} else 0 end), 0)::text as return_postage_amt,
       coalesce(sum(case when b.line_type in ('return_processing_fee', 'return_processing') then ${detailAmount} else 0 end), 0)::text as return_processing_amt,
+      -- PS-513: replacement re-ship money, its own buckets (never folded into shipping/pickpack).
+      -- ${detailAmount} keeps replacement money on a cancelled original (replace_* is excluded from
+      -- cancelledNoChargeBillingAmountSql), so a surviving replacement charge lands here.
+      coalesce(sum(case when b.line_type = 'replace_postage' then ${detailAmount} else 0 end), 0)::text as replace_postage_amt,
+      coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${detailAmount} else 0 end), 0)::text as replace_pick_pack_amt,
       -- PS-488 M3: PRESENCE, separate from amount. The coalesce(...,0) above cannot
       -- distinguish "never charged postage" from "charged 0.00 postage", so a
       -- processing-only return exported postage as 0.00 on a client-facing document.
@@ -2520,6 +2534,11 @@ async function billingInvoiceData(
       storage_amt: suppressed ? zero : r.storage_amt,
       return_postage_amt: suppressed ? zero : r.return_postage_amt,
       return_processing_amt: suppressed ? zero : r.return_processing_amt,
+      // PS-513: replacement money zeroes with the rest of a suppressed duplicate copy so
+      // components still agree with row_total. On a NON-suppressed cancelled original it is
+      // preserved (kept by ${detailAmount}), which is the DJ-ruled "survives cancellation".
+      replace_postage_amt: suppressed ? zero : r.replace_postage_amt,
+      replace_pick_pack_amt: suppressed ? zero : r.replace_pick_pack_amt,
       // PS-488 M3: presence is NOT suppressed with the money. PS-491 zeroes a duplicate
       // copy's dollars; the line still existed, and saying otherwise would turn a
       // suppressed charge into an absent one — a different claim about the same row.
@@ -2681,6 +2700,8 @@ export function renderInvoiceHtml(args: {
         storage: storageAmt,
         returnPostage: d.return_postage_amt,
         returnProcessing: d.return_processing_amt,
+        replacePostage: d.replace_postage_amt,
+        replacePickPack: d.replace_pick_pack_amt,
       });
       // PS-488 M3: resolved through the shared three-state owner, identically to the XLSX
       // and CSV serializers, so the three renderings of one invoice cannot disagree about
@@ -2693,6 +2714,11 @@ export function renderInvoiceHtml(args: {
         present: d.has_return_processing_line,
         amount: d.return_processing_amt,
       });
+      // PS-513: replacement money, rendered dashIfZero like the outbound shipping/storage cells
+      // (a non-replacement row shows "—"). Backend-owned; a display bucket that is NOT added into
+      // Total, which already includes it via row_total.
+      const replacePostageAmt = Number(d.replace_postage_amt);
+      const replacePickPackAmt = Number(d.replace_pick_pack_amt);
       const billingDate = invoiceShipDateTimeCell(
         d.billing_effective_date ?? d.ship_date,
       );
@@ -2725,6 +2751,8 @@ export function renderInvoiceHtml(args: {
              buckets — they are NOT added into Total, which already includes them. -->
         <td class="num">${returnPostageCell === null ? '—' : fmt(returnPostageCell)}</td>
         <td class="num">${returnProcessingCell === null ? '—' : fmt(returnProcessingCell)}</td>
+        <td class="num">${replacePostageAmt > 0 ? fmt(replacePostageAmt) : '—'}</td>
+        <td class="num">${replacePickPackAmt > 0 ? fmt(replacePickPackAmt) : '—'}</td>
       </tr>`;
     })
     .join('');
@@ -2822,6 +2850,10 @@ export function renderInvoiceHtml(args: {
              and no way at all to tell an absent fee from a $0.00 one. -->
         <th class="num">Return Postage</th>
         <th class="num">Return Processing</th>
+        <!-- PS-513: appended last (position-pinned invoice), like the return columns above. A
+             replacement row's Total previously had no column to show its re-ship money. -->
+        <th class="num">Replace Postage</th>
+        <th class="num">Replace Pick&amp;Pack</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -2846,6 +2878,10 @@ export function renderInvoiceHtml(args: {
              a sum over every line type), so a Return Postage total here would invite the
              reader to add it again. The footer sums what the columns above it sum; these
              two are a breakdown OF the Total, not an addition to it. -->
+        <td></td>
+        <td></td>
+        <!-- PS-513: two more empty footer cells for the appended Replace columns, empty for the
+             same reason as the return columns — a breakdown OF the Total, not an addition. -->
         <td></td>
         <td></td>
       </tr>
@@ -2938,6 +2974,11 @@ export async function renderInvoiceXlsx(args: {
     // the order's destination country, which this per-order query can read directly, and
     // it is classified by the canonical owner rather than re-derived here.
     { header: 'Destination', key: 'destination', width: 14 },
+    // PS-513: appended LAST, after Destination — the same position-pinning rule the AC-6 return
+    // columns and the PS-490 Destination column already follow. Replacement re-ship money, its
+    // own columns; a replacement row's Total previously had no column here to break it down.
+    { header: 'Replace Postage', key: 'replacePostage', width: 15, style: { numFmt: NUMBER_FMT } },
+    { header: 'Replace Pick&Pack', key: 'replacePickPack', width: 17, style: { numFmt: NUMBER_FMT } },
   ];
   invoice.getRow(1).font = { bold: true };
   for (const d of details) {
@@ -2951,6 +2992,9 @@ export async function renderInvoiceXlsx(args: {
     const packageCostAmt = Number(d.package_cost_amt);
     const shippingAmt = Number(d.shipping_amt);
     const storageAmt = Number(d.storage_amt);
+    // PS-513: replacement money for this row (backend-owned; blank cell when zero, below).
+    const replacePostageAmt = Number(d.replace_postage_amt);
+    const replacePickPackAmt = Number(d.replace_pick_pack_amt);
     // PS-505: same zero-row fallback terms as the HTML renderer, so the two renderings
     // of one invoice cannot disagree about a return's total.
     const fulfillmentFeeAmt = resolveBillingInvoiceRowTotal({
@@ -2961,6 +3005,8 @@ export async function renderInvoiceXlsx(args: {
       storage: storageAmt,
       returnPostage: d.return_postage_amt,
       returnProcessing: d.return_processing_amt,
+      replacePostage: d.replace_postage_amt,
+      replacePickPack: d.replace_pick_pack_amt,
     });
     invoice.addRow({
       // PS-490: carries the " - Return" suffix; the adjustment label is already baked in
@@ -3001,6 +3047,11 @@ export async function renderInvoiceXlsx(args: {
       // PS-490: an adjustment has no shipment and therefore no destination. Blank rather
       // than "Needs Review", which would imply a gap someone should chase.
       destination: d.billing_adjustment_id ? '' : d.destination,
+      // PS-513: replacement money — the raw number when charged, null (blank cell) when zero,
+      // so non-replacement rows are not noisy. A display bucket: NOT in the totals-row SUM
+      // below (it is already inside each row's Total/fulfillmentFee via row_total).
+      replacePostage: replacePostageAmt > 0 ? replacePostageAmt : null,
+      replacePickPack: replacePickPackAmt > 0 ? replacePickPackAmt : null,
     });
   }
   if (details.length) {

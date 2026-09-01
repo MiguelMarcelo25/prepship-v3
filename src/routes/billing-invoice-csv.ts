@@ -49,6 +49,12 @@ export type InvoiceCsvDetailRow = {
   /** PS-488 M3 — whether the fee EXISTS. The cell is blank when false, 0 when a real zero. */
   has_return_postage_line?: boolean;
   has_return_processing_line?: boolean;
+  /**
+   * PS-513 — replacement re-ship money, already bucketed by the backend aggregate. Optional so
+   * a caller that has not been updated serializes blank rather than NaN into a money column.
+   */
+  replace_postage_amt?: string | null;
+  replace_pick_pack_amt?: string | null;
   skus: string | null;
   package_cost_amt: string;
   box_label: string;
@@ -88,6 +94,11 @@ export const INVOICE_CSV_HEADERS = [
   // its own breakdown, and the two exports of one invoice disagreed on what was shown.
   'Return Postage',
   'Return Processing',
+  // PS-513: appended LAST, same position-pinning rule as the return columns and Destination.
+  // A replacement row exported a non-zero Total with every component column blank until these
+  // two existed — the same reconciliation gap the return columns closed.
+  'Replace Postage',
+  'Replace Pick&Pack',
 ] as const;
 
 /** RFC-4180 quote a field, with spreadsheet formula-injection neutralization:
@@ -142,6 +153,12 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   });
   const returnPostageAmt = returnPostageCell === null ? '' : num(returnPostageCell);
   const returnProcessingAmt = returnProcessingCell === null ? '' : num(returnProcessingCell);
+  // PS-513: replacement money, rendered blank when zero (dashIfZero) like the outbound cells so
+  // non-replacement rows are not noisy. Backend-owned; never inferred from a line type here.
+  const replacePostageRaw = Number(row.replace_postage_amt ?? 0);
+  const replacePickPackRaw = Number(row.replace_pick_pack_amt ?? 0);
+  const replacePostageAmt = replacePostageRaw > 0 ? num(replacePostageRaw) : '';
+  const replacePickPackAmt = replacePickPackRaw > 0 ? num(replacePickPackRaw) : '';
   // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
   // CSV delegates the read-only total fallback to the backend owner.
   const total = resolveBillingInvoiceRowTotal({
@@ -154,6 +171,8 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     // a term, and the resolver must not be handed a formatting decision.
     returnPostage: row.return_postage_amt,
     returnProcessing: row.return_processing_amt,
+    replacePostage: row.replace_postage_amt,
+    replacePickPack: row.replace_pick_pack_amt,
   });
 
   const cells = [
@@ -190,6 +209,9 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     // becomes 0, matching how the XLSX sheet carries these two columns.
     returnPostageAmt,
     returnProcessingAmt,
+    // PS-513: replacement re-ship money, appended last to match the header order.
+    replacePostageAmt,
+    replacePickPackAmt,
   ];
   return cells.map(csvField).join(',');
 }

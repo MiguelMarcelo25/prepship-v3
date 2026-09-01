@@ -16,6 +16,16 @@ type BillingInvoiceRowTotalInput = {
    */
   returnPostage?: number | string | null;
   returnProcessing?: number | string | null;
+  /**
+   * PS-513 — replacement re-ship money, counted EXACTLY ONCE, same discipline as the return
+   * terms above. Optional so existing call sites are unchanged; absent reads as 0. A caller
+   * must not also fold replacement money into `shipping` — it is its own category
+   * (billing-invoice-totals.ts, PS-502 AC-18). Latent today (a replacement row's persisted
+   * row_total is nonzero, so it returns above), but present so a zero-total replacement row
+   * reconstructs instead of exporting $0.00 the way a return row did before PS-505.
+   */
+  replacePostage?: number | string | null;
+  replacePickPack?: number | string | null;
 };
 
 /** Absent reads as 0; an unparseable value must not poison the sum with NaN. */
@@ -50,6 +60,11 @@ export function resolveBillingInvoiceRowTotal(input: BillingInvoiceRowTotalInput
       + amount(input.shipping)
       + amount(input.storage)
       + amount(input.returnPostage)
-      + amount(input.returnProcessing),
+      + amount(input.returnProcessing)
+      // PS-513: replacement re-ship money is a term here for the same reason returns are —
+      // a replacement carries no outbound prep/box/shipping, so a zero-total replacement row
+      // would otherwise reconstruct to $0.00 while its Replace columns showed real charges.
+      + amount(input.replacePostage)
+      + amount(input.replacePickPack),
   );
 }

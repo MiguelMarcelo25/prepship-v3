@@ -79,6 +79,10 @@ assert.deepEqual(
     // column at 0, so the CSV could not be reconciled against its own breakdown.
     'Return Postage',
     'Return Processing',
+    // PS-513: appended after the return columns for the same reason — a replacement row
+    // exported a non-zero Total with every component column blank until these existed.
+    'Replace Postage',
+    'Replace Pick&Pack',
   ],
   'CSV columns must keep the operator-facing line item order and omit Prep Fee Waiver',
 );
@@ -151,7 +155,9 @@ assert.equal(
   // return column on every shipment line of every invoice asserted a charge that was
   // never made. returnMoneyRow below covers a real return; the waived case is covered in
   // ps-488-billing-row-reference-guard, where the same number renders WITH presence.
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,',
+  // PS-513: two additional trailing blank cells for the appended Replace columns — this
+  // fixture is an outbound row with no replacement, so both are blank (dashIfZero).
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,,,',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -200,7 +206,9 @@ assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Total')], '10.73',
 const sumOf = (header: string) => Number(returnCells[INVOICE_CSV_HEADERS.indexOf(header)]);
 assert.equal(
   sumOf('Box Cost') + sumOf('Pick & Pack Fee') + sumOf('Shipping') + sumOf('Storage')
-    + sumOf('Return Postage') + sumOf('Return Processing'),
+    + sumOf('Return Postage') + sumOf('Return Processing')
+    // PS-513: replacement columns are part of the reconciliation identity too (0 on a return).
+    + sumOf('Replace Postage') + sumOf('Replace Pick&Pack'),
   sumOf('Total'),
   'a return row must reconcile against its own component columns',
 );
@@ -249,6 +257,52 @@ assert.equal(returnCells[INVOICE_CSV_HEADERS.indexOf('Order #')], '#1234-RETURN'
   );
 }
 
+// PS-513 — a REAL replacement row: replacement money only, no outbound components.
+//
+// Before the two Replace columns existed this row exported Total 11.75 with Box Cost, Qty,
+// Pick & Pack, Additional, Shipping and Storage all 0 — a money row whose own breakdown summed
+// to nothing, exactly the return defect PS-488 M3 closed, re-opened for replacements.
+const replaceMoneyRow: InvoiceCsvDetailRow = {
+  order_id: 5252,
+  order_number: '2200',
+  shipment_id: 52521,
+  ship_date: '2026-05-07',
+  billing_effective_date: '2026-05-07',
+  base_qty: '0',
+  addl_qty: '0',
+  pickpack_amt: '0',
+  additional_amt: '0',
+  shipping_amt: '0',
+  storage_amt: '0',
+  replace_postage_amt: '8.75',
+  replace_pick_pack_amt: '3.00',
+  row_total: '11.75',
+  skus: null,
+  package_cost_amt: '0',
+  box_label: '—',
+  box_review: false,
+  fee_waived: false,
+  destination: 'Domestic',
+  order_number_label: '2200',
+};
+const replaceCells = renderInvoiceCsvRow(replaceMoneyRow).split(',');
+assert.equal(replaceCells.length, INVOICE_CSV_HEADERS.length, 'every header must get a cell (replacement row)');
+assert.equal(replaceCells[INVOICE_CSV_HEADERS.indexOf('Replace Postage')], '8.75');
+assert.equal(replaceCells[INVOICE_CSV_HEADERS.indexOf('Replace Pick&Pack')], '3');
+assert.equal(replaceCells[INVOICE_CSV_HEADERS.indexOf('Total')], '11.75',
+  'the replacement Total must stay the backend row_total');
+const sumOfReplace = (header: string) => Number(replaceCells[INVOICE_CSV_HEADERS.indexOf(header)]);
+assert.equal(
+  sumOfReplace('Box Cost') + sumOfReplace('Pick & Pack Fee') + sumOfReplace('Shipping') + sumOfReplace('Storage')
+    + sumOfReplace('Return Postage') + sumOfReplace('Return Processing')
+    + sumOfReplace('Replace Postage') + sumOfReplace('Replace Pick&Pack'),
+  sumOfReplace('Total'),
+  'a replacement row must reconcile against its own component columns (PS-513)',
+);
+// Replacement money must never be laundered through the outbound buckets.
+assert.equal(sumOfReplace('Shipping'), 0, 'replacement postage must not appear as Shipping');
+assert.equal(sumOfReplace('Pick & Pack Fee'), 0, 'replacement handling must not appear as a prep fee');
+
 // PS-490: a row from a caller that has not been updated must still emit a correct order
 // number and an empty Destination — never a blank Order # cell.
 assert.ok(
@@ -273,6 +327,9 @@ assert.equal(
 // The same rule for the two return columns: absent means 0, never NaN or blank.
 assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Postage')], '');
 assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Return Processing')], '');
+// PS-513: the two replacement columns are blank on a non-replacement row (dashIfZero).
+assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Replace Postage')], '');
+assert.equal(fallbackCells[INVOICE_CSV_HEADERS.indexOf('Replace Pick&Pack')], '');
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
 // pickPackFee(3) + package cost(2) + shipping(2) + storage(1) = 8. Empty SKUs serialize blank.
@@ -284,7 +341,8 @@ assert.equal(
   // and the fallback deliberately does NOT include the return buckets — row_total is a
   // sum over every line type, so folding returns into the fallback would double-count on
   // every row that has a real total.
-  '5/5/2026 12:00 AM PT,PO-9002,,Small,2,1,3,0,2,1,8,#90021,,,',
+  // PS-513: two more trailing blank cells for the appended Replace columns (no replacement).
+  '5/5/2026 12:00 AM PT,PO-9002,,Small,2,1,3,0,2,1,8,#90021,,,,,',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 
