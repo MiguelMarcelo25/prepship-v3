@@ -125,14 +125,62 @@ export function billingReturnLineTypesSql(): SQL {
  * this list is exactly how return_processing_fee came to be missing from one in the first
  * place.
  */
+/**
+ * DOWNSTREAM COUPLING — the Client Portal SCRAPES these declarations.
+ *
+ * client-portal-prepship pins this file in contracts/prepship-billing-return-line-types.json
+ * and re-derives the vocabulary from it in scripts/prepship-return-vocabulary-parity.mjs.
+ * Renaming or restructuring the consts below (or BILLING_RETURN_LINE_TYPES above) means
+ * re-pinning that contract in the same breath, or the portal's gate fails on its next re-pin.
+ * Nothing else here hints at that, which is why it is written down.
+ *
+ * PS-517: the SPLIT vocabularies, exported for the same reason BILLING_RETURN_LINE_TYPES is.
+ *
+ * The predicates below and the invoice DETAIL query's SQL both answer "is this line return
+ * postage / processing?", and the SQL used to spell the answer out by hand. That is the second
+ * owner the aggregate bucket already learned not to be: a spelling added here and missed there
+ * moves money between the two named parts — or out of both — while grand_total stays right, so
+ * the row still foots and nothing errors. One list per bucket, consumed by both.
+ */
+export const BILLING_RETURN_POSTAGE_LINE_TYPES = ['return_postage', 'return_label'] as const;
+
+export const BILLING_RETURN_PROCESSING_LINE_TYPES = [
+  'return_processing_fee',
+  'return_processing',
+] as const;
+
 export function isBillingReturnPostageLineType(lineType: unknown): boolean {
   const value = normalizedText(lineType)?.toLowerCase();
-  return value === 'return_postage' || value === 'return_label';
+  return value != null && (BILLING_RETURN_POSTAGE_LINE_TYPES as readonly string[]).includes(value);
 }
 
 export function isBillingReturnProcessingLineType(lineType: unknown): boolean {
   const value = normalizedText(lineType)?.toLowerCase();
-  return value === 'return_processing_fee' || value === 'return_processing';
+  return value != null
+    && (BILLING_RETURN_PROCESSING_LINE_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * The split vocabularies as SQL `in (...)` lists, for the invoice detail's per-bucket sums and
+ * its presence flags.
+ *
+ * Deliberately NOT case-normalising, exactly like billingReturnLineTypesSql above: these render
+ * into existing `b.line_type in (...)` arms, and adding lower() here would change which rows are
+ * counted — a money-display change wearing a refactor's clothes. The predicates lowercase because
+ * they classify arbitrary input; the SQL matches the rows the SQL has always matched.
+ */
+export function billingReturnPostageLineTypesSql(): SQL {
+  return sql`(${sql.join(
+    BILLING_RETURN_POSTAGE_LINE_TYPES.map((lineType) => sql`${lineType}`),
+    sql`, `,
+  )})`;
+}
+
+export function billingReturnProcessingLineTypesSql(): SQL {
+  return sql`(${sql.join(
+    BILLING_RETURN_PROCESSING_LINE_TYPES.map((lineType) => sql`${lineType}`),
+    sql`, `,
+  )})`;
 }
 
 function result(

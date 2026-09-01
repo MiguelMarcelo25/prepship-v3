@@ -200,6 +200,66 @@ check('the invoice header totals owner does NOT re-spell the return vocabulary i
   check('the return vocabulary is declared ONCE and the predicate derives from it',
     /export const BILLING_RETURN_LINE_TYPES/.test(rowStatus) &&
     /BILLING_RETURN_LINE_TYPES as readonly string\[\]\)\.includes/.test(rowStatus));
+
+  // ── PS-517 — the SPLIT vocabulary has one owner too ────────────────────────
+  //
+  // The aggregate bucket above and the postage/processing SPLIT are different facts, and the
+  // split had its own hand-written copies: the invoice DETAIL query spelled both lists out in
+  // four SQL arms while the TS predicates spelled them out again. A spelling added to one and
+  // missed in the other moves money BETWEEN the two named parts (or out of both) while
+  // grand_total stays right — the row still foots, so nothing errors and nothing is caught.
+  console.log('\nPS-517 split return vocabulary (postage vs processing)');
+  const detailRoute = read('src/routes/billing.ts');
+
+  check('both SPLIT vocabularies are declared ONCE as consts',
+    /export const BILLING_RETURN_POSTAGE_LINE_TYPES/.test(rowStatus)
+    && /export const BILLING_RETURN_PROCESSING_LINE_TYPES/.test(rowStatus));
+  check('both SPLIT predicates derive from those consts, not inline spellings',
+    /BILLING_RETURN_POSTAGE_LINE_TYPES as readonly string\[\]\)\.includes/.test(rowStatus)
+    && /BILLING_RETURN_PROCESSING_LINE_TYPES as readonly string\[\]\)\.includes/.test(rowStatus));
+  check('the owner exposes both SPLIT vocabularies as SQL',
+    /export function billingReturnPostageLineTypesSql/.test(rowStatus)
+    && /export function billingReturnProcessingLineTypesSql/.test(rowStatus));
+  check('the invoice DETAIL query consumes the SQL owners',
+    /billingReturnPostageLineTypesSql\(\)/.test(detailRoute)
+    && /billingReturnProcessingLineTypesSql\(\)/.test(detailRoute));
+
+  // ALL FOUR arms must delegate: two amount sums + two bool_or presence flags. Counting the
+  // fragment uses is what proves it — an earlier version pinned two fixed substrings
+  // (`line_type in ('return_postage'`), which a PARTIAL revert of just the two bool_or arms
+  // walks straight past. Those two arms are the PS-488 M3 absent-vs-charged-zero flags printed
+  // on customer invoice HTML and XLSX, so a silent revert there is customer-visible.
+  const postageUses = (detailRoute.match(/\$\{returnPostageLineTypesSql\}/g) ?? []).length;
+  const processingUses = (detailRoute.match(/\$\{returnProcessingLineTypesSql\}/g) ?? []).length;
+  check('all FOUR split arms delegate (2 postage + 2 processing: a sum and a presence flag each)',
+    postageUses === 2 && processingUses === 2,
+    `postage=${postageUses} processing=${processingUses}`);
+
+  // Order- and whitespace-independent, unlike the substring pin it replaces: ANY re-spelling
+  // reintroduces one of these quoted literals, whatever the element order, spacing, or whether
+  // it is written as `in (...)` or `= 'x' or = 'y'`. The detail route carries none of them.
+  const respelled = ['return_postage', 'return_label', 'return_processing_fee', 'return_processing']
+    .filter((spelling) => detailRoute.includes(`'${spelling}'`));
+  check('the invoice DETAIL query does NOT re-spell the split vocabulary inline, in any form',
+    respelled.length === 0, `found inline: ${respelled.join(', ')}`);
+
+  // The split buckets must stay SUBSETS of the aggregate. If a spelling is added to a split
+  // list but not to BILLING_RETURN_LINE_TYPES, its money lands in a named part while dropping
+  // out of the return total — the two owners disagreeing in the one way each is blind to.
+  const listOf = (name: string): string[] => {
+    const block = rowStatus.match(new RegExp(`${name}[^=]*=\\s*\\[([\\s\\S]*?)\\]`));
+    return block ? [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+  };
+  const all = listOf('BILLING_RETURN_LINE_TYPES');
+  const postage = listOf('BILLING_RETURN_POSTAGE_LINE_TYPES');
+  const processing = listOf('BILLING_RETURN_PROCESSING_LINE_TYPES');
+  check('the split lists were parsed', all.length === 5 && postage.length === 2 && processing.length === 2,
+    `all=${all.length} postage=${postage.length} processing=${processing.length}`);
+  check('every SPLIT spelling is also in the aggregate return vocabulary',
+    [...postage, ...processing].every((t) => all.includes(t)),
+    `split=${[...postage, ...processing].join(',')} all=${all.join(',')}`);
+  check('the two SPLIT buckets are disjoint',
+    !postage.some((t) => processing.includes(t)));
 }
 
 // ── AC-5 — exports cannot diverge from what is displayed ─────────────────────
