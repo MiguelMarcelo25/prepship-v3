@@ -44,11 +44,8 @@ import {
   classifyDestinationCountry,
   type BillingDestination,
 } from '../services/billing-destination-international';
-import {
-  billingReturnPostageLineTypesSql,
-  billingReturnProcessingLineTypesSql,
-  isBillingReturnLineType,
-} from '../services/billing-row-status';
+import { isBillingReturnLineType } from '../services/billing-row-status';
+import { billingReturnSplitInvoiceArms } from '../services/billing-return-split-arms';
 // PS-488 AC-6: the invoice's reconciliation projection. Pure — it fetches nothing; both
 // of its inputs are supplied by billingInvoiceData.
 import { reconcileInvoiceRows } from './billing-invoice-reconcile';
@@ -2325,11 +2322,12 @@ async function billingInvoiceData(
     sql`b.billing_effective_date`,
     sql`b.ship_date`,
   );
-  // PS-517: the split return vocabularies come from the ONE owner that also backs
-  // isBillingReturnPostageLineType / isBillingReturnProcessingLineType, so the amounts and the
-  // presence flags below cannot classify a spelling differently from the DTO that renders them.
-  const returnPostageLineTypesSql = billingReturnPostageLineTypesSql();
-  const returnProcessingLineTypesSql = billingReturnProcessingLineTypesSql();
+  // PS-517: the four return-split arms (two amounts, two PS-488 M3 presence flags) are built by
+  // the owner that also backs isBillingReturnPostageLineType / isBillingReturnProcessingLineType,
+  // so the invoice cannot classify a spelling differently from the DTO that renders them. r3 moved
+  // the arms themselves there too: a source-regex guard could be satisfied by text alone, but a
+  // test that imports and RENDERS these can read the bound parameters and see the real vocabulary.
+  const returnSplitArms = billingReturnSplitInvoiceArms(detailAmount);
 
   const rawDetails = await db.execute<InvoiceDetailSqlRow>(sql`
     select
@@ -2360,8 +2358,8 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then ${detailAmount} else 0 end), 0)::text as additional_amt,
       coalesce(sum(case when b.line_type = 'shipping' then ${detailAmount} else 0 end), 0)::text as shipping_amt,
       coalesce(sum(case when b.line_type = 'storage' then ${detailAmount} else 0 end), 0)::text as storage_amt,
-      coalesce(sum(case when b.line_type in ${returnPostageLineTypesSql} then ${detailAmount} else 0 end), 0)::text as return_postage_amt,
-      coalesce(sum(case when b.line_type in ${returnProcessingLineTypesSql} then ${detailAmount} else 0 end), 0)::text as return_processing_amt,
+      ${returnSplitArms.postageAmount} as return_postage_amt,
+      ${returnSplitArms.processingAmount} as return_processing_amt,
       -- PS-513: replacement re-ship money, its own buckets (never folded into shipping/pickpack).
       -- PS-519: the words detailAmount / cancelledNoChargeBillingAmountSql below are NOT
       -- interpolated. This comment used to embed the detailAmount fragment, which renders as a
@@ -2376,8 +2374,8 @@ async function billingInvoiceData(
       -- distinguish "never charged postage" from "charged 0.00 postage", so a
       -- processing-only return exported postage as 0.00 on a client-facing document.
       -- bool_or over the line types answers the presence question directly.
-      bool_or(b.line_type in ${returnPostageLineTypesSql}) as has_return_postage_line,
-      bool_or(b.line_type in ${returnProcessingLineTypesSql}) as has_return_processing_line,
+      ${returnSplitArms.hasPostageLine} as has_return_postage_line,
+      ${returnSplitArms.hasProcessingLine} as has_return_processing_line,
       -- PS-488 M3: the STORED reference. PrepShip never mints a -RETURN suffix; max() over
       -- a group that is keyed by return_id reads the single value that group can have.
       max(r.return_reference) as return_reference,
