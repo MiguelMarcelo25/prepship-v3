@@ -5,7 +5,11 @@ import { intArraySql } from '../lib/scope-sql.js';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge.js';
 import { billingLineItemsHasReplacementIdColumn } from './billing-column-presence.js';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
-import { billingReturnLineTypesSql } from './billing-row-status.js';
+import {
+  billingReturnLineTypesSql,
+  billingReturnPostageLineTypesSql,
+  billingReturnProcessingLineTypesSql,
+} from './billing-row-status.js';
 import {
   nonBillableDuplicateOrderIds,
   type DuplicateOrderDecisions,
@@ -37,6 +41,16 @@ export type BillingInvoiceHeaderTotals = {
    * whenever a return exists (returns are live today).
    */
   returnTotal: number;
+  /**
+   * The two NAMED PARTS of returnTotal, split by the same vocabulary owner the arms use
+   * (PS-517). They are SUBSETS of returnTotal, never an addition to it.
+   *
+   * Added so a consumer that needs the breakdown — the Client Portal's customer invoice does —
+   * can read it from this owner instead of running its own aggregation. That second
+   * aggregation is exactly how the portal came to bill a customer for cancelled orders.
+   */
+  returnPostageTotal: number;
+  returnProcessingTotal: number;
   grandTotal: number;
   fulfillmentFeeTotal: number;
 };
@@ -106,6 +120,10 @@ export async function billingInvoiceHeaderTotals(
   // would drop return money out of this bucket while leaving it in grandTotal, so the invoice
   // summary would stop reconciling with no error.
   const returnLineTypesSql = billingReturnLineTypesSql();
+  // PS-517's split vocabulary, same owner as the invoice arms — so the two named parts cannot
+  // drift from the bucket that contains them.
+  const returnPostageTypesSql = billingReturnPostageLineTypesSql();
+  const returnProcessingTypesSql = billingReturnProcessingLineTypesSql();
   const summaryRow = await conn.execute<{
     pickpack_total: string;
     additional_total: string;
@@ -116,6 +134,8 @@ export async function billingInvoiceHeaderTotals(
     replace_postage_total: string;
     replace_pick_pack_total: string;
     return_total: string;
+    return_postage_total: string;
+    return_processing_total: string;
     order_count: number;
     replacement_count: number;
     grand_total: string;
@@ -134,6 +154,8 @@ export async function billingInvoiceHeaderTotals(
       -- PS-515: spellings come from BILLING_RETURN_LINE_TYPES via billingReturnLineTypesSql(), so this
       -- bucket cannot disagree with isBillingReturnLineType / grandTotal (was a hand-written third copy).
       coalesce(sum(case when b.line_type in ${returnLineTypesSql} then ${invoiceAmount} else 0 end), 0)::text as return_total,
+      coalesce(sum(case when b.line_type in ${returnPostageTypesSql} then ${invoiceAmount} else 0 end), 0)::text as return_postage_total,
+      coalesce(sum(case when b.line_type in ${returnProcessingTypesSql} then ${invoiceAmount} else 0 end), 0)::text as return_processing_total,
       count(distinct b.order_id)::int as order_count,
       ${replacementCountSql} as replacement_count,
       coalesce(sum(${invoiceAmount}), 0)::text as grand_total
@@ -157,6 +179,8 @@ export async function billingInvoiceHeaderTotals(
           replace_postage_total: string;
           replace_pick_pack_total: string;
           return_total: string;
+          return_postage_total: string;
+          return_processing_total: string;
           order_count: number;
           replacement_count: number;
           grand_total: string;
@@ -176,6 +200,8 @@ export async function billingInvoiceHeaderTotals(
   const replacePostageTotal = roundMoney(Number(s?.replace_postage_total ?? 0));
   const replacePickPackTotal = roundMoney(Number(s?.replace_pick_pack_total ?? 0));
   const returnTotal = roundMoney(Number(s?.return_total ?? 0));
+  const returnPostageTotal = roundMoney(Number(s?.return_postage_total ?? 0));
+  const returnProcessingTotal = roundMoney(Number(s?.return_processing_total ?? 0));
   const grandTotal = roundMoney(Number(s?.grand_total ?? 0));
   // NO residual bucket here, deliberately. An "other" category would make the AC-18 identity
   // hold by absorbing whatever is unaccounted for — which is exactly the alarm
@@ -206,6 +232,8 @@ export async function billingInvoiceHeaderTotals(
     replacePostageTotal,
     replacePickPackTotal,
     returnTotal,
+    returnPostageTotal,
+    returnProcessingTotal,
     grandTotal,
     fulfillmentFeeTotal,
   };

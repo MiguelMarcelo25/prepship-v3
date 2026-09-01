@@ -87,6 +87,13 @@ async function main(): Promise<void> {
     // no-charge), so the return category is 5 — the same money the residual assertion below
     // independently isolates.
     returnTotal: 5,
+    // CP-066: the two NAMED PARTS of returnTotal, split by the same vocabulary owner (PS-517)
+    // the invoice arms use. `return_label` is POSTAGE, so the split is 5 + 0 and must still add
+    // up to returnTotal — a breakdown OF that bucket, never an addition to it. Added to the
+    // owner so the Client Portal's customer invoice can read the breakdown from here instead of
+    // running its own aggregation, which is how it came to bill cancelled orders.
+    returnPostageTotal: 5,
+    returnProcessingTotal: 0,
     grandTotal: 23,
     // PS-505 corrective: fulfillment SERVICE fees only — pickPackFee 3 + package 3 = 6.
     // Previously 18 (all five buckets), which made this field a second row total.

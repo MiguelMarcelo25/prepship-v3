@@ -2787,9 +2787,14 @@ export function renderInvoiceHtml(args: {
     .meta .client-name { font-size: 18px; font-weight: 700; color: #111; }
     .meta .date-range { font-size: 12px; color: #6b7280; margin-top: 2px; }
     .meta .gen-date { font-size: 10px; color: #9ca3af; margin-top: 2px; }
-    .summary-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 20px; }
+    /* EIGHT cards, so a 7-column grid orphaned "Fulfillment Fee" onto a second row on its own,
+       left-aligned under a full row — which is what operators were reading as "not centred".
+       auto-fit keeps the row full at any card count and stays centred via justify-content. */
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 20px; justify-content: center; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
     .card .cl { font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px; }
+    /* Qualifier on a card label — says whether a figure contains, or is contained by, its neighbour. */
+    .card .cn { text-transform: none; letter-spacing: 0; color: #b6bcc6; font-weight: 400; }
     .card .cv { font-size: 16px; font-weight: 700; color: #111; }
     .grand-total { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
     .grand-total .gtl { font-size: 13px; font-weight: 600; color: #166534; }
@@ -2826,8 +2831,13 @@ export function renderInvoiceHtml(args: {
   </div>
   <div class="summary-grid">
     <div class="card"><div class="cl">Orders</div><div class="cv">${orderCount}</div></div>
-    <div class="card"><div class="cl">Pick &amp; Pack</div><div class="cv">${fmt(pickPackFeeTotal)}</div></div>
-    <div class="card"><div class="cl">Add'l Units</div><div class="cv">${fmt(additionalTotal)}</div></div>
+    <!-- This card renders pickPackFeeTotal, which is pick_pack PLUS additional_unit, while the
+         card beside it re-displays that same additional slice. Reading the two as separate
+         buckets and adding them over-counts by the whole Add'l Units figure — and it made this
+         invoice look like it disagreed with the customer portal by $542 when the real gap was
+         $30.50. The label now says which it is. -->
+    <div class="card"><div class="cl">Pick &amp; Pack <span class="cn">(incl. Add'l)</span></div><div class="cv">${fmt(pickPackFeeTotal)}</div></div>
+    <div class="card"><div class="cl">Add'l Units <span class="cn">(incl. above)</span></div><div class="cv">${fmt(additionalTotal)}</div></div>
     <div class="card"><div class="cl">Packages</div><div class="cv">${packageTotal > 0 ? fmt(packageTotal) : '—'}</div></div>
     <div class="card"><div class="cl">Shipping</div><div class="cv">${fmt(shippingTotal)}</div></div>
     <div class="card"><div class="cl">Storage</div><div class="cv">${storageTotal > 0 ? fmt(storageTotal) : '—'}</div></div>
