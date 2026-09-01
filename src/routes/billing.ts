@@ -2354,8 +2354,13 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type in ('return_postage', 'return_label') then ${detailAmount} else 0 end), 0)::text as return_postage_amt,
       coalesce(sum(case when b.line_type in ('return_processing_fee', 'return_processing') then ${detailAmount} else 0 end), 0)::text as return_processing_amt,
       -- PS-513: replacement re-ship money, its own buckets (never folded into shipping/pickpack).
-      -- ${detailAmount} keeps replacement money on a cancelled original (replace_* is excluded from
-      -- cancelledNoChargeBillingAmountSql), so a surviving replacement charge lands here.
+      -- PS-519: the words detailAmount / cancelledNoChargeBillingAmountSql below are NOT
+      -- interpolated. This comment used to embed the detailAmount fragment, which renders as a
+      -- MULTI-LINE case expression, so the leading "--" commented out only its first line and the
+      -- remaining twelve spilled into the select list as bare SQL. Never interpolate into a "--"
+      -- comment inside a sql`` template: the amount expression keeps replacement money on a
+      -- cancelled original (replace_* is excluded from cancelledNoChargeBillingAmountSql), so a
+      -- surviving replacement charge lands here.
       coalesce(sum(case when b.line_type = 'replace_postage' then ${detailAmount} else 0 end), 0)::text as replace_postage_amt,
       coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${detailAmount} else 0 end), 0)::text as replace_pick_pack_amt,
       -- PS-488 M3: PRESENCE, separate from amount. The coalesce(...,0) above cannot
