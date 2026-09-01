@@ -66,6 +66,10 @@ type InvoiceTotals = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  // PS-513: replacement re-ship money, its own categories (billing-invoice-totals.ts, PS-502
+  // AC-18). Optional so a stale API response reconciles to a $0 Replacement rather than NaN.
+  replacePostageTotal?: number;
+  replacePickPackTotal?: number;
   grandTotal: number;
   fulfillmentFeeTotal: number;
 };
@@ -193,6 +197,12 @@ export default function Invoice() {
             { type: 'Package', amount: totals.packageTotal },
             { type: 'Shipping', amount: totals.shippingTotal },
             { type: 'Storage', amount: totals.storageTotal },
+            // PS-513: replacement re-ship money, its own category (postage + handling), from the
+            // backend header totals. Shown only when present so a normal invoice is not cluttered
+            // with a $0.00 card; before this the summary omitted it and under-summed grandTotal.
+            ...(((totals.replacePostageTotal ?? 0) + (totals.replacePickPackTotal ?? 0)) > 0
+              ? [{ type: 'Replacement', amount: (totals.replacePostageTotal ?? 0) + (totals.replacePickPackTotal ?? 0) }]
+              : []),
           ]
         : [],
       summarySort,

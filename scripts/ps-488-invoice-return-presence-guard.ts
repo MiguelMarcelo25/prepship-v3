@@ -140,10 +140,18 @@ const html = (rows: unknown[]) => renderInvoiceHtml({
 /** The Return Postage / Return Processing cells of the single body row, as text. */
 function htmlReturnCells(rows: unknown[]): { postage: string; processing: string } {
   const doc = html(rows);
+  // PS-513: locate the return columns BY HEADER, not by "last two" — PS-513 appended the
+  // Replace columns after them, so the return cells are no longer last. Header-driven lookup
+  // keeps this test correct across future appended columns.
+  const headers = [...(/<thead>([\s\S]*?)<\/thead>/.exec(doc)?.[1] ?? '')
+    .matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1]!.trim());
+  const postageCol = headers.indexOf('Return Postage');
+  const processingCol = headers.indexOf('Return Processing');
+  assert.ok(postageCol >= 0 && processingCol >= 0, 'the invoice must carry both return columns');
   const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(doc)?.[1] ?? '';
   const cells = [...body.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]!.trim());
   assert.ok(cells.length >= 2, 'the body row must have cells at all');
-  return { postage: cells[cells.length - 2]!, processing: cells[cells.length - 1]! };
+  return { postage: cells[postageCol]!, processing: cells[processingCol]! };
 }
 
 /** The Return Postage / Return Processing cell VALUES from the Line Items sheet. */
@@ -221,8 +229,12 @@ await check('HTML: header, body and footer stay column-aligned', async () => {
   const doc = html([returnRow({ return_postage_amt: '7.73', has_return_postage_line: true })]);
   const headers = [...(/<thead>([\s\S]*?)<\/thead>/.exec(doc)?.[1] ?? '')
     .matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1]!.trim());
-  assert.equal(headers[headers.length - 2], 'Return Postage');
-  assert.equal(headers[headers.length - 1], 'Return Processing');
+  // PS-513: the Return columns are no longer last — the Replace columns are the appended-last
+  // pair. All four must exist in the header, and the body/footer counts below prove alignment.
+  assert.equal(headers[headers.length - 4], 'Return Postage');
+  assert.equal(headers[headers.length - 3], 'Return Processing');
+  assert.equal(headers[headers.length - 2], 'Replace Postage');
+  assert.equal(headers[headers.length - 1], 'Replace Pick&amp;Pack');
 
   const bodyCells = [...(/<tbody>([\s\S]*?)<\/tbody>/.exec(doc)?.[1] ?? '')
     .matchAll(/<td[^>]*>/g)].length;
