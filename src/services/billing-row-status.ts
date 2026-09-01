@@ -1,5 +1,4 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { REPLACEMENT_LINE_TYPES } from './replacement-billing-planner.js';
 
 import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
 
@@ -113,28 +112,6 @@ export function isBillingReturnLineType(lineType: unknown): boolean {
 export function billingReturnLineTypesSql(): SQL {
   return sql`(${sql.join(
     BILLING_RETURN_LINE_TYPES.map((lineType) => sql`${lineType}`),
-    sql`, `,
-  )})`;
-}
-
-/**
- * PS-502 AC-18 — the replacement line types, in SQL, from the ONE place that names them.
- *
- * Same reasoning as the return owner directly above, and the same failure if it is copied:
- * two callers need this list in SQL (the live billing summary and the cached
- * billing_summary_metrics upsert), and a hand-written `case` in either becomes a second
- * owner of the vocabulary. When they disagree nothing errors — the missing spelling's money
- * simply stays inside grand_total and lands in no bucket.
- *
- * Sourced from REPLACEMENT_LINE_TYPES rather than re-spelling it, because that const is
- * already what the planner, the writer and the outbound sweep agree on. A replacement
- * vocabulary is kept SEPARATE from the return vocabulary: a replacement is an outbound
- * re-ship and a return is inbound, so a shared list would make every reader asking "is this
- * a return?" answer yes.
- */
-export function billingReplacementLineTypesSql(): SQL {
-  return sql`(${sql.join(
-    REPLACEMENT_LINE_TYPES.map((lineType) => sql`${lineType}`),
     sql`, `,
   )})`;
 }
