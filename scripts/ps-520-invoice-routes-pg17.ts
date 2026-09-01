@@ -274,6 +274,28 @@ const unescapeHtml = (s: string) =>
   s.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 const tagText = (cell: string) => unescapeHtml(cell.replace(/<[^>]*>/g, '')).trim();
 
+/**
+ * The HTML footer's totals, bound to the same headers — COLSPAN-AWARE.
+ *
+ * The footer's first cell spans four columns, so a cell's POSITION is not its header's position.
+ * This is not hypothetical: billing.ts carries a PS-505 comment about a footer that spanned 5 and
+ * "pushed every total one cell right of the column it totals". Expanding colspans is the whole
+ * reason this reads the right column.
+ */
+function htmlFooterCells(html: string): Map<string, string> {
+  const header = [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => tagText(m[1]!));
+  const foot = html.slice(html.indexOf('<tfoot>'), html.indexOf('</tfoot>'));
+  const cells = new Map<string, string>();
+  let column = 0;
+  for (const m of foot.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)) {
+    const span = Number((m[1]!.match(/colspan=["']?(\d+)/) ?? [])[1] ?? 1);
+    const name = header[column];
+    if (name && !cells.has(name)) cells.set(name, tagText(m[2]!));
+    column += span;
+  }
+  return cells;
+}
+
 function htmlMoneyRows(html: string, orderNumber: string): MoneyRow[] {
   const header = [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => tagText(m[1]!));
   const body = html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>'));
@@ -390,10 +412,11 @@ async function main(): Promise<void> {
       `sheets: ${workbook.worksheets.map((w) => w.name).join(', ')}`);
 
     let xlsxRows: MoneyRow[] = [];
+    // Hoisted: the Totals row below is checked AGAINST this binding, so it must outlive the block.
+    let headerRowNumber = 0;
+    const headerIndex = new Map<string, number>();
     if (sheet) {
       // Bind columns by HEADER TEXT, not position — a reordered export must not silently pass.
-      let headerRowNumber = 0;
-      const headerIndex = new Map<string, number>();
       sheet.eachRow((row, n) => {
         if (headerRowNumber) return;
         const labels = (row.values as unknown[]).map((v) => (v == null ? '' : String(v).trim()));
@@ -415,6 +438,48 @@ async function main(): Promise<void> {
         xlsxRows.push(parsed);
       });
     }
+
+    // ── The bold Totals row ────────────────────────────────────────────────
+    // Its cells are SUM formulas addressed by COLUMN LETTER, and billing.ts states the cost of
+    // getting one wrong: "A stale letter here does not error — it silently sums the neighbouring
+    // column." Review pointed the Shipping total at the Storage column and all 35 checks stayed
+    // green, because nothing parsed the totals row at all — every row filter here keeps only rows
+    // carrying the seeded order number, and the totals row carries none.
+    //
+    // Assert each total sums ITS OWN column, derived from the header binding. Pinning the literal
+    // letters instead would just re-encode the bug the PS-505 comment describes.
+    const colLetter = (n: number): string => {
+      let out = '';
+      for (let i = n; i > 0; i = Math.floor((i - 1) / 26)) out = String.fromCharCode(65 + ((i - 1) % 26)) + out;
+      return out;
+    };
+    let totalsRowNumber = 0;
+    const totalsIssues: string[] = [];
+    if (sheet) {
+      sheet.eachRow((row, n) => {
+        if (totalsRowNumber || n <= headerRowNumber) return;
+        if ((row.values as unknown[]).some((v) => typeof v === 'string' && /^Totals\b/.test(v.trim()))) {
+          totalsRowNumber = n;
+        }
+      });
+      if (totalsRowNumber) {
+        const totalsRow = sheet.getRow(totalsRowNumber);
+        for (const header of ['Box Cost', 'Qty', 'Pick & Pack', 'Addl Units', 'Shipping', 'Storage', 'Total']) {
+          const idx = headerIndex.get(header);
+          if (idx === undefined) { totalsIssues.push(`${header}: no such column`); continue; }
+          const cell = totalsRow.getCell(idx).value as { formula?: string } | null;
+          const formula = cell && typeof cell === 'object' && 'formula' in cell ? String(cell.formula) : '';
+          const want = colLetter(idx);
+          const m = formula.match(/^SUM\(([A-Z]+)\d+:([A-Z]+)\d+\)$/);
+          if (!m || m[1] !== want || m[2] !== want) {
+            totalsIssues.push(`${header}: expected SUM(${want}..) but found ${formula || '(no formula)'}`);
+          }
+        }
+      }
+    }
+    check('the XLSX carries a Totals row', totalsRowNumber > 0, `header row=${headerRowNumber}`);
+    check('EVERY XLSX totals-row formula sums its OWN column, not a neighbour',
+      totalsRowNumber > 0 && totalsIssues.length === 0, totalsIssues.join(' | '));
 
     const csvRows = csvMoneyRows(csv, 'PS520-1001');
     const htmlRows = htmlMoneyRows(html, 'PS520-1001');
@@ -520,6 +585,35 @@ async function main(): Promise<void> {
     check(`the outbound row total agrees across HTML and CSV (${outboundRowTotal.toFixed(2)})`,
       htmlMoney.has(outboundRowTotal.toFixed(2)) && csvMoney.has(outboundRowTotal.toFixed(2)));
 
+    // ── The footer, against the rows it claims to total ─────────────────────
+    // The two checks above ask only whether a number appears ANYWHERE in the document — the same
+    // weakness that let a wrong workbook pass. Review swapped the footer's Shipping total for the
+    // Storage total and both stayed green, because 8.25 and 2.00 are still somewhere on the page.
+    // Foot the footer against the parsed rows instead.
+    const footer = htmlFooterCells(html);
+    const columnSum = (field: string) => csvSorted.reduce((sum, r) => sum + (r[field] ?? 0), 0);
+    const footIssues: string[] = [];
+    for (const [header, field] of [
+      ['Box Cost', 'boxCost'], ['Pick & Pack', 'pickPack'], ["Add'l Units", 'additional'],
+      ['Shipping', 'shipping'], ['Storage', 'storage'], ['Total', 'total'],
+    ] as const) {
+      const text = footer.get(header);
+      if (text === undefined) { footIssues.push(`${header}: no footer cell`); continue; }
+      const got = text === '—' || text === '' ? 0 : cellNumber(text);
+      const want = columnSum(field);
+      if (got === null || Math.abs(got - want) > 0.005) {
+        footIssues.push(`${header}: footer says ${text}, the column above sums to ${want.toFixed(2)}`);
+      }
+    }
+    check('EVERY HTML footer total equals the sum of the column above it',
+      footIssues.length === 0, footIssues.join(' | '));
+
+    // The headline the customer reads first must agree with the table it summarises.
+    const headline = html.match(/class="gtv">([^<]*)</)?.[1] ?? '';
+    check('the "Total Amount Due" headline equals the footer Total and the seeded grand total',
+      cellNumber(headline) === grandTotal && cellNumber(footer.get('Total') ?? '') === grandTotal,
+      `headline=${headline} footer=${footer.get('Total')} expected=${grandTotal.toFixed(2)}`);
+
     // ── PS-488 M3: "never charged" vs "charged 0.00" survive to the CSV ─────
     //
     // The exact distinction the presence flags exist for, asserted on the real document: the
@@ -545,11 +639,25 @@ async function main(): Promise<void> {
 
     // ── Client scoping ──────────────────────────────────────────────────────
     const foreign = appFor({ global: false, clientIds: [otherClientId] }, billingRoute);
-    const scopedRes = await foreign.request(`/billing/invoice?${qs}`);
-    const scopedBody = await scopedRes.text();
-    check('a caller scoped to ANOTHER client cannot read this invoice',
-      scopedRes.status === 404, `got ${scopedRes.status}`);
-    check("the refusal leaks no other client's billing", !scopedBody.includes('PS-520 Invoice Client'));
+    // Scoping is a property of each ROUTE, not of the invoice: all three handlers call
+    // billingScopeFromContext separately. Review's proof exercised only the HTML one, so deleting
+    // the scope from /invoice.csv left every check green while that route served any client's
+    // billing to any caller. A leak in the customer's spreadsheet is still a leak.
+    for (const [label, path] of [
+      ['HTML', `/billing/invoice?${qs}`],
+      ['XLSX', `/billing/invoice.xlsx?${qs}`],
+      ['CSV', `/billing/invoice.csv?${qs}`],
+    ] as const) {
+      const res = await foreign.request(path);
+      const body = await res.text();
+      check(`a caller scoped to ANOTHER client cannot read this invoice via ${label}`,
+        res.status === 404, `got ${res.status}`);
+      check(`the ${label} refusal carries neither this client's name nor its money`,
+        !body.includes('PS-520 Invoice Client')
+        && !/(^|[^\d])18\.75([^\d]|$)/.test(body)
+        && !/(^|[^\d])33\.50([^\d]|$)/.test(body),
+        `${res.status}: ${body.slice(0, 100)}`);
+    }
     // Anchored, not a bare substring: `includes('99.99')` also matches 999.99, so a mutation
     // that inflated a legitimate cell tripped this as a cross-client LEAK. A scope check that
     // fires on the wrong evidence is a scope check nobody can read.

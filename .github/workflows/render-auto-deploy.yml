@@ -30,6 +30,11 @@ on:
       # harness the gate EXECUTES: a fix to the PS-507 QA stack (npm run test:ps-507) must re-run the
       # gate, or a harness bug that only surfaces in this gate can never be re-verified through it.
       - 'scripts/ps-507-qa-stack.mjs'
+      # Same rule, same reason: `deploy` needs the invoice-routes-pg17 job, so a change to the
+      # harness that job RUNS must re-run this gate. Without this line the r2 repair of that
+      # harness pushed with this workflow never triggering — and "both required workflows green"
+      # could not be shown for the very commit that repaired it.
+      - 'scripts/ps-520-invoice-routes-pg17.ts'
 
 concurrency:
   # Never run two deploys for this branch at once; let an in-flight one finish.
