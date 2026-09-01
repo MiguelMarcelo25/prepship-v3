@@ -20,6 +20,7 @@ import {
   type SortState,
 } from '../components/SortableTable';
 import { formatBillingShipDate } from '../components/Views/billing-parity';
+import { buildInvoiceSummaryCategories } from './invoice-summary-categories';
 
 type LineItem = {
   id: number;
@@ -66,6 +67,10 @@ type InvoiceTotals = {
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  // PS-514: Adjustment + Return categories the summary now renders (grandTotal already sums both;
+  // returns are live today). Optional so a stale API response reads 0, not NaN.
+  adjustmentTotal?: number;
+  returnTotal?: number;
   // PS-513: replacement re-ship money, its own categories (billing-invoice-totals.ts, PS-502
   // AC-18). Optional so a stale API response reconciles to a $0 Replacement rather than NaN.
   replacePostageTotal?: number;
@@ -191,19 +196,11 @@ export default function Invoice() {
   const summaryRows = useMemo(() => {
     return sortRows(
       totals
-        ? [
-            { type: 'Pick & pack', amount: totals.pickPackTotal },
-            { type: 'Additional units', amount: totals.additionalTotal },
-            { type: 'Package', amount: totals.packageTotal },
-            { type: 'Shipping', amount: totals.shippingTotal },
-            { type: 'Storage', amount: totals.storageTotal },
-            // PS-513: replacement re-ship money, its own category (postage + handling), from the
-            // backend header totals. Shown only when present so a normal invoice is not cluttered
-            // with a $0.00 card; before this the summary omitted it and under-summed grandTotal.
-            ...(((totals.replacePostageTotal ?? 0) + (totals.replacePickPackTotal ?? 0)) > 0
-              ? [{ type: 'Replacement', amount: (totals.replacePostageTotal ?? 0) + (totals.replacePickPackTotal ?? 0) }]
-              : []),
-          ]
+        // PS-514: the full category breakdown is a backend-owned pure function. It renders every
+        // category grandTotal includes — Adjustment + Return added here, Replacement from PS-513 —
+        // so the summary cards reconcile to the Total instead of under-summing whenever a return or
+        // adjustment exists. Returns are live today, so the summary was mis-footing in production.
+        ? buildInvoiceSummaryCategories(totals)
         : [],
       summarySort,
       (row, key) => (key === 'amount' ? row.amount : row.type),

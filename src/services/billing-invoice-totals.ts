@@ -29,6 +29,13 @@ export type BillingInvoiceHeaderTotals = {
   replacePostageTotal: number;
   /** PS-502 AC-18: a re-ship's handling, its own category and never ordinary pick/pack. */
   replacePickPackTotal: number;
+  /**
+   * PS-514: return money (postage + processing + legacy) as its OWN category, so the FE invoice
+   * summary can render a Return card that reconciles to grandTotal. grandTotal already sums
+   * return lines; this names the bucket so the category breakdown no longer under-sums the Total
+   * whenever a return exists (returns are live today).
+   */
+  returnTotal: number;
   grandTotal: number;
   fulfillmentFeeTotal: number;
 };
@@ -100,6 +107,7 @@ export async function billingInvoiceHeaderTotals(
     adjustment_total: string;
     replace_postage_total: string;
     replace_pick_pack_total: string;
+    return_total: string;
     order_count: number;
     replacement_count: number;
     grand_total: string;
@@ -113,6 +121,9 @@ export async function billingInvoiceHeaderTotals(
       coalesce(sum(case when b.line_type = 'billing_adjustment' then ${invoiceAmount} else 0 end), 0)::text as adjustment_total,
       coalesce(sum(case when b.line_type = 'replace_postage' then ${invoiceAmount} else 0 end), 0)::text as replace_postage_total,
       coalesce(sum(case when b.line_type = 'replace_pick_pack' then ${invoiceAmount} else 0 end), 0)::text as replace_pick_pack_total,
+      -- PS-514: return money (postage + processing + legacy) as its own category, so the summary
+      -- reconciles. Same discipline as the adjustment/replace sums above; kept out of Fulfillment Fee.
+      coalesce(sum(case when b.line_type in ('return', 'return_label', 'return_processing', 'return_postage', 'return_processing_fee') then ${invoiceAmount} else 0 end), 0)::text as return_total,
       count(distinct b.order_id)::int as order_count,
       ${replacementCountSql} as replacement_count,
       coalesce(sum(${invoiceAmount}), 0)::text as grand_total
@@ -135,6 +146,7 @@ export async function billingInvoiceHeaderTotals(
           adjustment_total: string;
           replace_postage_total: string;
           replace_pick_pack_total: string;
+          return_total: string;
           order_count: number;
           replacement_count: number;
           grand_total: string;
@@ -153,6 +165,7 @@ export async function billingInvoiceHeaderTotals(
   const adjustmentTotal = roundMoney(Number(s?.adjustment_total ?? 0));
   const replacePostageTotal = roundMoney(Number(s?.replace_postage_total ?? 0));
   const replacePickPackTotal = roundMoney(Number(s?.replace_pick_pack_total ?? 0));
+  const returnTotal = roundMoney(Number(s?.return_total ?? 0));
   const grandTotal = roundMoney(Number(s?.grand_total ?? 0));
   // NO residual bucket here, deliberately. An "other" category would make the AC-18 identity
   // hold by absorbing whatever is unaccounted for — which is exactly the alarm
@@ -182,6 +195,7 @@ export async function billingInvoiceHeaderTotals(
     adjustmentTotal,
     replacePostageTotal,
     replacePickPackTotal,
+    returnTotal,
     grandTotal,
     fulfillmentFeeTotal,
   };

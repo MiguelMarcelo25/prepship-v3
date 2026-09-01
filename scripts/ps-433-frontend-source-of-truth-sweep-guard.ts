@@ -128,7 +128,11 @@ assert.deepEqual(
 // rendered verbatim; fail-closed reads reject before stale-cache recovery.
 assert.match(billingRoute, /billingInvoiceHeaderTotals/);
 assert.match(billingRoute, /return c\.json\(\{ data: rows, totals \}\)/);
-assert.match(invoice, /totals\.pickPackTotal/);
+// PS-514: the summary category breakdown moved to a backend-owned PURE builder
+// (invoice-summary-categories.ts). The page passes the backend totals to it VERBATIM, and the
+// builder reads them without recomputing — the source-of-truth property this line protects.
+assert.match(invoice, /buildInvoiceSummaryCategories\(totals\)/);
+assert.match(read('web/src/pages/invoice-summary-categories.ts'), /totals\.pickPackTotal/);
 assert.match(invoice, /totals\?\.grandTotal/);
 assert.doesNotMatch(invoice, /\.reduce\([\s\S]{0,240}totalCost/);
 assert.doesNotMatch(
