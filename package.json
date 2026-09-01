@@ -875,6 +875,7 @@
     "test:ps-504-read-retry": "tsx scripts/ps-504-read-retry-guard.ts",
     "test:ps-505-sync-line-fallback": "tsx scripts/ps-505-sync-line-fallback-guard.ts",
     "test:ps-505-return-economics": "tsx scripts/ps-505-return-economics-guard.ts",
+    "test:ps-519-sql-comment-interpolation": "tsx scripts/ps-519-sql-comment-interpolation-guard.ts",
     "test:ps-501-canonical-billing-total": "tsx scripts/ps-501-canonical-billing-total-guard.ts",
     "test:ps-512-replacement-billing-detail": "tsx scripts/ps-512-replacement-billing-detail-guard.ts",
     "test:ps-499-order-rate-display-contract": "tsx scripts/ps-499-order-rate-display-contract-guard.ts",
