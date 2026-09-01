@@ -80,6 +80,15 @@ export interface BillingDetailRowDto {
   returnPostageTotal?: number;
   returnProcessingTotal?: number;
   /**
+   * PS-512 — replacement re-ship money in its own columns, mirroring the return breakout.
+   * A replacement carries the ORIGINAL order's id and no returnId, so it folds onto the
+   * outbound order row (the agreed grain, matching billing-invoice-totals.ts) rather than
+   * getting its own row like a return. Present so the itemized view shows the charge and its
+   * column footer reconciles to grandTotal, instead of the money vanishing to $0.00.
+   */
+  replacePostageTotal?: number;
+  replacePickPackTotal?: number;
+  /**
    * PS-505 — the Return row's own total, owned here rather than reassembled downstream.
    *
    * Distinct from `grandTotal` on purpose: grandTotal is the row's money whatever kind of
@@ -255,6 +264,7 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
     return {
       pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, adjustment: 0, total: 0,
       returnPostage: 0, returnProcessing: 0, returnTotal: 0,
+      replacePostage: 0, replacePickPack: 0, replaceTotal: 0,
     };
   }
 
@@ -310,6 +320,19 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   const adjustment = isReturnLine ? 0 : numberValue(
     row.adjustmentTotal ?? (lineType === 'billing_adjustment' ? lineTotal : 0),
   );
+  // PS-512 — replacement re-ship money (replace_postage / replace_pick_pack). A replacement
+  // carries the ORIGINAL order's id and no returnId, so it folds onto the outbound order row
+  // (the agreed grain, matching billing-invoice-totals.ts). Classified on the LINE TYPE, never
+  // the amount, and — like every outbound bucket — gated to never reach a return row. Before
+  // this card billingLineMetrics had no arm for either type, so the money reached neither a
+  // component nor the fallback total and the itemized row rendered $0.00 (PS-512).
+  const replacePostage = isReturnLine ? 0 : numberValue(
+    row.replacePostageTotal ?? (lineType === 'replace_postage' ? lineTotal : 0),
+  );
+  const replacePickPack = isReturnLine ? 0 : numberValue(
+    row.replacePickPackTotal ?? (lineType === 'replace_pick_pack' ? lineTotal : 0),
+  );
+  const replaceTotal = replacePostage + replacePickPack;
   // PS-501 AC-3 — the two spellings must AGREE, not take turns.
   //
   // This was `nonEmpty(grandTotal) ? grandTotal : nonEmpty(total) ? total : null`, which
@@ -330,13 +353,15 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   }
   const explicitTotal = canonicalTotal ?? legacyTotal;
   // returnTotal is a term here because return money no longer arrives through an
-  // outbound bucket. Without it the fallback total for a Return row would be zero.
+  // outbound bucket. replaceTotal is a term for the same reason (PS-512): without it the
+  // fallback total drops replacement money that the query only ever ships as lineType+totalCost.
   const total = explicitTotal ??
-    pickPack + additional + packageCost + shipping + storage + adjustment + returnTotal;
+    pickPack + additional + packageCost + shipping + storage + adjustment + returnTotal + replaceTotal;
 
   return {
     pickPack, additional, packageCost, shipping, storage, adjustment, total,
     returnPostage, returnProcessing, returnTotal,
+    replacePostage, replacePickPack, replaceTotal,
   };
 }
 
@@ -509,6 +534,20 @@ function applyCancelledNoCharge(row: BillingDetailRowDto): void {
   // Per user override unlock shipped data on 2026-07-06: cancelled Billing rows
   // remain visible for audit, but stale prep/box/shipping generated lines and
   // their review badges cannot contribute money or review noise.
+  //
+  // Per user override unlock shipped data on 2026-09-01 (PS-512): replacement re-ship money is
+  // the ONE exception — it SURVIVES the outbound order's cancellation (DJ ruling 2026-09-01:
+  // "replacement money survives cancellation — bill it"). A replacement is its own fulfilled
+  // shipment that merely shares the cancelled order's id (it carries no returnId, so it folds
+  // onto this outbound row); cancelling the original does not refund it. This mirrors the
+  // Return carve-out above (a return is likewise its own event) and is consistent with
+  // billing-cancelled-no-charge already EXCLUDING replace_* from no-charge. So the replace
+  // breakout columns are preserved (not zeroed) and grandTotal is rebuilt from them, while the
+  // stale prep/box/shipping generated lines are still zeroed. Lockdown protections intact: this
+  // reads the cancelled row's own persisted billing money for DISPLAY and writes nothing to
+  // the orders or shipments tables.
+  const survivingReplaceTotal =
+    numberValue(row.replacePostageTotal) + numberValue(row.replacePickPackTotal);
   row.pickpackTotal = 0;
   row.additionalTotal = 0;
   row.packageTotal = 0;
@@ -517,7 +556,7 @@ function applyCancelledNoCharge(row: BillingDetailRowDto): void {
   row.adjustmentTotal = 0;
   row.pickPackFeeTotal = 0;
   row.fulfillmentFeeTotal = 0;
-  row.grandTotal = 0;
+  row.grandTotal = survivingReplaceTotal;
   row.totalCost = 0;
   row.hasPackageCostLine = false;
   row.boxCostNoCharge = false;
@@ -690,6 +729,10 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         returnPostageTotal: metrics.returnPostage,
         returnProcessingTotal: metrics.returnProcessing,
         returnTotal: metrics.returnTotal,
+        // PS-512 — replacement money in its own columns (grandTotal already includes it via
+        // metrics.total). Mirrors the return breakout above.
+        replacePostageTotal: metrics.replacePostage,
+        replacePickPackTotal: metrics.replacePickPack,
         storageTotal: metrics.storage,
         adjustmentTotal: metrics.adjustment,
         pickPackFeeTotal: metrics.pickPack + metrics.additional,
@@ -731,6 +774,9 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     existing.returnPostageTotal = numberValue(existing.returnPostageTotal) + metrics.returnPostage;
     existing.returnProcessingTotal = numberValue(existing.returnProcessingTotal) + metrics.returnProcessing;
     existing.returnTotal = numberValue(existing.returnTotal) + metrics.returnTotal;
+    // PS-512 — accumulate replacement money the same way (grandTotal below already includes it).
+    existing.replacePostageTotal = numberValue(existing.replacePostageTotal) + metrics.replacePostage;
+    existing.replacePickPackTotal = numberValue(existing.replacePickPackTotal) + metrics.replacePickPack;
     existing.storageTotal = numberValue(existing.storageTotal) + metrics.storage;
     existing.adjustmentTotal = numberValue(existing.adjustmentTotal) + metrics.adjustment;
     existing.pickPackFeeTotal = existing.pickpackTotal + existing.additionalTotal;

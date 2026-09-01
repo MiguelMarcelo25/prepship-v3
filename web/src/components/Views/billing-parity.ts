@@ -115,6 +115,8 @@ export type BillingDetailColumnId =
   | 'upsss'
   | 'uspsss'
   | 'shipping'
+  | 'replacePostage'
+  | 'replacePickPack'
   | 'total'
   | 'rowTotal'
   | 'margin'
@@ -156,6 +158,9 @@ export interface BillingDetailMetrics {
   margin: number | null
   /** PS-505: the Return row's own money, backend-owned. Zero on outbound rows. */
   returnTotal: number
+  /** PS-512: replacement re-ship money, backend-owned. Zero on rows without a replacement. */
+  replacePostage: number
+  replacePickPack: number
   ssCharged: boolean
   chargedRate: 'selectedRate' | 'upsss' | 'uspsss' | null
 }
@@ -205,6 +210,12 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'upsss', label: 'UPS SS', align: 'right', always: false },
   { id: 'uspsss', label: 'USPS SS', align: 'right', always: false },
   { id: 'shipping', label: 'Shipping', align: 'right', always: false },
+  // PS-512: replacement re-ship money, backend-owned columns. A replacement folds onto the
+  // outbound order row (no returnId), so a normal order shows "—". Present so replacement
+  // charges are visible and the column footer reconciles to Row Total, instead of the money
+  // vanishing to $0.00 the way it did before this card.
+  { id: 'replacePostage', label: 'Replace Postage', align: 'right', always: false },
+  { id: 'replacePickPack', label: 'Replace Pick&Pack', align: 'right', always: false },
   // PS-505 corrective: THREE distinct money concepts, three columns, no overloading.
   //   Fulfillment Fee = Pick & Pack + Additional Units + Box Cost  (4.49 on #3074)
   //   Return Total    = Return Processing + Return Postage         (10.55 on the return)
@@ -216,6 +227,9 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
+// v10 (PS-512): Replace Postage + Replace Pick&Pack added. The key bump is what surfaces the
+// new columns to a returning operator whose saved toggle set predates them — without it a
+// cancelled/replacement order's re-ship money would be in Row Total but have no column to show it.
 // v6 (2026-07-06): defaults add backend-owned Billing Status after Order #.
 // v4 (2026-05-27): defaults now expose every billing detail column plus
 // row actions so operators can audit/edit a full invoice line at once.
@@ -225,7 +239,7 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
 // v8 (PS-505): Billing Status removed, Return Total added. The key bump is what resets a
 // returning operator's saved toggles to the new default set — without it they would keep
 // a stored id that no longer exists and never see the new column.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v9'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v10'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
@@ -248,6 +262,8 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'upsss',
   'uspsss',
   'shipping',
+  'replacePostage',
+  'replacePickPack',
   'total',
   'rowTotal',
   'margin',
@@ -511,6 +527,11 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
     ? null
     : Number.isFinite(Number(marginRaw)) ? Number(marginRaw) : null
   const returnTotal = Number(detail.returnTotal ?? detail.return_total ?? 0) || 0
+  // PS-512: replacement re-ship money, backend-owned (billing-detail-row-sot.ts) and rendered
+  // verbatim; snake fallback for deploy skew. Never inferred from the line type here — the SOT
+  // classifies and this displays, the same discipline as returnTotal above.
+  const replacePostage = Number(detail.replacePostageTotal ?? detail.replace_postage_total ?? 0) || 0
+  const replacePickPack = Number(detail.replacePickPackTotal ?? detail.replace_pick_pack_total ?? 0) || 0
   const refUpsRate = detail.refUpsRate ?? detail.ref_ups_rate
   const refUspsRate = detail.refUspsRate ?? detail.ref_usps_rate
   const ssCharged = shipping > 0 && selectedRateCost != null && shipping > Number(selectedRateCost) + 0.01
@@ -535,6 +556,8 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
     ourCost,
     margin,
     returnTotal,
+    replacePostage,
+    replacePickPack,
     ssCharged,
     chargedRate,
   }

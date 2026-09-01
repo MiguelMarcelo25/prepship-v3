@@ -48,6 +48,8 @@ const DETAIL_COLUMN_WIDTHS: Partial<Record<BillingDetailColumnId, number>> = {
   upsss: 90,
   uspsss: 90,
   shipping: 110,
+  replacePostage: 120,
+  replacePickPack: 130,
   total: 110,
   margin: 130,
 }
@@ -91,6 +93,8 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'upsss': return row.refUpsRate ?? row.ref_ups_rate
     case 'uspsss': return row.refUspsRate ?? row.ref_usps_rate
     case 'shipping': return metrics.shipping
+    case 'replacePostage': return metrics.replacePostage
+    case 'replacePickPack': return metrics.replacePickPack
     // PS-505 corrective: the 'total' column is Fulfillment Fee and must sort on it, not
     // on the row total — sorting a column by a number it does not display is its own bug.
     case 'total': return metrics.fulfillmentFee
@@ -283,6 +287,9 @@ export function BillingDetailTable({
     additional: number
     packageCost: number
     shipping: number
+    /** PS-512: replacement re-ship money column footers, so columns still sum to Row Total. */
+    replacePostage: number
+    replacePickPack: number
     /** PS-505: fulfillment SERVICE fees only — matches the Fulfillment Fee cells. */
     fulfillmentFee: number
     returnTotal: number
@@ -730,6 +737,14 @@ export function BillingDetailTable({
                     {formatBillingMoney(metrics.shipping)}
                   </MoneyWithBillingBadges>
                 )
+              case 'replacePostage':
+              case 'replacePickPack': {
+                // PS-512: replacement re-ship money, backend-owned. Folds onto the outbound
+                // order row, so a row without a replacement shows "—" (dashIfZero) rather than
+                // a fabricated $0.00. Rendered verbatim from the SOT metrics — no inference here.
+                const replaceValue = column.id === 'replacePostage' ? metrics.replacePostage : metrics.replacePickPack
+                return <span>{formatBillingMoney(replaceValue, { dashIfZero: true })}</span>
+              }
               case 'total':
                 // PS-505 corrective: fulfillment SERVICE fees. 4.49 on #3074, and 0 on a
                 // Return row because every outbound bucket is zero there.
@@ -800,6 +815,9 @@ export function BillingDetailTable({
           case 'additional': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.additional, { dashIfZero: true })}</td>
           case 'packageCost': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.packageCost, { dashIfZero: true })}</td>
           case 'shipping': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.shipping)}</td>
+          // PS-512: the replacement column footers, so the visible columns still sum to Row Total.
+          case 'replacePostage': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.replacePostage, { dashIfZero: true })}</td>
+          case 'replacePickPack': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.replacePickPack, { dashIfZero: true })}</td>
           // PS-505 corrective: each footer now sums the SAME concept its cells render.
           case 'total': return <td key={c.key} style={{ ...td, fontWeight: 800 }}>{formatBillingMoney(detailTotals.fulfillmentFee)}</td>
           case 'returnTotal': return <td key={c.key} style={{ ...td, fontWeight: 700 }}>{formatBillingMoney(detailTotals.returnTotal, { dashIfZero: true })}</td>
