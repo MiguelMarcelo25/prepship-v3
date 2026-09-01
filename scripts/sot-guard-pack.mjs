@@ -1384,6 +1384,17 @@ const REQUIRED_GUARDS = [
   // profit whenever the carrier cost was unproven.
   'test:ps-505-return-economics',
   'test:ps-501-canonical-billing-total',
+  // PS-519 (2026-09-01). Interpolating a multi-line fragment into a `--` comment inside a
+  // sql`` template ends the comment at its first newline and spills the rest into the
+  // statement. PS-513 did exactly that in billingInvoiceData and took GET /invoice,
+  // /invoice.xlsx and /invoice.csv down for ~6 hours. TYPECHECK CANNOT SEE IT — with the
+  // broken line restored, tsc still exits 0 — so this lexical guard is the only mechanical
+  // control that catches the class, which is why it belongs in the pack rather than beside it.
+  // PS-517 r3. Renders the four invoice return-split arms and reads the BOUND PARAMETERS,
+  // because the r2 source-regex version was defeated by a comment-hidden token plus a
+  // hand-spelled double-quoted list with a typo'd member.
+  'test:ps-517-return-split-arms',
+  'test:ps-519-sql-comment-interpolation',
   'test:ps-499-order-rate-display-contract',
   // PS-507 (2026-08-14). The disposable QA harness proves that an authenticated browser
   'test:ps-502-replacement-contract',

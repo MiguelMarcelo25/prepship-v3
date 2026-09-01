@@ -220,26 +220,23 @@ check('the invoice header totals owner does NOT re-spell the return vocabulary i
   check('the owner exposes both SPLIT vocabularies as SQL',
     /export function billingReturnPostageLineTypesSql/.test(rowStatus)
     && /export function billingReturnProcessingLineTypesSql/.test(rowStatus));
-  check('the invoice DETAIL query consumes the SQL owners',
-    /billingReturnPostageLineTypesSql\(\)/.test(detailRoute)
-    && /billingReturnProcessingLineTypesSql\(\)/.test(detailRoute));
+  // PS-517 r3: the four detail arms moved into billing-return-split-arms.ts, so this file
+  // checks OWNERSHIP only — that billing.ts builds them from the owner and re-spells nothing.
+  // Whether the arms bind the right vocabulary is proven by RENDERING them, in
+  // test:ps-517-return-split-arms; a source-regex version of that check was defeated by a
+  // comment-hidden token plus a hand-spelled double-quoted list with a typo'd member.
+  const splitArms = read('src/services/billing-return-split-arms.ts');
+  check('the invoice DETAIL query builds its split arms from the owner',
+    /billingReturnSplitInvoiceArms\(detailAmount\)/.test(detailRoute));
+  check('the split-arms owner consumes the SQL vocabulary owners',
+    /billingReturnPostageLineTypesSql\(\)/.test(splitArms)
+    && /billingReturnProcessingLineTypesSql\(\)/.test(splitArms));
 
-  // ALL FOUR arms must delegate: two amount sums + two bool_or presence flags. Counting the
-  // fragment uses is what proves it — an earlier version pinned two fixed substrings
-  // (`line_type in ('return_postage'`), which a PARTIAL revert of just the two bool_or arms
-  // walks straight past. Those two arms are the PS-488 M3 absent-vs-charged-zero flags printed
-  // on customer invoice HTML and XLSX, so a silent revert there is customer-visible.
-  const postageUses = (detailRoute.match(/\$\{returnPostageLineTypesSql\}/g) ?? []).length;
-  const processingUses = (detailRoute.match(/\$\{returnProcessingLineTypesSql\}/g) ?? []).length;
-  check('all FOUR split arms delegate (2 postage + 2 processing: a sum and a presence flag each)',
-    postageUses === 2 && processingUses === 2,
-    `postage=${postageUses} processing=${processingUses}`);
-
-  // Order- and whitespace-independent, unlike the substring pin it replaces: ANY re-spelling
-  // reintroduces one of these quoted literals, whatever the element order, spacing, or whether
-  // it is written as `in (...)` or `= 'x' or = 'y'`. The detail route carries none of them.
+  // Quote-style-agnostic and comment-stripped: the defeating mutation used double quotes and
+  // hid the canonical token in a comment, so neither a quote style nor a comment can satisfy it.
+  const detailCode = strip(detailRoute);
   const respelled = ['return_postage', 'return_label', 'return_processing_fee', 'return_processing']
-    .filter((spelling) => detailRoute.includes(`'${spelling}'`));
+    .filter((s) => [`'${s}'`, `"${s}"`, `\`${s}\``].some((q) => detailCode.includes(q)));
   check('the invoice DETAIL query does NOT re-spell the split vocabulary inline, in any form',
     respelled.length === 0, `found inline: ${respelled.join(', ')}`);
 
