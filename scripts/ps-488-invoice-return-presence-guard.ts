@@ -17,6 +17,7 @@
  * Offline/pure: no DB, no network, no provider calls, no billing regeneration.
  */
 import assert from 'node:assert/strict';
+import { INVOICE_COLUMN_HEADERS } from '../src/routes/billing-invoice-columns';
 import { readFileSync } from 'node:fs';
 import { resolveBillingInvoiceReturnFee } from '../src/services/billing-invoice-return-cell';
 
@@ -229,12 +230,19 @@ await check('HTML: header, body and footer stay column-aligned', async () => {
   const doc = html([returnRow({ return_postage_amt: '7.73', has_return_postage_line: true })]);
   const headers = [...(/<thead>([\s\S]*?)<\/thead>/.exec(doc)?.[1] ?? '')
     .matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1]!.trim());
-  // PS-513: the Return columns are no longer last — the Replace columns are the appended-last
-  // pair. All four must exist in the header, and the body/footer counts below prove alignment.
-  assert.equal(headers[headers.length - 4], 'Return Postage');
-  assert.equal(headers[headers.length - 3], 'Return Processing');
-  assert.equal(headers[headers.length - 2], 'Replace Postage');
-  assert.equal(headers[headers.length - 1], 'Replace Pick&amp;Pack');
+  // PS-513 made the Replace columns the appended-last pair; the column-contract unification
+  // then appended Carrier and Item Name behind them so all three exports carry one set. What
+  // this check protects is that the four money columns EXIST, in this order, contiguous — not
+  // that they are last, which was only ever true until the next append. The rendered header
+  // is also required to equal the shared contract, so a renderer that stops using it fails here.
+  const unescaped = headers.map((h) => h.replace(/&amp;/g, '&'));
+  const i = unescaped.indexOf('Return Postage');
+  assert.ok(i >= 0, 'Return Postage must be a header');
+  assert.deepEqual(unescaped.slice(i, i + 4),
+    ['Return Postage', 'Return Processing', 'Replace Postage', 'Replace Pick&Pack'],
+    'the return and replace columns must be present, contiguous, and in this order');
+  assert.deepEqual(unescaped, [...INVOICE_COLUMN_HEADERS],
+    'the HTML header row must equal the shared invoice column contract');
 
   const bodyCells = [...(/<tbody>([\s\S]*?)<\/tbody>/.exec(doc)?.[1] ?? '')
     .matchAll(/<td[^>]*>/g)].length;

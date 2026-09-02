@@ -882,6 +882,55 @@ async function main(): Promise<void> {
       `/billing/invoice?clientId=${otherClientId}&dateFrom=${FROM_DAY}&dateTo=${TO_DAY}`);
     check('that same scoped caller CAN read its own invoice (so 404 was scope, not breakage)',
       ownRes.status === 200, `got ${ownRes.status}`);
+
+    // ── FINALIZATION: the persisted amount is the rendered amount ─────────────
+    //
+    // The close workflow snapshots billingInvoiceHeaderTotals into billing_finalizations. Every
+    // check above proves what the CUSTOMER sees; nothing proved what the BOOKS record. Review
+    // rated that PLAUSIBLE: ps-433 calls the totals owner directly and never finalizes.
+    //
+    // LAST, deliberately. Finalizing stamps invoiced=true on every line in the period, and the
+    // duplicate loader never suppresses an already-invoiced copy — so any render AFTER this
+    // point would legitimately show different money. Order matters here, and it is not a
+    // detail: it is the same rule that stops a fix from restating an invoice a customer holds.
+    delete process.env.BILLING_WEEKEND_ROLLFORWARD_EFFECTIVE_DATE; // the weekday gate must not make CI flaky
+    const { finalizeBillingPeriod } = await import('../src/services/billing-finalization-policy.js');
+    const period = { clientId, dateFrom: `${FROM_DAY}T00:00:00.000Z`, dateTo: '2026-08-01T00:00:00.000Z' };
+    const first = await finalizeBillingPeriod({ ...period, actorId: 'ps-520', actorEmail: 'ps-520@test' });
+    check('finalizeBillingPeriod runs against the same seeded period', !first.alreadyFinalized);
+    check('the PERSISTED subtotal equals the invoice grand total the customer was shown',
+      Number(first.finalization.subtotal) === grandTotal,
+      `persisted=${first.finalization.subtotal} rendered=${grandTotal.toFixed(2)}`);
+    const [persisted] = await seeded`
+      select subtotal::text, line_count, order_count from billing_finalizations
+      where client_id = ${clientId}`;
+    check('the billing_finalizations ROW carries that same subtotal (read back, not returned)',
+      persisted !== undefined && Number(persisted.subtotal) === grandTotal,
+      JSON.stringify(persisted));
+    // Line/order counts are LINE-derived and PRE-suppression: every line in the window is
+    // stamped, including the cancelled order's and BOTH duplicate copies'. So order_count here
+    // is 5 where the invoice and the list say 4. That is the current, documented behaviour of
+    // the close record — asserted as-is, and flagged in the report rather than silently changed.
+    // 9 lines on PS520-1001 + cancelled + two duplicate copies + last-day = 13; next-day is OUT.
+    check('the close record counts every line in the window (13) and none outside it',
+      persisted?.line_count === 13, `line_count=${persisted?.line_count}`);
+    check('the close record order_count is LINE-derived (5), which differs from the invoice (4) — flagged',
+      persisted?.order_count === 5, `order_count=${persisted?.order_count}`);
+    const [stamped] = await seeded`
+      select
+        count(*) filter (where invoiced and order_number <> 'PS520-NEXTDAY')::int as in_window,
+        count(*) filter (where invoiced and order_number = 'PS520-NEXTDAY')::int as next_day,
+        count(*) filter (where not invoiced and order_number <> 'PS520-NEXTDAY' and client_id = ${clientId})::int as unstamped
+      from billing_line_items where client_id = ${clientId}`;
+    check('every in-window line is stamped invoiced=true; the next-day line is NOT',
+      stamped?.in_window === 13 && stamped?.next_day === 0 && stamped?.unstamped === 0,
+      JSON.stringify(stamped));
+    // Replay is idempotent: same id, no second record.
+    const again = await finalizeBillingPeriod({ ...period, actorId: 'ps-520', actorEmail: 'ps-520@test' });
+    const [{ n }] = await seeded`select count(*)::int as n from billing_finalizations where client_id = ${clientId}`;
+    check('finalizing the same period again returns the SAME finalization and creates no second record',
+      again.alreadyFinalized && again.finalization.id === first.finalization.id && n === 1,
+      `alreadyFinalized=${again.alreadyFinalized} sameId=${again.finalization.id === first.finalization.id} rows=${n}`);
   } finally {
     await migrator.end({ timeout: 5 }).catch(() => {});
     await seeded.end({ timeout: 5 }).catch(() => {});
