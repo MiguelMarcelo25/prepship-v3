@@ -187,7 +187,7 @@ jobs:
             exit 1
           fi
 
-          json_field() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s)||{})[process.argv[1]]??"")}catch{console.log("")}})' "$1"; }
+          json_field() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(process.argv[1].split(".").reduce((o,k)=>(o==null?undefined:o[k]),JSON.parse(s)||{})??"")}catch{console.log("")}})' "$1"; }
 
           deploy_service() {
             service_id="$1"; service_name="$2"
@@ -198,7 +198,7 @@ jobs:
               -H "Authorization: Bearer ${RENDER_API_KEY}" \
               -H "Content-Type: application/json" \
               -H "Accept: application/json" \
-              -d '{"clearCache":"do_not_clear"}')
+              -d "{\"clearCache\":\"do_not_clear\",\"commitId\":\"${GITHUB_SHA}\"}")
             http_code=$(printf '%s' "$resp" | tail -n1)
             body=$(printf '%s' "$resp" | sed '$d')
 
@@ -237,6 +237,19 @@ jobs:
             fi
             echo "${service_name}: deploy created -> ${deploy_id}"
 
+            # The deploy must be THIS commit. Without commitId in the trigger body Render built the
+            # branch TIP: on 2026-09-02 the gate for feb922c8 deployed c8fc5328 — a commit whose own
+            # gate was still queued — because a second push had landed minutes later. A deploy that
+            # can carry an ungated commit is not gated. Fail loudly if Render reports another commit.
+            deployed_commit=$(curl -sS \
+              "https://api.render.com/v1/services/${service_id}/deploys/${deploy_id}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H "Accept: application/json" | json_field commit.id)
+            if [ -z "${deployed_commit}" ] || [ "${deployed_commit}" != "${GITHUB_SHA}" ]; then
+              echo "::error::${service_name}: deploy ${deploy_id} is for commit '${deployed_commit}', not the gated ${GITHUB_SHA}"
+              return 1
+            fi
+            echo "${service_name}: deploy ${deploy_id} is for the gated commit ${deployed_commit} ✓"
             # Poll until terminal. Render statuses: live (ok); build_failed/update_failed/
             # pre_deploy_failed/canceled/deactivated (fail); everything else = in progress.
             for i in $(seq 1 90); do
