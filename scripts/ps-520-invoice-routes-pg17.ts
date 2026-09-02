@@ -102,6 +102,20 @@ const suppressed = {
   duplicateCopyPickPack: 11.11,
 };
 
+/**
+ * The period boundary, executed. The Client Portal once sent an EXCLUSIVE instant where this
+ * API expects an inclusive day, and the row window silently opened a day wider than the totals
+ * on the same page — an August invoice listed 9/1 rows. Review noted no fixture ever placed
+ * one row on the last included day and one on the first excluded day and proved which is
+ * absent. These two do. Distinctive amounts, like the suppression fixtures above.
+ */
+const boundary = {
+  /** 2026-07-31T23:59:59Z — the last second of TO_DAY. Must be IN the invoice. */
+  lastDayPickPack: 44.44,
+  /** 2026-08-01T00:00:00Z — the exclusive upper bound itself. Must be OUT. */
+  nextDayPickPack: 55.55,
+};
+
 async function seed(sql: postgres.Sql): Promise<{ clientId: number; otherClientId: number }> {
   const [client] = await sql`
     insert into clients (name, active, is_test) values ('PS-520 Invoice Client', true, false) returning id`;
@@ -211,6 +225,22 @@ async function seed(sql: postgres.Sql): Promise<{ clientId: number; otherClientI
       values (${clientId}, ${Number(dup!.id)}, 'PS520-DUPLICATE', ${SHIP_AT},
               'pick_pack', ${`duplicate copy ${suffix} pick_pack`}, 1,
               ${suppressed.duplicateCopyPickPack}, ${suppressed.duplicateCopyPickPack})`;
+  }
+
+  // 3. THE DAY BOUNDARY: one order at the last second of the period, one at the exclusive
+  //    upper bound. The invoice must carry the first and refuse the second.
+  for (const [orderNumber, shipAt, amount] of [
+    ['PS520-LASTDAY', '2026-07-31T23:59:59Z', boundary.lastDayPickPack],
+    ['PS520-NEXTDAY', '2026-08-01T00:00:00Z', boundary.nextDayPickPack],
+  ] as const) {
+    const [o] = await sql`
+      insert into orders (order_number, order_status, client_id, ship_to_name)
+      values (${orderNumber}, 'shipped', ${clientId}, ${`PS-520 ${orderNumber}`}) returning id`;
+    await sql`
+      insert into billing_line_items
+        (client_id, order_id, order_number, ship_date, line_type, description, qty, unit_cost, total_cost)
+      values (${clientId}, ${Number(o!.id)}, ${orderNumber}, ${shipAt},
+              'pick_pack', ${`${orderNumber} pick_pack`}, 1, ${amount}, ${amount})`;
   }
 
   // A second client's billing, so a scoped caller proves it cannot read across the boundary.
@@ -657,7 +687,9 @@ async function main(): Promise<void> {
     const grandTotal = money.pickPack + money.additional + money.packageCost + money.shipping
       + money.storage + money.returnPostage + money.returnProcessingZero
       + money.replacePostage + money.replacePickPack
-      + suppressed.duplicateCopyPickPack;
+      + suppressed.duplicateCopyPickPack
+      // ...plus the last-second-of-the-period order, and NOT the one at the exclusive bound.
+      + boundary.lastDayPickPack;
     check(`the HTML invoice totals to the seeded money (${grandTotal.toFixed(2)})`,
       htmlMoney.has(grandTotal.toFixed(2)),
       `expected ${grandTotal.toFixed(2)} among: ${[...htmlMoney].join(' ')}`);
@@ -726,6 +758,20 @@ async function main(): Promise<void> {
       && /PS520-DUPLICATE \(Duplicate of order \d+\)/.test(html),
       'a $0.00 row with no explanation reads as a billing error to a customer');
 
+    // ── The day boundary, on the rendered documents ─────────────────────────
+    const lastDay = boundary.lastDayPickPack.toFixed(2);
+    const nextDay = boundary.nextDayPickPack.toFixed(2);
+    check('an order at the LAST SECOND of the period is on the invoice, in every format',
+      html.includes('PS520-LASTDAY') && csv.includes('PS520-LASTDAY')
+      && html.includes(lastDay) && csv.includes(lastDay)
+      && allCsvRows.some((r) => r.pickPack === boundary.lastDayPickPack),
+      `${lastDay} must appear in HTML and CSV`);
+    check('an order at the EXCLUSIVE upper bound is on NO format — the window is not a day too wide',
+      !html.includes('PS520-NEXTDAY') && !csv.includes('PS520-NEXTDAY')
+      && !html.includes(nextDay) && !csv.includes(nextDay)
+      && !xlsxSorted.some((r) => Object.values(r).includes(boundary.nextDayPickPack)),
+      `${nextDay} (2026-08-01T00:00Z) must appear nowhere for a 2026-07-01..2026-07-31 invoice`);
+
     // The headline the customer reads first must agree with the table it summarises.
     const headline = html.match(/class="gtv">([^<]*)</)?.[1] ?? '';
     check('the "Total Amount Due" headline equals the footer Total and the seeded grand total',
@@ -774,13 +820,17 @@ async function main(): Promise<void> {
     check('the LIST grand total equals the INVOICE grand total, to the cent',
       listTotals !== undefined && Math.abs(listTotals.grandTotal - grandTotal) < 0.005,
       `list=${listTotals?.grandTotal} invoice=${grandTotal.toFixed(2)}`);
+    // pick_pack the list may charge: the seeded order, ONE duplicate copy, and the last-day
+    // order. NOT the cancelled 77.77, NOT the second copy, NOT the next-day 55.55.
+    const listPickPack = money.pickPack + suppressed.duplicateCopyPickPack + boundary.lastDayPickPack;
     check('the list applies cancelled-no-charge (the 77.77 order contributes nothing)',
-      listTotals !== undefined
-      && Math.abs(listTotals.pickPackTotal - (money.pickPack + suppressed.duplicateCopyPickPack)) < 0.005,
-      `pickPackTotal=${listTotals?.pickPackTotal} expected=${(money.pickPack + suppressed.duplicateCopyPickPack).toFixed(2)}`);
+      listTotals !== undefined && Math.abs(listTotals.pickPackTotal - listPickPack) < 0.005,
+      `pickPackTotal=${listTotals?.pickPackTotal} expected=${listPickPack.toFixed(2)}`);
+    // Orders the list counts: PS520-1001, PS520-CANCELLED (still an order, at zero), ONE of the
+    // two PS520-DUPLICATE copies, and PS520-LASTDAY. The next-day order is outside the window.
     check('the list applies duplicate suppression to its ORDER COUNT too',
-      listTotals !== undefined && listTotals.orderCount === 3,
-      `orderCount=${listTotals?.orderCount} (4 = the suppressed copy was counted)`);
+      listTotals !== undefined && listTotals.orderCount === 4,
+      `orderCount=${listTotals?.orderCount} (5 = the suppressed copy or the next-day order was counted)`);
 
     const foreign = appFor({ global: false, clientIds: [otherClientId] }, billingRoute);
 
