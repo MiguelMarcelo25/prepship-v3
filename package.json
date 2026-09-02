@@ -877,6 +877,7 @@
     "test:ps-505-return-economics": "tsx scripts/ps-505-return-economics-guard.ts",
     "test:ps-517-return-split-arms": "tsx scripts/ps-517-return-split-arms-guard.ts",
     "test:ps-520-invoice-routes-pg17": "tsx scripts/ps-520-invoice-routes-pg17.ts",
+    "test:ps-520-render-deploy-pin": "tsx scripts/ps-520-render-deploy-pin-guard.ts",
     "test:ps-519-sql-comment-interpolation": "tsx scripts/ps-519-sql-comment-interpolation-guard.ts",
     "test:ps-501-canonical-billing-total": "tsx scripts/ps-501-canonical-billing-total-guard.ts",
     "test:ps-512-replacement-billing-detail": "tsx scripts/ps-512-replacement-billing-detail-guard.ts",

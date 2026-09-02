@@ -324,6 +324,7 @@ const REQUIRED_GUARDS = [
   'test:ps-354-print-queue-stale-job',
   'test:ps-214-hugrab-universal-insurance',
   'test:ps-468-invoice-csv',
+  'test:ps-520-render-deploy-pin',
   'test:ps-406-shopify-rates-labels',
   // ── Batch 12: rate proof, print-queue recovery, insurance proof ──
   //

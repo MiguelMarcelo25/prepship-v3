@@ -19,6 +19,8 @@ const CSV = 'src/routes/billing-invoice-csv.ts';
 const TOTALS = 'src/services/billing-invoice-totals.ts';
 const PROOF = 'npm run -s test:ps-520-invoice-routes-pg17';
 const CSV_GUARD = 'npm run -s test:ps-468-invoice-csv';
+const YML = '.github/workflows/render-auto-deploy.yml';
+const DEPLOY_GUARD = 'npm run -s test:ps-520-render-deploy-pin';
 
 /** Replace the Nth (1-based) occurrence, or return null if it does not exist. */
 function replaceNth(src, from, to, n) {
@@ -94,6 +96,18 @@ const MUTATIONS = [
     apply: (s) => replaceNth(s, '    const last = first + details.length - 1;', '    const last = first + details.length - 1 - (details.some((d) => d.billing_adjustment_id) ? 1 : 0);', 1) },
   { name: 'PRE-AUDIT — HTML prints a credit as $-12.34 again', file: BILLING,
     apply: (s) => replaceNth(s, "    return v <= -0.005 ? `-$${abs}` : `$${abs}`;", '    return `$${v.toFixed(2)}`;', 1) },
+  // The r6.2 audit's survivors. The scope predicate's OR became AND with every gate green —
+  // no principal carried both claims, so a false denial had nothing to fail against. Removing
+  // commitId from the deploy workflow passed every guard — the runtime readback fires only after
+  // Render has been asked to build, so the static pin is the guard that must die. Forcing every
+  // Destination to 'Domestic' agreed across all three formats (PS-490 catches the route bypass;
+  // this proof now asserts the value too).
+  { name: 'AUDIT — client OR store scope becomes client AND store (false denial for combined claims)', file: BILLING,
+    apply: (s) => replaceNth(s, 'return sql`(${sql.join(predicates, sql` or `)})`;', 'return sql`(${sql.join(predicates, sql` and `)})`;', 1) },
+  { name: 'AUDIT — commitId removed from the Render deploy trigger (branch tip would deploy again)', file: YML, checks: [DEPLOY_GUARD],
+    apply: (s) => replaceNth(s, ',\\"commitId\\":\\"${GITHUB_SHA}\\"', '', 1) },
+  { name: 'AUDIT — every Destination forced to Domestic (a no-country order must say Needs Review)', file: BILLING,
+    apply: (s) => replaceNth(s, '      destination: classifyDestinationCountry(r.ship_to_country).destination,', "      destination: 'Domestic',", 1) },
 ];
 
 if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !process.env.PS488_PG17_ADMIN_URL) {
@@ -209,7 +223,7 @@ for (const m of SELECTED) {
   const results = checks.map((c) => outcome(c));
   if (!restorePending()) process.exit(1);
   if (results.includes('infra')) abortInfra(m.name);
-  const killedBy = checks.filter((_, i) => results[i] === 'red').map((c) => (c === PROOF ? 'proof' : 'ps-468'));
+  const killedBy = checks.filter((_, i) => results[i] === 'red').map((c) => (c === PROOF ? 'proof' : c === CSV_GUARD ? 'ps-468' : 'deploy-pin'));
   if (killedBy.length === 0) { survived += 1; console.error(`  SURVIVED     ${m.name}`); }
   else console.log(`  killed       ${m.name}  [${killedBy.join('+')}]`);
 }

@@ -242,13 +242,17 @@ async function seed(sql: postgres.Sql): Promise<{ clientId: number; otherClientI
 
   // 3. THE DAY BOUNDARY: one order at the last second of the period, one at the exclusive
   //    upper bound. The invoice must carry the first and refuse the second.
-  for (const [orderNumber, shipAt, amount] of [
-    ['PS520-LASTDAY', '2026-07-31T23:59:59Z', boundary.lastDayPickPack],
-    ['PS520-NEXTDAY', '2026-08-01T00:00:00Z', boundary.nextDayPickPack],
+  //    They also carry a ship-to COUNTRY (the outbound order deliberately has none), so the
+  //    Destination column can be asserted by VALUE for all three classes the canonical
+  //    classifier owns: no country → Needs Review, US → Domestic, CA → International.
+  for (const [orderNumber, shipAt, amount, country] of [
+    ['PS520-LASTDAY', '2026-07-31T23:59:59Z', boundary.lastDayPickPack, 'US'],
+    ['PS520-NEXTDAY', '2026-08-01T00:00:00Z', boundary.nextDayPickPack, 'CA'],
   ] as const) {
     const [o] = await sql`
-      insert into orders (order_number, order_status, client_id, ship_to_name)
-      values (${orderNumber}, 'shipped', ${clientId}, ${`PS-520 ${orderNumber}`}) returning id`;
+      insert into orders (order_number, order_status, client_id, ship_to_name, raw)
+      values (${orderNumber}, 'shipped', ${clientId}, ${`PS-520 ${orderNumber}`},
+              ${sql.json({ shipTo: { country } })}) returning id`;
     await sql`
       insert into billing_line_items
         (client_id, order_id, order_number, ship_date, line_type, description, qty, unit_cost, total_cost)
@@ -824,6 +828,12 @@ async function main(): Promise<void> {
         o?.[DAY_HEADER] === '2026-07-10' && ld?.[DAY_HEADER] === '2026-07-31',
         `outbound=${String(o?.[DAY_HEADER])} lastday=${String(ld?.[DAY_HEADER])}`);
     }
+    // Destination was agreement-only: forcing every row to 'Domestic' left all three formats
+    // agreeing on the same wrong value (the r6.2 audit's delta — PS-490's guard catches that
+    // route bypass, this proof did not). Asserted by VALUE for the classes the classifier owns.
+    check('Destination is a VALUE in all three formats: no country → Needs Review, US → Domestic',
+      [july.csvS, july.htmlS, july.xlsxS].every((rows) => outboundFull(rows)?.['Destination'] === 'Needs Review' && lastDayFull(rows)?.['Destination'] === 'Domestic'),
+      [july.csvS, july.htmlS, july.xlsxS].map((rows) => `${String(outboundFull(rows)?.['Destination'])}/${String(lastDayFull(rows)?.['Destination'])}`).join(' | '));
     // RAW CSV: the formula-shaped item name must arrive NEUTRALISED (leading apostrophe) and
     // quoted — the comparator reads through the apostrophe, so it must be asserted on the raw cell.
     const itemIdx = ALL_FIELDS.findIndex((f) => f.header === 'Item Name');
@@ -1187,6 +1197,25 @@ async function main(): Promise<void> {
       !leaksSeededMoney(noScopeText) && ((noScopeTotals.status === 200 && Array.isArray(noScopeData) && noScopeData.length === 0) || (noScopeTotals.status >= 400 && noScopeTotals.status < 500)),
       `${noScopeTotals.status}: ${noScopeText.slice(0, 120)}`);
 
+    // A principal carrying BOTH claims, where each client is authorised by exactly ONE axis:
+    // this client by its client id (its store is not in the caller's store list), the other
+    // client by its store id (its id is not in the caller's client list). The contract is
+    // client OR store. The r6.2 audit found the predicate's OR→AND surviving every gate: with
+    // no such principal, a false denial had nothing to fail against.
+    const both = appFor({ global: false, clientIds: [clientId], storeIds: [OTHER_STORE_ID] }, billingRoute);
+    for (const [label, path] of invoicePaths) {
+      const res = await both.request(path);
+      check(`a caller with BOTH claims reads this client's invoice by CLIENT id via ${label} (client OR store, never AND)`, res.status === 200, `got ${res.status}`);
+    }
+    const bothOther = await both.request(`/billing/invoice?clientId=${otherClientId}&dateFrom=${FROM_DAY}&dateTo=${TO_DAY}`);
+    check('that same caller reads the OTHER client by STORE id (the second axis authorises on its own)', bothOther.status === 200, `got ${bothOther.status}`);
+    const bothTotals = await both.request(`/billing/invoice-totals?clientIds=${clientId},${otherClientId}&dateFrom=${FROM_DAY}&dateTo=${TO_DAY}`);
+    const bothBody = await bothTotals.json() as { data: Array<{ clientId: number }> };
+    check('the totals endpoint returns BOTH clients to the caller with both claims',
+      bothTotals.status === 200 && bothBody.data.length === 2 && new Set(bothBody.data.map((d) => d.clientId)).size === 2
+      && bothBody.data.every((d) => d.clientId === clientId || d.clientId === otherClientId),
+      JSON.stringify(bothBody.data?.map((d) => d.clientId)));
+
     // ── FINALIZATION: the persisted amount is the rendered amount ─────────────
     //
     // The close workflow snapshots billingInvoiceHeaderTotals into billing_finalizations. Every
@@ -1297,6 +1326,9 @@ async function main(): Promise<void> {
       [aug.csvS, aug.htmlS, aug.xlsxS].map((rows) => rows.map((r) => r['Order #']).join(',')).join(' / '));
     check('August carries the next-day order (2026-08-01T00:00Z belongs to August) in all three formats',
       [aug.csvS, aug.htmlS, aug.xlsxS].every((rows) => rows.some((r) => r['Order #'] === 'PS520-NEXTDAY' && r['Pick & Pack Fee'] === boundary.nextDayPickPack)));
+    check('August: the next-day order shipped to CA is International in all three formats (a value, not agreement)',
+      [aug.csvS, aug.htmlS, aug.xlsxS].every((rows) => rows.find((r) => r['Order #'] === 'PS520-NEXTDAY')?.['Destination'] === 'International'),
+      [aug.csvS, aug.htmlS, aug.xlsxS].map((rows) => String(rows.find((r) => r['Order #'] === 'PS520-NEXTDAY')?.['Destination'])).join(' / '));
     // The August TOTALS the customer reads — headline, footer, the Billing list, the workbook's
     // SUM range — against the August rows. The pre-audit clipped the canonical grand total at
     // zero (credits vanished from the headline) and dropped the adjustment row from the
