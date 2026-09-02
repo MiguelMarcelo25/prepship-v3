@@ -35,6 +35,15 @@ on:
       # harness pushed with this workflow never triggering — and "both required workflows green"
       # could not be shown for the very commit that repaired it.
       - 'scripts/ps-520-invoice-routes-pg17.ts'
+      # The gate job runs the WHOLE sot-guard-pack, so ANY guard in it can turn the gate red or
+      # green. But a guard-only commit did not start this workflow (7c8f5e1a, 2026-09-02: the
+      # ps-323 re-pin that fixed a red gate could not release the deploy it had blocked, and the
+      # product change in 76e4269f stayed stranded with every check green). A guard that gates
+      # the deploy must be able to trigger it. Same reason ps-507 and ps-520 are listed above,
+      # generalised.
+      - 'scripts/sot-guard-pack.mjs'
+      - 'scripts/**/*-guard.ts'
+      - 'scripts/**/*-guard.mjs'
 
 concurrency:
   # Never run two deploys for this branch at once; let an in-flight one finish.
