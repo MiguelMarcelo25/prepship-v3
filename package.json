@@ -1038,7 +1038,8 @@
     "test:ps-497-shipped-outcome-invariant-pglite": "tsx scripts/ps-497-shipped-outcome-invariant-pglite.ts",
     "test:ps-510-plan": "tsx scripts/ps-510-migration-plan-contract.ts",
     "test:ps-510-guard": "tsx scripts/ps-510-no-local-appliers-guard.ts",
-    "test:ps-520-invoice-routes-pg17:mutations": "node scripts/ps-520-invoice-routes-pg17-mutations.mjs"
+    "test:ps-520-invoice-routes-pg17:mutations": "node scripts/ps-520-invoice-routes-pg17-mutations.mjs",
+    "test:ps-520-invoice-totals-latency": "tsx scripts/ps-520-invoice-totals-latency.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
