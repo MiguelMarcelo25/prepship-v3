@@ -96,7 +96,16 @@ export const INVOICE_CSV_HEADERS = INVOICE_COLUMN_HEADERS;
  *  the cell is treated as text, not a live formula. */
 function csvField(value: unknown): string {
   let s = value === null || value === undefined ? '' : String(value);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  // NUMERIC-MONEY CONTRACT (DJ, 2026-09-02). A strictly validated signed decimal — `-12.34`,
+  // a credit — is DATA, not an executable formula, and it stays a plain number so it sums in a
+  // spreadsheet. Before this, the injection guard below prefixed every leading '-' with an
+  // apostrophe, so a customer's credit arrived as the TEXT cell `'-12.34` while the HTML and
+  // XLSX carried a real negative number — the three formats disagreed on every negative.
+  // Found by the PS-520 adjustment fixture; ruled numeric by DJ. The guard still neutralises
+  // anything formula-shaped that is NOT a bare signed decimal (`=SUM(...)`, `+1+1`, `-1+1`,
+  // `@cmd`), which is what it exists for.
+  const strictSignedDecimal = /^-?\d+(?:\.\d+)?$/.test(s);
+  if (!strictSignedDecimal && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }

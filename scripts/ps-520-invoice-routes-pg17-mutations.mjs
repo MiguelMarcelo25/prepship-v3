@@ -45,6 +45,15 @@ const MUTATIONS = [
     apply: (s) => replaceNth(s, 'qty: baseQty + addlQty,', 'qty: 999,', 1) },
   { name: 'REVIEW — XLSX totals formulas skip the first detail row (first = 3)', file: BILLING,
     apply: (s) => replaceNth(s, 'const first = 2;', 'const first = 3;', 1) },
+  // Review's third-round defeats. A never-charged replacement fee rendered as numeric 0 on the
+  // cancelled row survived because the comparator folded blank and zero together for every
+  // money column; a wrong adjustment Destination survived because the August document was
+  // checked by a two-column parser instead of the 19-column comparator.
+  { name: 'REVIEW — XLSX renders a never-charged replacement fee as 0 on the cancelled row', file: BILLING,
+    apply: (s) => replaceNth(s, 'replacePostage: replacePostageAmt > 0 ? replacePostageAmt : null,',
+      "replacePostage: replacePostageAmt > 0 ? replacePostageAmt : (d.order_number_label === 'PS520-CANCELLED' ? 0 : null),", 1) },
+  { name: 'REVIEW — XLSX adjustment row carries a wrong Destination', file: BILLING,
+    apply: (s) => replaceNth(s, "destination: d.billing_adjustment_id ? '' : d.destination,", "destination: d.billing_adjustment_id ? 'WRONG DESTINATION' : d.destination,", 1) },
 ];
 
 if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !process.env.PS488_PG17_ADMIN_URL) {
@@ -61,6 +70,30 @@ const proofIsGreen = () => {
   }
 };
 
+/**
+ * Restore the ORIGINAL bytes, retrying through Windows' transient file faults. On 2026-09-02 a
+ * run crashed here with errno -4094 (UNKNOWN) on the restore write — something else held the
+ * file for an instant — and billing.ts was left MUTATED on disk with the process gone. A
+ * harness that can leave the tree mutated is worse than no harness. Retry with backoff; if it
+ * still fails, write the original to a sidecar next to the file and say so, so the restore is
+ * never lost.
+ */
+function restoreOriginal(file, original) {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    try {
+      writeFileSync(file, original);
+      if (readFileSync(file, 'utf8') === original) return;
+    } catch (e) {
+      console.error(`  restore attempt ${attempt} for ${file}: ${e.code ?? e.message}`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250 * attempt);
+  }
+  const sidecar = `${file}.ps520-restore`;
+  writeFileSync(sidecar, original);
+  console.error(`RESTORE FAILED for ${file} after 8 attempts — the ORIGINAL is at ${sidecar}; copy it back before anything else`);
+  process.exit(1);
+}
+
 if (!proofIsGreen()) { console.error('ABORT — the proof is RED before any mutation. Fix the baseline first.'); process.exit(1); }
 console.log('baseline: proof green on the unmutated tree');
 
@@ -71,8 +104,7 @@ for (const m of MUTATIONS) {
   if (mutated === null || mutated === original) { notApplied += 1; console.error(`  NOT APPLIED  ${m.name}`); continue; }
   writeFileSync(m.file, mutated);
   const green = proofIsGreen();
-  writeFileSync(m.file, original);
-  if (readFileSync(m.file, 'utf8') !== original) { console.error(`RESTORE FAILED for ${m.file}; stopping`); process.exit(1); }
+  restoreOriginal(m.file, original);
   if (green) { survived += 1; console.error(`  SURVIVED     ${m.name}`); } else console.log(`  killed       ${m.name}`);
 }
 console.log(`\n${MUTATIONS.length - survived - notApplied}/${MUTATIONS.length} mutations killed, ${notApplied} not applied`);

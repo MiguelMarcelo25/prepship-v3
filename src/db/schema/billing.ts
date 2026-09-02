@@ -185,6 +185,16 @@ export const billingFinalizations = pgTable(
     periodStart: timestamp({ withTimezone: true }).notNull(),
     periodEnd: timestamp({ withTimezone: true }).notNull(),
     lineCount: integer().notNull(),
+    /**
+     * Distinct order RECORDS whose lines were closed by this finalization — LINE-derived and
+     * PRE-suppression. It is NOT the invoice's order count: a PS-491 duplicate copy still has
+     * lines, so it is counted here (5) while the invoice and the Billing list, which suppress
+     * it, say 4. `subtotal` IS canonical (it comes from billingInvoiceHeaderTotals with
+     * suppression applied); this count is not, and the two answer different questions.
+     *
+     * DJ ruling 2026-09-02: leave the meaning as-is and document it. Historical close records
+     * keep their semantics; nobody should silently redefine a financial-close field.
+     */
     orderCount: integer().notNull(),
     subtotal: numeric({ precision: 12, scale: 2 }).notNull(),
     finalizedBy: text().notNull(),

@@ -371,10 +371,51 @@ const csvSafe = renderInvoiceCsv([
   },
 ]);
 const unsafeLine = csvSafe.split('\r\n')[1];
+// This pin used to accept EITHER the neutralised form OR the raw formula — it enforced
+// nothing. The formula lead must arrive apostrophe-prefixed, and only that.
 assert.ok(
-  unsafeLine.includes('"\'=cmd,""x"""') || unsafeLine.includes('"=cmd,""x"""'),
-  'fields with commas/quotes/formula-leads must be CSV-quoted/escaped',
+  unsafeLine.includes('"\'=cmd,""x"""'),
+  'a formula-lead text cell must be apostrophe-neutralised AND CSV-quoted/escaped',
 );
+
+// ── 1b. Numeric-money contract at the sanitizer (DJ ruling 2026-09-02) ───────
+// A strictly validated signed decimal is DATA and stays a bare number; anything
+// formula-shaped that is not a bare number is neutralised. Found by PS-520's credit
+// fixture: the CSV wrote a credit as the TEXT cell '-12.34 while HTML/XLSX carried a
+// real negative, so the three formats disagreed on every negative amount.
+// Cells are located by header name through a quote-aware split, so a date cell with a
+// comma cannot shift the index and pass a wrong column.
+const splitCsv = (line: string): string[] => {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i += 1; }
+      else if (ch === '"') quoted = false;
+      else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+};
+const csvHeader = splitCsv(renderInvoiceCsv([fallbackRow]).replace(/^\uFEFF/, '').split('\r\n')[0]);
+const SKU_COL = csvHeader.indexOf('SKUs');
+const TOTAL_COL = csvHeader.indexOf('Total');
+assert.ok(SKU_COL >= 0 && TOTAL_COL >= 0, 'SKUs and Total must be locatable by header name');
+const cellOf = (row: Parameters<typeof renderInvoiceCsvRow>[0], idx: number) =>
+  splitCsv(renderInvoiceCsvRow(row))[idx];
+for (const bare of ['-12.34', '12.34', '-0', '-5', '0.5']) {
+  assert.equal(cellOf({ ...fallbackRow, skus: bare }, SKU_COL), bare, `bare signed decimal ${bare} must stay numeric`);
+}
+for (const formula of ['-1+1', '+5', '=SUM(A1)', '@cmd', '-12.34abc', '-', '--1', '-1e5']) {
+  assert.equal(cellOf({ ...fallbackRow, skus: formula }, SKU_COL), `'${formula}`, `formula-shaped ${formula} must be neutralised`);
+}
+assert.equal(cellOf({ ...fallbackRow, row_total: '-12.34' }, TOTAL_COL), '-12.34', 'a credit Total is a bare negative number in the CSV');
+assert.equal(cellOf({ ...fallbackRow, row_total: '12.34' }, TOTAL_COL), '12.34', 'a charge Total is a bare number in the CSV');
 
 // ── 2. Source pins ───────────────────────────────────────────────────────────
 

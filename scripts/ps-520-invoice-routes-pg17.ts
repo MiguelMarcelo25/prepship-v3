@@ -645,12 +645,22 @@ async function main(): Promise<void> {
     //
     // The money comparison above covers ten columns. Review set the XLSX Qty cell to 999 and
     // all 65 checks stayed green: identical HEADERS say nothing about identical VALUES, and a
-    // column nobody parses is a column nobody can defend. This parses all 19 contract columns
-    // from every data row of every format, normalises each by KIND — money and quantities to
-    // numbers, dates to the billing DAY (the formats legitimately differ on time-of-day), text
-    // with the em-dash/blank convention folded to one form — and compares row by row, field by
-    // field. Rows are matched by (order label, total), which is unique in this fixture.
-    type Kind = 'money' | 'qty' | 'day' | 'text';
+    // column nobody parses is a column nobody can defend. So every contract column is parsed
+    // from every data row of every format and compared row by row, field by field.
+    //
+    // Normalisation is BY KIND, and presence-aware where the contract is. The four return/
+    // replace columns distinguish "never charged" (blank) from "charged zero" (0) in all three
+    // formats — that is PS-488 M3, and it is a customer-visible fact about money. A previous
+    // version folded blank→0 for every money column; review made the XLSX render a numeric 0
+    // where CSV/HTML were blank on the cancelled row and the fold hid it. The six BASE money
+    // columns are folded on purpose: for the same zero the CSV writes 0 and the HTML '—', by
+    // contract, so there blank and zero are one fact. Dates reduce to the billing DAY because
+    // the XLSX cell is date-only while HTML/CSV carry time-of-day — a disclosed difference, not
+    // timestamp parity. Text folds '—' and '' to one "not applicable".
+    //
+    // This is a FUNCTION, not inline code, so the August adjustment invoice below goes through
+    // exactly the same comparator — review found that document checked by a two-column parser.
+    type Kind = 'money' | 'presence' | 'qty' | 'day' | 'text';
     const ALL_FIELDS: ReadonlyArray<{ header: string; kind: Kind }> = [
       { header: 'Billing / Activity Date (Los Angeles)', kind: 'day' },
       { header: 'Order #', kind: 'text' }, { header: 'SKUs', kind: 'text' },
@@ -659,8 +669,8 @@ async function main(): Promise<void> {
       { header: 'Additional Units', kind: 'money' }, { header: 'Shipping', kind: 'money' },
       { header: 'Storage', kind: 'money' }, { header: 'Total', kind: 'money' },
       { header: 'Shipment #', kind: 'text' }, { header: 'Destination', kind: 'text' },
-      { header: 'Return Postage', kind: 'money' }, { header: 'Return Processing', kind: 'money' },
-      { header: 'Replace Postage', kind: 'money' }, { header: 'Replace Pick&Pack', kind: 'money' },
+      { header: 'Return Postage', kind: 'presence' }, { header: 'Return Processing', kind: 'presence' },
+      { header: 'Replace Postage', kind: 'presence' }, { header: 'Replace Pick&Pack', kind: 'presence' },
       { header: 'Carrier', kind: 'text' }, { header: 'Item Name', kind: 'text' },
     ];
     const toDay = (raw: unknown): string => {
@@ -671,55 +681,90 @@ async function main(): Promise<void> {
       return us ? `${us[3]}-${us[1]!.padStart(2, '0')}-${us[2]!.padStart(2, '0')}` : s.trim();
     };
     const norm = (kind: Kind, raw: unknown): string | number | null => {
-      const text = raw instanceof Date ? raw.toISOString() : String(raw ?? '').replace(/ /g, ' ').trim();
+      const text = raw instanceof Date ? raw.toISOString() : String(raw ?? '').replace(/ /g, ' ').trim();
       if (kind === 'day') return toDay(raw);
-      if (kind === 'text') return text === '—' || text === '' ? '' : text;
-      // money and qty: the em-dash and blank both mean "nothing to show"; the CSV writes 0 for
-      // base money columns and '' for return/replace — folded to 0 here so the formats can be
-      // compared on what a reader would SUM, which is what review's 999 attack was about.
-      if (text === '—' || text === '') return 0;
+      const blank = text === '—' || text === '';
+      if (kind === 'text') return blank ? '' : text;
+      if (blank) return kind === 'presence' ? null : 0;
+      // The CSV prefixes a leading '-' with an apostrophe (PS-468). Read through it; the
+      // August FLAG check records that this is a text cell in a spreadsheet.
       const n = Number(text.replace(/^'/, '').replace(/[$,]/g, '')); return Number.isFinite(n) ? n : text;
     };
     type FullRow = Record<string, string | number | null>;
-    const rowKey = (r: FullRow) => `${r['Order #']}|${r['Total']}`;
-    const csvFull: FullRow[] = csv.replace(/^﻿/, '').split('\r\n').filter((l) => l.trim() !== '').slice(1)
+    // Identity = order label + rendered shipment identity + total. Order label alone is not
+    // unique (a return and its outbound share it); order+total is not guaranteed unique either
+    // (two shipments of one order with identical money). Shipment # is the rendered identity
+    // the invoice itself groups by. Uniqueness is ASSERTED per artifact below, so a collision
+    // fails loudly instead of pairing the wrong rows.
+    const rowKey = (r: FullRow) => `${r['Order #']}|${r['Shipment #']}|${r['Total']}`;
+    const csvFullRows = (doc: string): FullRow[] => doc.replace(/^﻿/, '').split('\r\n')
+      .filter((l) => l.trim() !== '').slice(1)
       .map((line) => { const cells = line.split(','); const r: FullRow = {};
         ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i]); }); return r; });
-    const htmlFull: FullRow[] = [...html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>')).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+    const htmlFullRows = (doc: string): FullRow[] => [...doc.slice(doc.indexOf('<tbody>'), doc.indexOf('</tbody>'))
+      .matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
       .map((m) => { const cells = [...m[1]!.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => tagText(c[1]!.replace(/<br\s*\/?>/g, ' ')));
         const r: FullRow = {}; ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i]); }); return r; });
-    const xlsxFull: FullRow[] = [];
-    if (sheet && headerRowNumber && totalsRowNumber) {
-      for (let n = headerRowNumber + 1; n < totalsRowNumber; n += 1) {
-        const row = sheet.getRow(n); const r: FullRow = {};
+    // Self-locating: finds the header row by its labels and the totals row by its label, so
+    // the same parser serves any invoice sheet rather than the one whose numbers happened to
+    // be in scope.
+    const xlsxFullRows = (ws: NonNullable<typeof sheet> | undefined): FullRow[] => {
+      if (!ws) return [];
+      let hdr = 0; let tot = 0; const idx = new Map<string, number>();
+      ws.eachRow((row, rn) => {
+        const labels = (row.values as unknown[]).map((v) => (v == null ? '' : String(v).trim()));
+        if (!hdr && labels.includes('Shipping') && labels.includes('Total')) { hdr = rn; labels.forEach((l, i) => { if (l) idx.set(l, i); }); return; }
+        if (hdr && !tot && labels.some((l) => /^Totals\b/.test(l))) tot = rn;
+      });
+      const out: FullRow[] = [];
+      if (!hdr || !tot) return out;
+      for (let n = hdr + 1; n < tot; n += 1) {
+        const row = ws.getRow(n); const r: FullRow = {};
         for (const f of ALL_FIELDS) {
-          const v = row.getCell(headerIndex.get(f.header)!).value as unknown;
+          const col = idx.get(f.header); const v = col === undefined ? undefined : (row.getCell(col).value as unknown);
           const raw = v && typeof v === 'object' && !(v instanceof Date) && 'result' in (v as object) ? (v as { result: unknown }).result : v;
           r[f.header] = norm(f.kind, raw);
         }
-        xlsxFull.push(r);
+        out.push(r);
       }
-    }
+      return out;
+    };
     const bySort = (rows: FullRow[]) => [...rows].sort((a, b) => rowKey(a).localeCompare(rowKey(b)));
-    const [csvS, htmlS, xlsxS] = [bySort(csvFull), bySort(htmlFull), bySort(xlsxFull)];
-    check('all three formats carry the same number of DATA rows (every row, not just the seeded order)',
-      csvS.length === htmlS.length && csvS.length === xlsxS.length && csvS.length >= 6,
-      `csv=${csvS.length} html=${htmlS.length} xlsx=${xlsxS.length}`);
-    const fullDiffs: string[] = [];
-    csvS.forEach((c, i) => {
-      for (const other of [['html', htmlS[i]], ['xlsx', xlsxS[i]]] as const) {
-        const o = other[1]; if (!o) { fullDiffs.push(`row ${i} missing in ${other[0]}`); continue; }
-        for (const f of ALL_FIELDS) if (c[f.header] !== o[f.header]) fullDiffs.push(`${rowKey(c)} ${f.header}: csv=${JSON.stringify(c[f.header])} ${other[0]}=${JSON.stringify(o[f.header])}`);
+    const compareArtifacts = (label: string, docs: { csv: string; html: string; sheet: NonNullable<typeof sheet> | undefined }, minRows: number) => {
+      const csvS = bySort(csvFullRows(docs.csv)); const htmlS = bySort(htmlFullRows(docs.html)); const xlsxS = bySort(xlsxFullRows(docs.sheet));
+      check(`${label}: all three formats carry the same number of DATA rows`,
+        csvS.length === htmlS.length && csvS.length === xlsxS.length && csvS.length >= minRows,
+        `csv=${csvS.length} html=${htmlS.length} xlsx=${xlsxS.length}`);
+      for (const [name, rows] of [['csv', csvS], ['html', htmlS], ['xlsx', xlsxS]] as const) {
+        const keys = rows.map(rowKey);
+        check(`${label}: every ${name} row has a unique (order, shipment, total) identity`,
+          new Set(keys).size === keys.length, keys.filter((k, i) => keys.indexOf(k) !== i).join(' | '));
       }
-    });
-    check('EVERY one of the 19 columns agrees across CSV, HTML and XLSX on EVERY data row',
-      fullDiffs.length === 0, fullDiffs.slice(0, 8).join('\n       '));
+      const diffs: string[] = [];
+      csvS.forEach((c, i) => {
+        for (const [name, o] of [['html', htmlS[i]], ['xlsx', xlsxS[i]]] as const) {
+          if (!o) { diffs.push(`row ${i} missing in ${name}`); continue; }
+          for (const f of ALL_FIELDS) if (c[f.header] !== o[f.header]) diffs.push(`${rowKey(c)} ${f.header}: csv=${JSON.stringify(c[f.header])} ${name}=${JSON.stringify(o[f.header])}`);
+        }
+      });
+      check(`${label}: EVERY one of the 19 columns agrees across CSV, HTML and XLSX on EVERY data row (blank ≠ 0 where the contract says so)`,
+        diffs.length === 0, diffs.slice(0, 8).join('\n       '));
+      return { csvS, htmlS, xlsxS };
+    };
+    const july = compareArtifacts('July', { csv, html, sheet }, 6);
     // The outbound row's Qty is base 1 + additional 1 = 2 — asserted as a VALUE, in every
     // format, because "the three agree" is also true when all three are 999.
     const outboundQty = (rows: FullRow[]) => rows.find((r) => r['Order #'] === 'PS520-1001' && r['Storage'] === money.storage)?.['Qty'];
     check('the seeded outbound row carries Qty 2 in all three formats (the column review set to 999)',
-      [csvS, htmlS, xlsxS].every((rows) => outboundQty(rows) === 2),
-      `csv=${outboundQty(csvS)} html=${outboundQty(htmlS)} xlsx=${outboundQty(xlsxS)}`);
+      [july.csvS, july.htmlS, july.xlsxS].every((rows) => outboundQty(rows) === 2),
+      `csv=${outboundQty(july.csvS)} html=${outboundQty(july.htmlS)} xlsx=${outboundQty(july.xlsxS)}`);
+    // The cancelled row was review's vehicle: its replacement cells are "never charged" and must
+    // be BLANK — null after presence-aware normalisation — in all three, never a numeric 0.
+    const cancelledRow = (rows: FullRow[]) => rows.find((r) => r['Order #'] === 'PS520-CANCELLED');
+    check('the cancelled row\'s four return/replace cells are BLANK (never charged), not zero, in all three formats',
+      [july.csvS, july.htmlS, july.xlsxS].every((rows) => { const r = cancelledRow(rows); return r !== undefined
+        && r['Return Postage'] === null && r['Return Processing'] === null && r['Replace Postage'] === null && r['Replace Pick&Pack'] === null; }),
+      [july.csvS, july.htmlS, july.xlsxS].map((rows) => JSON.stringify(cancelledRow(rows)?.['Replace Postage'])).join(' / '));
 
     // ── The seeded components, asserted in the WORKBOOK itself ──────────────
     const xOutbound = xlsxSorted.find((r) => r.storage === money.storage);
@@ -1009,7 +1054,7 @@ async function main(): Promise<void> {
     // 9 lines on PS520-1001 + cancelled + two duplicate copies + last-day = 13; next-day is OUT.
     check('the close record counts every line in the window (13) and none outside it',
       persisted?.line_count === 13, `line_count=${persisted?.line_count}`);
-    check('the close record order_count is LINE-derived (5), which differs from the invoice (4) — flagged',
+    check('the close record order_count is LINE-derived (5) where the invoice says 4 — DJ ruled: leave, documented at the schema',
       persisted?.order_count === 5, `order_count=${persisted?.order_count}`);
     const [stamped] = await seeded`
       select
@@ -1070,47 +1115,38 @@ async function main(): Promise<void> {
     const augCsv = await augCsvRes.text();
     const augWb = new ExcelJS.Workbook(); await augWb.xlsx.load(Buffer.from(await augXlsxRes.arrayBuffer()) as unknown as ArrayBuffer);
     const augSheet = augWb.getWorksheet('Invoice');
-    // CSV: the adjustment is a row whose Shipment # is "Adjustment", Destination blank, Total ±12.34.
-    const augCsvRows = augCsv.replace(/^﻿/, '').split('\r\n').filter((l) => l.trim() !== '').slice(1).map((l) => l.split(','));
-    const shipIdx = ALL_FIELDS.findIndex((f) => f.header === 'Shipment #'); const totIdx = ALL_FIELDS.findIndex((f) => f.header === 'Total');
-    const destIdx = ALL_FIELDS.findIndex((f) => f.header === 'Destination');
-    const csvAdj = augCsvRows.find((c) => c[shipIdx] === 'Adjustment');
-    check('CSV: the adjustment row exists, carries the credit as its Total, and has no destination',
-      csvAdj !== undefined && Math.abs((cellNumber(csvAdj[totIdx]) ?? NaN) - adjSigned) < 0.005 && (csvAdj[destIdx] ?? '') === '',
-      csvAdj ? csvAdj.join(',') : 'no Adjustment row');
-    // FLAGGED, DELIBERATELY VISIBLE: a negative Total in the CSV is written as `'-12.34`. That is
-    // PS-468's formula-injection rule (a leading -, +, =, @ gets an apostrophe so a spreadsheet
-    // cannot execute it) — correct for security, but it means a CREDIT's Total is a text cell in
-    // Excel and will not sum, while the HTML and XLSX carry a real negative number. The three
-    // formats therefore do NOT carry equal data for negatives. This check passes only while that
-    // is the CSV's behaviour, so the finding stays in every log until DJ rules on it.
-    check("FLAG: the CSV writes a negative Total with a leading apostrophe ('-12.34) — text, not a number, in a spreadsheet",
-      csvAdj !== undefined && /^'-/.test(csvAdj[totIdx] ?? ''), csvAdj?.[totIdx] ?? '');
-    // HTML: same row, and the Adjustments summary card is no longer a dash.
-    const augRows = [...augHtml.slice(augHtml.indexOf('<tbody>'), augHtml.indexOf('</tbody>')).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
-      .map((m) => [...m[1]!.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => tagText(c[1]!.replace(/<br\s*\/?>/g, ' '))));
-    const htmlAdj = augRows.find((c) => c[shipIdx] === 'Adjustment');
-    check('HTML: the adjustment row exists with the credit as its Total and an em-dash destination',
-      htmlAdj !== undefined && Math.abs((cellNumber(htmlAdj[totIdx]) ?? 0) - adjSigned) < 0.005 && htmlAdj[destIdx] === '—',
-      htmlAdj ? htmlAdj.join(' | ') : 'no Adjustment row');
+    // The SAME 19-column comparator as July. Review changed the XLSX adjustment Destination to
+    // "WRONG DESTINATION" and the previous two-column parser (Shipment #, Total) let it through.
+    // August holds two rows: the next-day order and the adjustment.
+    const aug = compareArtifacts('August', { csv: augCsv, html: augHtml, sheet: augSheet }, 2);
+    const adjRow = (rows: FullRow[]) => rows.find((r) => r['Shipment #'] === 'Adjustment');
+    check('the adjustment row exists in all three August formats',
+      [aug.csvS, aug.htmlS, aug.xlsxS].every((rows) => adjRow(rows) !== undefined));
+    check('the adjustment Total is the signed credit in all three formats',
+      [aug.csvS, aug.htmlS, aug.xlsxS].every((rows) => Math.abs(Number(adjRow(rows)?.['Total'] ?? NaN) - adjSigned) < 0.005),
+      [aug.csvS, aug.htmlS, aug.xlsxS].map((rows) => String(adjRow(rows)?.['Total'])).join(' / '));
+    // Asserted as a VALUE, not only as cross-format agreement: an adjustment has no shipment and
+    // therefore no destination, and all three must say so with a blank rather than a guess.
+    check('the adjustment Destination is BLANK in all three formats',
+      [aug.csvS, aug.htmlS, aug.xlsxS].every((rows) => adjRow(rows)?.['Destination'] === ''),
+      [aug.csvS, aug.htmlS, aug.xlsxS].map((rows) => JSON.stringify(adjRow(rows)?.['Destination'])).join(' / '));
+    check('the adjustment row is orderless in every format: Qty 0 and no outbound money',
+      [aug.csvS, aug.htmlS, aug.xlsxS].every((rows) => { const r = adjRow(rows); return r !== undefined && r['Qty'] === 0
+        && r['Pick & Pack Fee'] === 0 && r['Shipping'] === 0 && r['Storage'] === 0 && r['Box Cost'] === 0; }));
+    // NUMERIC-MONEY CONTRACT, asserted on the RAW CSV cell (the comparator above reads through
+    // any prefix, so it cannot see this). This fixture found the CSV writing a credit as the
+    // text cell `'-12.34` — PS-468's injection guard prefixing every leading '-' — while HTML
+    // and XLSX carried a real negative number. DJ ruled (2026-09-02) that a strictly validated
+    // signed decimal is data and stays numeric; the guard keeps neutralising formula-shaped
+    // text. So the raw cell must be exactly the bare signed decimal, summable in a spreadsheet.
+    const totIdx = ALL_FIELDS.findIndex((f) => f.header === 'Total'); const shipIdx = ALL_FIELDS.findIndex((f) => f.header === 'Shipment #');
+    const rawCsvAdj = augCsv.replace(/^﻿/, '').split('\r\n').map((l) => l.split(',')).find((c) => c[shipIdx] === 'Adjustment');
+    check('the CSV writes the credit as a bare signed decimal (-12.34), not an apostrophe-prefixed text cell',
+      rawCsvAdj !== undefined && /^-\d+(\.\d+)?$/.test(rawCsvAdj[totIdx] ?? '') && Number(rawCsvAdj[totIdx]) === adjSigned,
+      `raw cell=${JSON.stringify(rawCsvAdj?.[totIdx])}`);
     const adjCard = augHtml.match(/Adjustments<\/div><div class="cv">([^<]*)</)?.[1] ?? '';
     check('HTML: the Adjustments summary card shows the credit, not a dash',
       adjCard !== '-' && Math.abs((cellNumber(adjCard) ?? 0) - adjSigned) < 0.005, `card=${JSON.stringify(adjCard)}`);
-    // XLSX: same row, by header binding, with the numeric Total.
-    let xlsxAdjTotal: number | null = null;
-    if (augSheet) {
-      let hdr = 0; const idx = new Map<string, number>();
-      augSheet.eachRow((row, rn) => { if (hdr) return; const labels = (row.values as unknown[]).map((v) => (v == null ? '' : String(v).trim()));
-        if (labels.includes('Shipment #') && labels.includes('Total')) { hdr = rn; labels.forEach((l, i) => { if (l) idx.set(l, i); }); } });
-      augSheet.eachRow((row, rn) => { if (rn <= hdr || !idx.has('Shipment #')) return;
-        if (String(row.getCell(idx.get('Shipment #')!).value ?? '').trim() === 'Adjustment') xlsxAdjTotal = cellNumber(row.getCell(idx.get('Total')!).value); });
-    }
-    check('XLSX: the adjustment row exists with the credit as its numeric Total',
-      xlsxAdjTotal !== null && Math.abs(xlsxAdjTotal - adjSigned) < 0.005, `xlsx total=${xlsxAdjTotal}`);
-    check('the adjustment carries the same signed amount in all three formats (CSV read through its apostrophe)',
-      csvAdj !== undefined && htmlAdj !== undefined && xlsxAdjTotal !== null
-      && cellNumber(csvAdj[totIdx]) === cellNumber(htmlAdj[totIdx]) && cellNumber(htmlAdj[totIdx]) === xlsxAdjTotal,
-      `csv=${csvAdj?.[totIdx]} html=${htmlAdj?.[totIdx]} xlsx=${xlsxAdjTotal}`);
   } finally {
     await migrator.end({ timeout: 5 }).catch(() => {});
     await seeded.end({ timeout: 5 }).catch(() => {});
