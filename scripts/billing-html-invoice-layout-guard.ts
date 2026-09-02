@@ -45,9 +45,17 @@ check(
   'HTML invoice preserves both backend billing and actual activity dates when they differ',
   /`Billed \$\{billingDate\}<br><small>Fulfilled \$\{actualDate\}<\/small>`/.test(html),
 );
+// This used to pin the literal "118px; min-width: 118px; white-space: nowrap". The fit-the-page
+// layout (r8) sizes columns in percentages under table-layout: fixed, so the fact protected is
+// the OUTCOME: the date column has a dedicated width rule (so it cannot collapse) and the table
+// is fixed-layout at full width (so every column stays on the page).
 check(
-  'HTML invoice Ship Date column is widened and non-wrapping',
-  /th\.ship-date,\s*td\.ship-date\s*\{[^}]*width:\s*118px;[^}]*min-width:\s*118px;[^}]*white-space:\s*nowrap;[^}]*\}/s.test(html),
+  'HTML invoice gives the Ship Date column a dedicated width rule',
+  /th\.ship-date,\s*td\.ship-date\s*\{[^}]*width:\s*[0-9.]+(px|%);[^}]*\}/s.test(html),
+);
+check(
+  'HTML invoice table is fixed-layout at full width, so all columns fit the page (screen and print)',
+  /table\s*\{[^}]*width:\s*100%;[^}]*table-layout:\s*fixed;[^}]*\}/s.test(html) && /@page\s*\{[^}]*size:\s*landscape/.test(html),
 );
 check('HTML invoice table no longer renders the Prep Fee Waiver header', !/WAIVED_COLUMN_HEADER/.test(html));
 check('HTML invoice table no longer renders waiver cells or badges', !/waiver-cell|waiver-badge|waivedCellText\(/.test(html));

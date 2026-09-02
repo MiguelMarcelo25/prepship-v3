@@ -24,6 +24,7 @@
  * minted or forged. A production spot-check remains a separate credential-holder step.
  */
 import path from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { Hono } from 'hono';
@@ -72,6 +73,15 @@ const TOLERATED: ToleranceRule[] = [
   { file: '0094_pin_function_search_path.sql', sqlstate: '3F000', reason: 'pgboss schema is created by the library at runtime; no worker here' },
   { file: '0058_search_trgm_indexes.sql', sqlstate: '58P01', reason: 'pg_trgm contrib may be absent; those indexes are search performance, not correctness' },
 ];
+
+/** Optional: PS520_DUMP_DIR=<dir> writes the rendered artifacts so the invoice can be opened as a
+ *  human sees it (screen and print) without a database. Never affects a check. */
+const DUMP_DIR = process.env.PS520_DUMP_DIR;
+const dump = (name: string, body: string | Buffer): void => {
+  if (!DUMP_DIR) return;
+  mkdirSync(DUMP_DIR, { recursive: true });
+  writeFileSync(path.join(DUMP_DIR, name), body);
+};
 
 const FROM_DAY = '2026-07-01';
 const TO_DAY = '2026-07-31';
@@ -802,6 +812,7 @@ async function main(): Promise<void> {
         diffs.length === 0, diffs.slice(0, 8).join('\n       '));
       return { csvS, htmlS, xlsxS };
     };
+    dump('july.html', html); dump('july.csv', csv); dump('july.xlsx', xlsxBuf);
     const july = compareArtifacts('July', { csv, html, sheet }, 6);
     // "EVERY one of the 19 columns" is bounded by ALL_FIELDS. Make ALL_FIELDS answer to the
     // rendered header, so a twentieth column cannot arrive unseen and a renamed one cannot be
@@ -1312,6 +1323,7 @@ async function main(): Promise<void> {
     // The SAME 19-column comparator as July. Review changed the XLSX adjustment Destination to
     // "WRONG DESTINATION" and the previous two-column parser (Shipment #, Total) let it through.
     // August holds two rows: the next-day order and the adjustment.
+    dump('august.html', augHtml); dump('august.csv', augCsv);
     const aug = compareArtifacts('August', { csv: augCsv, html: augHtml, sheet: augSheet }, 2);
     // August holds EXACTLY two rows — the next-day order and the adjustment — and NOTHING July
     // already billed and finalized. compareArtifacts proves the three formats agree on whatever

@@ -2729,9 +2729,14 @@ async function billingInvoiceData(
 function invoiceHeaderCellsHtml(): string {
   return INVOICE_COLUMNS
     .map((column, index) => {
+      // Width hooks for the fixed table layout (see the stylesheet): the date, order, SKU and
+      // item-name columns get a class the width rules key on; money columns keep .num.
+      const widthClass = column.key === 'orderNumber' ? 'col-order'
+        : column.key === 'sku' ? 'col-sku'
+          : column.key === 'itemName' ? 'col-item' : '';
       const cls = index === 0
         ? ' class="ship-date"'
-        : column.money ? ' class="num"' : '';
+        : column.money ? ' class="num"' : widthClass ? ' class="' + widthClass + '"' : '';
       return '        <th' + cls + '>' + escHtml(column.header) + '</th>';
     })
     .join('\n');
@@ -2840,8 +2845,8 @@ export function renderInvoiceHtml(args: {
       return `
       <tr>
         <td class="ship-date">${dateCell}</td>
-        <td class="mono">${escHtml(d.order_number_label)}</td>
-        <td class="sku">${escHtml(d.skus ?? '—')}</td>
+        <td class="mono col-order">${escHtml(d.order_number_label)}</td>
+        <td class="sku col-sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
         <td class="num">${packageCostAmt > 0 ? fmt(packageCostAmt) : '—'}</td>
         <td class="num">${totalQty}</td>
@@ -2865,7 +2870,7 @@ export function renderInvoiceHtml(args: {
              and Item Name and this document did not, so one invoice showed different columns
              depending on which button the operator pressed. Same helpers the XLSX uses. -->
         <td>${escHtml(invoiceCarrierCell(d.carrier_code))}</td>
-        <td>${escHtml(invoiceOneLineCell(d.item_names))}</td>
+        <td class="col-item">${escHtml(invoiceOneLineCell(d.item_names))}</td>
       </tr>`;
     })
     .join('');
@@ -2878,7 +2883,11 @@ export function renderInvoiceHtml(args: {
   <title>Invoice — ${escHtml(clientName)} — ${fromDisplay} to ${toDisplay}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #111; background: #fff; padding: 40px 48px; max-width: 1100px; margin: 0 auto; }
+    /* FIT THE PAGE. The table has 19 columns; an 1100px body hid six of them behind a horizontal
+       scrollbar on screen and clipped them off the right edge of a portrait print. The body now
+       uses the viewport, the table is laid out to a fixed 100% width so every column is always
+       on the page, and print is landscape with the header row repeated on every page. */
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #111; background: #fff; padding: 28px 32px; max-width: 1600px; margin: 0 auto; }
     .print-tip { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 16px; margin-bottom: 24px; font-size: 12px; color: #1d4ed8; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 2px solid #e5e7eb; }
     .brand h1 { font-size: 22px; font-weight: 800; color: #111; letter-spacing: -.3px; }
@@ -2899,21 +2908,54 @@ export function renderInvoiceHtml(args: {
     .grand-total { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
     .grand-total .gtl { font-size: 13px; font-weight: 600; color: #166534; }
     .grand-total .gtv { font-size: 24px; font-weight: 800; color: #166534; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    thead th { background: #f9fafb; border: 1px solid #e5e7eb; padding: 7px 10px; font-weight: 700; color: #374151; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+    /* Mixed case and no letter-spacing: at 19 columns an uppercase "DESTINATION" no longer fits a
+       column and broke mid-word. A word now breaks only when it cannot fit on its own line. */
+    thead th { background: #f9fafb; border: 1px solid #e5e7eb; padding: 5px 3px; font-weight: 700; color: #374151; font-size: 8.5px; overflow-wrap: break-word; vertical-align: bottom; }
     thead th.num { text-align: right; }
-    th.ship-date, td.ship-date { width: 118px; min-width: 118px; white-space: nowrap; }
-    tbody td { border: 1px solid #e5e7eb; padding: 6px 10px; color: #374151; vertical-align: middle; }
+    /* Column widths for the fixed layout: the date, SKUs and item name need room; the other
+       fifteen share the remainder equally. Percentages, so one set of rules fits a 1280px
+       screen and a landscape page alike. */
+    th.ship-date, td.ship-date { width: 9%; }
+    th.col-order, td.col-order { width: 4.5%; }
+    th.col-sku, td.col-sku { width: 8%; }
+    th.col-item, td.col-item { width: 8%; }
+    tbody td { border: 1px solid #e5e7eb; padding: 5px 6px; color: #374151; vertical-align: middle; overflow-wrap: anywhere; }
     tbody tr:nth-child(even) { background: #fafafa; }
     td.num { text-align: right; }
     td.mono { font-family: monospace; font-size: 11px; color: #2563eb; }
-    td.sku { font-family: monospace; font-size: 10px; color: #6b7280; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.sku { font-family: monospace; font-size: 10px; color: #6b7280; }
     td.bold { font-weight: 700; }
     td.review { color: #b45309; font-size: 11px; }
     .waiver-note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 8px 14px; margin-bottom: 16px; font-size: 11px; color: #92400e; }
     tfoot td { border: 1px solid #d1d5db; padding: 8px 10px; font-weight: 700; background: #f3f4f6; }
     tfoot td.num { text-align: right; }
     .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; text-align: center; }
+    /* PRINT: landscape, full width, compact, the header row on every page, no row split across pages. */
+    @page { size: landscape; margin: 8mm 9mm; }
+    @media print {
+      body { padding: 0; max-width: none; font-size: 10px; }
+      .print-tip { display: none; }
+      .header { margin-bottom: 10px; padding-bottom: 8px; }
+      .brand h1 { font-size: 16px; }
+      .meta .client-name { font-size: 13px; }
+      .summary-grid { grid-template-columns: repeat(8, 1fr); gap: 6px; margin-bottom: 8px; }
+      .card { padding: 5px 8px; border-radius: 4px; }
+      .card .cl { font-size: 7.5px; margin-bottom: 1px; }
+      .card .cv { font-size: 11px; }
+      .grand-total { padding: 6px 12px; margin-bottom: 8px; border-radius: 4px; }
+      .grand-total .gtl { font-size: 10px; }
+      .grand-total .gtv { font-size: 15px; }
+      .waiver-note { margin-bottom: 8px; padding: 5px 10px; font-size: 9px; }
+      table { font-size: 8.5px; }
+      thead { display: table-header-group; }
+      thead th { font-size: 6.5px; padding: 3px 2px; }
+      tbody td { padding: 2px 3px; }
+      td.mono, td.sku { font-size: 8px; }
+      tfoot td { padding: 3px 3px; }
+      tr { page-break-inside: avoid; break-inside: avoid; }
+      .footer { margin-top: 8px; padding-top: 4px; font-size: 7.5px; }
+    }
   </style>
 </head>
 <body>
