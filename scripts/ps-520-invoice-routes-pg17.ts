@@ -756,7 +756,52 @@ async function main(): Promise<void> {
       `outbound postage="${outboundRow?.[iPostage] ?? '?'}" processing="${outboundRow?.[iProcessing] ?? '?'}"`);
 
     // ── Client scoping ──────────────────────────────────────────────────────
+    // ── /billing/invoice-totals: the Billing LIST reads the invoice's money ──
+    // The portal's Billing list used to total its rows with its own aggregation, which has
+    // neither suppression rule. This endpoint exists so the list and the invoice a customer
+    // opens from it cannot disagree, so it is asserted to return EXACTLY the invoice's totals —
+    // including the cancelled order contributing nothing and the duplicate charged once.
+    const totalsRes = await staff.request(
+      `/billing/invoice-totals?clientIds=${clientId}&dateFrom=${FROM_DAY}&dateTo=${TO_DAY}`,
+    );
+    check('GET /invoice-totals returns HTTP 200', totalsRes.status === 200, `got ${totalsRes.status}`);
+    const totalsBody = await totalsRes.json() as {
+      data: Array<{ clientId: number; totals: Record<string, number> }>;
+    };
+    const listTotals = totalsBody.data?.[0]?.totals;
+    check('the list totals cover the requested client', totalsBody.data?.[0]?.clientId === clientId,
+      JSON.stringify(totalsBody.data?.[0]?.clientId));
+    check('the LIST grand total equals the INVOICE grand total, to the cent',
+      listTotals !== undefined && Math.abs(listTotals.grandTotal - grandTotal) < 0.005,
+      `list=${listTotals?.grandTotal} invoice=${grandTotal.toFixed(2)}`);
+    check('the list applies cancelled-no-charge (the 77.77 order contributes nothing)',
+      listTotals !== undefined
+      && Math.abs(listTotals.pickPackTotal - (money.pickPack + suppressed.duplicateCopyPickPack)) < 0.005,
+      `pickPackTotal=${listTotals?.pickPackTotal} expected=${(money.pickPack + suppressed.duplicateCopyPickPack).toFixed(2)}`);
+    check('the list applies duplicate suppression to its ORDER COUNT too',
+      listTotals !== undefined && listTotals.orderCount === 3,
+      `orderCount=${listTotals?.orderCount} (4 = the suppressed copy was counted)`);
+
     const foreign = appFor({ global: false, clientIds: [otherClientId] }, billingRoute);
+
+    // The totals endpoint is a NEW money surface, so it gets its own scope proof rather than
+    // inheriting confidence from the invoice routes. It takes a LIST of client ids, which is a
+    // shape that invites a leak: asking about someone else's client alongside your own must not
+    // return theirs. Out-of-scope ids are dropped silently — a 403 would confirm the id exists.
+    const foreignTotals = await foreign.request(
+      `/billing/invoice-totals?clientIds=${clientId},${otherClientId}&dateFrom=${FROM_DAY}&dateTo=${TO_DAY}`,
+    );
+    const foreignTotalsBody = await foreignTotals.json() as {
+      data: Array<{ clientId: number; totals: Record<string, number> }>;
+    };
+    check('a scoped caller asking for BOTH clients receives only its own totals',
+      foreignTotals.status === 200
+      && foreignTotalsBody.data.length === 1
+      && foreignTotalsBody.data[0]?.clientId === otherClientId,
+      JSON.stringify(foreignTotalsBody.data?.map((d) => d.clientId)));
+    check('the totals endpoint leaks none of the other client\'s money',
+      !foreignTotalsBody.data.some((d) => Math.abs(d.totals.grandTotal - grandTotal) < 0.005),
+      JSON.stringify(foreignTotalsBody.data));
     // Scoping is a property of each ROUTE, not of the invoice: all three handlers call
     // billingScopeFromContext separately. Review's proof exercised only the HTML one, so deleting
     // the scope from /invoice.csv left every check green while that route served any client's

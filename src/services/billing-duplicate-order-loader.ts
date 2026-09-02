@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineEffectiveDaySql } from './billing-calendar-policy.js';
+import { intArraySql } from '../lib/scope-sql.js';
 import {
   classifyDuplicateOrderCopies,
   type DuplicateOrderDecision,
@@ -102,6 +103,93 @@ export async function loadDuplicateOrderDecisions(
         shipStationSplit: row.ss_split,
       })),
   );
+}
+
+/**
+ * The same decisions for SEVERAL clients, in one query.
+ *
+ * PARTITIONED BY CLIENT, and that is the whole reason this is not just a wider `where`.
+ * Duplicate detection groups by ORDER NUMBER, and two different clients can legitimately carry
+ * the same order number — "1001" is not rare. Classifying a mixed set in one pass would read
+ * those as copies of each other and suppress one client's real money. So the rows are bucketed
+ * by client id first and each bucket is classified on its own, exactly as the single-client
+ * loader would have.
+ *
+ * Exists so the Billing LIST can apply the same suppression as the invoice without N round
+ * trips per page. The returned map is keyed by order id, which is globally unique, so the
+ * per-client results merge without collision.
+ */
+export async function loadDuplicateOrderDecisionsForClients(
+  clientIds: number[],
+  dateFrom: string,
+  dateTo: string,
+  conn: DuplicateLoaderExecutor = db,
+): Promise<DuplicateOrderDecisions> {
+  const ids = [...new Set(clientIds.filter((id) => Number.isInteger(id) && id > 0))];
+  const merged: DuplicateOrderDecisions = new Map();
+  if (!ids.length) return merged;
+
+  const effectiveDay = billingLineEffectiveDaySql(
+    sql`b.billing_effective_date`,
+    sql`b.ship_date`,
+  );
+  const result = await conn.execute<EvidenceRow & { client_id: number }>(sql`
+    select
+      b.client_id as client_id,
+      b.order_id,
+      b.order_number,
+      coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
+      b.shipment_id,
+      b.billing_adjustment_id,
+      count(*) filter (where b.invoiced)::int as invoiced_lines,
+      bool_or(
+        o.raw->'advancedOptions'->>'mergedOrSplit' = 'true'
+        or o.raw->'advancedOptions'->>'parentId' is not null
+      ) as ss_split
+    from billing_line_items b
+    left join orders o on o.id = b.order_id
+    where b.client_id = any(${intArraySql(ids)})
+      and ${effectiveDay} >= ${dateFrom}::timestamptz
+      and ${effectiveDay} < ${dateTo}::timestamptz
+    group by b.client_id, b.order_id, b.order_number, b.shipment_id, b.billing_adjustment_id
+  `);
+
+  const rows = Array.isArray(result)
+    ? result
+    : result && typeof result === 'object' && 'rows' in result
+      ? (result as { rows: Array<EvidenceRow & { client_id: number }> }).rows
+      : [];
+
+  const byClient = new Map<number, Array<EvidenceRow & { client_id: number }>>();
+  for (const row of rows) {
+    const key = Number(row.client_id);
+    const bucket = byClient.get(key);
+    if (bucket) bucket.push(row);
+    else byClient.set(key, [row]);
+  }
+
+  for (const bucket of byClient.values()) {
+    // An order copy with ANY invoiced line is out of scope — same rule as the single-client
+    // loader, applied within the client so an invoiced copy elsewhere cannot leak across.
+    const invoicedOrderIds = new Set<number>();
+    for (const row of bucket) {
+      if (row.order_id != null && Number(row.invoiced_lines) > 0) invoicedOrderIds.add(row.order_id);
+    }
+    const decisions = classifyDuplicateOrderCopies(
+      bucket
+        .filter((row) => row.order_id == null || !invoicedOrderIds.has(row.order_id))
+        .map((row) => ({
+          orderId: row.order_id,
+          orderNumber: row.order_number,
+          shippingAmount: Number(row.shipping_amt ?? 0),
+          shipmentId: row.shipment_id,
+          billingAdjustmentId: row.billing_adjustment_id,
+          shipStationSplit: row.ss_split,
+        })),
+    );
+    for (const [orderId, decision] of decisions) merged.set(orderId, decision);
+  }
+  return merged;
 }
 
 /** The order ids the invoice must not charge for. */

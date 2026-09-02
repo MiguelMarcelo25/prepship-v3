@@ -8,7 +8,7 @@ import {
   resolveReturnDateCorrection,
 } from '../services/billing-return-date-correction';
 import { returns } from '../db/schema/returns';
-import { and, asc, desc, eq, notInArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { ensureReturnsBillingDateOverrideColumns } from '../db/ensure-returns-billing-date-override';
 import {
@@ -30,9 +30,16 @@ import {
   generateLineItems,
   upsertBillingConfig,
 } from '../services/billing';
-import { billingInvoiceHeaderTotals } from '../services/billing-invoice-totals';
+import {
+  billingInvoiceHeaderTotals,
+  billingInvoiceHeaderTotalsByClient,
+  billingInvoiceHeaderTotalsFor,
+} from '../services/billing-invoice-totals';
 // PS-491: duplicated order numbers must not be charged twice on the invoice.
-import { loadDuplicateOrderDecisions } from '../services/billing-duplicate-order-loader';
+import {
+  loadDuplicateOrderDecisions,
+  loadDuplicateOrderDecisionsForClients,
+} from '../services/billing-duplicate-order-loader';
 // PS-495: shipped orders that never reached billing at all.
 import {
   loadBillingCoverageGaps,
@@ -914,6 +921,65 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
         await loadDuplicateOrderDecisions(q.clientId, q.dateFrom!, q.dateTo!),
       );
   return c.json({ data: rows, totals });
+});
+
+// ─── Canonical invoice totals, for one or many clients ─────────────────
+//
+// The money behind the Client Portal's Billing LIST. Its rows used to be totalled by the
+// portal's own aggregation, which implements neither PS-491 duplicate suppression nor
+// cancelled-no-charge — the same gap that had the portal's INVOICE billing a customer for 8
+// cancelled orders and a duplicate copy. Once the invoice moved onto this owner, a list still
+// on the old aggregation would disagree with the invoice a customer opens from it.
+//
+// Returns the SAME billingInvoiceHeaderTotals shape the invoice and the finalization snapshot
+// read, so there is one answer to "what does this client owe for this period".
+const invoiceTotalsQuery = z.object({
+  clientIds: z.string().trim().min(1),
+  dateFrom: z.string(),
+  dateTo: z.string(),
+});
+
+app.get('/invoice-totals', zValidator('query', invoiceTotalsQuery), async (c) => {
+  const q = c.req.valid('query');
+  const range = billingDayRange(q.dateFrom, q.dateTo);
+  if (!range) return c.json({ error: 'Invalid dateFrom/dateTo — expected YYYY-MM-DD' }, 400);
+  const requested = parseClientIds(q.clientIds);
+  if (!requested) return c.json({ error: 'clientIds must be a comma-separated list of ids' }, 400);
+
+  // Scope in ONE query rather than a per-id access check: the list can ask about dozens of
+  // clients, and N round trips to answer "may I see this?" is its own performance bug. Ids the
+  // caller cannot see are dropped SILENTLY rather than refused, so the response cannot be used
+  // to probe which client ids exist.
+  const scope = billingScopeFromContext(c);
+  const visible = await db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(and(inArray(clients.id, requested), billingClientScopePredicate(scope)));
+  const allowed = visible.map((row) => Number(row.id));
+  if (!allowed.length) return c.json({ data: [] });
+
+  const decisions = await loadDuplicateOrderDecisionsForClients(
+    allowed,
+    range.fromUtc,
+    range.toUtcExclusive,
+  );
+  const byClient = await billingInvoiceHeaderTotalsByClient(
+    allowed,
+    range.fromUtc,
+    range.toUtcExclusive,
+    db,
+    decisions,
+  );
+  return c.json({
+    // Every allowed client gets a row, including one with no activity — an absent row and a
+    // zero row read the same to a person but only one of them can be reconciled.
+    data: allowed.map((clientId) => ({
+      clientId,
+      totals: billingInvoiceHeaderTotalsFor(byClient, clientId),
+    })),
+    dateFrom: range.fromDay,
+    dateTo: range.toDay,
+  });
 });
 
 // ─── Storage-fee PROOF drilldown (admin) ───────────────────────────────
