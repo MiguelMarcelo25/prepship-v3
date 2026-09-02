@@ -16,10 +16,11 @@
  * weekend roll-forward policy.
  */
 import {
-  INVOICE_SHIP_DATE_HEADER,
   invoiceBillingActivityDateTimeCell,
   invoiceOneLineCell,
 } from './billing-invoice-text';
+import { invoiceCarrierCell } from './billing-invoice-xlsx-row';
+import { INVOICE_COLUMN_HEADERS } from './billing-invoice-columns';
 import { resolveBillingInvoiceRowTotal } from '../services/billing-invoice-row-total';
 import { resolveBillingInvoiceReturnFee } from '../services/billing-invoice-return-cell';
 
@@ -56,6 +57,10 @@ export type InvoiceCsvDetailRow = {
   replace_postage_amt?: string | null;
   replace_pick_pack_amt?: string | null;
   skus: string | null;
+  // Carried by the same billingInvoiceData rows the XLSX already reads these from; the CSV
+  // simply never declared them, which is why it was missing two columns the workbook had.
+  item_names?: string | null;
+  carrier_code?: string | null;
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
@@ -69,37 +74,22 @@ export type InvoiceCsvDetailRow = {
   order_number_label?: string | null;
 };
 
-/** Column order mirrors the operator-facing invoice line item sheet. */
-export const INVOICE_CSV_HEADERS = [
-  INVOICE_SHIP_DATE_HEADER,
-  'Order #',
-  // PS-505: 'Status' removed. Every later cell shifts one position left; the ps-468
-  // positional assertions move with it.
-  'SKUs',
-  'Box Size',
-  'Box Cost',
-  'Qty',
-  'Pick & Pack Fee',
-  'Additional Units',
-  'Shipping',
-  'Storage',
-  'Total',
-  'Shipment #',
-  // PS-490: appended LAST. ps-468 pins CSV cells by position, same constraint as the
-  // XLSX sheet, so a column inserted earlier would shift every existing assertion.
-  'Destination',
-  // PS-488 M3: return money, appended last for the same reason. The XLSX sheet already
-  // carried these two columns; the CSV did not, so a return row exported with a non-zero
-  // Total and every component column at 0.00 — the row could not be reconciled against
-  // its own breakdown, and the two exports of one invoice disagreed on what was shown.
-  'Return Postage',
-  'Return Processing',
-  // PS-513: appended LAST, same position-pinning rule as the return columns and Destination.
-  // A replacement row exported a non-zero Total with every component column blank until these
-  // two existed — the same reconciliation gap the return columns closed.
-  'Replace Postage',
-  'Replace Pick&Pack',
-] as const;
+/**
+ * The CSV header row — now DERIVED from the one invoice column contract rather than
+ * hand-maintained here.
+ *
+ * This list used to be one of three hand-written column lists (HTML, XLSX, CSV). They had
+ * drifted into different columns, in a different order, under different names, so the "Excel
+ * export" and "the invoice" of one period were differently-shaped documents. Three lists that
+ * must agree will not stay agreeing; see billing-invoice-columns.ts for the whole argument.
+ *
+ * The CSV's own spellings WON that unification and did not move — its header row is a machine
+ * contract a customer may have keyed a script to, so `SKUs`, `Pick & Pack Fee` and
+ * `Additional Units` are unchanged here and the workbook and web page adopted them instead.
+ * What did change: Carrier and Item Name are appended at the end, because the XLSX carried
+ * them and this export did not.
+ */
+export const INVOICE_CSV_HEADERS = INVOICE_COLUMN_HEADERS;
 
 /** RFC-4180 quote a field, with spreadsheet formula-injection neutralization:
  *  a leading =, +, -, @, tab or CR gets a leading apostrophe before quoting so
@@ -212,6 +202,11 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     // PS-513: replacement re-ship money, appended last to match the header order.
     replacePostageAmt,
     replacePickPackAmt,
+    // Appended LAST, matching the shared column contract. The workbook already carried these
+    // two and this export did not, so one invoice had two different column sets depending on
+    // which button the operator pressed. Same helpers the XLSX uses, so the cells agree too.
+    invoiceCarrierCell(row.carrier_code),
+    invoiceOneLineCell(row.item_names),
   ];
   return cells.map(csvField).join(',');
 }

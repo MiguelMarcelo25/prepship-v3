@@ -6,6 +6,8 @@
  * CSV/XLSX export/audit waiver markers are guarded separately.
  */
 import { readFileSync } from 'node:fs';
+import { INVOICE_COLUMNS } from '../src/routes/billing-invoice-columns';
+import { INVOICE_SHIP_DATE_HEADER } from '../src/routes/billing-invoice-text';
 
 const route = readFileSync('src/routes/billing.ts', 'utf8');
 const htmlStart = route.indexOf('function renderInvoiceHtml(');
@@ -24,7 +26,20 @@ function check(name: string, condition: boolean) {
 }
 
 check('HTML invoice renderer was found', html.length > 0);
-check('HTML invoice marks Billing / Activity Date header with the ship-date class', /<th class="ship-date">\$\{escHtml\(INVOICE_SHIP_DATE_HEADER\)\}<\/th>/.test(html));
+// The header row is no longer hand-written in the template — all three artifacts derive their
+// columns from one contract (billing-invoice-columns.ts), which is what stopped the HTML, XLSX
+// and CSV carrying different columns under different names. So this can no longer pin the
+// literal <th> and instead asserts the two facts it was really protecting: the date column is
+// FIRST, and the generated header row marks it with the ship-date class the width rule below
+// depends on.
+check('the Billing / Activity Date column is first in the shared column contract',
+  INVOICE_COLUMNS[0]?.header === INVOICE_SHIP_DATE_HEADER,
+  `first column is ${INVOICE_COLUMNS[0]?.header}`);
+check('HTML invoice marks the first header cell with the ship-date class',
+  // The CALL is inside renderInvoiceHtml; the helper itself lives just above it, outside the
+  // slice, so the class rule is checked against the whole file.
+  /\$\{invoiceHeaderCellsHtml\(\)\}/.test(html)
+  && /index === 0[\s\S]{0,160}class="ship-date"/.test(route));
 check('HTML invoice marks Billing / Activity Date cells with the ship-date class', /<td class="ship-date">\$\{dateCell\}<\/td>/.test(html));
 check(
   'HTML invoice preserves both backend billing and actual activity dates when they differ',

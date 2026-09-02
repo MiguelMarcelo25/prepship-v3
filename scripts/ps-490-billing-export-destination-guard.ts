@@ -17,6 +17,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { INVOICE_COLUMN_HEADERS, invoiceColumnIndex } from '../src/routes/billing-invoice-columns';
 
 let failures = 0;
 function check(name: string, condition: boolean, detail?: unknown): void {
@@ -125,19 +126,30 @@ for (const [label, src] of [['routes/billing.ts', route], ['billing-invoice-csv.
 check('the CSV serializer stays pure — it renders destination, never classifies it',
   !/classifyDestinationCountry\s*\(/.test(csvSrc));
 
-// ── the XLSX/HTML columns are appended last too ────────────────────────────
-const xlsxColumns = [...route.matchAll(/{ header: '([^']+)', key:/g)].map((m) => m[1]);
-// PS-513 appended Replace Postage / Replace Pick&Pack AFTER Destination, so Destination is no
-// longer the LAST column. What this guard actually protects is the appended-last discipline —
-// Destination stays after the AC-6 return columns and no earlier column shifted. Relaxed the
-// same way ps-468 / ps-488 were when the Replace columns landed.
-check('XLSX Destination stays after the AC-6 return columns (appended-last discipline preserved)',
-  xlsxColumns.indexOf('Destination') > xlsxColumns.indexOf('Return Processing'),
-  xlsxColumns.slice(-5));
-check('HTML appends a Destination header after Shipment #',
-  /<th>Shipment #<\/th>[\s\S]{0,300}?<th>Destination<\/th>/.test(route));
-check('the HTML footer gained a matching cell so the totals row stays aligned',
-  /PS-490: matches the appended Destination column/.test(route));
+// ── Destination's POSITION, now owned by the shared column contract ────────
+//
+// These three assertions used to scrape the XLSX's and the HTML's own hand-written column
+// lists, and required Destination to sit AFTER the return columns — which is where the XLSX
+// happened to have appended it. The three renderers now derive from ONE contract
+// (billing-invoice-columns.ts), and in that contract Destination sits directly after
+// Shipment #, which is where the HTML and the CSV always had it. The XLSX moved to match.
+//
+// What this guard actually protects is that Destination has ONE agreed position and that
+// nothing shifted underneath it. That is now a property of the contract, so assert it there
+// instead of re-scraping three lists that no longer exist.
+const destinationIndex = invoiceColumnIndex('destination');
+check('Destination sits directly after Shipment # in the shared column contract',
+  destinationIndex === invoiceColumnIndex('shipmentId') + 1,
+  `destination=${destinationIndex} shipmentId=${invoiceColumnIndex('shipmentId')}`);
+check('Destination comes before the AC-6 return columns, as the HTML and CSV always had it',
+  destinationIndex < invoiceColumnIndex('returnPostage'),
+  INVOICE_COLUMN_HEADERS.join(' | '));
+// The three artifacts share one list, so "all three agree about Destination" is true by
+// construction here. It is asserted on the RENDERED documents by
+// test:ps-520-invoice-routes-pg17, which compares the actual header rows of all three.
+check('the XLSX renders the shared contract rather than its own column list',
+  /invoice\.columns = INVOICE_COLUMNS\.map/.test(route),
+  'a second hand-written column list is how the three exports drifted apart');
 
 assert.ok(true);
 if (failures > 0) {

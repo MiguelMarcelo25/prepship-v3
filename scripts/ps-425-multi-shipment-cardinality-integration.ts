@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
+import { invoiceColumnIndex } from '../src/routes/billing-invoice-columns';
 import { drizzle } from 'drizzle-orm/pglite';
 
 async function main(): Promise<void> {
@@ -239,12 +240,17 @@ async function main(): Promise<void> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(xlsx);
   const sheet = workbook.getWorksheet('Invoice');
-  // PS-505: one column left each — the XLSX Status column (previously column 2) was
-  // removed, so Shipment # moved 15 -> 14 and Shipping moved 12 -> 11.
-  assert.equal(sheet?.getRow(2).getCell(14).value, '#501');
-  assert.equal(sheet?.getRow(3).getCell(14).value, '#502');
-  assert.equal(sheet?.getRow(2).getCell(11).value, 12);
-  assert.equal(sheet?.getRow(3).getCell(11).value, 20);
+  // Column NUMBERS are derived, not typed. These were hard-coded (14 and 11) and PS-505 had
+  // already been forced to renumber them once when a column was removed; unifying the three
+  // exports onto one column contract moved them again. A typed number here does not fail
+  // loudly when the layout shifts — it reads the neighbouring column and asserts against the
+  // wrong cell, which is the same trap the XLSX totals row's SUM letters had.
+  const shipmentCell = invoiceColumnIndex('shipmentId') + 1;
+  const shippingCell = invoiceColumnIndex('shipping') + 1;
+  assert.equal(sheet?.getRow(2).getCell(shipmentCell).value, '#501');
+  assert.equal(sheet?.getRow(3).getCell(shipmentCell).value, '#502');
+  assert.equal(sheet?.getRow(2).getCell(shippingCell).value, 12);
+  assert.equal(sheet?.getRow(3).getCell(shippingCell).value, 20);
 
   await client.exec(`UPDATE shipments SET voided = true WHERE id = 501`);
   const afterFirstVoid = await pg

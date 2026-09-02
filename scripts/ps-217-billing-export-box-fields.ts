@@ -24,6 +24,7 @@
  *   npx tsx scripts/ps-217-billing-export-box-fields.ts
  */
 import { readFileSync } from 'node:fs';
+import { INVOICE_COLUMNS } from '../src/routes/billing-invoice-columns';
 import assert from 'node:assert/strict';
 
 const routes = readFileSync('src/routes/billing.ts', 'utf8');
@@ -64,10 +65,20 @@ check('box label resolver exists with the documented precedence',
   routes.includes('function resolveInvoiceBoxLabel('));
 
 // 3. Both renderers expose the columns.
-check('HTML invoice shows a Box Size header', routes.includes('<th>Box Size</th>'));
-check('HTML invoice shows a Box Cost header', routes.includes('<th class="num">Box Cost</th>'));
-check('XLSX adds a Box Size column', routes.includes("{ header: 'Box Size', key: 'boxSize'"));
-check('XLSX adds a Box Cost column', routes.includes("{ header: 'Box Cost', key: 'boxCost'"));
+// The four checks below used to scrape hand-written <th> and column literals out of
+// routes/billing.ts. All three invoice artifacts now derive their columns from ONE contract
+// (billing-invoice-columns.ts), which is what stopped the HTML, XLSX and CSV carrying different
+// columns under different names — so there are no literals left to scrape, and re-adding them
+// here would recreate the second source of truth. Assert the columns EXIST in the contract every
+// renderer reads; ps-520's real-PG proof compares the rendered header rows of all three.
+check('Box Size is a column in the shared invoice contract',
+  INVOICE_COLUMNS.some((c) => c.key === 'boxSize' && c.header === 'Box Size'));
+check('Box Cost is a MONEY column in the shared invoice contract',
+  INVOICE_COLUMNS.some((c) => c.key === 'boxCost' && c.header === 'Box Cost' && c.money === true));
+check('the HTML header row is generated from that contract',
+  routes.includes('${invoiceHeaderCellsHtml()}'));
+check('the XLSX columns are generated from that contract',
+  /invoice\.columns = INVOICE_COLUMNS\.map/.test(routes));
 
 // 4. One canonical data owner, both renderers consume it (no fork).
 const dataCalls = routes.split('await billingInvoiceData(').length - 1;
@@ -103,9 +114,19 @@ check('row-total owner preserves authoritative totals and includes box in fallba
 // letter shifts back left to where it was before PS-393. Pins are key-bound so they
 // cannot coincidentally match a neighboring column's SUM — which matters here because a
 // wrong letter sums the adjacent column silently instead of erroring.
-check('XLSX Fulfillment Fee SUM targets column M', routes.includes('fulfillmentFee: { formula: `SUM(M${first}:M${last})`'));
-check('XLSX Qty SUM re-lettered to column F', routes.includes('qty: { formula: `SUM(F${first}:F${last})`'));
-check('XLSX totals include a Box Cost SUM (column I)', routes.includes('boxCost: { formula: `SUM(I${first}:I${last})`'));
+// The three checks below used to pin the literal SUM letters (M, F, I). Those letters are now
+// DERIVED from each column's own position in the shared contract, which is what made reordering
+// the sheet safe — billing.ts had warned for two tickets that "a stale letter here does not
+// error, it silently sums the neighbouring column", and PS-505 had already been forced to
+// re-letter all seven once. Pinning a letter re-creates that trap; assert the derivation and
+// that each total is addressed by COLUMN KEY instead.
+check('the totals row sums Fulfillment Fee by key, not by a typed letter',
+  routes.includes("fulfillmentFee: sumOf('fulfillmentFee')"));
+check('the totals row sums Qty by key', routes.includes("qty: sumOf('qty')"));
+check('the totals row sums Box Cost by key', routes.includes("boxCost: sumOf('boxCost')"));
+check('SUM letters come from the column contract, never typed by hand',
+  /xlsxColumnLetter\(invoiceColumnIndex\(key\)/.test(routes)
+  && !/formula:\s*`SUM\([A-Z]\$\{/.test(routes));
 
 // Self-wiring.
 check('package.json exposes test:ps-217-billing-export-box-fields',

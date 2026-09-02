@@ -83,6 +83,13 @@ assert.deepEqual(
     // exported a non-zero Total with every component column blank until these existed.
     'Replace Postage',
     'Replace Pick&Pack',
+    // Appended when the three exports were unified onto one column contract
+    // (billing-invoice-columns.ts). The XLSX carried Carrier and Item Name and this export
+    // did not, so one invoice had two different column sets depending on which button the
+    // operator pressed. Appended LAST, so every position above is untouched — the same
+    // discipline every column since PS-490 has followed.
+    'Carrier',
+    'Item Name',
   ],
   'CSV columns must keep the operator-facing line item order and omit Prep Fee Waiver',
 );
@@ -157,7 +164,7 @@ assert.equal(
   // ps-488-billing-row-reference-guard, where the same number renders WITH presence.
   // PS-513: two additional trailing blank cells for the appended Replace columns — this
   // fixture is an outbound row with no replacement, so both are blank (dashIfZero).
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,,,',
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,,,,,',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -342,7 +349,7 @@ assert.equal(
   // sum over every line type, so folding returns into the fallback would double-count on
   // every row that has a real total.
   // PS-513: two more trailing blank cells for the appended Replace columns (no replacement).
-  '5/5/2026 12:00 AM PT,PO-9002,,Small,2,1,3,0,2,1,8,#90021,,,,,',
+  '5/5/2026 12:00 AM PT,PO-9002,,Small,2,1,3,0,2,1,8,#90021,,,,,,,',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

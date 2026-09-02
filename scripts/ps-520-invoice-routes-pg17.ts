@@ -268,22 +268,29 @@ const moneySet = (text: string): Set<string> => new Set(
  * The header text genuinely differs between the two exports, which is exactly why a shared field
  * key is needed rather than matching on the label.
  */
-// The three formats spell the SAME column differently, so binding by header text means
-// binding per format. `dash` is what an em-dash means in the HTML for that column: the base
-// columns render `x > 0 ? fmt(x) : '—'` and the CSV writes a numeric 0 there, while the
-// return/replace columns are blank-when-absent in every format. Getting this wrong would
-// make the formats disagree for a formatting reason and hide a real disagreement in the noise.
+// ONE header name per column, for all three formats.
+//
+// This used to carry three spellings per field — csv 'Pick & Pack Fee' / xlsx 'Pick & Pack' /
+// html 'Pick & Pack', and 'Additional Units' / 'Addl Units' / "Add'l Units" — because the three
+// renderers each owned their own column list and had drifted apart. They now render from one
+// contract (billing-invoice-columns.ts), so a single name binds all three. This collapse IS the
+// evidence: if the formats ever diverge again, this table cannot be written.
+//
+// `dash` is what an em-dash means in the HTML for that column: base columns render
+// `x > 0 ? fmt(x) : '—'` while the CSV writes a numeric 0 there; return/replace columns are
+// blank-when-absent everywhere. Getting it wrong would make the formats disagree for a
+// formatting reason and bury a real disagreement in the noise.
 const MONEY_FIELDS = [
-  { field: 'pickPack', csv: 'Pick & Pack Fee', xlsx: 'Pick & Pack', html: 'Pick & Pack', dash: 0 },
-  { field: 'additional', csv: 'Additional Units', xlsx: 'Addl Units', html: "Add'l Units", dash: 0 },
-  { field: 'boxCost', csv: 'Box Cost', xlsx: 'Box Cost', html: 'Box Cost', dash: 0 },
-  { field: 'shipping', csv: 'Shipping', xlsx: 'Shipping', html: 'Shipping', dash: 0 },
-  { field: 'storage', csv: 'Storage', xlsx: 'Storage', html: 'Storage', dash: 0 },
-  { field: 'total', csv: 'Total', xlsx: 'Total', html: 'Total', dash: 0 },
-  { field: 'returnPostage', csv: 'Return Postage', xlsx: 'Return Postage', html: 'Return Postage', dash: null },
-  { field: 'returnProcessing', csv: 'Return Processing', xlsx: 'Return Processing', html: 'Return Processing', dash: null },
-  { field: 'replacePostage', csv: 'Replace Postage', xlsx: 'Replace Postage', html: 'Replace Postage', dash: null },
-  { field: 'replacePickPack', csv: 'Replace Pick&Pack', xlsx: 'Replace Pick&Pack', html: 'Replace Pick&Pack', dash: null },
+  { field: 'pickPack', header: 'Pick & Pack Fee', dash: 0 },
+  { field: 'additional', header: 'Additional Units', dash: 0 },
+  { field: 'boxCost', header: 'Box Cost', dash: 0 },
+  { field: 'shipping', header: 'Shipping', dash: 0 },
+  { field: 'storage', header: 'Storage', dash: 0 },
+  { field: 'total', header: 'Total', dash: 0 },
+  { field: 'returnPostage', header: 'Return Postage', dash: null },
+  { field: 'returnProcessing', header: 'Return Processing', dash: null },
+  { field: 'replacePostage', header: 'Replace Postage', dash: null },
+  { field: 'replacePickPack', header: 'Replace Pick&Pack', dash: null },
 ] as const;
 
 type MoneyRow = Record<string, number | null>;
@@ -307,7 +314,7 @@ function csvMoneyRows(csv: string, orderNumber: string): MoneyRow[] {
     .map((line) => {
       const cells = line.split(',');
       const row: MoneyRow = {};
-      for (const f of MONEY_FIELDS) row[f.field] = cellNumber(cells[header.indexOf(f.csv)]);
+      for (const f of MONEY_FIELDS) row[f.field] = cellNumber(cells[header.indexOf(f.header)]);
       return row;
     });
 }
@@ -357,7 +364,7 @@ function htmlMoneyRows(html: string, orderNumber: string): MoneyRow[] {
       const cells = [...tr.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => tagText(m[1]!));
       const row: MoneyRow = {};
       for (const f of MONEY_FIELDS) {
-        const text = cells[header.indexOf(f.html)] ?? '';
+        const text = cells[header.indexOf(f.header)] ?? '';
         row[f.field] = text === '—' || text === '' ? f.dash : cellNumber(text);
       }
       return row;
@@ -477,15 +484,15 @@ async function main(): Promise<void> {
         }
       });
       check('the XLSX header row binds every money column by name',
-        headerRowNumber > 0 && MONEY_FIELDS.every((f) => headerIndex.has(f.xlsx)),
-        `missing: ${MONEY_FIELDS.filter((f) => !headerIndex.has(f.xlsx)).map((f) => f.xlsx).join(', ')}`);
+        headerRowNumber > 0 && MONEY_FIELDS.every((f) => headerIndex.has(f.header)),
+        `missing: ${MONEY_FIELDS.filter((f) => !headerIndex.has(f.header)).map((f) => f.header).join(', ')}`);
 
       const orderCol = headerIndex.get('Order #');
       sheet.eachRow((row, n) => {
         if (n <= headerRowNumber || orderCol === undefined) return;
         if (String(row.getCell(orderCol).value ?? '').trim() !== 'PS520-1001') return;
         const parsed: MoneyRow = {};
-        for (const f of MONEY_FIELDS) parsed[f.field] = cellNumber(row.getCell(headerIndex.get(f.xlsx)!).value);
+        for (const f of MONEY_FIELDS) parsed[f.field] = cellNumber(row.getCell(headerIndex.get(f.header)!).value);
         xlsxRows.push(parsed);
       });
     }
@@ -515,7 +522,7 @@ async function main(): Promise<void> {
       });
       if (totalsRowNumber) {
         const totalsRow = sheet.getRow(totalsRowNumber);
-        for (const header of ['Box Cost', 'Qty', 'Pick & Pack', 'Addl Units', 'Shipping', 'Storage', 'Total']) {
+        for (const header of ['Box Cost', 'Qty', 'Pick & Pack Fee', 'Additional Units', 'Shipping', 'Storage', 'Total']) {
           const idx = headerIndex.get(header);
           if (idx === undefined) { totalsIssues.push(`${header}: no such column`); continue; }
           const cell = totalsRow.getCell(idx).value as { formula?: string } | null;
@@ -531,6 +538,26 @@ async function main(): Promise<void> {
     check('the XLSX carries a Totals row', totalsRowNumber > 0, `header row=${headerRowNumber}`);
     check('EVERY XLSX totals-row formula sums its OWN column, not a neighbour',
       totalsRowNumber > 0 && totalsIssues.length === 0, totalsIssues.join(' | '));
+
+    // ── THE OPERATOR'S REQUIREMENT: one invoice, one shape, whichever button you press ──
+    // "it must always the same data same all what ever export/invoce, excel or CSV."
+    // The three renderers used to own three column lists and had drifted into different
+    // columns, in a different order, under different names. They now derive from one contract;
+    // this asserts that on the RENDERED artifacts, not on the contract they were built from —
+    // a shared constant proves nothing if a renderer stops using it.
+    const csvHeaderRow = csv.replace(/^﻿/, '').split('\r\n')[0]!.split(',')
+      .map((h) => h.replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const htmlHeaderRow = [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => tagText(m[1]!));
+    const xlsxHeaderRow = sheet && headerRowNumber
+      ? (sheet.getRow(headerRowNumber).values as unknown[])
+        .slice(1).map((v) => (v == null ? '' : String(v).trim()))
+      : [];
+    check('the CSV and the operator HTML carry IDENTICAL columns, in identical order',
+      JSON.stringify(csvHeaderRow) === JSON.stringify(htmlHeaderRow),
+      `csv:  ${csvHeaderRow.join(' | ')}\n       html: ${htmlHeaderRow.join(' | ')}`);
+    check('the XLSX carries those same columns, in that same order',
+      JSON.stringify(xlsxHeaderRow) === JSON.stringify(csvHeaderRow),
+      `xlsx: ${xlsxHeaderRow.join(' | ')}\n       csv:  ${csvHeaderRow.join(' | ')}`);
 
     const csvRows = csvMoneyRows(csv, 'PS520-1001');
     const htmlRows = htmlMoneyRows(html, 'PS520-1001');
@@ -653,7 +680,7 @@ async function main(): Promise<void> {
     const columnSum = (field: string) => allCsvRows.reduce((sum, r) => sum + (r[field] ?? 0), 0);
     const footIssues: string[] = [];
     for (const [header, field] of [
-      ['Box Cost', 'boxCost'], ['Pick & Pack', 'pickPack'], ["Add'l Units", 'additional'],
+      ['Box Cost', 'boxCost'], ['Pick & Pack Fee', 'pickPack'], ['Additional Units', 'additional'],
       ['Shipping', 'shipping'], ['Storage', 'storage'], ['Total', 'total'],
     ] as const) {
       const text = footer.get(header);

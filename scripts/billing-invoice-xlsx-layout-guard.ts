@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { INVOICE_COLUMN_HEADERS } from '../src/routes/billing-invoice-columns';
 import ExcelJS from 'exceljs';
 import {
   INVOICE_XLSX_LEFT_ALIGNMENT,
@@ -130,32 +131,63 @@ const xlsxStart = billingRoute.indexOf('async function renderInvoiceXlsx(');
 const xlsxEnd = billingRoute.indexOf("app.get('/invoice.xlsx'", xlsxStart);
 const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? billingRoute.slice(xlsxStart, xlsxEnd) : '';
 assert.match(xlsxRenderer, /workbook\.addWorksheet\('Invoice'/, 'XLSX export must create one Invoice sheet');
-const expectedHeaders = [
-  "header: 'Order #'",
-  'header: INVOICE_XLSX_SHIP_DATE_HEADER',
-  "header: 'Carrier'",
-  "header: 'Item Name'",
-  "header: 'SKU'",
-  "header: 'Qty'",
-  "header: 'Pick & Pack'",
-  "header: 'Addl Units'",
-  "header: 'Box Cost'",
-  "header: 'Box Size'",
-  "header: 'Shipping'",
-  "header: 'Storage'",
-  // Repointed 2026-08-04. This expected "header: 'Fulfillment Fee'". The column
-  // was re-labelled to 'Total' in the export while KEEPING key 'fulfillmentFee'
-  // (routes/billing.ts:2398), so the data binding never moved -- only the
-  // operator-visible label. The CSV owner agrees (billing-invoice-csv.ts:64).
-  // Nothing about the money changed; the guard was pinned to the old wording.
-  "header: 'Total'",
-];
-let lastHeaderIndex = -1;
-for (const header of expectedHeaders) {
-  const index = xlsxRenderer.indexOf(header);
-  assert.ok(index > lastHeaderIndex, `XLSX Invoice headers must include ${header} in screenshot order`);
-  lastHeaderIndex = index;
-}
+// COLUMN ORDER IS NO LONGER PINNED AS SOURCE TEXT HERE.
+//
+// This used to scrape `header: '...'` literals out of renderInvoiceXlsx and require them in a
+// fixed order. That list is gone: all three invoice artifacts now derive their columns from one
+// contract (billing-invoice-columns.ts), which is what stopped the HTML, XLSX and CSV carrying
+// different columns, in a different order, under different names.
+//
+// Pinning source literals here would recreate the problem — a fourth place where the column
+// order appears to be decided, drifting from the owner the moment anyone edits it. So assert
+// the DERIVATION, and assert the ORDER against the contract itself. The rendered header rows of
+// all three documents are compared against each other by test:ps-520-invoice-routes-pg17.
+assert.match(
+  xlsxRenderer,
+  /invoice\.columns = INVOICE_COLUMNS\.map/,
+  'the Invoice sheet must render the shared column contract, not its own hand-written list',
+);
+assert.doesNotMatch(
+  xlsxRenderer,
+  /\{\s*header:\s*'[^']+',\s*key:/,
+  'a hand-written column literal reintroduces the second source of truth this replaced',
+);
+// The totals row addresses its SUM() ranges by spreadsheet column letter, and billing.ts warns
+// that a stale letter "does not error — it silently sums the neighbouring column". Deriving the
+// letter is what made reordering safe, so a hand-typed one must not come back.
+assert.doesNotMatch(
+  xlsxRenderer,
+  /formula:\s*`SUM\([A-Z]\$\{/,
+  'totals-row column letters must be derived via xlsxColumnLetter(invoiceColumnIndex(key))',
+);
+assert.match(xlsxRenderer, /sumOf\('fulfillmentFee'\)/, 'the totals row must sum by column KEY');
+assert.deepEqual(
+  [...INVOICE_COLUMN_HEADERS],
+  [
+    'Billing / Activity Date (Los Angeles)',
+    'Order #',
+    'SKUs',
+    'Box Size',
+    'Box Cost',
+    'Qty',
+    'Pick & Pack Fee',
+    'Additional Units',
+    'Shipping',
+    'Storage',
+    'Total',
+    'Shipment #',
+    'Destination',
+    'Return Postage',
+    'Return Processing',
+    'Replace Postage',
+    'Replace Pick&Pack',
+    // Appended LAST. New columns go on the END — several guards pin invoice cells by position
+    // and the totals row addresses columns by letter.
+    'Carrier',
+    'Item Name',
+  ],
+  'the shared invoice column order changed — update every consumer deliberately, never casually',
+);
 assert.match(xlsxRenderer, /itemName:\s*invoiceOneLineCell\(d\.item_names\)/, 'Invoice sheet must flatten item names to one readable cell');
 assert.match(xlsxRenderer, /sku:\s*invoiceOneLineCell\(d\.skus\)/, 'Invoice sheet must flatten SKUs to one readable cell');
 assert.doesNotMatch(xlsxRenderer, /skus:\s*d\.skus\s*\?\?\s*''/, 'Invoice sheet must not export raw multiline SKU text');

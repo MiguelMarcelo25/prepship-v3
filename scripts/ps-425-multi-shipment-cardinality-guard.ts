@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { INVOICE_COLUMNS } from '../src/routes/billing-invoice-columns';
 import {
   decideShipmentVoidLifecycle,
   SHIPMENT_BILLING_CARDINALITY,
@@ -62,9 +63,15 @@ assert.ok(invoiceGroupBy.includes('b.order_id') && invoiceGroupBy.includes('b.sh
 // while the row count silently disagrees with the Billing table for the same period.
 assert.ok(invoiceGroupBy.includes('b.return_id'),
   'PS-488 M3: the invoice must group per return event');
-assert.match(route, /<th>Shipment #<\/th>/);
-assert.match(route, /header: 'Shipment #', key: 'shipmentId'/);
-assert.match(csv, /'Shipment #'/);
+// The Shipment # column is no longer declared three times, once per renderer. All three
+// invoice artifacts derive their columns from one contract (billing-invoice-columns.ts), which
+// is what stopped the HTML, XLSX and CSV carrying different columns under different names. So
+// assert the column exists ONCE, in the owner every renderer reads, rather than re-pinning a
+// literal <th> and an inline XLSX entry that no longer exist.
+assert.ok(
+  INVOICE_COLUMNS.some((column) => column.key === 'shipmentId' && column.header === 'Shipment #'),
+  'the shared invoice column contract must carry Shipment #',
+);
 assert.match(csv, /row\.shipment_id == null/);
 
 assert.match(labels, /voidOrderShipmentLifecycleInTransaction\(tx,/);

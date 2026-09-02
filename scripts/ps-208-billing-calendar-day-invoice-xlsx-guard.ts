@@ -152,12 +152,31 @@ assert.ok(routes.includes("import('exceljs')"),
   'XLSX renderer must lazy-import exceljs');
 assert.ok(routes.includes("state: 'frozen'"),
   'Invoice sheet must freeze the header row');
-assert.ok(routes.includes('SUM(M${first}:M${last})'),
-  'Invoice totals row must use real SUM formulas for Fulfillment Fee');
+// The totals row still uses real SUM formulas, but its column letters are DERIVED from each
+// column's position in the shared invoice contract rather than typed. billing.ts had warned for
+// two tickets that a stale letter "does not error — it silently sums the neighbouring column",
+// and PS-505 had already been forced to re-letter all seven once; pinning 'M' here re-created
+// that trap and would have blocked unifying the three exports onto one column list.
+assert.ok(routes.includes("fulfillmentFee: sumOf('fulfillmentFee')"),
+  'Invoice totals row must SUM Fulfillment Fee, addressed by column key');
+assert.ok(/xlsxColumnLetter\(invoiceColumnIndex\(key\)/.test(routes),
+  'totals-row SUM letters must be derived from the column contract, never typed by hand');
 assert.ok(routes.includes('invoiceBillingActivityDateCell('),
   'XLSX invoice rows must preserve both effective billing and actual activity dates');
-assert.ok(routes.includes('INVOICE_XLSX_SHIP_DATE_HEADER'),
-  'XLSX invoice must use the date-only Ship Date header');
+// The XLSX header label is no longer XLSX-specific: all three artifacts share one column
+// contract, so the sheet carries the same 'Billing / Activity Date (Los Angeles)' header the
+// HTML and CSV always used. What this check actually protects is the CELL staying date-only,
+// which invoiceBillingActivityDateCell above (not the time-bearing helper) already guarantees.
+// Scoped to the XLSX renderer: the time-bearing helper is CORRECT in the HTML invoice, so an
+// unscoped search here fails on the wrong document.
+{
+  const xlsxStart = routes.indexOf('async function renderInvoiceXlsx(');
+  const xlsxEnd = routes.indexOf("app.get('/invoice.xlsx'", xlsxStart);
+  const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? routes.slice(xlsxStart, xlsxEnd) : '';
+  assert.ok(xlsxRenderer.length > 0, 'could not locate renderInvoiceXlsx to scope the date-cell check');
+  assert.ok(!xlsxRenderer.includes('invoiceShipDateTimeCell('),
+    'the XLSX date cell must stay date-only — it must not adopt the time-bearing helper');
+}
 assert.ok(!routes.includes('excelDayCell'),
   'XLSX invoice must not revive Date-object day cells');
 assert.ok(routes.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),

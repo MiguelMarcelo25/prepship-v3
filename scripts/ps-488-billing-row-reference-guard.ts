@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { INVOICE_COLUMNS } from '../src/routes/billing-invoice-columns';
 import { billingRowIdentity } from '../src/services/billing-row-reference';
 import { toBillingDetailOrderRows } from '../src/services/billing-detail-row-sot';
 
@@ -403,8 +404,22 @@ check('the Billing table renders backend values and computes none of them', () =
 // ── AC-6 STOPGAP: return money on the invoice export ────────────────────────
 check('the invoice xlsx carries Return Postage and Return Processing', () => {
   const billing = readFileSync('src/routes/billing.ts', 'utf8');
-  assert.ok(/header: 'Return Postage'/.test(billing));
-  assert.ok(/header: 'Return Processing'/.test(billing));
+  // Same move this check already made once for PS-517, for the same reason. The two column
+  // headers are no longer literals in this file: all three invoice artifacts derive their
+  // columns from ONE contract (billing-invoice-columns.ts), which is what stopped the HTML,
+  // XLSX and CSV carrying different columns under different names. Pinning the literals here
+  // would again assert the opposite of what the repo wants — failing the build for removing a
+  // duplicated list. Assert the columns exist in the owner the exporter reads.
+  assert.ok(
+    INVOICE_COLUMNS.some((c) => c.key === 'returnPostage' && c.header === 'Return Postage'),
+    'the shared invoice column contract must carry Return Postage',
+  );
+  assert.ok(
+    INVOICE_COLUMNS.some((c) => c.key === 'returnProcessing' && c.header === 'Return Processing'),
+    'the shared invoice column contract must carry Return Processing',
+  );
+  assert.ok(/invoice\.columns = INVOICE_COLUMNS\.map/.test(billing),
+    'the XLSX export must render that contract rather than its own column list');
   // Both vocabularies, or frozen rows carrying the old spelling export as 0.00.
   //
   // PS-517 moved the spellings OUT of this file and into the one vocabulary owner, so pinning

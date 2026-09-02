@@ -139,11 +139,12 @@ import {
 import { renderInvoiceCsv } from './billing-invoice-csv';
 import {
   INVOICE_SHIP_DATE_HEADER,
-  INVOICE_XLSX_SHIP_DATE_HEADER,
   invoiceBillingActivityDateCell,
   invoiceOneLineCell,
   invoiceShipDateTimeCell,
 } from './billing-invoice-text';
+// The ONE column contract the HTML, XLSX and CSV all render. See billing-invoice-columns.ts.
+import { INVOICE_COLUMNS, INVOICE_COLUMN_HEADERS, invoiceColumnIndex, xlsxColumnLetter } from './billing-invoice-columns';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
 import { invoiceCarrierCell } from './billing-invoice-xlsx-row';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
@@ -2650,6 +2651,26 @@ async function billingInvoiceData(
 // template (fmt / >0 dash guards / `|| grandTotal` fallbacks / escHtml call sites kept verbatim;
 // the guard-pinned `const totalQty = baseQty + addlQty`, `<th class="num">Qty</th>`, and addl-fee
 // ternary stay in-file). `generated` (Date.now()) is computed once per render, same as before.
+/**
+ * The invoice table's header cells, from the shared column contract.
+ *
+ * A FUNCTION, and built by concatenation, on purpose. Inlining this as a nested template
+ * literal inside renderInvoiceHtml's own template closes that template early — which is the
+ * defect class that took all three invoice routes down for ~6 hours (PS-519, and typecheck
+ * exits 0 on the SQL variant of it). Keeping it out here means the loop can never be
+ * accidentally nested.
+ */
+function invoiceHeaderCellsHtml(): string {
+  return INVOICE_COLUMNS
+    .map((column, index) => {
+      const cls = index === 0
+        ? ' class="ship-date"'
+        : column.money ? ' class="num"' : '';
+      return '        <th' + cls + '>' + escHtml(column.header) + '</th>';
+    })
+    .join('\n');
+}
+
 export function renderInvoiceHtml(args: {
   clientName: string;
   /** PS-208: the operator-picked calendar days (plain YYYY-MM-DD), not instants. */
@@ -2766,6 +2787,11 @@ export function renderInvoiceHtml(args: {
         <td class="num">${returnProcessingCell === null ? '—' : fmt(returnProcessingCell)}</td>
         <td class="num">${replacePostageAmt > 0 ? fmt(replacePostageAmt) : '—'}</td>
         <td class="num">${replacePickPackAmt > 0 ? fmt(replacePickPackAmt) : '—'}</td>
+        <!-- Appended LAST, matching the shared column contract. The workbook carried Carrier
+             and Item Name and this document did not, so one invoice showed different columns
+             depending on which button the operator pressed. Same helpers the XLSX uses. -->
+        <td>${escHtml(invoiceCarrierCell(d.carrier_code))}</td>
+        <td>${escHtml(invoiceOneLineCell(d.item_names))}</td>
       </tr>`;
     })
     .join('');
@@ -2850,33 +2876,17 @@ export function renderInvoiceHtml(args: {
   </div>
   ${waiverNote ? `<div class="waiver-note">${escHtml(waiverNote)}</div>` : ''}
   <table>
+    <!-- DERIVED from the shared column contract, like the XLSX sheet and the CSV. This row
+         used to be hand-written, which is how the three documents came to carry different
+         columns under different names. The first column keeps its ship-date class for the
+         width the layout guard pins; money columns are right-aligned from the contract's own
+         money flag rather than from a second hand-maintained list.
+         NOTE: built by concatenation, NOT a nested template literal, and this comment carries
+         no backticks — either one closes the enclosing template early. PS-519 took the invoice
+         routes down for ~6h on exactly that. -->
     <thead>
       <tr>
-        <th class="ship-date">${escHtml(INVOICE_SHIP_DATE_HEADER)}</th>
-        <th>Order #</th>
-        <th>SKU(s)</th>
-        <th>Box Size</th>
-        <th class="num">Box Cost</th>
-        <th class="num">Qty</th>
-        <th class="num">Pick &amp; Pack</th>
-        <th class="num">Add'l Units</th>
-        <th class="num">Shipping</th>
-        <th class="num">Storage</th>
-        <th class="num">Total</th>
-        <th>Shipment #</th>
-        <!-- PS-490: appended LAST on purpose. ps-425 and the layout guards pin invoice
-             cells by POSITION, so inserting a column earlier shifts what they read. -->
-        <th>Destination</th>
-        <!-- PS-488 M3: appended last for the same reason. The XLSX sheet and the CSV both
-             carry these two columns; the HTML invoice did not, so the operator-facing
-             document showed a return row's Total with no way to see what it was made of —
-             and no way at all to tell an absent fee from a $0.00 one. -->
-        <th class="num">Return Postage</th>
-        <th class="num">Return Processing</th>
-        <!-- PS-513: appended last (position-pinned invoice), like the return columns above. A
-             replacement row's Total previously had no column to show its re-ship money. -->
-        <th class="num">Replace Postage</th>
-        <th class="num">Replace Pick&amp;Pack</th>
+${invoiceHeaderCellsHtml()}
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -2905,6 +2915,11 @@ export function renderInvoiceHtml(args: {
         <td></td>
         <!-- PS-513: two more empty footer cells for the appended Replace columns, empty for the
              same reason as the return columns — a breakdown OF the Total, not an addition. -->
+        <td></td>
+        <td></td>
+        <!-- Carrier and Item Name: appended with the shared column contract. Not money, so
+             nothing to total — but the cells must exist or every total left of them would sit
+             under the wrong heading. PS-505 records exactly that failure. -->
         <td></td>
         <td></td>
       </tr>
@@ -2960,49 +2975,21 @@ export async function renderInvoiceXlsx(args: {
   const invoice = workbook.addWorksheet('Invoice');
   invoice.views = [{ state: 'frozen', ySplit: 1 }];
   // PS-425: one operator-facing row per frozen shipment identity.
-  invoice.columns = [
-    { header: 'Order #', key: 'orderNumber', width: 12 },
-    { header: INVOICE_XLSX_SHIP_DATE_HEADER, key: 'shipDate', width: 12 },
-    { header: 'Carrier', key: 'carrier', width: 12 },
-    { header: 'Item Name', key: 'itemName', width: 36 },
-    { header: 'SKU', key: 'sku', width: 30 },
-    { header: 'Qty', key: 'qty', width: 8 },
-    { header: 'Pick & Pack', key: 'pickPackFee', width: 12, style: { numFmt: NUMBER_FMT } },
-    { header: 'Addl Units', key: 'additional', width: 12, style: { numFmt: NUMBER_FMT } },
-    // PS-217: billed box cost is the package_cost line value; it is displayed
-    // separately, already included in Fulfillment Fee.
-    { header: 'Box Cost', key: 'boxCost', width: 10, style: { numFmt: NUMBER_FMT } },
-    { header: 'Box Size', key: 'boxSize', width: 14 },
-    { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: NUMBER_FMT } },
-    { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
-    { header: 'Total', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
-    { header: 'Shipment #', key: 'shipmentId', width: 14 },
-    // PS-488 AC-6 — appended LAST on purpose. ps-425 pins invoice cells by POSITION, so
-    // inserting anywhere earlier shifts what existing assertions read.
-    //
-    // No longer a stopgap. These were computed by THIS query while the invoice was still
-    // a second, independent read path; as of M3 return rows are produced by the canonical
-    // DTO and appended by reconcileInvoiceRows, so these two columns now carry the same
-    // owner's numbers the Billing table shows rather than a parallel derivation that
-    // merely agreed. The remaining per-order aggregate stays for OUTBOUND rows, where it
-    // owns the frozen shipment grain the DTO does not model.
-    //
-    // Type is still absent from this sheet: the row-type concept now exists (returns are
-    // their own rows), but adding a column is a visible layout change, not a correctness
-    // one, and this ticket is not authorised to redesign the invoice.
-    { header: 'Return Postage', key: 'returnPostage', width: 14, style: { numFmt: NUMBER_FMT } },
-    { header: 'Return Processing', key: 'returnProcessing', width: 16, style: { numFmt: NUMBER_FMT } },
-    // PS-490: appended LAST for the same position-pinning reason as the AC-6 columns
-    // above. Unlike Type, Destination does NOT need the DTO cutover — it is a property of
-    // the order's destination country, which this per-order query can read directly, and
-    // it is classified by the canonical owner rather than re-derived here.
-    { header: 'Destination', key: 'destination', width: 14 },
-    // PS-513: appended LAST, after Destination — the same position-pinning rule the AC-6 return
-    // columns and the PS-490 Destination column already follow. Replacement re-ship money, its
-    // own columns; a replacement row's Total previously had no column here to break it down.
-    { header: 'Replace Postage', key: 'replacePostage', width: 15, style: { numFmt: NUMBER_FMT } },
-    { header: 'Replace Pick&Pack', key: 'replacePickPack', width: 17, style: { numFmt: NUMBER_FMT } },
-  ];
+  //
+  // DERIVED, not hand-listed. This sheet used to carry its own column list, and it had drifted
+  // furthest of the three: it led with Order # instead of the date, put Box Cost before Box
+  // Size (the reverse of the HTML and CSV), placed Destination AFTER the return columns, and
+  // spelled four labels differently. An operator comparing the Excel export against the invoice
+  // was comparing two differently-shaped documents. See billing-invoice-columns.ts.
+  //
+  // The old inline list is gone on purpose: leaving it would leave a fourth place where the
+  // column order appears to be decided.
+  invoice.columns = INVOICE_COLUMNS.map((column) => ({
+    header: column.header,
+    key: column.key,
+    width: column.width,
+    ...(column.money ? { style: { numFmt: NUMBER_FMT } } : {}),
+  }));
   invoice.getRow(1).font = { bold: true };
   for (const d of details) {
     // Per user override unlock shipped data on 2026-07-14 (Audit B-9):
@@ -3080,23 +3067,32 @@ export async function renderInvoiceXlsx(args: {
   if (details.length) {
     const first = 2;
     const last = first + details.length - 1;
+    // COLUMN LETTERS ARE DERIVED, NEVER TYPED.
+    //
+    // These used to be hard-coded (A=Order# B=ShipDate C=Carrier ... M=Total), with a comment
+    // warning that "a stale letter here does not error — it silently sums the neighbouring
+    // column". PS-505 had already been forced to shift every one of them once, and moving this
+    // sheet onto the shared column contract would have silently broken all seven again:
+    // the totals row would have reported one column's sum under another's heading.
+    //
+    // Deriving the letter from the column's own key removes the failure mode instead of
+    // documenting it. invoiceColumnIndex throws on an unknown key, so a renamed column is a
+    // loud startup error rather than a quietly wrong total.
+    const sumOf = (key: string) => {
+      const letter = xlsxColumnLetter(invoiceColumnIndex(key) + 1);
+      return { formula: `SUM(${letter}${first}:${letter}${last})` };
+    };
     const totalsRow = invoice.addRow({
       itemName: `Totals - ${totals.orderCount} orders`,
       // Box Cost is display-only here; it is already inside each row's
       // Fulfillment Fee, so it is never added a second time.
-      // PS-505: every letter moved one LEFT. PS-393 inserted Status as column B and
-      // shifted these right; removing it shifts them back. A stale letter here does not
-      // error — it silently sums the neighbouring column, so the totals row would have
-      // reported Box Size under Box Cost and Shipment # under Total.
-      // A=Order# B=ShipDate C=Carrier D=ItemName E=SKU F=Qty G=Pick&Pack H=Addl
-      // I=BoxCost J=BoxSize K=Shipping L=Storage M=Total N=Shipment#
-      boxCost: { formula: `SUM(I${first}:I${last})` },
-      qty: { formula: `SUM(F${first}:F${last})` },
-      pickPackFee: { formula: `SUM(G${first}:G${last})` },
-      additional: { formula: `SUM(H${first}:H${last})` },
-      shipping: { formula: `SUM(K${first}:K${last})` },
-      storage: { formula: `SUM(L${first}:L${last})` },
-      fulfillmentFee: { formula: `SUM(M${first}:M${last})` },
+      boxCost: sumOf('boxCost'),
+      qty: sumOf('qty'),
+      pickPackFee: sumOf('pickPackFee'),
+      additional: sumOf('additional'),
+      shipping: sumOf('shipping'),
+      storage: sumOf('storage'),
+      fulfillmentFee: sumOf('fulfillmentFee'),
     });
     totalsRow.font = { bold: true };
   }
