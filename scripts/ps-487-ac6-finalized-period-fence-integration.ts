@@ -5,11 +5,14 @@
  * contacted. Covers Hermes proofs 1-5 and 7 (escaping-order, idempotency, existing-finalized
  * parity, open-period control, half-open boundaries + a mixed range, safety) plus the fail-closed
  * zero-baseline validation. The two-connection concurrency proof (#6) lives in the PG17 test.
+ * Timestamptz fixtures are explicit UTC instants from the billing-day owner and the PGlite session
+ * zone is pinned NON-UTC, so the half-open boundary proof is host-timezone-independent.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
+import { BILLING_LOS_ANGELES_TIME_ZONE, billingDayRange } from '../src/lib/time/billing-day.js';
 
 function migration(path: string): string {
   return readFileSync(path, 'utf8');
@@ -49,6 +52,12 @@ async function main(): Promise<void> {
   process.env.SUPABASE_URL ??= 'https://example.supabase.co';
 
   const pg = new PGlite();
+  // Adversarial DB session zone (the product's own billing DISPLAY zone). PGlite defaults the
+  // session to the host offset (Etc/GMT-8 in Manila, Etc/GMT+7 in Los Angeles), which is what
+  // made this proof host-dependent. Every timestamptz the owner reads or writes is an explicit
+  // instant, so a non-UTC session must change nothing — and a bare date literal creeping back
+  // into a fixture now fails on every host, not only on non-UTC laptops.
+  await pg.exec(`set time zone '${BILLING_LOS_ANGELES_TIME_ZONE}'`);
   await pg.exec(`
     create table clients (id integer primary key, name text not null default 'Test');
     create table orders (id integer primary key, canonical_billing_total numeric(12,2) not null default 0);
@@ -82,19 +91,32 @@ async function main(): Promise<void> {
   await pg.exec(migration('drizzle/0071_billing_weekend_rollforward.sql'));
   await pg.exec(migration('drizzle/0074_billing_current_period_adjustments.sql'));
 
-  // Client 1: an ESCAPING order (91) — a finalized July 1-8 period with NO invoiced line for order
-  // 91. Also a baseline order (90) WITH an invoiced frozen line in the same period, for parity.
+  // Client 1: an ESCAPING order (91) — a finalized July 1-7 period (half-open [07-01, 07-08))
+  // with NO invoiced line for order 91. Also a baseline order (90) WITH an invoiced frozen line
+  // in the same period, for parity.
+  //
+  // The timestamptz fixtures are the EXPLICIT UTC-MIDNIGHT INSTANTS the product itself stores:
+  // finalizeBillingPeriod inserts billingDayRange().fromUtc / .toUtcExclusive verbatim. A bare
+  // '2026-07-01' literal is read in the DB session zone instead, so on a Los Angeles host the
+  // bounds landed 7h late, 'at-start' fell before period_start and 'at-end' before period_end.
+  const PERIOD = billingDayRange('2026-07-01', '2026-07-07');
+  const FROZEN = billingDayRange('2026-07-02', '2026-07-02');
+  if (!PERIOD || !FROZEN) throw new Error('fixture days must parse');
   await pg.exec(`
     insert into clients (id, name) values (1, 'AC-6 client');
     insert into orders (id) values (90), (91), (92);
+  `);
+  await pg.query(`
     insert into billing_line_items
       (client_id, order_id, order_number, ship_date, billing_effective_date, line_type, description, unit_cost, total_cost, invoiced)
-    values
-      (1, 90, 'AC6-90', '2026-07-02', '2026-07-02', 'pick_pack', 'Frozen prep 90', 40, 40, true);
+    values (1, 90, 'AC6-90', $1::timestamptz, $1::timestamptz,
+      'pick_pack', 'Frozen prep 90', 40, 40, true)
+  `, [FROZEN.fromUtc]);
+  await pg.query(`
     insert into billing_finalizations
       (id, client_id, period_start, period_end, line_count, order_count, subtotal, finalized_by)
-    values ('final-jul', 1, '2026-07-01', '2026-07-08', 1, 1, 40, 'test');
-  `);
+    values ('final-jul', 1, $1::timestamptz, $2::timestamptz, 1, 1, 40, 'test')
+  `, [PERIOD.fromUtc, PERIOD.toUtcExclusive]);
 
   const policy = await import('../src/services/billing-finalization-policy.js');
   const database = drizzle(pg, { casing: 'snake_case' });
@@ -103,6 +125,21 @@ async function main(): Promise<void> {
   const NOW = new Date('2026-07-22T18:00:00.000Z');
   let passed = 0;
   const ok = (m: string) => { passed += 1; console.log('ok   ' + m); };
+
+  // ---- fixture integrity: stored bounds are the exact UTC instants under a non-UTC session ---
+  const stored = await pg.query<{ start: string; end: string; tz: string }>(`
+    select extract(epoch from period_start)::bigint::text as start,
+      extract(epoch from period_end)::bigint::text as "end",
+      current_setting('TimeZone') as tz
+    from billing_finalizations where id = 'final-jul'
+  `);
+  const epoch = (iso: string) => String(Date.parse(iso) / 1000);
+  assert.notEqual(stored.rows[0]?.tz, 'UTC', 'the session zone under test must be non-UTC');
+  assert.deepEqual({ start: stored.rows[0]?.start, end: stored.rows[0]?.end },
+    { start: epoch(PERIOD.fromUtc), end: epoch(PERIOD.toUtcExclusive) },
+    'finalized bounds are UTC-midnight instants, not shifted by the session zone');
+  ok(`fixture: [${PERIOD.fromDay}..${PERIOD.toDay}] stored as exact UTC-midnight instants`
+    + ` under session TimeZone=${stored.rows[0]?.tz}`);
 
   // ---- classifier: open vs finalized + half-open boundaries + mixed range -------------------
   const classified = await policy.classifyReturnLinesByFinalization({
