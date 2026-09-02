@@ -196,7 +196,12 @@ check('the invoice header totals owner does NOT re-spell the return vocabulary i
 {
   // A second hand-written list is exactly how return_processing_fee once went missing from
   // one projection while staying in another.
-  const rowStatus = read('src/services/billing-row-status.ts');
+  // PS-521: the vocabulary moved to a dependency-free LEAF (billing-row-status.ts re-exports
+  // it). These checks read the leaf; the check after them holds the old owner to re-exporting.
+  const rowStatus = read('src/services/billing-return-line-types.ts');
+  check('billing-row-status.ts declares no return vocabulary of its own any more (PS-521 leaf)',
+    !/export const BILLING_RETURN_[A-Z_]*LINE_TYPES\s*=\s*\[/.test(read('src/services/billing-row-status.ts'))
+    && /from '\.\/billing-return-line-types'/.test(read('src/services/billing-row-status.ts')));
   check('the return vocabulary is declared ONCE and the predicate derives from it',
     /export const BILLING_RETURN_LINE_TYPES/.test(rowStatus) &&
     /BILLING_RETURN_LINE_TYPES as readonly string\[\]\)\.includes/.test(rowStatus));
@@ -244,7 +249,9 @@ check('the invoice header totals owner does NOT re-spell the return vocabulary i
   // list but not to BILLING_RETURN_LINE_TYPES, its money lands in a named part while dropping
   // out of the return total — the two owners disagreeing in the one way each is blind to.
   const listOf = (name: string): string[] => {
-    const block = rowStatus.match(new RegExp(`${name}[^=]*=\\s*\\[([\\s\\S]*?)\\]`));
+    // PS-521: anchored on the DECLARATION. The leaf's module comment mentions the const names, and
+    // "first mention, then the next \`= [\`" once captured the bare list instead of the aggregate.
+    const block = rowStatus.match(new RegExp(`export const ${name}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
     return block ? [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
   };
   const all = listOf('BILLING_RETURN_LINE_TYPES');

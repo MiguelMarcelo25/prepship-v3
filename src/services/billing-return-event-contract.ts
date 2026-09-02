@@ -29,6 +29,8 @@
  * nothing. Two names for one fact in one table is not a naming preference, it is a
  * divergence that only appears as missing money.
  */
+import { BILLING_RETURN_LINE_TYPES, type BillingReturnLineType } from './billing-return-line-types';
+
 export const RETURN_PROCESSING_LINE_TYPE = 'return_processing_fee';
 export const RETURN_SHIPPING_LINE_TYPE = 'return_postage';
 
@@ -64,11 +66,14 @@ export const CANONICAL_RETURN_WRITE_LINE_TYPES = [
  * What must never happen is one of these appearing on a NEW write. That is what
  * turns a compatibility alias into a second policy owner.
  */
-export const LEGACY_RETURN_READ_ONLY_LINE_TYPES = [
-  'return',
-  'return_label',
-  'return_processing',
-] as const;
+// PS-521: derived from the one vocabulary owner rather than spelled here. Every return
+// spelling that is not one of the two canonical WRITE types is, by definition, legacy. The
+// order follows the owner's list — return, return_label, return_processing — unchanged, and
+// the type guard keeps the element type exact rather than widening it to every spelling.
+export const LEGACY_RETURN_READ_ONLY_LINE_TYPES = BILLING_RETURN_LINE_TYPES.filter(
+  (lineType): lineType is Exclude<BillingReturnLineType, CanonicalReturnWriteLineType> =>
+    !(CANONICAL_RETURN_WRITE_LINE_TYPES as readonly string[]).includes(lineType),
+);
 
 /**
  * PS-488 M2 — every line type that carries RETURN money, canonical or frozen.

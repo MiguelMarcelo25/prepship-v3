@@ -2,10 +2,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { billingLineItems } from '../db/schema/billing';
 import { returnActivityEvents, returns } from '../db/schema/returns';
-import {
-  RETURN_PROCESSING_LINE_TYPE,
-  RETURN_SHIPPING_LINE_TYPE,
-} from './billing-return-event-contract';
+import { BILLING_RETURN_LINE_TYPES } from './billing-return-line-types';
 import {
   RETURN_BILLING_DATE_CORRECTED_EVENT,
   type PersistedReturnDateCorrectionAudit,
@@ -22,14 +19,9 @@ import {
 // and is testable with no database. This one only writes what that one decided; it
 // re-derives nothing and takes no view on whether the correction was allowed.
 
-/** Legacy spellings kept alongside the canonical two, so the gap count cannot miss rows. */
-const RETURN_LINE_TYPES = [
-  RETURN_PROCESSING_LINE_TYPE,
-  RETURN_SHIPPING_LINE_TYPE,
-  'return_processing',
-  'return_label',
-  'return',
-] as const;
+// PS-521: the return spellings come from the one owner. This used to assemble its own list —
+// the two canonical constants plus three legacy strings typed by hand — which was a third copy
+// of the vocabulary and would have missed any spelling added to the owner alone.
 
 export async function applyReturnBillingDateCorrection(input: {
   returnId: number;
@@ -71,7 +63,7 @@ export async function applyReturnBillingDateCorrection(input: {
           and(
             eq(billingLineItems.orderId, ret.orderId),
             isNull(billingLineItems.returnId),
-            inArray(billingLineItems.lineType, [...RETURN_LINE_TYPES]),
+            inArray(billingLineItems.lineType, [...BILLING_RETURN_LINE_TYPES]),
           ),
         );
       unattributedLegacyReturnLines = Number(gap?.n ?? 0);

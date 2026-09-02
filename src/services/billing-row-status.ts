@@ -1,6 +1,11 @@
 import { sql, type SQL } from 'drizzle-orm';
 
 import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
+import {
+  isBillingReturnLineType,
+  isBillingReturnPostageLineType,
+  isBillingReturnProcessingLineType,
+} from './billing-return-line-types';
 
 export type BillingLifecycleStatus =
   | 'fulfilled'
@@ -80,108 +85,28 @@ function normalizedLineTypes(input: BillingRowStatusInput): string[] {
  * and rewriting frozen billing rows is forbidden.
  */
 /**
- * PS-501: the vocabulary itself, exported so SQL and TypeScript cannot drift.
+ * PS-521: the return vocabulary now lives in billing-return-line-types.ts — a dependency-free
+ * LEAF — and is re-exported here so this module's importers do not move. Why it moved: this
+ * file imports isCancelledBillingStatus from billing-cancelled-no-charge.ts, and that file
+ * needs the vocabulary too (a cancelled order must not strip a return charge); importing it
+ * from here was an import cycle, so it kept a private copy — the second owner this vocabulary
+ * exists to end. The predicates below still classify with the same rules; they are the leaf's.
  *
- * The summary's return bucket has to sum exactly the line types this predicate accepts.
- * Re-listing them in a SQL `case` would create a second owner of the same fact, and the
- * failure mode is silent — a spelling present here and missing there drops return money
- * out of the bucket while leaving it in grandTotal, so the row simply stops reconciling.
+ * DOWNSTREAM COUPLING: the Client Portal scrapes and pins the LEAF file now (CP-065 re-pin),
+ * not this one. See the leaf's module comment before restructuring anything there.
  */
-export const BILLING_RETURN_LINE_TYPES = [
-  'return',
-  'return_label',
-  'return_processing',
-  'return_postage',
-  'return_processing_fee',
-] as const;
-
-export function isBillingReturnLineType(lineType: unknown): boolean {
-  const value = normalizedText(lineType)?.toLowerCase();
-  return value != null && (BILLING_RETURN_LINE_TYPES as readonly string[]).includes(value);
-}
-
-/**
- * The same vocabulary as a SQL `in (...)` list, for the return buckets.
- *
- * Lives beside the predicate on purpose. Two callers need this list in SQL — the live
- * billing summary and the cached billing_summary_metrics upsert — and a hand-written
- * `case` in either would be a second owner of the vocabulary. When those disagree the
- * failure is silent: the missing spelling's money stays inside grand_total but lands in no
- * bucket, so the row simply stops reconciling and nothing errors.
- */
-export function billingReturnLineTypesSql(): SQL {
-  return sql`(${sql.join(
-    BILLING_RETURN_LINE_TYPES.map((lineType) => sql`${lineType}`),
-    sql`, `,
-  )})`;
-}
-
-/**
- * PS-488 M3 — which BUCKET a return line belongs to, by canonical and legacy spelling.
- *
- * Exported from the shared owner because three places need the same answer and had been
- * spelling the list out separately: the DTO's metrics, the invoice aggregate's SQL CASE
- * arms, and the presence tracking added for absent-versus-zero. A fourth private copy of
- * this list is exactly how return_processing_fee came to be missing from one in the first
- * place.
- */
-/**
- * DOWNSTREAM COUPLING — the Client Portal SCRAPES these declarations.
- *
- * client-portal-prepship pins this file in contracts/prepship-billing-return-line-types.json
- * and re-derives the vocabulary from it in scripts/prepship-return-vocabulary-parity.mjs.
- * Renaming or restructuring the consts below (or BILLING_RETURN_LINE_TYPES above) means
- * re-pinning that contract in the same breath, or the portal's gate fails on its next re-pin.
- * Nothing else here hints at that, which is why it is written down.
- *
- * PS-517: the SPLIT vocabularies, exported for the same reason BILLING_RETURN_LINE_TYPES is.
- *
- * The predicates below and the invoice DETAIL query's SQL both answer "is this line return
- * postage / processing?", and the SQL used to spell the answer out by hand. That is the second
- * owner the aggregate bucket already learned not to be: a spelling added here and missed there
- * moves money between the two named parts — or out of both — while grand_total stays right, so
- * the row still foots and nothing errors. One list per bucket, consumed by both.
- */
-export const BILLING_RETURN_POSTAGE_LINE_TYPES = ['return_postage', 'return_label'] as const;
-
-export const BILLING_RETURN_PROCESSING_LINE_TYPES = [
-  'return_processing_fee',
-  'return_processing',
-] as const;
-
-export function isBillingReturnPostageLineType(lineType: unknown): boolean {
-  const value = normalizedText(lineType)?.toLowerCase();
-  return value != null && (BILLING_RETURN_POSTAGE_LINE_TYPES as readonly string[]).includes(value);
-}
-
-export function isBillingReturnProcessingLineType(lineType: unknown): boolean {
-  const value = normalizedText(lineType)?.toLowerCase();
-  return value != null
-    && (BILLING_RETURN_PROCESSING_LINE_TYPES as readonly string[]).includes(value);
-}
-
-/**
- * The split vocabularies as SQL `in (...)` lists, for the invoice detail's per-bucket sums and
- * its presence flags.
- *
- * Deliberately NOT case-normalising, exactly like billingReturnLineTypesSql above: these render
- * into existing `b.line_type in (...)` arms, and adding lower() here would change which rows are
- * counted — a money-display change wearing a refactor's clothes. The predicates lowercase because
- * they classify arbitrary input; the SQL matches the rows the SQL has always matched.
- */
-export function billingReturnPostageLineTypesSql(): SQL {
-  return sql`(${sql.join(
-    BILLING_RETURN_POSTAGE_LINE_TYPES.map((lineType) => sql`${lineType}`),
-    sql`, `,
-  )})`;
-}
-
-export function billingReturnProcessingLineTypesSql(): SQL {
-  return sql`(${sql.join(
-    BILLING_RETURN_PROCESSING_LINE_TYPES.map((lineType) => sql`${lineType}`),
-    sql`, `,
-  )})`;
-}
+export {
+  BILLING_RETURN_BARE_LINE_TYPES,
+  BILLING_RETURN_LINE_TYPES,
+  BILLING_RETURN_POSTAGE_LINE_TYPES,
+  BILLING_RETURN_PROCESSING_LINE_TYPES,
+  billingReturnLineTypesSql,
+  billingReturnPostageLineTypesSql,
+  billingReturnProcessingLineTypesSql,
+  isBillingReturnLineType,
+  isBillingReturnPostageLineType,
+  isBillingReturnProcessingLineType,
+} from './billing-return-line-types';
 
 function result(
   status: BillingLifecycleStatus,
