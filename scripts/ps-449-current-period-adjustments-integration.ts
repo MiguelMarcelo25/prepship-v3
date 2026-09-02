@@ -253,17 +253,17 @@ async function main(): Promise<void> {
   `);
   assert.equal(netFinalized.rows[0]?.subtotal, '-10.00', 'net-credit current periods remain finalizable');
 
-  await expectToken('BILLING_ADJUSTMENT_PROJECTION_MISSING', () => pg.exec(`
+  await expectToken('BILLING_ADJUSTMENT_PROJECTION_MISSING', () => pg.query(`
     insert into billing_credit_notes (
       id, finalization_id, client_id, amount, adjustment_kind,
       adjustment_source, posting_version, effective_date,
       billing_policy_version, reason, idempotency_key, created_by
     ) values (
       'orphan-note', 'final-101', 1, 1, 'debit', 'manual',
-      'current_period_v2', '2026-07-22T00:00:00.000Z', 'legacy_calendar_v1',
+      'current_period_v2', $1::timestamptz, 'legacy_calendar_v1',
       'Missing projection', 'orphan-note-key', 'test'
     )
-  `));
+  `, [NET.fromUtc]));
 
   await expectToken('BILLING_ADJUSTMENT_LEGACY_WRITE_DISABLED', () => pg.exec(`
     insert into billing_credit_notes (

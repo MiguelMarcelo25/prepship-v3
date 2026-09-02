@@ -49,12 +49,27 @@ const PERIOD = fixtureDays('2026-07-01', '2026-07-07');
 // Every connection pins a NON-UTC session zone (the product's billing DISPLAY zone), so the proof
 // cannot pass by luck on a UTC server: the owner's SQL must be immune to the session zone, and a
 // bare date literal creeping back into a fixture fails here on every server.
-function connect(url: string): postgres.Sql {
+function pinned(url: string): postgres.Sql {
   return postgres(url, {
     max: 1,
     onnotice: () => {},
     connection: { TimeZone: BILLING_LOS_ANGELES_TIME_ZONE },
   });
+}
+
+// Proof connections are tracked so a thrown assertion still closes them. Otherwise a red proof
+// sat on open sockets until the 60s HANG timer fired and exited 3 instead of reporting itself.
+const PROOF_CONNECTIONS = new Set<postgres.Sql>();
+function connect(url: string): postgres.Sql {
+  const conn = pinned(url);
+  PROOF_CONNECTIONS.add(conn);
+  return conn;
+}
+async function closeProofConnections(): Promise<void> {
+  for (const conn of PROOF_CONNECTIONS) {
+    PROOF_CONNECTIONS.delete(conn);
+    await conn.end({ timeout: 5 }).catch((error: unknown) => console.error('cleanup:', error));
+  }
 }
 
 async function setupSchema(db: postgres.Sql): Promise<void> {
@@ -127,7 +142,9 @@ async function main(): Promise<void> {
   process.env.VERCEL ??= '1';
   process.env.SUPABASE_URL ??= 'https://example.supabase.co';
 
-  const admin = postgres(ADMIN, { max: 1, onnotice: () => {} });
+  // Only creates, version-checks and drops the throwaway database; pinned like every other
+  // connection so no session in this proof runs under the server default zone.
+  const admin = pinned(ADMIN);
   const [ver] = await admin<{ v: number }[]>`select current_setting('server_version_num')::int as v`;
   const v = Number(ver?.v ?? 0);
   if (v < 170000 || v >= 180000) {
@@ -140,6 +157,21 @@ async function main(): Promise<void> {
   const base = ADMIN.replace(/\/[^/]*$/, `/${dbName}`);
   process.env.DATABASE_URL = base;
 
+  try {
+    const passed = await runProofs(base);
+    console.log(`\nPASS PS-487 AC-6 concurrency (PostgreSQL ${v}) — ${passed}/${passed} checks`);
+  } finally {
+    // Runs on PASS and on a thrown assertion alike: disarm the HANG timer, close every proof
+    // connection, drop the throwaway database, release the admin connection.
+    clearTimeout(hardTimeout);
+    await closeProofConnections();
+    await admin.unsafe(`drop database "${dbName}" with (force)`)
+      .catch((error: unknown) => console.error('cleanup:', error));
+    await admin.end({ timeout: 5 }).catch((error: unknown) => console.error('cleanup:', error));
+  }
+}
+
+async function runProofs(base: string): Promise<number> {
   const setup = connect(base);
   await setupSchema(setup);
   const [stored] = await setup<{ start: string; end: string; tz: string }[]>`
@@ -205,13 +237,7 @@ async function main(): Promise<void> {
   }
   assert.ok(failedClosed, 'a zero-baseline candidate whose finalization is not locked must fail closed');
   ok('fail-closed on real PG17: a zero-baseline return whose finalization this run does not lock is REFUSED');
-
-  clearTimeout(hardTimeout);
-  await connA.end({ timeout: 5 });
-  await connB.end({ timeout: 5 });
-  await admin.unsafe(`drop database "${dbName}" with (force)`);
-  await admin.end({ timeout: 5 });
-  console.log(`\nPASS PS-487 AC-6 concurrency (PostgreSQL ${v}) — ${passed}/${passed} checks`);
+  return passed;
 }
 
 main().catch((error) => {
