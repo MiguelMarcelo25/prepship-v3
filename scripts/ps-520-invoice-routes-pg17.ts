@@ -84,6 +84,24 @@ const money = {
   replacePostage: 5.75, replacePickPack: 2.5,
 };
 
+/**
+ * Money that MUST NOT reach the customer, and the two rules that stop it.
+ *
+ * Measured on HUGRAB's real August 2026 invoice: the Client Portal, which had no copy of
+ * either rule, billed the customer for 8 CANCELLED orders ($27.00) and a DUPLICATE COPY of
+ * order 3629 ($3.50) — $30.50 over, and one order too many (581 vs 580). Nothing executed
+ * either rule end to end, so nothing would have caught it re-breaking here either.
+ *
+ * Distinctive amounts on purpose: a substring search for them must find NOTHING, and values
+ * like 77.77 cannot be confused with a legitimate figure elsewhere in the document.
+ */
+const suppressed = {
+  /** A cancelled order's fees are zeroed, but the ORDER still exists (rows stay, amounts go). */
+  cancelledPickPack: 77.77,
+  /** One of two copies of one order number. PS-491 case B: NO copy carries paid shipping. */
+  duplicateCopyPickPack: 11.11,
+};
+
 async function seed(sql: postgres.Sql): Promise<{ clientId: number; otherClientId: number }> {
   const [client] = await sql`
     insert into clients (name, active, is_test) values ('PS-520 Invoice Client', true, false) returning id`;
@@ -161,6 +179,39 @@ async function seed(sql: postgres.Sql): Promise<{ clientId: number; otherClientI
   //
   // (Both facts above were learned from the database rejecting the seed, which is the whole
   // argument for executing against real PostgreSQL rather than a fixture DTO.)
+
+  // ── Money the invoice must REFUSE to charge ─────────────────────────────────
+  //
+  // 1. A CANCELLED order. cancelled-no-charge zeroes its fees while the order itself remains,
+  //    so the order COUNT is unchanged and only the money disappears.
+  const [cancelled] = await sql`
+    insert into orders (order_number, order_status, client_id, ship_to_name)
+    values ('PS520-CANCELLED', 'cancelled', ${clientId}, 'PS-520 Cancelled Customer') returning id`;
+  await sql`
+    insert into billing_line_items
+      (client_id, order_id, order_number, ship_date, line_type, description, qty, unit_cost, total_cost)
+    values (${clientId}, ${Number(cancelled!.id)}, 'PS520-CANCELLED', ${SHIP_AT},
+            'pick_pack', 'cancelled order pick_pack', 1,
+            ${suppressed.cancelledPickPack}, ${suppressed.cancelledPickPack})`;
+
+  // 2. A DUPLICATE ORDER NUMBER — two `orders` rows for one order number, PS-491 case B:
+  //    NEITHER copy carries paid shipping, so only pick/pack was duplicated. Exactly one copy
+  //    is authoritative; the other must be charged nothing AND must not inflate the order
+  //    count. Both copies are seeded identically so the test cannot pass by accident of which
+  //    one the classifier happens to pick.
+  const dupIds: number[] = [];
+  for (const suffix of ['a', 'b']) {
+    const [dup] = await sql`
+      insert into orders (order_number, order_status, client_id, ship_to_name)
+      values ('PS520-DUPLICATE', 'shipped', ${clientId}, ${`PS-520 Duplicate ${suffix}`}) returning id`;
+    dupIds.push(Number(dup!.id));
+    await sql`
+      insert into billing_line_items
+        (client_id, order_id, order_number, ship_date, line_type, description, qty, unit_cost, total_cost)
+      values (${clientId}, ${Number(dup!.id)}, 'PS520-DUPLICATE', ${SHIP_AT},
+              'pick_pack', ${`duplicate copy ${suffix} pick_pack`}, 1,
+              ${suppressed.duplicateCopyPickPack}, ${suppressed.duplicateCopyPickPack})`;
+  }
 
   // A second client's billing, so a scoped caller proves it cannot read across the boundary.
   const [otherOrder] = await sql`
@@ -574,9 +625,12 @@ async function main(): Promise<void> {
     // the seed). The arm still executes on every request; it simply has no row to sum.
 
     // ── The totals the customer actually reads ──────────────────────────────
+    // Plus ONE authoritative duplicate copy, and nothing at all from the cancelled order —
+    // if either rule regressed, this figure is the first thing that moves.
     const grandTotal = money.pickPack + money.additional + money.packageCost + money.shipping
       + money.storage + money.returnPostage + money.returnProcessingZero
-      + money.replacePostage + money.replacePickPack;
+      + money.replacePostage + money.replacePickPack
+      + suppressed.duplicateCopyPickPack;
     check(`the HTML invoice totals to the seeded money (${grandTotal.toFixed(2)})`,
       htmlMoney.has(grandTotal.toFixed(2)),
       `expected ${grandTotal.toFixed(2)} among: ${[...htmlMoney].join(' ')}`);
@@ -591,7 +645,12 @@ async function main(): Promise<void> {
     // Storage total and both stayed green, because 8.25 and 2.00 are still somewhere on the page.
     // Foot the footer against the parsed rows instead.
     const footer = htmlFooterCells(html);
-    const columnSum = (field: string) => csvSorted.reduce((sum, r) => sum + (r[field] ?? 0), 0);
+    // Foot against EVERY billed row, not just the seeded order's three. The invoice also carries
+    // the cancelled order (at zero) and the one authoritative duplicate copy, and the footer
+    // totals them too — comparing a whole-table footer against a subset of rows would fail for a
+    // reason that has nothing to do with the footer being wrong.
+    const allCsvRows = csvMoneyRows(csv, '');
+    const columnSum = (field: string) => allCsvRows.reduce((sum, r) => sum + (r[field] ?? 0), 0);
     const footIssues: string[] = [];
     for (const [header, field] of [
       ['Box Cost', 'boxCost'], ['Pick & Pack', 'pickPack'], ["Add'l Units", 'additional'],
@@ -607,6 +666,38 @@ async function main(): Promise<void> {
     }
     check('EVERY HTML footer total equals the sum of the column above it',
       footIssues.length === 0, footIssues.join(' | '));
+
+    // ── The two money rules the Client Portal did not have ──────────────────
+    // Both are asserted on the RENDERED DOCUMENT, not on a service return value, because the
+    // customer-visible failure was a document that charged for things the backend had already
+    // decided not to charge for.
+    const cancelledAmount = suppressed.cancelledPickPack.toFixed(2);
+    check('a CANCELLED order contributes no money to the invoice',
+      !html.includes(cancelledAmount) && !csv.includes(cancelledAmount)
+      && !xlsxSorted.some((r) => Object.values(r).includes(suppressed.cancelledPickPack)),
+      `${cancelledAmount} must appear in no format`);
+    // ...but the order itself is still a real order. cancelled-no-charge zeroes the MONEY, it
+    // does not delete history — conflating the two would hide a cancellation from the customer.
+    check('the cancelled order still appears on the invoice, at zero',
+      html.includes('PS520-CANCELLED') && csv.includes('PS520-CANCELLED'));
+
+    // The duplicate: BOTH copies stay visible, but only one is charged.
+    //
+    // Suppression zeroes the copy, it does not delete the row — and that is the right design:
+    // the suppressed copy is rendered with every money cell at 0 and its reference labelled
+    // "(Duplicate of order N)", which matches the badge the Billing table already shows. Hiding
+    // it would turn a flagged, explainable condition into a silent gap in the customer's
+    // itemization. So the invariant is about the MONEY, not the row count.
+    const dupRows = csvMoneyRows(csv, 'PS520-DUPLICATE');
+    const dupCharged = dupRows.reduce((sum, r) => sum + (r.total ?? 0), 0);
+    check('a DUPLICATE order number is CHARGED exactly once, though both copies are shown',
+      dupRows.length === 2 && Math.abs(dupCharged - suppressed.duplicateCopyPickPack) < 0.005,
+      `${dupRows.length} rows charging ${dupCharged.toFixed(2)}; `
+      + `${(suppressed.duplicateCopyPickPack * 2).toFixed(2)} = double-charged, 0.00 = over-suppressed`);
+    check('the suppressed copy is labelled as a duplicate rather than silently zeroed',
+      /PS520-DUPLICATE \(Duplicate of order \d+\)/.test(csv)
+      && /PS520-DUPLICATE \(Duplicate of order \d+\)/.test(html),
+      'a $0.00 row with no explanation reads as a billing error to a customer');
 
     // The headline the customer reads first must agree with the table it summarises.
     const headline = html.match(/class="gtv">([^<]*)</)?.[1] ?? '';
