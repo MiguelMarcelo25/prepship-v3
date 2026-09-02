@@ -13,11 +13,14 @@
  *
  * Unskippable: absent PS487_PG17_ADMIN_URL (or PS508_PG17_ADMIN_URL) this FAILS rather than skips,
  * and it refuses any server that is not PostgreSQL 17. No production database is reachable.
+ * Timestamptz fixtures are explicit UTC instants from the billing-day owner and every connection
+ * pins a NON-UTC session zone, so the proof is server-timezone-independent.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import { BILLING_LOS_ANGELES_TIME_ZONE, billingDayRange } from '../src/lib/time/billing-day.js';
 
 const ADMIN_URL = process.env.PS487_PG17_ADMIN_URL || process.env.PS508_PG17_ADMIN_URL;
 if (!ADMIN_URL) {
@@ -32,6 +35,27 @@ function migration(path: string): string {
 
 const CLIENT = 1;
 const WINDOW = { dateFrom: '2026-07-01T00:00:00.000Z', dateTo: '2026-08-01T00:00:00.000Z' };
+// The finalized period is calendar days July 1..7 (half-open [07-01, 07-08)) as the explicit
+// UTC-midnight instants the product stores (finalizeBillingPeriod inserts
+// billingDayRange().fromUtc / .toUtcExclusive). A bare '2026-07-01' literal into timestamptz is
+// read in the server's session zone and drifts by hours on a non-UTC server.
+function fixtureDays(from: string, to: string) {
+  const range = billingDayRange(from, to);
+  if (!range) throw new Error(`fixture days must parse: ${from}..${to}`);
+  return range;
+}
+const PERIOD = fixtureDays('2026-07-01', '2026-07-07');
+
+// Every connection pins a NON-UTC session zone (the product's billing DISPLAY zone), so the proof
+// cannot pass by luck on a UTC server: the owner's SQL must be immune to the session zone, and a
+// bare date literal creeping back into a fixture fails here on every server.
+function connect(url: string): postgres.Sql {
+  return postgres(url, {
+    max: 1,
+    onnotice: () => {},
+    connection: { TimeZone: BILLING_LOS_ANGELES_TIME_ZONE },
+  });
+}
 
 async function setupSchema(db: postgres.Sql): Promise<void> {
   await db.unsafe(`
@@ -69,10 +93,12 @@ async function setupSchema(db: postgres.Sql): Promise<void> {
   await db.unsafe(`
     insert into clients (id, name) values (${CLIENT}, 'AC-6 concurrency');
     insert into orders (id) values (91);
+  `);
+  await db.unsafe(`
     insert into billing_finalizations
       (id, client_id, period_start, period_end, line_count, order_count, subtotal, finalized_by)
-    values ('final-jul', ${CLIENT}, '2026-07-01', '2026-07-08', 1, 1, 6.77, 'test');
-  `);
+    values ('final-jul', ${CLIENT}, $1::timestamptz, $2::timestamptz, 1, 1, 6.77, 'test')
+  `, [PERIOD.fromUtc, PERIOD.toUtcExclusive]);
 }
 
 /**
@@ -114,19 +140,33 @@ async function main(): Promise<void> {
   const base = ADMIN.replace(/\/[^/]*$/, `/${dbName}`);
   process.env.DATABASE_URL = base;
 
-  const setup = postgres(base, { max: 1, onnotice: () => {} });
+  const setup = connect(base);
   await setupSchema(setup);
+  const [stored] = await setup<{ start: string; end: string; tz: string }[]>`
+    select extract(epoch from period_start)::bigint::text as start,
+      extract(epoch from period_end)::bigint::text as "end",
+      current_setting('TimeZone') as tz
+    from billing_finalizations where id = 'final-jul'`;
   await setup.end({ timeout: 5 });
 
   // Connection A runs the REAL classifier inside a transaction (acquires 36421/CLIENT + FOR UPDATE
   // on the finalization). Connection B is fully independent.
-  const connA = postgres(base, { max: 1, onnotice: () => {} });
-  const connB = postgres(base, { max: 1, onnotice: () => {} });
+  const connA = connect(base);
+  const connB = connect(base);
   const dbA = drizzle(connA, { casing: 'snake_case' });
   const policy = await import('../src/services/billing-finalization-policy.js');
 
   let passed = 0;
   const ok = (m: string) => { passed += 1; console.log('ok   ' + m); };
+
+  // ---- fixture integrity: stored bounds are the exact UTC instants under a non-UTC session ---
+  const epoch = (iso: string) => String(Date.parse(iso) / 1000);
+  assert.notEqual(stored?.tz, 'UTC', 'the session zone under test must be non-UTC');
+  assert.deepEqual({ start: stored?.start, end: stored?.end },
+    { start: epoch(PERIOD.fromUtc), end: epoch(PERIOD.toUtcExclusive) },
+    'finalized bounds are UTC-midnight instants, not shifted by the server session zone');
+  ok(`fixture: [${PERIOD.fromDay}..${PERIOD.toDay}] stored as exact UTC-midnight instants`
+    + ` under session TimeZone=${stored?.tz}`);
 
   let whileHeld: 'acquired' | 'blocked' | 'unset' = 'unset';
   await dbA.transaction(async (tx) => {

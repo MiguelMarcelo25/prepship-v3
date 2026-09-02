@@ -2,12 +2,15 @@
  * PS-449 migrated behavior proof. Offline only: PGlite applies the real
  * billing lock/close/calendar/adjustment migrations and the test injects that
  * database into the canonical reconciliation policy. No configured database
- * or provider is contacted.
+ * or provider is contacted. Timestamptz fixtures are explicit UTC instants from
+ * the billing-day owner and the PGlite session zone is pinned NON-UTC, so the
+ * proof is host-timezone-independent.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
+import { BILLING_LOS_ANGELES_TIME_ZONE, billingDayRange } from '../src/lib/time/billing-day.js';
 
 function migration(path: string): string {
   return readFileSync(path, 'utf8');
@@ -39,6 +42,10 @@ async function main(): Promise<void> {
   process.env.SUPABASE_URL ??= 'https://example.supabase.co';
 
   const pg = new PGlite();
+  // Adversarial DB session zone (the product's billing DISPLAY zone). PGlite defaults the session
+  // to the host offset, which made bare date literals drift by hours per host. Every timestamptz
+  // the owner reads or writes is an explicit instant, so a non-UTC session must change nothing.
+  await pg.exec(`set time zone '${BILLING_LOS_ANGELES_TIME_ZONE}'`);
   await pg.exec(`
     create table clients (id integer primary key, name text not null default 'Test');
     create table orders (
@@ -81,25 +88,54 @@ async function main(): Promise<void> {
   await pg.exec(migration('drizzle/0071_billing_weekend_rollforward.sql'));
   await pg.exec(migration('drizzle/0074_billing_current_period_adjustments.sql'));
 
+  // Timestamptz fixtures are the EXPLICIT UTC-MIDNIGHT INSTANTS the product stores
+  // (billingDayRange().fromUtc / .toUtcExclusive, what finalizeBillingPeriod inserts). A bare
+  // '2026-07-01' literal into timestamptz is read in the DB session zone and drifts by hours on
+  // a non-UTC host. billing_summary_metrics.period_from/to are DATE columns: a bare day is exact.
+  const PERIOD = billingDayRange('2026-07-01', '2026-07-07'); // half-open [07-01, 07-08)
+  const FROZEN = billingDayRange('2026-07-01', '2026-07-01');
+  const NET = billingDayRange('2026-07-22', '2026-07-22'); // current-period net-credit close
+  if (!PERIOD || !FROZEN || !NET) throw new Error('fixture days must parse');
   await pg.exec(`
     insert into clients (id, name) values (1, 'Credit/debit client'), (2, 'Net credit client');
     insert into orders (id, canonical_billing_total) values (101, 100), (202, 10);
+  `);
+  await pg.query(`
     insert into billing_line_items
       (client_id, order_id, order_number, ship_date, line_type, description, unit_cost, total_cost)
     values
-      (1, 101, 'PS449-101', '2026-07-01', 'pick_pack', 'Frozen prep', 40, 40),
-      (1, 101, 'PS449-101', '2026-07-01', 'shipping', 'Frozen shipping', 60, 60),
-      (2, 202, 'PS449-202', '2026-07-01', 'pick_pack', 'Frozen prep', 10, 10);
-    update billing_line_items set invoiced = true where order_id in (101, 202);
+      (1, 101, 'PS449-101', $1::timestamptz, 'pick_pack', 'Frozen prep', 40, 40),
+      (1, 101, 'PS449-101', $1::timestamptz, 'shipping', 'Frozen shipping', 60, 60),
+      (2, 202, 'PS449-202', $1::timestamptz, 'pick_pack', 'Frozen prep', 10, 10)
+  `, [FROZEN.fromUtc]);
+  await pg.exec(`update billing_line_items set invoiced = true where order_id in (101, 202)`);
+  await pg.query(`
     insert into billing_finalizations
       (id, client_id, period_start, period_end, line_count, order_count, subtotal, finalized_by)
     values
-      ('final-101', 1, '2026-07-01', '2026-07-08', 2, 1, 100, 'test'),
-      ('final-202', 2, '2026-07-01', '2026-07-08', 1, 1, 10, 'test');
+      ('final-101', 1, $1::timestamptz, $2::timestamptz, 2, 1, 100, 'test'),
+      ('final-202', 2, $1::timestamptz, $2::timestamptz, 1, 1, 10, 'test')
+  `, [PERIOD.fromUtc, PERIOD.toUtcExclusive]);
+  await pg.exec(`
     insert into billing_summary_metrics
       (client_id, period_from, period_to, grand_total)
     values (1, '2026-07-01', '2026-08-01', 100);
   `);
+
+  // Fixture integrity: the stored bounds are the exact instants, whatever the session zone.
+  const stored = await pg.query<{ id: string; start: string; end: string; tz: string }>(`
+    select id, extract(epoch from period_start)::bigint::text as start,
+      extract(epoch from period_end)::bigint::text as "end", current_setting('TimeZone') as tz
+    from billing_finalizations order by id
+  `);
+  const epoch = (iso: string) => String(Date.parse(iso) / 1000);
+  assert.notEqual(stored.rows[0]?.tz, 'UTC', 'the session zone under test must be non-UTC');
+  assert.deepEqual(stored.rows.map((r) => ({ id: r.id, start: r.start, end: r.end })), [
+    { id: 'final-101', start: epoch(PERIOD.fromUtc), end: epoch(PERIOD.toUtcExclusive) },
+    { id: 'final-202', start: epoch(PERIOD.fromUtc), end: epoch(PERIOD.toUtcExclusive) },
+  ], 'finalized bounds are UTC-midnight instants, not shifted by the session zone');
+  console.log(`ok   fixture: [${PERIOD.fromDay}..${PERIOD.toDay}] stored as exact UTC-midnight`
+    + ` instants under session TimeZone=${stored.rows[0]?.tz}`);
 
   const policy = await import('../src/services/billing-finalization-policy.js');
   const database = drizzle(pg, { casing: 'snake_case' });
@@ -205,11 +241,13 @@ async function main(): Promise<void> {
   await pg.exec(`
     update billing_line_items
     set invoiced = true
-    where client_id = 2 and line_type = 'billing_adjustment';
+    where client_id = 2 and line_type = 'billing_adjustment'
+  `);
+  await pg.query(`
     insert into billing_finalizations
       (id, client_id, period_start, period_end, line_count, order_count, subtotal, finalized_by)
-    values ('current-net-credit', 2, '2026-07-22', '2026-07-23', 1, 0, -10, 'test');
-  `);
+    values ('current-net-credit', 2, $1::timestamptz, $2::timestamptz, 1, 0, -10, 'test')
+  `, [NET.fromUtc, NET.toUtcExclusive]);
   const netFinalized = await pg.query<{ subtotal: string }>(`
     select subtotal::text from billing_finalizations where id = 'current-net-credit'
   `);
@@ -222,7 +260,7 @@ async function main(): Promise<void> {
       billing_policy_version, reason, idempotency_key, created_by
     ) values (
       'orphan-note', 'final-101', 1, 1, 'debit', 'manual',
-      'current_period_v2', '2026-07-22', 'legacy_calendar_v1',
+      'current_period_v2', '2026-07-22T00:00:00.000Z', 'legacy_calendar_v1',
       'Missing projection', 'orphan-note-key', 'test'
     )
   `));
