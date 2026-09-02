@@ -1659,9 +1659,14 @@ console.log('\nmoney that silently disappears');
       'reconcileFinalizedBillingOrderAdjustments({'),
     'folding after the comparison would be the same bug with extra steps');
 
+  // PS-521 (2026-09-03, under `unlock shipped data`): the SQL twin no longer types the two
+  // spellings; it renders them from REPLACEMENT_LINE_TYPES' owner. Assert the delegation, and
+  // that the owner still carries both spellings — the pair the predicate used to spell here.
   check('a cancelled original does not zero replacement money — both twins',
     /REPLACEMENT_LINE_TYPES\.has\(normalized\)/.test(noCharge)
-    && /'replace_postage', 'replace_pick_pack'/.test(noCharge),
+    && /not in \$\{replacementLineTypesSql\(\)\}/.test(noCharge)
+    && /REPLACEMENT_BILLING_LINE_TYPES\.map\(\(lineType\) => sql/.test(noCharge)
+    && /'replace_postage', 'replace_pick_pack'/.test(read('src/services/replacement-billing-planner.ts')),
     'the TypeScript set and the SQL predicate are read by different callers; one without the other is a disagreement, not a fix');
 }
 

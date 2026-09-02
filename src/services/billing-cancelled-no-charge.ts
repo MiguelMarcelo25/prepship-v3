@@ -1,17 +1,17 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { REPLACEMENT_LINE_TYPES as REPLACEMENT_BILLING_LINE_TYPES } from './replacement-billing-planner.js';
+// Per user override unlock shipped data on 2026-09-03 (PS-521): the return vocabulary is read
+// from its one owner, a dependency-free leaf, instead of a private copy here. This file could
+// not import billing-row-status.ts (that file imports isCancelledBillingStatus from here — a
+// cycle), which is why it carried the copy in the first place.
+import { billingReturnLineTypesSql, isBillingReturnLineType } from './billing-return-line-types';
 
 const CANCELLED_STATUSES = new Set(['cancelled', 'canceled', 'upstream_cancelled']);
 // PS-488 AC-4: both vocabularies. The portal writes return_postage /
 // return_processing_fee into the same table; omitting them here would let a cancelled
-// order strip a return charge it should have kept.
-const RETURN_LINE_TYPES = new Set([
-  'return',
-  'return_label',
-  'return_processing',
-  'return_postage',
-  'return_processing_fee',
-]);
+// order strip a return charge it should have kept. Per user override unlock shipped data on
+// 2026-09-03 (PS-521): the return spellings are the leaf's (isBillingReturnLineType), not a
+// Set typed here — a spelling added to the owner is excluded here automatically.
 /**
  * PS-502: a replacement is its own business event, exactly as a return is.
  *
@@ -32,6 +32,11 @@ const RETURN_LINE_TYPES = new Set([
  */
 const REPLACEMENT_LINE_TYPES = new Set(REPLACEMENT_BILLING_LINE_TYPES as readonly string[]);
 
+/** The replacement vocabulary as a SQL `in (...)` list, from its owner (PS-521). */
+function replacementLineTypesSql(): SQL {
+  return sql`(${sql.join(REPLACEMENT_BILLING_LINE_TYPES.map((lineType) => sql`${lineType}`), sql`, `)})`;
+}
+
 function normalizedText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim().toLowerCase();
@@ -46,7 +51,7 @@ export function isCancelledBillingStatus(value: unknown): boolean {
 export function isCancelledNoChargeExcludedLineType(value: unknown): boolean {
   const normalized = normalizedText(value);
   if (!normalized) return false;
-  return RETURN_LINE_TYPES.has(normalized) || REPLACEMENT_LINE_TYPES.has(normalized);
+  return isBillingReturnLineType(normalized) || REPLACEMENT_LINE_TYPES.has(normalized);
 }
 
 export function isCancelledNoChargeBillingRow(input: {
@@ -79,11 +84,13 @@ export function cancelledNoChargeBillingLinePredicateSql(input: {
   // Per user override unlock shipped data on 2026-07-06: cancelled/canceled
   // Billing lines are read-model no-charge rows. Return line types are excluded
   // so return fees/credits remain independently billable.
+  // Per user override unlock shipped data on 2026-09-03 (PS-521): the excluded RETURN spellings
+  // render from the vocabulary owner and the excluded REPLACEMENT spellings from theirs, instead
+  // of the seven-string list that was typed here. `not in (returns) and not in (replacements)`
+  // is the same predicate as one `not in` over both lists, for every value including NULL.
   return sql`(
-    ${input.lineType} not in (
-      'return', 'return_label', 'return_processing', 'return_postage', 'return_processing_fee',
-      'replace_postage', 'replace_pick_pack'
-    )
+    ${input.lineType} not in ${billingReturnLineTypesSql()}
+    and ${input.lineType} not in ${replacementLineTypesSql()}
     and (
       lower(coalesce(${input.orderStatus}, '')) in ('cancelled', 'canceled')
       or lower(coalesce(${input.canonicalStatus}, '')) in ('cancelled', 'canceled')

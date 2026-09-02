@@ -14,11 +14,10 @@
  *     re-exports the leaf's; billing-return-date-correction-apply.ts imports the aggregate
  *     instead of assembling a list; billing-return-event-contract.ts derives its legacy
  *     read-only list from the leaf.
- *  4. RATCHET: the only hand-spelled copy left in src/ is the one in the shipped-lockdown file
- *     billing-cancelled-no-charge.ts, which needs DJ's fresh `unlock shipped data` before it can
- *     be migrated. The allow-list below names it so its debt is visible on every run, and so a
- *     NEW copy anywhere else fails the pack. When it is migrated, delete it from the allow-list
- *     and this guard tightens to "no copies at all".
+ *  4. RATCHET: NO hand-spelled copy of the vocabulary exists anywhere in src/. The last one, in
+ *     the shipped-lockdown file billing-cancelled-no-charge.ts, was migrated on 2026-09-03 under
+ *     DJ's fresh `unlock shipped data`; the allow-list below is empty and must stay so — a new
+ *     entry is a new copy.
  */
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -101,7 +100,9 @@ check('billing-return-event-contract.ts derives its legacy read-only list from t
 // ── 4. Ratchet: hand-spelled copies outside the leaf ─────────────────────────────────────────
 // A "copy" is an array literal that lists two or more return spellings. Per-spelling display
 // mappings and single-spelling comparisons are not copies. The allow-list is the debt.
-const PENDING_UNLOCK = ['src/services/billing-cancelled-no-charge.ts'];
+// Emptied 2026-09-03 under DJ's fresh `unlock shipped data`: billing-cancelled-no-charge.ts now
+// delegates too. Keep it empty; a new entry here is a new copy of the vocabulary.
+const PENDING_UNLOCK: string[] = [];
 check(`the only hand-spelled copies left in src/ are the allow-listed ones: ${PENDING_UNLOCK.join(', ') || '(none)'}`, () => {
   const spellings = BILLING_RETURN_LINE_TYPES.map((t) => `'${t}'`);
   const files: string[] = [];
@@ -120,8 +121,11 @@ check(`the only hand-spelled copies left in src/ are the allow-listed ones: ${PE
   });
   assert.deepEqual(copies.sort(), PENDING_UNLOCK.slice().sort(), `hand-spelled copies: ${copies.join(', ')}`);
 });
-check('the allow-listed file really does carry the debt (so a migrated file is removed from the list, not forgotten)', () => {
-  for (const f of PENDING_UNLOCK) assert.ok(/'return_processing_fee'/.test(read(f)), `${f} no longer spells the vocabulary — remove it from PENDING_UNLOCK`);
+check('the allow-list is EMPTY — every former copy delegates to the leaf, none is pending', () => {
+  assert.equal(PENDING_UNLOCK.length, 0, `pending: ${PENDING_UNLOCK.join(', ')}`);
+  const noCharge = read('src/services/billing-cancelled-no-charge.ts');
+  assert.ok(/isBillingReturnLineType\(normalized\)/.test(noCharge) && /not in \$\{billingReturnLineTypesSql\(\)\}/.test(noCharge),
+    'billing-cancelled-no-charge.ts does not delegate both its predicate and its SQL to the leaf');
 });
 
 check('the guard is in the SOT pack and has an npm script', () => {
