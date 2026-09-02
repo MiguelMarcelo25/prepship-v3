@@ -4,8 +4,9 @@
 //
 // Each mutation must be PROVEN APPLIED (an anchor that no longer matches is a hard failure —
 // a mutation that silently did not apply looks exactly like a guard that caught it), must turn
-// test:ps-520-invoice-routes-pg17 RED, and is restored from the in-memory original and verified
-// byte-identical. Never `git checkout`: that once wiped an uncommitted route in billing.ts.
+// the proof RED — or, for a mutation the CSV guard owns, that guard — and is restored from the
+// in-memory original and verified byte-identical. Never `git checkout`: that once wiped an
+// uncommitted route in billing.ts.
 //
 // Needs PS520_PG17_ADMIN_URL like the proof itself. Each run is a full migration + seed +
 // three routes + finalization (~60-90s), so this is a local/pre-push tool, not a CI step.
@@ -14,6 +15,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const BILLING = 'src/routes/billing.ts';
 const DAY = 'src/lib/time/billing-day.ts';
+const CSV = 'src/routes/billing-invoice-csv.ts';
+const TOTALS = 'src/services/billing-invoice-totals.ts';
+const PROOF = 'npm run -s test:ps-520-invoice-routes-pg17';
+const CSV_GUARD = 'npm run -s test:ps-468-invoice-csv';
 
 /** Replace the Nth (1-based) occurrence, or return null if it does not exist. */
 function replaceNth(src, from, to, n) {
@@ -25,6 +30,11 @@ function replaceNth(src, from, to, n) {
   return src.slice(0, idx) + to + src.slice(idx + from.length);
 }
 
+// `checks` lists what must catch the mutation. The proof is always run; a mutation the CSV
+// guard owns (the sanitizer's character class, a per-cell bypass) also runs that guard, and
+// the mutation is killed if ANY listed check goes red. Naming the owner keeps the harness
+// honest about WHICH gate protects what — a kill by the wrong check is still a kill, but a
+// survivor is reported against the check that should have owned it.
 const MUTATIONS = [
   { name: 'XLSX Shipping cell 999.99 (review\'s original defeat)', file: BILLING,
     apply: (s) => replaceNth(s, 'const shippingAmt = Number(d.shipping_amt);', 'const shippingAmt = 999.99;', 2) },
@@ -45,15 +55,45 @@ const MUTATIONS = [
     apply: (s) => replaceNth(s, 'qty: baseQty + addlQty,', 'qty: 999,', 1) },
   { name: 'REVIEW — XLSX totals formulas skip the first detail row (first = 3)', file: BILLING,
     apply: (s) => replaceNth(s, 'const first = 2;', 'const first = 3;', 1) },
-  // Review's third-round defeats. A never-charged replacement fee rendered as numeric 0 on the
-  // cancelled row survived because the comparator folded blank and zero together for every
-  // money column; a wrong adjustment Destination survived because the August document was
-  // checked by a two-column parser instead of the 19-column comparator.
-  { name: 'REVIEW — XLSX renders a never-charged replacement fee as 0 on the cancelled row', file: BILLING,
-    apply: (s) => replaceNth(s, 'replacePostage: replacePostageAmt > 0 ? replacePostageAmt : null,',
-      "replacePostage: replacePostageAmt > 0 ? replacePostageAmt : (d.order_number_label === 'PS520-CANCELLED' ? 0 : null),", 1) },
+  // Review's third-round defeats. A never-charged replacement fee rendered as numeric 0 survived
+  // because the comparator folded blank and zero together for every money column; a wrong
+  // adjustment Destination survived because the August document was checked by a two-column
+  // parser instead of the 19-column comparator. The first is the UNCONDITIONAL form — what a
+  // real revert of the PS-513 null looks like — not one keyed to the proof's own order number.
+  { name: 'REVIEW — XLSX renders a never-charged replacement fee as 0 (every row)', file: BILLING,
+    apply: (s) => replaceNth(s, 'replacePostage: replacePostageAmt > 0 ? replacePostageAmt : null,', 'replacePostage: replacePostageAmt > 0 ? replacePostageAmt : 0,', 1) },
   { name: 'REVIEW — XLSX adjustment row carries a wrong Destination', file: BILLING,
     apply: (s) => replaceNth(s, "destination: d.billing_adjustment_id ? '' : d.destination,", "destination: d.billing_adjustment_id ? 'WRONG DESTINATION' : d.destination,", 1) },
+  // The r5 pre-audit's survivors (2026-09-02). Each survived 86 green checks for a reason the
+  // proof now names: August was agreement-only (no absence, no exact count, no footing, no
+  // totals interval), the day and Item Name were compared but never asserted to a VALUE, the
+  // workbook's cell TYPES were never read, three scope shapes were never exercised, the
+  // refusal check pinned a stale figure, and two text columns were blank in every fixture row.
+  { name: 'PRE-AUDIT — lower bound one day too early: August re-bills the finalized July-31 order', file: BILLING,
+    apply: (s) => replaceNth(s, '      and ${invoiceEffectiveDay} >= ${dateFrom}::timestamptz', "      and ${invoiceEffectiveDay} >= ${dateFrom}::timestamptz - interval '1 day'", 1) },
+  { name: 'PRE-AUDIT — the billed day shifted by one in the invoice SQL', file: BILLING,
+    apply: (s) => replaceNth(s, "to_char(${invoiceEffectiveDay} at time zone 'UTC', 'YYYY-MM-DD') as billing_effective_date,", "to_char((${invoiceEffectiveDay} + interval '1 day') at time zone 'UTC', 'YYYY-MM-DD') as billing_effective_date,", 1) },
+  { name: 'PRE-AUDIT — XLSX Total written as a TEXT cell (SUM scores it 0)', file: BILLING,
+    apply: (s) => replaceNth(s, 'fulfillmentFee: fulfillmentFeeAmt,', 'fulfillmentFee: fulfillmentFeeAmt.toFixed(2),', 1) },
+  { name: 'PRE-AUDIT — csvField bypassed for the two appended columns (Carrier, Item Name)', file: CSV, checks: [CSV_GUARD],
+    apply: (s) => replaceNth(s, "  return cells.map(csvField).join(',');", "  return cells.map((v, i) => (i >= 17 ? String(v ?? '') : csvField(v))).join(',');", 1) },
+  { name: 'PRE-AUDIT — tab/CR dropped from the injection character class', file: CSV, checks: [CSV_GUARD],
+    apply: (s) => replaceNth(s, "if (!strictSignedDecimal && /^[=+\\-@\\t\\r]/.test(s)) s = `'${s}`;", "if (!strictSignedDecimal && /^[=+\\-@]/.test(s)) s = `'${s}`;", 1) },
+  { name: 'PRE-AUDIT — store-scoped callers read every client (storeIds branch = true)', file: BILLING,
+    apply: (s) => replaceNth(s, 'predicates.push(sql`${clients.storeIds} && ${intArraySql(storeIds)}`);', 'predicates.push(sql`true`);', 1) },
+  { name: 'PRE-AUDIT — a restricted caller with NO ids fails open', file: BILLING,
+    apply: (s) => replaceNth(s, 'return scope.isRestricted ? sql`false` : sql`true`;', 'return sql`true`;', 1) },
+  { name: 'PRE-AUDIT — the CSV refusal leaks the real grand total in its 404 body', file: BILLING,
+    apply: (s) => replaceNth(s, "if (!data) return c.text('Client not found', 404);",
+      "if (!data) { const leak = await billingInvoiceHeaderTotals(clientId, range.fromUtc, range.toUtcExclusive, db, await loadDuplicateOrderDecisions(clientId, range.fromUtc, range.toUtcExclusive)); return c.text(`Client not found (${leak.grandTotal})`, 404); }", 3) },
+  { name: 'PRE-AUDIT — the adjustment row\'s Item Name (credit reason) blanked in the shared owner', file: BILLING,
+    apply: (s) => replaceNth(s, '      item_names: r.adjustment_description ?? itemSummary.itemNames,', '      item_names: itemSummary.itemNames,', 1) },
+  { name: 'PRE-AUDIT — canonical grand total clipped at zero (credits vanish from the headline)', file: TOTALS,
+    apply: (s) => replaceNth(s, 'coalesce(sum(${invoiceAmount}), 0)::text as grand_total', 'coalesce(sum(greatest(${invoiceAmount}, 0)), 0)::text as grand_total', 1) },
+  { name: 'PRE-AUDIT — XLSX totals-row range drops the adjustment row', file: BILLING,
+    apply: (s) => replaceNth(s, '    const last = first + details.length - 1;', '    const last = first + details.length - 1 - (details.some((d) => d.billing_adjustment_id) ? 1 : 0);', 1) },
+  { name: 'PRE-AUDIT — HTML prints a credit as $-12.34 again', file: BILLING,
+    apply: (s) => replaceNth(s, "    return v <= -0.005 ? `-$${abs}` : `$${abs}`;", '    return `$${v.toFixed(2)}`;', 1) },
 ];
 
 if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !process.env.PS488_PG17_ADMIN_URL) {
@@ -61,52 +101,107 @@ if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !p
   process.exit(1);
 }
 
-const proofIsGreen = () => {
-  try { execSync('npm run -s test:ps-520-invoice-routes-pg17', { stdio: 'pipe' }); return true; }
-  catch (e) {
-    const out = String(e.stdout ?? '') + String(e.stderr ?? '');
-    if (/ECONNREFUSED/.test(out)) { console.error('   !! DB DOWN — result meaningless; aborting'); process.exit(1); }
-    return false;
-  }
-};
+// ── The tree must never be left mutated ─────────────────────────────────────────────────────
+//
+// On 2026-09-02 a run crashed INSIDE the restore write (Windows errno -4094, something held the
+// file for an instant) and billing.ts stayed mutated on disk with the process gone. The pre-
+// audit then showed two more ways to the same state: the ECONNREFUSED abort ran process.exit
+// before the restore, and a Ctrl-C during the 60-90s child proof killed the parent from the
+// default signal handler with nothing restored. A harness that can leave the tree mutated is
+// worse than no harness — the next run "passes" against mutated code.
+//
+// So: the original of the file currently mutated is held in `pending`, and it is restored on
+// EVERY exit path — normal, abort, uncaught, SIGINT, SIGTERM — with retries and a sidecar of
+// last resort. The abort paths restore FIRST and exit second.
+let pending = null;
 
-/**
- * Restore the ORIGINAL bytes, retrying through Windows' transient file faults. On 2026-09-02 a
- * run crashed here with errno -4094 (UNKNOWN) on the restore write — something else held the
- * file for an instant — and billing.ts was left MUTATED on disk with the process gone. A
- * harness that can leave the tree mutated is worse than no harness. Retry with backoff; if it
- * still fails, write the original to a sidecar next to the file and say so, so the restore is
- * never lost.
- */
 function restoreOriginal(file, original) {
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     try {
       writeFileSync(file, original);
-      if (readFileSync(file, 'utf8') === original) return;
+      if (readFileSync(file, 'utf8') === original) return true;
     } catch (e) {
       console.error(`  restore attempt ${attempt} for ${file}: ${e.code ?? e.message}`);
     }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250 * attempt);
   }
   const sidecar = `${file}.ps520-restore`;
-  writeFileSync(sidecar, original);
-  console.error(`RESTORE FAILED for ${file} after 8 attempts — the ORIGINAL is at ${sidecar}; copy it back before anything else`);
+  try {
+    writeFileSync(sidecar, original);
+    console.error(`RESTORE FAILED for ${file} after 8 attempts — the ORIGINAL is at ${sidecar}; copy it back before anything else`);
+  } catch (e) {
+    console.error(`RESTORE FAILED for ${file} and the sidecar write failed too (${e.code ?? e.message}); the original is ${original.length} bytes and is lost with this process — git diff the file NOW`);
+  }
+  return false;
+}
+
+function restorePending() {
+  if (!pending) return true;
+  const { file, original } = pending;
+  pending = null;
+  return restoreOriginal(file, original);
+}
+
+process.on('exit', () => { restorePending(); });
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => { console.error(`\n${signal} — restoring the mutated file before exiting`); restorePending(); process.exit(130); });
+}
+process.on('uncaughtException', (e) => { console.error('uncaught:', e); restorePending(); process.exit(1); });
+
+const INFRA = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|55006|being accessed by other users|could not connect|server closed the connection|Connection terminated/;
+
+/** 'green' | 'red' | 'infra' — an infrastructure failure is NOT a kill and NOT a survival. */
+function outcome(cmd) {
+  try { execSync(cmd, { stdio: 'pipe', timeout: 10 * 60 * 1000 }); return 'green'; }
+  catch (e) {
+    const out = String(e.stdout ?? '') + String(e.stderr ?? '') + String(e.code ?? '') + String(e.signal ?? '');
+    return INFRA.test(out) ? 'infra' : 'red';
+  }
+}
+
+function abortInfra(where) {
+  console.error(`   !! infrastructure failure during ${where} (DB down / timeout) — result meaningless; restoring and aborting`);
+  restorePending();
   process.exit(1);
 }
 
-if (!proofIsGreen()) { console.error('ABORT — the proof is RED before any mutation. Fix the baseline first.'); process.exit(1); }
+// Fail fast: every anchor must match the CURRENT tree before anything runs. A stale anchor
+// would otherwise surface only after minutes of proof runs, and a partially-run matrix is
+// easy to misreport.
+const stale = MUTATIONS.filter((m) => { const src = readFileSync(m.file, 'utf8'); const out = m.apply(src); return out === null || out === src; });
+if (stale.length) {
+  console.error('ABORT — these mutations no longer anchor to the tree (fix the anchor, do not delete the mutation):');
+  for (const m of stale) console.error(`  ${m.name}  [${m.file}]`);
+  process.exit(1);
+}
+
+// PS520_MUTATIONS_ONLY=<regex> re-runs a subset after a targeted repair (each mutation is a
+// full proof run, so the whole matrix is ~40 minutes). A subset run says so in its output and
+// never prints the full-matrix PASS line, so it cannot be mistaken for one.
+const only = process.env.PS520_MUTATIONS_ONLY ? new RegExp(process.env.PS520_MUTATIONS_ONLY, 'i') : null;
+const SELECTED = only ? MUTATIONS.filter((m) => only.test(m.name)) : MUTATIONS;
+if (only) console.log(`SUBSET RUN: ${SELECTED.length}/${MUTATIONS.length} mutations match /${only.source}/i`);
+if (!SELECTED.length) { console.error('no mutation matches PS520_MUTATIONS_ONLY'); process.exit(1); }
+
+const base = outcome(PROOF);
+if (base === 'infra') abortInfra('the baseline');
+if (base === 'red') { console.error('ABORT — the proof is RED before any mutation. Fix the baseline first.'); process.exit(1); }
 console.log('baseline: proof green on the unmutated tree');
 
-let survived = 0, notApplied = 0;
-for (const m of MUTATIONS) {
+let survived = 0;
+for (const m of SELECTED) {
   const original = readFileSync(m.file, 'utf8');
   const mutated = m.apply(original);
-  if (mutated === null || mutated === original) { notApplied += 1; console.error(`  NOT APPLIED  ${m.name}`); continue; }
+  pending = { file: m.file, original };
   writeFileSync(m.file, mutated);
-  const green = proofIsGreen();
-  restoreOriginal(m.file, original);
-  if (green) { survived += 1; console.error(`  SURVIVED     ${m.name}`); } else console.log(`  killed       ${m.name}`);
+  const checks = [PROOF, ...(m.checks ?? [])];
+  const results = checks.map((c) => outcome(c));
+  if (!restorePending()) process.exit(1);
+  if (results.includes('infra')) abortInfra(m.name);
+  const killedBy = checks.filter((_, i) => results[i] === 'red').map((c) => (c === PROOF ? 'proof' : 'ps-468'));
+  if (killedBy.length === 0) { survived += 1; console.error(`  SURVIVED     ${m.name}`); }
+  else console.log(`  killed       ${m.name}  [${killedBy.join('+')}]`);
 }
-console.log(`\n${MUTATIONS.length - survived - notApplied}/${MUTATIONS.length} mutations killed, ${notApplied} not applied`);
-if (survived || notApplied) { console.error('\n✖ PS-520 mutation harness FAILED'); process.exit(1); }
-console.log('\nPASS PS-520 mutations — every mutation dies against real PostgreSQL, restore verified');
+console.log(`\n${SELECTED.length - survived}/${SELECTED.length} mutations killed${only ? ' (SUBSET)' : ''}`);
+if (survived) { console.error('\n✖ PS-520 mutation harness FAILED'); process.exit(1); }
+console.log(only ? '\nsubset green — this is NOT a full-matrix result' : '\nPASS PS-520 mutations — every mutation dies against real PostgreSQL, restore verified');

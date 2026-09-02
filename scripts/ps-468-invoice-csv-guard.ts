@@ -416,6 +416,30 @@ for (const formula of ['-1+1', '+5', '=SUM(A1)', '@cmd', '-12.34abc', '-', '--1'
 }
 assert.equal(cellOf({ ...fallbackRow, row_total: '-12.34' }, TOTAL_COL), '-12.34', 'a credit Total is a bare negative number in the CSV');
 assert.equal(cellOf({ ...fallbackRow, row_total: '12.34' }, TOTAL_COL), '12.34', 'a charge Total is a bare number in the CSV');
+// Every cell goes through the sanitizer, so every cell is probed — the pre-audit found that a
+// map skipping the two APPENDED columns (Carrier, Item Name) passed this guard, because every
+// fixture left them blank. Order # is the cell that can carry a tab/CR lead: it bypasses
+// invoiceOneLineCell, which would strip the control character before the sanitizer saw it.
+const ORDER_COL = csvHeader.indexOf('Order #');
+const CARRIER_COL = csvHeader.indexOf('Carrier');
+const ITEM_COL = csvHeader.indexOf('Item Name');
+assert.ok(ORDER_COL >= 0 && CARRIER_COL >= 0 && ITEM_COL >= 0, 'Order #, Carrier and Item Name must be locatable by header name');
+for (const lead of ['\t=cmd', '\r=cmd']) {
+  assert.equal(
+    cellOf({ ...fallbackRow, order_number: lead, order_number_label: undefined }, ORDER_COL),
+    `'${lead}`,
+    `a ${JSON.stringify(lead)} lead on Order # must be neutralised (DDE-shaped)`,
+  );
+}
+assert.equal(
+  cellOf({ ...fallbackRow, item_names: '=HYPERLINK("http://evil","Widget, Blue")' }, ITEM_COL),
+  `'=HYPERLINK("http://evil","Widget, Blue")`,
+  'a formula-shaped Item Name must be neutralised — the appended column is sanitised like every other',
+);
+assert.ok(
+  String(cellOf({ ...fallbackRow, carrier_code: '@carrier' }, CARRIER_COL)).startsWith("'@"),
+  'a formula-shaped Carrier must be neutralised',
+);
 
 // ── 2. Source pins ───────────────────────────────────────────────────────────
 

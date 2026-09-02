@@ -2757,7 +2757,15 @@ export function renderInvoiceHtml(args: {
     grandTotal,
     fulfillmentFeeTotal,
   } = totals;
-  const fmt = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
+  // A credit is money too. This used to print `${n.toFixed(2)}` for every value, so the
+  // August adjustment row, the Adjustments card and the headline showed a customer `$-12.34` —
+  // a token neither the CSV nor the workbook carries and not a money format anyone writes.
+  // The sign goes before the currency symbol.
+  const fmt = (n: number | string) => {
+    const v = Number(n) || 0;
+    const abs = Math.abs(v).toFixed(2);
+    return v <= -0.005 ? `-$${abs}` : `$${abs}`;
+  };
   // PS-208: header shows the operator-picked days verbatim — "May 01, 2026 →
   // May 31, 2026" for a 05/01→05/31 selection, never the previous day.
   const fromDisplay = formatBillingDay(fromDay);
