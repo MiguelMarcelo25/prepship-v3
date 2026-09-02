@@ -332,7 +332,11 @@ const cellNumber = (raw: unknown): number | null => {
     ? (raw as { result: unknown }).result
     : raw).trim();
   if (text === '') return null;
-  const n = Number(text.replace(/[$,]/g, ''));
+  // The CSV prefixes a leading '-' with an apostrophe (PS-468 formula-injection neutralization),
+  // so a credit's Total arrives as `'-12.34`. Read through the prefix to the number the other
+  // two formats carry — and see the named check on the August adjustment, which records that
+  // this cell is TEXT in a spreadsheet rather than hiding it inside a parser.
+  const n = Number(text.replace(/^'/, '').replace(/[$,]/g, ''));
   return Number.isFinite(n) ? n : null;
 };
 
@@ -552,15 +556,26 @@ async function main(): Promise<void> {
       });
       if (totalsRowNumber) {
         const totalsRow = sheet.getRow(totalsRowNumber);
+        // The ROWS a formula sums matter as much as the column. Review moved the range start
+        // from 2 to 3 — skipping the first detail row — and this check stayed green, because it
+        // matched the digits and then discarded them. ExcelJS writes no computed result, so a
+        // wrong range is invisible to every value check that follows. The interval is derived
+        // from the sheet, not typed: first detail row is the header's successor, last is the
+        // totals row's predecessor, and every summed column must use exactly that interval.
+        const firstDetail = headerRowNumber + 1;
+        const lastDetail = totalsRowNumber - 1;
+        if (lastDetail < firstDetail) totalsIssues.push(`no detail rows between header ${headerRowNumber} and totals ${totalsRowNumber}`);
         for (const header of ['Box Cost', 'Qty', 'Pick & Pack Fee', 'Additional Units', 'Shipping', 'Storage', 'Total']) {
           const idx = headerIndex.get(header);
           if (idx === undefined) { totalsIssues.push(`${header}: no such column`); continue; }
           const cell = totalsRow.getCell(idx).value as { formula?: string } | null;
           const formula = cell && typeof cell === 'object' && 'formula' in cell ? String(cell.formula) : '';
           const want = colLetter(idx);
-          const m = formula.match(/^SUM\(([A-Z]+)\d+:([A-Z]+)\d+\)$/);
-          if (!m || m[1] !== want || m[2] !== want) {
+          const m = formula.match(/^SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)$/);
+          if (!m || m[1] !== want || m[3] !== want) {
             totalsIssues.push(`${header}: expected SUM(${want}..) but found ${formula || '(no formula)'}`);
+          } else if (Number(m[2]) !== firstDetail || Number(m[4]) !== lastDetail) {
+            totalsIssues.push(`${header}: sums rows ${m[2]}..${m[4]} but the detail rows are ${firstDetail}..${lastDetail}`);
           }
         }
       }
@@ -625,6 +640,86 @@ async function main(): Promise<void> {
       xlsxMismatches.length === 0, xlsxMismatches.slice(0, 6).join(' | '));
     check('EVERY money cell agrees between CSV and the operator HTML, field by field',
       htmlMismatches.length === 0, htmlMismatches.slice(0, 6).join(' | '));
+
+    // ── EVERY column, EVERY row, all three formats ──────────────────────────
+    //
+    // The money comparison above covers ten columns. Review set the XLSX Qty cell to 999 and
+    // all 65 checks stayed green: identical HEADERS say nothing about identical VALUES, and a
+    // column nobody parses is a column nobody can defend. This parses all 19 contract columns
+    // from every data row of every format, normalises each by KIND — money and quantities to
+    // numbers, dates to the billing DAY (the formats legitimately differ on time-of-day), text
+    // with the em-dash/blank convention folded to one form — and compares row by row, field by
+    // field. Rows are matched by (order label, total), which is unique in this fixture.
+    type Kind = 'money' | 'qty' | 'day' | 'text';
+    const ALL_FIELDS: ReadonlyArray<{ header: string; kind: Kind }> = [
+      { header: 'Billing / Activity Date (Los Angeles)', kind: 'day' },
+      { header: 'Order #', kind: 'text' }, { header: 'SKUs', kind: 'text' },
+      { header: 'Box Size', kind: 'text' }, { header: 'Box Cost', kind: 'money' },
+      { header: 'Qty', kind: 'qty' }, { header: 'Pick & Pack Fee', kind: 'money' },
+      { header: 'Additional Units', kind: 'money' }, { header: 'Shipping', kind: 'money' },
+      { header: 'Storage', kind: 'money' }, { header: 'Total', kind: 'money' },
+      { header: 'Shipment #', kind: 'text' }, { header: 'Destination', kind: 'text' },
+      { header: 'Return Postage', kind: 'money' }, { header: 'Return Processing', kind: 'money' },
+      { header: 'Replace Postage', kind: 'money' }, { header: 'Replace Pick&Pack', kind: 'money' },
+      { header: 'Carrier', kind: 'text' }, { header: 'Item Name', kind: 'text' },
+    ];
+    const toDay = (raw: unknown): string => {
+      if (raw instanceof Date) return raw.toISOString().slice(0, 10);
+      const s = String(raw ?? '');
+      const iso = s.match(/\d{4}-\d{2}-\d{2}/); if (iso) return iso[0];
+      const us = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      return us ? `${us[3]}-${us[1]!.padStart(2, '0')}-${us[2]!.padStart(2, '0')}` : s.trim();
+    };
+    const norm = (kind: Kind, raw: unknown): string | number | null => {
+      const text = raw instanceof Date ? raw.toISOString() : String(raw ?? '').replace(/ /g, ' ').trim();
+      if (kind === 'day') return toDay(raw);
+      if (kind === 'text') return text === '—' || text === '' ? '' : text;
+      // money and qty: the em-dash and blank both mean "nothing to show"; the CSV writes 0 for
+      // base money columns and '' for return/replace — folded to 0 here so the formats can be
+      // compared on what a reader would SUM, which is what review's 999 attack was about.
+      if (text === '—' || text === '') return 0;
+      const n = Number(text.replace(/^'/, '').replace(/[$,]/g, '')); return Number.isFinite(n) ? n : text;
+    };
+    type FullRow = Record<string, string | number | null>;
+    const rowKey = (r: FullRow) => `${r['Order #']}|${r['Total']}`;
+    const csvFull: FullRow[] = csv.replace(/^﻿/, '').split('\r\n').filter((l) => l.trim() !== '').slice(1)
+      .map((line) => { const cells = line.split(','); const r: FullRow = {};
+        ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i]); }); return r; });
+    const htmlFull: FullRow[] = [...html.slice(html.indexOf('<tbody>'), html.indexOf('</tbody>')).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+      .map((m) => { const cells = [...m[1]!.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => tagText(c[1]!.replace(/<br\s*\/?>/g, ' ')));
+        const r: FullRow = {}; ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i]); }); return r; });
+    const xlsxFull: FullRow[] = [];
+    if (sheet && headerRowNumber && totalsRowNumber) {
+      for (let n = headerRowNumber + 1; n < totalsRowNumber; n += 1) {
+        const row = sheet.getRow(n); const r: FullRow = {};
+        for (const f of ALL_FIELDS) {
+          const v = row.getCell(headerIndex.get(f.header)!).value as unknown;
+          const raw = v && typeof v === 'object' && !(v instanceof Date) && 'result' in (v as object) ? (v as { result: unknown }).result : v;
+          r[f.header] = norm(f.kind, raw);
+        }
+        xlsxFull.push(r);
+      }
+    }
+    const bySort = (rows: FullRow[]) => [...rows].sort((a, b) => rowKey(a).localeCompare(rowKey(b)));
+    const [csvS, htmlS, xlsxS] = [bySort(csvFull), bySort(htmlFull), bySort(xlsxFull)];
+    check('all three formats carry the same number of DATA rows (every row, not just the seeded order)',
+      csvS.length === htmlS.length && csvS.length === xlsxS.length && csvS.length >= 6,
+      `csv=${csvS.length} html=${htmlS.length} xlsx=${xlsxS.length}`);
+    const fullDiffs: string[] = [];
+    csvS.forEach((c, i) => {
+      for (const other of [['html', htmlS[i]], ['xlsx', xlsxS[i]]] as const) {
+        const o = other[1]; if (!o) { fullDiffs.push(`row ${i} missing in ${other[0]}`); continue; }
+        for (const f of ALL_FIELDS) if (c[f.header] !== o[f.header]) fullDiffs.push(`${rowKey(c)} ${f.header}: csv=${JSON.stringify(c[f.header])} ${other[0]}=${JSON.stringify(o[f.header])}`);
+      }
+    });
+    check('EVERY one of the 19 columns agrees across CSV, HTML and XLSX on EVERY data row',
+      fullDiffs.length === 0, fullDiffs.slice(0, 8).join('\n       '));
+    // The outbound row's Qty is base 1 + additional 1 = 2 — asserted as a VALUE, in every
+    // format, because "the three agree" is also true when all three are 999.
+    const outboundQty = (rows: FullRow[]) => rows.find((r) => r['Order #'] === 'PS520-1001' && r['Storage'] === money.storage)?.['Qty'];
+    check('the seeded outbound row carries Qty 2 in all three formats (the column review set to 999)',
+      [csvS, htmlS, xlsxS].every((rows) => outboundQty(rows) === 2),
+      `csv=${outboundQty(csvS)} html=${outboundQty(htmlS)} xlsx=${outboundQty(xlsxS)}`);
 
     // ── The seeded components, asserted in the WORKBOOK itself ──────────────
     const xOutbound = xlsxSorted.find((r) => r.storage === money.storage);
@@ -931,6 +1026,91 @@ async function main(): Promise<void> {
     check('finalizing the same period again returns the SAME finalization and creates no second record',
       again.alreadyFinalized && again.finalization.id === first.finalization.id && n === 1,
       `alreadyFinalized=${again.alreadyFinalized} sameId=${again.finalization.id === first.finalization.id} rows=${n}`);
+
+    // ── ADJUSTMENT, through the REAL workflow ─────────────────────────────────
+    //
+    // The card's fixture list includes an adjustment, and this harness could not seed one: the
+    // database refuses a hand-inserted billing_adjustment row (BILLING_ADJUSTMENT_LEGACY_WRITE_
+    // DISABLED — corrections must be posted through current-period posting, against a
+    // finalization). Review was right that "the arm executes with no row" is not proof. Now
+    // that the harness FINALIZES the period, it can post a credit note against that
+    // finalization exactly as an operator would, and the policy projects the adjustment line
+    // into the billing day of `now`. That day is placed in AUGUST, so the August invoice is
+    // where the adjustment must appear — in all three formats — next to the next-day order.
+    const { createBillingCreditNote } = await import('../src/services/billing-finalization-policy.js');
+    const ADJUSTMENT = '12.34';
+    const posted = await createBillingCreditNote({
+      clientId,
+      finalizationId: first.finalization.id,
+      amount: ADJUSTMENT,
+      reason: 'PS-520 fixture: a real current-period credit against the finalized period',
+      idempotencyKey: 'ps520-credit-note-1',
+      actorId: 'ps-520',
+      actorEmail: 'ps-520@test',
+      now: new Date('2026-08-05T12:00:00Z'),
+    });
+    check('a credit note posts through the real current-period workflow', !posted.alreadyCreated,
+      `alreadyCreated=${posted.alreadyCreated}`);
+    const [projected] = await seeded`
+      select line_type, total_cost::text, billing_adjustment_id, order_id, shipment_id
+      from billing_line_items where client_id = ${clientId} and line_type = 'billing_adjustment'`;
+    check('the policy projected ONE billing_adjustment line, orderless, bound to the credit note',
+      projected !== undefined && projected.order_id === null && projected.billing_adjustment_id === posted.creditNote.id
+      && Math.abs(Math.abs(Number(projected.total_cost)) - Number(ADJUSTMENT)) < 0.005,
+      JSON.stringify(projected));
+    const adjSigned = Number(projected?.total_cost ?? 0);
+
+    const augQs = `clientId=${clientId}&dateFrom=2026-08-01&dateTo=2026-08-31`;
+    const [augHtmlRes, augCsvRes, augXlsxRes] = await Promise.all([
+      staff.request(`/billing/invoice?${augQs}`), staff.request(`/billing/invoice.csv?${augQs}`), staff.request(`/billing/invoice.xlsx?${augQs}`),
+    ]);
+    check('the August invoice renders in all three formats', augHtmlRes.status === 200 && augCsvRes.status === 200 && augXlsxRes.status === 200,
+      `${augHtmlRes.status}/${augCsvRes.status}/${augXlsxRes.status}`);
+    const augHtml = await augHtmlRes.text();
+    const augCsv = await augCsvRes.text();
+    const augWb = new ExcelJS.Workbook(); await augWb.xlsx.load(Buffer.from(await augXlsxRes.arrayBuffer()) as unknown as ArrayBuffer);
+    const augSheet = augWb.getWorksheet('Invoice');
+    // CSV: the adjustment is a row whose Shipment # is "Adjustment", Destination blank, Total ±12.34.
+    const augCsvRows = augCsv.replace(/^﻿/, '').split('\r\n').filter((l) => l.trim() !== '').slice(1).map((l) => l.split(','));
+    const shipIdx = ALL_FIELDS.findIndex((f) => f.header === 'Shipment #'); const totIdx = ALL_FIELDS.findIndex((f) => f.header === 'Total');
+    const destIdx = ALL_FIELDS.findIndex((f) => f.header === 'Destination');
+    const csvAdj = augCsvRows.find((c) => c[shipIdx] === 'Adjustment');
+    check('CSV: the adjustment row exists, carries the credit as its Total, and has no destination',
+      csvAdj !== undefined && Math.abs((cellNumber(csvAdj[totIdx]) ?? NaN) - adjSigned) < 0.005 && (csvAdj[destIdx] ?? '') === '',
+      csvAdj ? csvAdj.join(',') : 'no Adjustment row');
+    // FLAGGED, DELIBERATELY VISIBLE: a negative Total in the CSV is written as `'-12.34`. That is
+    // PS-468's formula-injection rule (a leading -, +, =, @ gets an apostrophe so a spreadsheet
+    // cannot execute it) — correct for security, but it means a CREDIT's Total is a text cell in
+    // Excel and will not sum, while the HTML and XLSX carry a real negative number. The three
+    // formats therefore do NOT carry equal data for negatives. This check passes only while that
+    // is the CSV's behaviour, so the finding stays in every log until DJ rules on it.
+    check("FLAG: the CSV writes a negative Total with a leading apostrophe ('-12.34) — text, not a number, in a spreadsheet",
+      csvAdj !== undefined && /^'-/.test(csvAdj[totIdx] ?? ''), csvAdj?.[totIdx] ?? '');
+    // HTML: same row, and the Adjustments summary card is no longer a dash.
+    const augRows = [...augHtml.slice(augHtml.indexOf('<tbody>'), augHtml.indexOf('</tbody>')).matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+      .map((m) => [...m[1]!.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => tagText(c[1]!.replace(/<br\s*\/?>/g, ' '))));
+    const htmlAdj = augRows.find((c) => c[shipIdx] === 'Adjustment');
+    check('HTML: the adjustment row exists with the credit as its Total and an em-dash destination',
+      htmlAdj !== undefined && Math.abs((cellNumber(htmlAdj[totIdx]) ?? 0) - adjSigned) < 0.005 && htmlAdj[destIdx] === '—',
+      htmlAdj ? htmlAdj.join(' | ') : 'no Adjustment row');
+    const adjCard = augHtml.match(/Adjustments<\/div><div class="cv">([^<]*)</)?.[1] ?? '';
+    check('HTML: the Adjustments summary card shows the credit, not a dash',
+      adjCard !== '-' && Math.abs((cellNumber(adjCard) ?? 0) - adjSigned) < 0.005, `card=${JSON.stringify(adjCard)}`);
+    // XLSX: same row, by header binding, with the numeric Total.
+    let xlsxAdjTotal: number | null = null;
+    if (augSheet) {
+      let hdr = 0; const idx = new Map<string, number>();
+      augSheet.eachRow((row, rn) => { if (hdr) return; const labels = (row.values as unknown[]).map((v) => (v == null ? '' : String(v).trim()));
+        if (labels.includes('Shipment #') && labels.includes('Total')) { hdr = rn; labels.forEach((l, i) => { if (l) idx.set(l, i); }); } });
+      augSheet.eachRow((row, rn) => { if (rn <= hdr || !idx.has('Shipment #')) return;
+        if (String(row.getCell(idx.get('Shipment #')!).value ?? '').trim() === 'Adjustment') xlsxAdjTotal = cellNumber(row.getCell(idx.get('Total')!).value); });
+    }
+    check('XLSX: the adjustment row exists with the credit as its numeric Total',
+      xlsxAdjTotal !== null && Math.abs(xlsxAdjTotal - adjSigned) < 0.005, `xlsx total=${xlsxAdjTotal}`);
+    check('the adjustment carries the same signed amount in all three formats (CSV read through its apostrophe)',
+      csvAdj !== undefined && htmlAdj !== undefined && xlsxAdjTotal !== null
+      && cellNumber(csvAdj[totIdx]) === cellNumber(htmlAdj[totIdx]) && cellNumber(htmlAdj[totIdx]) === xlsxAdjTotal,
+      `csv=${csvAdj?.[totIdx]} html=${htmlAdj?.[totIdx]} xlsx=${xlsxAdjTotal}`);
   } finally {
     await migrator.end({ timeout: 5 }).catch(() => {});
     await seeded.end({ timeout: 5 }).catch(() => {});

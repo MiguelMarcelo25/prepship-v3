@@ -38,6 +38,13 @@ const MUTATIONS = [
     apply: (s) => { const re = /const detailAmount = cancelledNoChargeBillingAmountSql\(\{[\s\S]*?\n  \}\);/; return re.test(s) ? s.replace(re, 'const detailAmount = sql`b.total_cost`;') : null; } },
   { name: 'period window one day too wide (exclusive bound = day+2)', file: DAY,
     apply: (s) => replaceNth(s, 'toUtcExclusive: `${nextDay(toDay)}T00:00:00.000Z`,', 'toUtcExclusive: `${nextDay(nextDay(toDay))}T00:00:00.000Z`,', 1) },
+  // Review's second-round defeats. Both survived 65 green checks: the row comparison covered
+  // only MONEY columns, and the formula check validated the column letters then discarded the
+  // row digits. Header identity is not value identity, and "which column" is not "which rows".
+  { name: 'REVIEW — XLSX Qty cell 999 (a non-money column nobody compared)', file: BILLING,
+    apply: (s) => replaceNth(s, 'qty: baseQty + addlQty,', 'qty: 999,', 1) },
+  { name: 'REVIEW — XLSX totals formulas skip the first detail row (first = 3)', file: BILLING,
+    apply: (s) => replaceNth(s, 'const first = 2;', 'const first = 3;', 1) },
 ];
 
 if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !process.env.PS488_PG17_ADMIN_URL) {
