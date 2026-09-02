@@ -148,12 +148,18 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 process.on('uncaughtException', (e) => { console.error('uncaught:', e); restorePending(); process.exit(1); });
 
-const INFRA = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|55006|being accessed by other users|could not connect|server closed the connection|Connection terminated/;
+const INFRA = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|ENOBUFS|55006|being accessed by other users|could not connect|server closed the connection|Connection terminated/;
 
 /** 'green' | 'red' | 'infra' — an infrastructure failure is NOT a kill and NOT a survival. */
 function outcome(cmd) {
-  try { execSync(cmd, { stdio: 'pipe', timeout: 10 * 60 * 1000 }); return 'green'; }
+  try { execSync(cmd, { stdio: 'pipe', timeout: 10 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 }); return 'green'; }
   catch (e) {
+    // A child killed by the operator's Ctrl-C is neither red nor green. This loop is synchronous,
+    // so the SIGINT handler above cannot pre-empt it: restore here and leave, or the interrupted
+    // mutation would be scored as a kill and the run would continue to PASS.
+    if (e.signal === 'SIGINT' || e.signal === 'SIGTERM' || e.signal === 'SIGHUP') {
+      console.error(`\n${e.signal} during "${cmd}" — restoring and exiting`); restorePending(); process.exit(130);
+    }
     const out = String(e.stdout ?? '') + String(e.stderr ?? '') + String(e.code ?? '') + String(e.signal ?? '');
     return INFRA.test(out) ? 'infra' : 'red';
   }
@@ -183,10 +189,15 @@ const SELECTED = only ? MUTATIONS.filter((m) => only.test(m.name)) : MUTATIONS;
 if (only) console.log(`SUBSET RUN: ${SELECTED.length}/${MUTATIONS.length} mutations match /${only.source}/i`);
 if (!SELECTED.length) { console.error('no mutation matches PS520_MUTATIONS_ONLY'); process.exit(1); }
 
-const base = outcome(PROOF);
-if (base === 'infra') abortInfra('the baseline');
-if (base === 'red') { console.error('ABORT — the proof is RED before any mutation. Fix the baseline first.'); process.exit(1); }
-console.log('baseline: proof green on the unmutated tree');
+// Every check a selected mutation relies on must be GREEN on the unmutated tree, not only the
+// proof: a guard that is red for an unrelated reason would report "killed [ps-468]" while
+// proving nothing.
+for (const cmd of [PROOF, ...new Set(SELECTED.flatMap((m) => m.checks ?? []))]) {
+  const base = outcome(cmd);
+  if (base === 'infra') abortInfra(`the baseline of "${cmd}"`);
+  if (base === 'red') { console.error(`ABORT — "${cmd}" is RED before any mutation. Fix the baseline first.`); process.exit(1); }
+  console.log(`baseline: "${cmd}" green on the unmutated tree`);
+}
 
 let survived = 0;
 for (const m of SELECTED) {

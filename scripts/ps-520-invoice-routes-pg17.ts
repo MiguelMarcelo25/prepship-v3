@@ -625,8 +625,7 @@ async function main(): Promise<void> {
     // columns, in a different order, under different names. They now derive from one contract;
     // this asserts that on the RENDERED artifacts, not on the contract they were built from —
     // a shared constant proves nothing if a renderer stops using it.
-    const csvHeaderRow = splitCsvLine(csv.replace(/^﻿/, '').split('\r\n')[0]!)
-      .map((h) => h.replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const csvHeaderRow = splitCsvLine(csv.replace(/^\uFEFF/, '').split('\r\n')[0]!);
     const htmlHeaderRow = [...html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => tagText(m[1]!));
     const xlsxHeaderRow = sheet && headerRowNumber
       ? (sheet.getRow(headerRowNumber).values as unknown[])
@@ -717,15 +716,18 @@ async function main(): Promise<void> {
       const us = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
       return us ? `${us[3]}-${us[1]!.padStart(2, '0')}-${us[2]!.padStart(2, '0')}` : s.trim();
     };
-    const norm = (kind: Kind, raw: unknown): string | number | null => {
-      const text = raw instanceof Date ? raw.toISOString() : String(raw ?? '').replace(/ /g, ' ').trim();
+    // The apostrophe read-through is the CSV's spelling and ONLY the CSV's: applied to every
+    // format, a renderer that started writing '=Widget into the workbook or the page would be
+    // stripped to the same value and pass. The format is passed in, and only 'csv' reads through.
+    const norm = (kind: Kind, raw: unknown, format: 'csv' | 'html' | 'xlsx'): string | number | null => {
+      const text = raw instanceof Date ? raw.toISOString() : String(raw ?? '').replace(/\u00a0/g, ' ').trim();
       if (kind === 'day') return toDay(raw);
       const blank = text === '—' || text === '';
       if (kind === 'text') {
         // The CSV neutralises a formula-shaped TEXT cell with a leading apostrophe (PS-468). That
         // is the CSV's disclosed spelling of the same value, read through ONLY when the value is
         // formula-shaped; a raw-cell check below asserts the apostrophe is actually there.
-        return blank ? '' : text.replace(/^'(?=[=+\-@])/, '');
+        return blank ? '' : (format === 'csv' ? text.replace(/^'(?=[=+\-@\t\r])/, '') : text);
       }
       // A blank Qty is not a zero Qty and a blank presence cell is "never charged"; only the
       // base money columns fold blank→0, by contract (the HTML prints '—' where the CSV writes 0).
@@ -745,11 +747,11 @@ async function main(): Promise<void> {
     const csvFullRows = (doc: string): FullRow[] => doc.replace(/^﻿/, '').split('\r\n')
       .filter((l) => l.trim() !== '').slice(1)
       .map((line) => { const cells = splitCsvLine(line); const r: FullRow = {};
-        ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i]); }); return r; });
+        ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i], 'csv'); }); return r; });
     const htmlFullRows = (doc: string): FullRow[] => [...doc.slice(doc.indexOf('<tbody>'), doc.indexOf('</tbody>'))
       .matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
       .map((m) => { const cells = [...m[1]!.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => tagText(c[1]!.replace(/<br\s*\/?>/g, ' ')));
-        const r: FullRow = {}; ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i]); }); return r; });
+        const r: FullRow = {}; ALL_FIELDS.forEach((f, i) => { r[f.header] = norm(f.kind, cells[i], 'html'); }); return r; });
     // Self-locating: finds the header row by its labels and the totals row by its label, so
     // the same parser serves any invoice sheet rather than the one whose numbers happened to
     // be in scope.
@@ -768,7 +770,7 @@ async function main(): Promise<void> {
         for (const f of ALL_FIELDS) {
           const col = idx.get(f.header); const v = col === undefined ? undefined : (row.getCell(col).value as unknown);
           const raw = v && typeof v === 'object' && !(v instanceof Date) && 'result' in (v as object) ? (v as { result: unknown }).result : v;
-          r[f.header] = norm(f.kind, raw);
+          r[f.header] = norm(f.kind, raw, 'xlsx');
         }
         out.push(r);
       }
@@ -847,7 +849,7 @@ async function main(): Promise<void> {
       if (!hdr || !tot) return [`${label}: header/totals row not found`];
       for (let n = hdr + 1; n < tot; n += 1) for (const f of ALL_FIELDS) {
         if (f.kind === 'text' || f.kind === 'day') continue;
-        const col = idx.get(f.header); if (col === undefined) continue;
+        const col = idx.get(f.header); if (col === undefined) { issues.push(`${label}: no ${f.header} column`); continue; }
         const v = ws.getRow(n).getCell(col).value;
         if (!(v === null || v === undefined || typeof v === 'number')) issues.push(`${label} row ${n} ${f.header}: ${typeof v} ${JSON.stringify(v)}`);
       }
@@ -1080,13 +1082,13 @@ async function main(): Promise<void> {
     check('the list totals cover the requested client', totalsBody.data?.[0]?.clientId === clientId,
       JSON.stringify(totalsBody.data?.[0]?.clientId));
     check('the LIST grand total equals the INVOICE grand total, to the cent',
-      listTotals !== undefined && Math.abs(listTotals.grandTotal - grandTotal) < 0.005,
+      listTotals !== undefined && Math.abs((listTotals.grandTotal ?? NaN) - grandTotal) < 0.005,
       `list=${listTotals?.grandTotal} invoice=${grandTotal.toFixed(2)}`);
     // pick_pack the list may charge: the seeded order, ONE duplicate copy, and the last-day
     // order. NOT the cancelled 77.77, NOT the second copy, NOT the next-day 55.55.
     const listPickPack = money.pickPack + suppressed.duplicateCopyPickPack + boundary.lastDayPickPack;
     check('the list applies cancelled-no-charge (the 77.77 order contributes nothing)',
-      listTotals !== undefined && Math.abs(listTotals.pickPackTotal - listPickPack) < 0.005,
+      listTotals !== undefined && Math.abs((listTotals.pickPackTotal ?? NaN) - listPickPack) < 0.005,
       `pickPackTotal=${listTotals?.pickPackTotal} expected=${listPickPack.toFixed(2)}`);
     // Orders the list counts: PS520-1001, PS520-CANCELLED (still an order, at zero), ONE of the
     // two PS520-DUPLICATE copies, and PS520-LASTDAY. The next-day order is outside the window.
@@ -1123,7 +1125,7 @@ async function main(): Promise<void> {
       && foreignTotalsBody.data[0]?.clientId === otherClientId,
       JSON.stringify(foreignTotalsBody.data?.map((d) => d.clientId)));
     check('the totals endpoint leaks none of the other client\'s money',
-      !foreignTotalsBody.data.some((d) => Math.abs(d.totals.grandTotal - grandTotal) < 0.005),
+      !foreignTotalsBody.data.some((d) => Math.abs((d.totals.grandTotal ?? NaN) - grandTotal) < 0.005),
       JSON.stringify(foreignTotalsBody.data));
     // Scoping is a property of each ROUTE, not of the invoice: all three handlers call
     // billingScopeFromContext separately. Review's proof exercised only the HTML one, so deleting
@@ -1229,7 +1231,8 @@ async function main(): Promise<void> {
       JSON.stringify(stamped));
     // Replay is idempotent: same id, no second record.
     const again = await finalizeBillingPeriod({ ...period, actorId: 'ps-520', actorEmail: 'ps-520@test' });
-    const [{ n }] = await seeded`select count(*)::int as n from billing_finalizations where client_id = ${clientId}`;
+    const countRow = (await seeded`select count(*)::int as n from billing_finalizations where client_id = ${clientId}`)[0];
+    const n = Number(countRow?.n ?? NaN);
     check('finalizing the same period again returns the SAME finalization and creates no second record',
       again.alreadyFinalized && again.finalization.id === first.finalization.id && n === 1,
       `alreadyFinalized=${again.alreadyFinalized} sameId=${again.finalization.id === first.finalization.id} rows=${n}`);
@@ -1316,11 +1319,19 @@ async function main(): Promise<void> {
     const augTotalsBody = await augTotalsRes.json() as { data: Array<{ clientId: number; totals: Record<string, number> }> };
     const augList = augTotalsBody.data?.[0]?.totals;
     check(`the Billing LIST's August grand total is next-day + credit (${augGrand.toFixed(2)}), signed — a credit is not clipped`,
-      augList !== undefined && Math.abs(augList.grandTotal - augGrand) < 0.005 && Math.abs(augList.adjustmentTotal - adjSigned) < 0.005,
+      augList !== undefined && Math.abs((augList.grandTotal ?? NaN) - augGrand) < 0.005 && Math.abs((augList.adjustmentTotal ?? NaN) - adjSigned) < 0.005,
       `grandTotal=${augList?.grandTotal} adjustmentTotal=${augList?.adjustmentTotal}`);
     const augTotalsIssues = xlsxTotalsIssues(augSheet, 'August');
     check('EVERY August XLSX totals-row formula sums its own column over EXACTLY the August detail rows (the adjustment included)',
       augTotalsIssues.length === 0, augTotalsIssues.join(' | '));
+    // The July header-parity check does not cover August, and xlsxTypeIssues skipping a column it
+    // cannot find would have passed vacuously: the August CSV header must be the contract and
+    // the August workbook must carry every one of its headers.
+    const augCsvHeader = splitCsvLine(augCsv.replace(/^\uFEFF/, '').split('\r\n')[0]!);
+    const augIdx = augSheet ? locateSheet(augSheet).idx : new Map<string, number>();
+    check('August: the CSV header is the 19-column contract and the workbook carries every one of its headers',
+      augCsvHeader.length === ALL_FIELDS.length && augCsvHeader.every((h, i) => h === ALL_FIELDS[i]!.header) && ALL_FIELDS.every((f) => augIdx.has(f.header)),
+      `csv=${augCsvHeader.join('|')} xlsx-missing=${ALL_FIELDS.filter((f) => !augIdx.has(f.header)).map((f) => f.header).join(',')}`);
     const augTypes = xlsxTypeIssues(augSheet, 'August');
     check('every numeric August XLSX cell is a NUMBER (the credit is a real negative number)', augTypes.length === 0, augTypes.slice(0, 5).join(' | '));
     const adjRow = (rows: FullRow[]) => rows.find((r) => r['Shipment #'] === 'Adjustment');

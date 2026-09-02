@@ -191,7 +191,6 @@ const returnMoneyRow: InvoiceCsvDetailRow = {
   return_processing_amt: '3.00',
   has_return_processing_line: true,
   row_total: '10.73',
-  billing_status_label: 'Return postage',
   skus: null,
   package_cost_amt: '0',
   box_label: '—',
@@ -370,7 +369,7 @@ const csvSafe = renderInvoiceCsv([
     skus: 'A,B',
   },
 ]);
-const unsafeLine = csvSafe.split('\r\n')[1];
+const unsafeLine = csvSafe.split('\r\n')[1] ?? '';
 // This pin used to accept EITHER the neutralised form OR the raw formula — it enforced
 // nothing. The formula lead must arrive apostrophe-prefixed, and only that.
 assert.ok(
@@ -402,7 +401,7 @@ const splitCsv = (line: string): string[] => {
   out.push(cur);
   return out;
 };
-const csvHeader = splitCsv(renderInvoiceCsv([fallbackRow]).replace(/^\uFEFF/, '').split('\r\n')[0]);
+const csvHeader = splitCsv(renderInvoiceCsv([fallbackRow]).replace(/^\uFEFF/, '').split('\r\n')[0] ?? '');
 const SKU_COL = csvHeader.indexOf('SKUs');
 const TOTAL_COL = csvHeader.indexOf('Total');
 assert.ok(SKU_COL >= 0 && TOTAL_COL >= 0, 'SKUs and Total must be locatable by header name');

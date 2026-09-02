@@ -290,3 +290,6 @@ export const PS497_0104_CATALOG: CatalogExpectation = {
     { name: 'fulfillment_line_claims_supply_chk', mustBeValidated: true },
   ],
 };
+
+// Re-exported for the scripts that call applyMigrations and type their own tolerance list.
+export type { ToleranceRule };
