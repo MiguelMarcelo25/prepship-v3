@@ -77,8 +77,12 @@ function baseRow(over: Partial<InvoiceCsvDetailRow>): InvoiceCsvDetailRow {
 // ── 1) Behavioral: the per-order Total is the backend row_total verbatim when it is > 0 ──
 const billed = renderInvoiceCsvRow(baseRow({ row_total: '10.66' })).split(',');
 check('CSV Total reads the backend row_total verbatim when present (no FE recompute)', billed[TOTAL_COL] === '10.66');
+// A credit is a NUMBER in the CSV (DJ ruling 2026-09-02, PS-520): csvField leaves a strictly validated signed
+// decimal bare and neutralises only formula-shaped text. This pin used to require the TEXT cell '-2.5 —
+// the apostrophe form that made a customer's credit unsummable — and went red at the gate when the
+// contract changed (76e4269f). It now asserts the contract, not the old sanitizer's side effect.
 const credited = renderInvoiceCsvRow(baseRow({ row_total: '-2.50' })).split(',');
-check('CSV Total preserves a backend signed credit instead of replacing it with component fees', credited[TOTAL_COL] === "'-2.5");
+check('CSV Total preserves a backend signed credit instead of replacing it with component fees', credited[TOTAL_COL] === '-2.5');
 
 // ── 2) Behavioral: the documented fallback fires ONLY when row_total is 0 (sums the same backend
 //        per-line amounts: pickPackFee + package + shipping + storage) — clean integers to avoid float noise ──
