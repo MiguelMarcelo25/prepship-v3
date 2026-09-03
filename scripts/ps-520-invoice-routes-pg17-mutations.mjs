@@ -21,6 +21,8 @@ const PROOF = 'npm run -s test:ps-520-invoice-routes-pg17';
 const CSV_GUARD = 'npm run -s test:ps-468-invoice-csv';
 const YML = '.github/workflows/render-auto-deploy.yml';
 const DEPLOY_GUARD = 'npm run -s test:ps-520-render-deploy-pin';
+const LEAF = 'src/services/billing-return-line-types.ts';
+const LEAF_GUARD = 'npm run -s test:ps-521-return-vocabulary-leaf';
 
 /** Replace the Nth (1-based) occurrence, or return null if it does not exist. */
 function replaceNth(src, from, to, n) {
@@ -108,6 +110,11 @@ const MUTATIONS = [
     apply: (s) => replaceNth(s, ',\\"commitId\\":\\"${GITHUB_SHA}\\"', '', 1) },
   { name: 'AUDIT — every Destination forced to Domestic (a no-country order must say Needs Review)', file: BILLING,
     apply: (s) => replaceNth(s, '      destination: classifyDestinationCountry(r.ship_to_country).destination,', "      destination: 'Domestic',", 1) },
+  // PS-521 r2 (Hermes 88%): the aggregate's ORDER is contractual and was unenforced — reversing it
+  // left the whole pack green. The proof cannot see this (same members); the leaf guard owns it.
+  { name: 'PS-521 — the return vocabulary aggregate reversed (order is the SQL in-list + portal contract)', file: LEAF, checks: [LEAF_GUARD],
+    apply: (s) => replaceNth(s, "export const BILLING_RETURN_LINE_TYPES = [\n  'return',\n  'return_label',\n  'return_processing',\n  'return_postage',\n  'return_processing_fee',\n] as const;",
+      "export const BILLING_RETURN_LINE_TYPES = [\n  'return_processing_fee',\n  'return_postage',\n  'return_processing',\n  'return_label',\n  'return',\n] as const;", 1) },
 ];
 
 if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !process.env.PS488_PG17_ADMIN_URL) {
@@ -223,7 +230,7 @@ for (const m of SELECTED) {
   const results = checks.map((c) => outcome(c));
   if (!restorePending()) process.exit(1);
   if (results.includes('infra')) abortInfra(m.name);
-  const killedBy = checks.filter((_, i) => results[i] === 'red').map((c) => (c === PROOF ? 'proof' : c === CSV_GUARD ? 'ps-468' : 'deploy-pin'));
+  const killedBy = checks.filter((_, i) => results[i] === 'red').map((c) => (c === PROOF ? 'proof' : c === CSV_GUARD ? 'ps-468' : c === LEAF_GUARD ? 'ps-521' : 'deploy-pin'));
   if (killedBy.length === 0) { survived += 1; console.error(`  SURVIVED     ${m.name}`); }
   else console.log(`  killed       ${m.name}  [${killedBy.join('+')}]`);
 }

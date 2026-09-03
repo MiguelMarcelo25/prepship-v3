@@ -62,6 +62,30 @@ check('aggregate = postage ∪ processing ∪ bare, exactly (executed, not read)
   assert.deepEqual([...all].sort(), [...union].sort());
   assert.equal(all.size, BILLING_RETURN_LINE_TYPES.length, 'the aggregate list repeats a spelling');
 });
+// ORDER IS CONTRACTUAL. The aggregate renders into every `b.line_type in (...)` arm in this order
+// and the Client Portal pins it in this order; the leaf keeps it a literal for exactly that
+// reason. Until this check existed nothing enforced it — the audit reversed the list and every
+// gate stayed green. The contract order is written here, once, as a value.
+const CONTRACT_ORDER = {
+  all: ['return', 'return_label', 'return_processing', 'return_postage', 'return_processing_fee'],
+  postage: ['return_postage', 'return_label'],
+  processing: ['return_processing_fee', 'return_processing'],
+  bare: ['return'],
+} as const;
+check('the aggregate and the split lists are in their CONTRACT order (the SQL in-list order the portal pins)', () => {
+  assert.deepEqual([...BILLING_RETURN_LINE_TYPES], [...CONTRACT_ORDER.all], 'aggregate order changed');
+  assert.deepEqual([...BILLING_RETURN_POSTAGE_LINE_TYPES], [...CONTRACT_ORDER.postage], 'postage order changed');
+  assert.deepEqual([...BILLING_RETURN_PROCESSING_LINE_TYPES], [...CONTRACT_ORDER.processing], 'processing order changed');
+  assert.deepEqual([...BILLING_RETURN_BARE_LINE_TYPES], [...CONTRACT_ORDER.bare], 'bare order changed');
+});
+check('the rendered SQL in-list carries the spellings in that same order', () => {
+  const src = read(LEAF);
+  // The literal declaration IS what renders: inList() maps the tuple in order. Assert the source
+  // order matches the executed tuple, so a declaration edit cannot disagree with the export.
+  const block = /export const BILLING_RETURN_LINE_TYPES = \[([\s\S]*?)\]/.exec(src)?.[1] ?? '';
+  const declared = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(declared, [...CONTRACT_ORDER.all], 'the declaration text is not in contract order');
+});
 check('postage and processing are disjoint, and neither contains the bare spelling', () => {
   for (const t of BILLING_RETURN_POSTAGE_LINE_TYPES) assert.ok(!(BILLING_RETURN_PROCESSING_LINE_TYPES as readonly string[]).includes(t), `${t} is in both buckets`);
   for (const t of BILLING_RETURN_BARE_LINE_TYPES) {
