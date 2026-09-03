@@ -33,6 +33,7 @@ const shipStationAccount: OrderSyncAccountDiagnostic = {
   lastError: null,
   backlogPasses: 0,
   backlogPages: 0,
+  staleReasons: [],
   cursors: [],
 };
 

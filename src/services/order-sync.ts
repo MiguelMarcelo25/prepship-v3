@@ -6,6 +6,12 @@ import { shipments } from '../db/schema/shipments';
 import { getSettingNumber, setSetting } from './settings';
 import { getJsonSetting, setJsonSetting } from './settings-json';
 import { env } from '../lib/env';
+import {
+  STALLED_PASS_ALERT_THRESHOLD,
+  isOrderSyncAccountStale,
+  orderSyncAccountStaleReasons,
+  type OrderSyncStaleReason,
+} from './order-sync-account-stale';
 import { isExcludedStoreId } from '../config/prepship';
 import {
   upsertNormalizedStoreOrders,
@@ -503,8 +509,11 @@ export type OrderStatusCatchupSnapshot = {
  * Three keeps detection inside the card's ~10 minute target at the observed
  * catch-up cadence, while being longer than the one-pass dip a store larger
  * than the page budget produces on every cycle.
+ *
+ * PS-484: the constant lives with the stale rule in order-sync-account-stale.ts; re-exported here
+ * so existing importers keep working.
  */
-export const STALLED_PASS_ALERT_THRESHOLD = 3;
+export { STALLED_PASS_ALERT_THRESHOLD, isOrderSyncAccountStale, orderSyncAccountStaleReasons };
 
 function emptyStatusCatchupSnapshot(): OrderStatusCatchupSnapshot {
   return {
@@ -614,42 +623,7 @@ function nextStalledPasses(
   return nextStalledPassCount(previous, current);
 }
 
-/**
- * PS-484. Whether one ShipStation sync account counts as stale.
- *
- * Extracted from the diagnostics loop so the rule is directly testable. It was inline
- * and consequently untested: reverting the fix below left every sync guard green.
- *
- * The correction: a backlog only counts once it has STOPPED DRAINING. Both backlog
- * clauses used to read `.length > 0`, so ANY backlog made the account stale and healthy
- * paginated progress reported as a fault. Store 378060 carries 13 pages of shipped
- * orders against a 10-page pass budget, so it has a backlog on every other pass
- * forever while updating zero rows -- the same non-fault PS-431 fixed one layer up in
- * the watchdog verdict, of which this flag was the half that never learned it.
- *
- * Narrowing loses no real detection. A backlog whose watermark has stopped advancing is
- * already caught by the age clause; a failed pass by `failed`. What only these clauses
- * can catch is a backlog that never drains while the watermark keeps moving, and that
- * is exactly what stalledPasses measures.
- */
-export function isOrderSyncAccountStale(input: {
-  failed: boolean;
-  watermarkMs: number | null;
-  ageMs: number | null;
-  freshMs: number;
-  statusBacklogEntries: ReadonlyArray<{ stalledPasses: number }>;
-  awaitingBacklogEntries: ReadonlyArray<{ stalledPasses: number }>;
-}): boolean {
-  const stalled = (entries: ReadonlyArray<{ stalledPasses: number }>) =>
-    entries.some((entry) => entry.stalledPasses >= STALLED_PASS_ALERT_THRESHOLD);
-  return (
-    input.failed ||
-    input.watermarkMs === null ||
-    (input.ageMs !== null && input.ageMs > input.freshMs) ||
-    stalled(input.statusBacklogEntries) ||
-    stalled(input.awaitingBacklogEntries)
-  );
-}
+// PS-484: isOrderSyncAccountStale and the stale REASONS live in order-sync-account-stale.ts.
 
 export function mergeOrderStatusCatchupEntries(
   previousEntries: OrderStatusCatchupEntry[],
@@ -1777,7 +1751,10 @@ export type OrderSyncAccountDiagnostic = {
   runAgeSeconds: number | null;
   fresh: boolean;
   stale: boolean;
-  state: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running';
+  /** PS-484: 'retrying' = the queue holds this account's failed attempt for a retry (not stale). */
+  state: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running' | 'retrying';
+  /** PS-484: every clause that makes the account stale, so a 503 can name its cause. */
+  staleReasons: OrderSyncStaleReason[];
   activeJobId: string | null;
   lastStartedAt: string | null;
   lastCompletedAt: string | null;
@@ -1806,9 +1783,16 @@ export function orderSyncRunQueueVerdict(
   } | undefined,
   queueTruth: OrderSyncQueueTruth,
   nowMs: number,
-): { running: boolean; abandoned: boolean; error: string | null; runAgeSeconds: number | null } {
+): {
+  running: boolean;
+  abandoned: boolean;
+  /** PS-484: the recorded attempt failed and pg-boss holds it for a retry — recovery in progress. */
+  recovering: boolean;
+  error: string | null;
+  runAgeSeconds: number | null;
+} {
   if (runState?.status !== 'running') {
-    return { running: false, abandoned: false, error: null, runAgeSeconds: null };
+    return { running: false, abandoned: false, recovering: false, error: null, runAgeSeconds: null };
   }
 
   const startedMs = runState.lastStartedAt ? Date.parse(runState.lastStartedAt) : NaN;
@@ -1823,23 +1807,42 @@ export function orderSyncRunQueueVerdict(
     return {
       running: true,
       abandoned: false,
+      recovering: false,
       error: null,
       runAgeSeconds: runAgeMs === null ? null : Math.floor(runAgeMs / 1000),
     };
   }
 
+  const runAgeSeconds = runAgeMs === null ? null : Math.floor(runAgeMs / 1000);
+  // PS-484: an attempt the queue holds in 'retry' is recovery in progress, not an abandoned run.
+  // Calling it abandoned made the account "failed" (and /health/deep 503) for the whole retry
+  // delay of a pass that pg-boss was about to run again. Nothing is lost by the narrowing: a retry
+  // that never runs trips the watermark-age clause within the freshness window, a retry that
+  // exhausts its limit leaves the job in no live state and IS abandoned below, and a retry that
+  // throws marks the account failed through the handler's own catch.
+  // Precondition (pinned by ps-417): SHIPMENT_SYNC_WATCHDOG_ORDER_FRESH_SECONDS (900 default) is
+  // below the orders job's expireInSeconds (1800), so an orphaned pass that only becomes 'retry'
+  // at expiry is already watermark_stale by then.
   const retrying = Boolean(
     activeJobId && queueTruth.available && queueTruth.retryingJobIds.includes(activeJobId),
   );
+  if (retrying) {
+    return {
+      running: false,
+      abandoned: false,
+      recovering: true,
+      error: 'Order sync attempt failed and is queued to retry.',
+      runAgeSeconds,
+    };
+  }
   return {
     running: false,
     abandoned: true,
-    error: retrying
-      ? 'Order sync timed out and is waiting to retry.'
-      : !withinLease
-        ? 'Order sync exceeded its worker deadline.'
-        : 'Order sync worker no longer owns this job.',
-    runAgeSeconds: runAgeMs === null ? null : Math.floor(runAgeMs / 1000),
+    recovering: false,
+    error: !withinLease
+      ? 'Order sync exceeded its worker deadline.'
+      : 'Order sync worker no longer owns this job.',
+    runAgeSeconds,
   };
 }
 
@@ -1887,14 +1890,18 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
     const runVerdict = orderSyncRunQueueVerdict(runState, queueTruth, nowMs);
     const failed = runState?.status === 'failed' || runVerdict.abandoned;
     const running = runVerdict.running;
-    const stale = isOrderSyncAccountStale({
-      failed,
+    // PS-484: the owner says WHICH clause, not just whether. The codes ride on the diagnostic,
+    // the watchdog verdict text and /health/deep, so the next 503 names its cause.
+    const staleReasons = orderSyncAccountStaleReasons({
+      runStatusFailed: runState?.status === 'failed',
+      runAbandoned: runVerdict.abandoned,
       watermarkMs,
       ageMs,
       freshMs,
       statusBacklogEntries,
       awaitingBacklogEntries,
     });
+    const stale = staleReasons.length > 0;
     const backlogPageValues = [
       ...statusBacklogEntries.map((entry) => entry.backlogPages),
       ...awaitingBacklogEntries.map((entry) => entry.backlogPages),
@@ -1909,15 +1916,18 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
       runAgeSeconds: runVerdict.runAgeSeconds,
       fresh: !stale,
       stale,
+      staleReasons,
       state: running
         ? 'running'
-        : failed
-          ? 'failed'
-          : watermarkMs === null
-            ? 'never_synced'
-            : stale
-              ? 'stale'
-              : 'fresh',
+        : runVerdict.recovering
+          ? 'retrying'
+          : failed
+            ? 'failed'
+            : watermarkMs === null
+              ? 'never_synced'
+              : stale
+                ? 'stale'
+                : 'fresh',
       activeJobId: running ? runState?.activeJobId ?? null : null,
       lastStartedAt: runState?.lastStartedAt ?? null,
       lastCompletedAt: runState?.lastCompletedAt ?? null,

@@ -674,7 +674,7 @@ export function formatSyncPill(sync: {
     accounts?: Array<{
       displayName?: string
       storeIds?: number[]
-      state?: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running'
+      state?: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running' | 'retrying'
       stale?: boolean
       backlogPasses?: number
       backlogPages?: number | null

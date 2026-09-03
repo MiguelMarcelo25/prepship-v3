@@ -156,14 +156,54 @@ const activeVerdict = orderSyncRunQueueVerdict(
   Date.parse('2026-07-10T00:01:00.000Z'),
 );
 assert.equal(activeVerdict.running, true);
+assert.equal(activeVerdict.recovering, false);
+// PS-484: an attempt pg-boss holds for a retry is recovery in progress, not an abandoned run —
+// calling it abandoned made the account "failed" and /health/deep 503 for the retry delay.
 const retryVerdict = orderSyncRunQueueVerdict(
   { status: 'running', activeJobId: 'retry-1', lastStartedAt: '2026-07-10T00:00:00.000Z' },
   queueTruth,
   Date.parse('2026-07-10T00:01:00.000Z'),
 );
 assert.equal(retryVerdict.running, false);
-assert.equal(retryVerdict.abandoned, true);
-assert.match(retryVerdict.error ?? '', /waiting to retry/);
+assert.equal(retryVerdict.abandoned, false, 'a queued retry is not abandoned');
+assert.equal(retryVerdict.recovering, true);
+assert.match(retryVerdict.error ?? '', /queued to retry/);
+// ...and a run the queue no longer lists at all IS abandoned, within the lease or past it.
+const orphanVerdict = orderSyncRunQueueVerdict(
+  { status: 'running', activeJobId: 'gone-1', lastStartedAt: '2026-07-10T00:00:00.000Z' },
+  queueTruth,
+  Date.parse('2026-07-10T00:01:00.000Z'),
+);
+assert.equal(orphanVerdict.abandoned, true, 'a run no live queue row owns is abandoned');
+assert.equal(orphanVerdict.recovering, false);
+assert.match(orphanVerdict.error ?? '', /no longer owns/);
+const deadlineVerdict = orderSyncRunQueueVerdict(
+  { status: 'running', activeJobId: 'active-1', lastStartedAt: '2026-07-10T00:00:00.000Z' },
+  queueTruth,
+  Date.parse('2026-07-10T01:00:00.000Z'),
+);
+assert.equal(deadlineVerdict.abandoned, true, 'past the lease the run is abandoned even if the row is active');
+assert.match(deadlineVerdict.error ?? '', /worker deadline/);
+// The narrowing's backstop: an orphaned pass turns 'retry' only at pg-boss expiry, and by then
+// the account must already be watermark_stale — so the freshness window must sit BELOW the
+// orders job's expiry. Pinned on the two defaults; raising the window past 1800s would open a
+// silent gap between expiry and the retry's pickup.
+{
+  const envSource = readFileSync('src/lib/env.ts', 'utf8');
+  const queueSource = readFileSync('src/services/sync-job-queue.ts', 'utf8');
+  const product = (m: RegExpExecArray | null): number | null =>
+    m ? Number(m[1]) * Number(m[2]) : null;
+  const freshSeconds = product(
+    /SHIPMENT_SYNC_WATCHDOG_ORDER_FRESH_SECONDS:[^\n]*?default\((\d+)\s*\*\s*(\d+)\)/.exec(envSource),
+  );
+  const expirySeconds = product(/expireInSeconds:\s*(\d+)\s*\*\s*(\d+)/.exec(queueSource));
+  assert.ok(freshSeconds !== null && expirySeconds !== null,
+    'the freshness default and the job expiry are both declared in source as <n> * <m> seconds');
+  assert.ok(
+    freshSeconds! < expirySeconds!,
+    `PS-484 precondition: order freshness default (${freshSeconds}s) must be below job expiry (${expirySeconds}s)`,
+  );
+}
 assert.equal(
   formatSyncPill({
     status: 'syncing',

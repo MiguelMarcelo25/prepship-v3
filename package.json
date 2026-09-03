@@ -727,6 +727,7 @@
     "test:sync-continuous-self-healing": "tsx scripts/sync-continuous-self-healing-guard.ts",
     "test:ps-400-sync-freshness": "tsx scripts/ps-400-sync-freshness-split-child-guard.ts",
     "test:ps-409-status-catchup-backlog": "tsx scripts/ps-409-status-catchup-backlog-guard.ts",
+    "test:ps-484-stale-reasons:mutations": "node scripts/ps-484-stale-reasons-mutations.mjs",
     "test:ps-417-shipstation-sync-account-state": "tsx scripts/ps-417-shipstation-sync-account-state-guard.ts",
     "test:ps-426-awaiting-cursor-manual-sync": "tsx scripts/ps-426-awaiting-cursor-manual-sync-guard.ts && tsx scripts/ps-426-manual-sync-timing-guard.ts && tsx scripts/ps-426-consumer-leadership-integration.ts",
     "test:ps-424-order-lifecycle": "tsx scripts/ps-424-order-lifecycle-command-guard.ts && tsx scripts/ps-424-order-lifecycle-command-integration.ts",

@@ -22,6 +22,7 @@ const {
   prioritizeOrderStatusCatchupPasses,
   mergeOrderStatusCatchupEntries,
   isOrderSyncAccountStale,
+  orderSyncAccountStaleReasons,
   buildAwaitingOrderCursorState,
 } = await import('../src/services/order-sync');
 type OrderStatusCatchupEntry =
@@ -330,6 +331,64 @@ assert.equal(
   isOrderSyncAccountStale({ ...HEALTHY_ACCOUNT, ageMs: 15 * 60 * 1000 }), false,
   'a watermark exactly at the freshness window is not yet stale',
 );
+
+// ── PS-484 (r2): the rule names its clause. The boolean delegates to the reasons ──
+const REASON_BASE = {
+  runStatusFailed: false,
+  runAbandoned: false,
+  watermarkMs: HEALTHY_ACCOUNT.watermarkMs,
+  ageMs: HEALTHY_ACCOUNT.ageMs,
+  freshMs: HEALTHY_ACCOUNT.freshMs,
+  statusBacklogEntries: [] as Array<{ stalledPasses: number }>,
+  awaitingBacklogEntries: [] as Array<{ stalledPasses: number }>,
+};
+assert.deepEqual(orderSyncAccountStaleReasons(REASON_BASE), [], 'a healthy account has no stale reason');
+assert.deepEqual(orderSyncAccountStaleReasons({ ...REASON_BASE, runStatusFailed: true }), ['run_failed']);
+assert.deepEqual(orderSyncAccountStaleReasons({ ...REASON_BASE, runAbandoned: true }), ['run_abandoned'],
+  'an abandoned run is its own clause — the one a 503 could never name before');
+assert.deepEqual(orderSyncAccountStaleReasons({ ...REASON_BASE, watermarkMs: null, ageMs: null }), ['never_synced']);
+assert.deepEqual(orderSyncAccountStaleReasons({ ...REASON_BASE, ageMs: 16 * 60 * 1000 }), ['watermark_stale']);
+assert.deepEqual(orderSyncAccountStaleReasons({ ...REASON_BASE, ageMs: 15 * 60 * 1000 }), [],
+  'exactly at the freshness window is not yet stale');
+assert.deepEqual(
+  orderSyncAccountStaleReasons({ ...REASON_BASE, statusBacklogEntries: [{ stalledPasses: 3 }] }),
+  ['status_backlog_stalled'],
+);
+assert.deepEqual(
+  orderSyncAccountStaleReasons({ ...REASON_BASE, awaitingBacklogEntries: [{ stalledPasses: 9 }] }),
+  ['awaiting_backlog_stalled'],
+);
+assert.deepEqual(
+  orderSyncAccountStaleReasons({ ...REASON_BASE, statusBacklogEntries: [{ stalledPasses: 0 }], awaitingBacklogEntries: [{ stalledPasses: 2 }] }),
+  [],
+  'draining backlogs stay progress under the reasons rule too',
+);
+assert.deepEqual(
+  orderSyncAccountStaleReasons({ ...REASON_BASE, runAbandoned: true, ageMs: 20 * 60 * 1000, statusBacklogEntries: [{ stalledPasses: 3 }] }),
+  ['run_abandoned', 'watermark_stale', 'status_backlog_stalled'],
+  'every firing clause is listed, in a fixed order',
+);
+// The boolean is the reasons, not a second rule: same truth table, same answers.
+for (const [label, boolInput, reasonInput] of [
+  ['healthy', HEALTHY_ACCOUNT, REASON_BASE],
+  ['failed', { ...HEALTHY_ACCOUNT, failed: true }, { ...REASON_BASE, runStatusFailed: true }],
+  ['never synced', { ...HEALTHY_ACCOUNT, watermarkMs: null }, { ...REASON_BASE, watermarkMs: null }],
+  ['stale watermark', { ...HEALTHY_ACCOUNT, ageMs: 16 * 60 * 1000 }, { ...REASON_BASE, ageMs: 16 * 60 * 1000 }],
+  ['stalled backlog', { ...HEALTHY_ACCOUNT, statusBacklogEntries: [{ stalledPasses: 3 }] }, { ...REASON_BASE, statusBacklogEntries: [{ stalledPasses: 3 }] }],
+] as const) {
+  assert.equal(
+    isOrderSyncAccountStale(boolInput as never),
+    orderSyncAccountStaleReasons(reasonInput as never).length > 0,
+    `boolean and reasons agree: ${label}`,
+  );
+}
+const staleOwner = readFileSync('src/services/order-sync-account-stale.ts', 'utf8');
+assert.match(staleOwner, /return orderSyncAccountStaleReasons\(\{[\s\S]*?\}\)\.length > 0;/,
+  'isOrderSyncAccountStale must delegate to the reasons, not restate the clauses');
+const diagnostics = readFileSync('src/services/order-sync.ts', 'utf8');
+assert.match(diagnostics, /const staleReasons = orderSyncAccountStaleReasons\(\{/, 'the diagnostics loop asks the owner for reasons');
+assert.match(diagnostics, /const stale = staleReasons\.length > 0;/, 'the loop\'s stale flag IS the reasons');
+assert.doesNotMatch(diagnostics.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1'), /watermarkMs === null \|\|/, 'no inline copy of the rule survives in order-sync.ts');
 
 // ── PS-484: the awaiting cursor learns the same stall rule as status catch-up ─
 const awaitingPass = (over: Partial<Parameters<typeof buildAwaitingOrderCursorState>[0]>) =>

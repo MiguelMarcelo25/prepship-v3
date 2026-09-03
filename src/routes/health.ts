@@ -3,7 +3,7 @@ import postgres from 'postgres';
 import { performance } from 'node:perf_hooks';
 import { env } from '../lib/env';
 import { readPrintQueueWorkerHealth } from '../services/print-queue-worker-health';
-import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
+import { describeStaleOrderAccounts, readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
 import { getPersistedWorkerStatus } from '../services/worker-status';
 import { evaluateWorkerJobSkipHealth } from '../services/worker-job-skip-health';
 import { readInventoryClaimReviewHealth } from '../services/inventory-claim-review-health';
@@ -217,6 +217,8 @@ async function checkSyncFreshness(): Promise<ReadinessComponent> {
         currentJobDeadlineAt: health.worker.currentJobDeadlineAt ?? 'none',
         lastCompletedOrderSyncAt: health.worker.lastCompletedOrderSyncAt ?? 'none',
         lastCompletedShipmentSyncAt: health.worker.lastCompletedShipmentSyncAt ?? 'none',
+        // PS-484: which account, which clause — captured by the watchdog on every 503.
+        staleOrderAccounts: describeStaleOrderAccounts(health.orders.accountAlerts) || 'none',
       },
     };
   } catch {

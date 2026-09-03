@@ -130,9 +130,29 @@ export type ShipmentSyncWatchdogAccountAlert = Pick<
   | 'runAgeSeconds'
   | 'lastFailureAt'
   | 'lastError'
+  | 'staleReasons'
   | 'backlogPasses'
   | 'backlogPages'
 >;
+
+/** PS-484: what the verdict needs to NAME a stale account in its reason text. */
+export type ShipmentSyncWatchdogStaleAccountInput = {
+  accountId: string;
+  staleReasons: ReadonlyArray<string>;
+  lastError: string | null;
+};
+
+/** PS-484: "main=run_abandoned (Order sync worker no longer owns this job.)" */
+export function describeStaleOrderAccounts(
+  accounts: ReadonlyArray<ShipmentSyncWatchdogStaleAccountInput>,
+): string {
+  return accounts
+    .map((account) => {
+      const reasons = account.staleReasons.length > 0 ? account.staleReasons.join('+') : 'unknown';
+      return `${account.accountId}=${reasons}${account.lastError ? ` (${account.lastError})` : ''}`;
+    })
+    .join('; ');
+}
 
 export type ShipmentSyncQueueHealth = ShipmentSyncWatchdogQueueInput & {
   oldestCreatedAt: string | null;
@@ -338,6 +358,7 @@ function orderAccountAlerts(
       runAgeSeconds: account.runAgeSeconds,
       lastFailureAt: account.lastFailureAt,
       lastError: account.lastError,
+      staleReasons: account.staleReasons,
       backlogPasses: account.backlogPasses,
       backlogPages: account.backlogPages,
     }));
@@ -359,6 +380,8 @@ export function evaluateShipmentSyncWatchdog(
     /** PS-431: backlogged passes whose cursor has stopped advancing. */
     orderStatusCatchupStalledCount?: number;
     staleOrderAccountCount?: number;
+    /** PS-484: the stale accounts with their clauses, so the 503 reason can name them. */
+    staleOrderAccounts?: ReadonlyArray<ShipmentSyncWatchdogStaleAccountInput>;
   },
   thresholds: ShipmentSyncWatchdogThresholds = SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 ): ShipmentSyncWatchdogVerdict {
@@ -499,11 +522,16 @@ export function evaluateShipmentSyncWatchdog(
   }
 
   if (staleOrderAccountCount > 0 && !shipmentStale) {
+    // PS-484: say WHICH account and WHY. "1 order sync account(s) are stale or failed" was the
+    // whole evidence a 503 left behind, and the per-run snapshot is gone by the next pass.
+    const detail = input.staleOrderAccounts?.length
+      ? `: ${describeStaleOrderAccounts(input.staleOrderAccounts)}`
+      : '';
     return {
       ...base,
       state: 'order_account_stale',
       alert: true,
-      reason: `${staleOrderAccountCount} order sync account(s) are stale or failed`,
+      reason: `${staleOrderAccountCount} order sync account(s) are stale or failed${detail}`,
       recommendedAction: 'enqueue_order_sync',
     };
   }
@@ -705,6 +733,8 @@ async function buildShipmentSyncWatchdogStatus(
     readLastAction(),
   ]);
 
+  // PS-484: computed before the verdict so the reason text can name the accounts.
+  const accountAlerts = orderAccountAlerts(orders.accounts);
   const backlogActive = queue.created + queue.retry > thresholds.queueBacklogThreshold;
   const previousConsecutive = snapshot?.queueBacklogActive
     ? Math.max(0, Number(snapshot.consecutiveBacklogChecks ?? 0))
@@ -730,11 +760,11 @@ async function buildShipmentSyncWatchdogStatus(
       orderStatusCatchupBacklogCount: orders.statusCatchup.backlogCount,
       orderStatusCatchupStalledCount: orders.statusCatchup.stalledCount,
       staleOrderAccountCount: orders.staleAccountCount,
+      staleOrderAccounts: accountAlerts,
     },
     thresholds,
   );
   const orderBlocker = orderBlockedBy(worker.status);
-  const accountAlerts = orderAccountAlerts(orders.accounts);
 
   return {
     enabled: env.SHIPMENT_SYNC_WATCHDOG_ENABLED,
@@ -1109,7 +1139,8 @@ export async function runShipmentSyncWatchdogTick(
     }
     for (const account of status.orders.accountAlerts) {
       console.error(
-        `[shipment-sync-watchdog] account=${account.accountId} state=${account.state}: ` +
+        `[shipment-sync-watchdog] account=${account.accountId} state=${account.state} ` +
+          `reasons=${account.staleReasons.join('+') || 'none'}: ` +
           `${account.lastError ?? `${account.displayName} order sync is stale`}`,
       );
     }

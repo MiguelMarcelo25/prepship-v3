@@ -15,6 +15,7 @@ process.env.SUPABASE_JWT_SECRET ??= 'secret';
 
 const {
   heartbeatGatedWatchdogAction,
+  describeStaleOrderAccounts,
   evaluateShipmentSyncWatchdog,
 } = await import('../src/services/shipment-sync-watchdog');
 const { nextOrderSyncResumePage } = await import('../src/services/order-sync');
@@ -56,6 +57,45 @@ const staleAccount = evaluateShipmentSyncWatchdog({
 assert.equal(staleAccount.state, 'order_account_stale');
 assert.equal(staleAccount.orderFresh, false);
 assert.equal(staleAccount.recommendedAction, 'enqueue_order_sync');
+// PS-484: the 503 names the account and the clause — the evidence the original 503 never left.
+const namedStaleAccount = evaluateShipmentSyncWatchdog({
+  nowMs: Date.parse('2026-07-14T08:00:00Z'),
+  orderLastSyncedAt: '2026-07-14T07:59:00Z',
+  shipmentLastSyncedAt: '2026-07-14T07:59:00Z',
+  workerHeartbeatAgeSeconds: 30,
+  queue: { created: 0, retry: 0, active: 0, failed: 0, activeMaxAgeSeconds: null },
+  missingShipments: { recentShippedOrders: 10, missingActiveShipments: 0 },
+  consecutiveBacklogChecks: 0,
+  staleOrderAccountCount: 1,
+  staleOrderAccounts: [
+    { accountId: 'main', staleReasons: ['run_abandoned'], lastError: 'Order sync worker no longer owns this job.' },
+  ],
+});
+assert.equal(
+  namedStaleAccount.reason,
+  '1 order sync account(s) are stale or failed: main=run_abandoned (Order sync worker no longer owns this job.)',
+  'the verdict text carries the account and its clause',
+);
+assert.equal(
+  evaluateShipmentSyncWatchdog({
+    nowMs: Date.parse('2026-07-14T08:00:00Z'),
+    orderLastSyncedAt: '2026-07-14T07:59:00Z',
+    shipmentLastSyncedAt: '2026-07-14T07:59:00Z',
+    workerHeartbeatAgeSeconds: 30,
+    queue: { created: 0, retry: 0, active: 0, failed: 0, activeMaxAgeSeconds: null },
+    missingShipments: { recentShippedOrders: 10, missingActiveShipments: 0 },
+    consecutiveBacklogChecks: 0,
+    staleOrderAccountCount: 2,
+    staleOrderAccounts: [
+      { accountId: 'main', staleReasons: ['never_synced'], lastError: null },
+      { accountId: 'client:11', staleReasons: ['watermark_stale', 'status_backlog_stalled'], lastError: null },
+    ],
+  }).reason,
+  '2 order sync account(s) are stale or failed: main=never_synced; client:11=watermark_stale+status_backlog_stalled',
+  'several accounts, several clauses, one line',
+);
+assert.equal(describeStaleOrderAccounts([{ accountId: 'x', staleReasons: [], lastError: null }]), 'x=unknown',
+  'an account flagged with no listed clause says so rather than hiding it');
 
 assert.equal(
   nextOrderSyncResumePage({ complete: false, startPage: 1, lastPageProcessed: 1 }),
