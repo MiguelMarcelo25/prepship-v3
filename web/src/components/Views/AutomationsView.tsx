@@ -2658,10 +2658,6 @@ export default function AutomationsView() {
           <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-ink">
             Automations
           </h1>
-          <p className="mt-1 max-w-3xl text-small text-ink-3">
-            Versioned declarative rules with deterministic simulation, explicit
-            conflicts, immutable publishing, and explainable history.
-          </p>
         </div>
         <div className="flex w-fit shrink-0 items-center gap-2 rounded-lg bg-surface px-3 py-2 text-tiny text-ink-2 ring-1 ring-line">
           <Activity size={14} className="text-emerald-600" />

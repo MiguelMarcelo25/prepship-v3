@@ -130,14 +130,13 @@ const INVENTORY_ACCENT_ICON_COLOR: Record<InventoryAccentTone, string> = {
 // Tab metadata array — paired with the existing `activeTab` state
 // machine. Each entry carries everything the rail + section header
 // need to render: id (matches existing setActiveTab values), short
-// label for the rail pill, full label for the section header, a
-// one-line description for the section subtitle, an icon, and the
-// accent tone. Order here is the order tabs appear in the rail.
+// label for the rail pill, full label for the section header, an
+// icon, and the accent tone. Order here is the order tabs appear in
+// the rail.
 const INVENTORY_TAB_META: Array<{
   id: 'stock' | 'receive' | 'alerts' | 'parents' | 'history'
   short: string
   label: string
-  description: string
   icon: LucideIcon
   tone: InventoryAccentTone
 }> = [
@@ -145,8 +144,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'stock',
     short: 'Stock Levels',
     label: 'Stock Levels',
-    description:
-      'Track on-hand quantity per SKU per client. Adjust min-stock thresholds, edit weights and dimensions, and import new SKUs from existing orders.',
     icon: Layers,
     tone: 'brand',
   },
@@ -154,8 +151,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'receive',
     short: 'Receive',
     label: 'Receive Inventory',
-    description:
-      'Log incoming inventory. Pick a client, list the SKUs and quantities received, then post the batch — quantities flow into Stock Levels and a History entry is recorded automatically.',
     icon: PackagePlus,
     tone: 'emerald',
   },
@@ -163,8 +158,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'alerts',
     short: 'Alerts',
     label: 'Low / Out-of-Stock Alerts',
-    description:
-      'SKUs at or below their minimum stock threshold. Click any row to jump to it in Stock Levels with the Low/Out filter applied.',
     icon: AlertTriangle,
     tone: 'amber',
   },
@@ -172,8 +165,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'parents',
     short: 'Parent SKUs',
     label: 'Parent SKUs',
-    description:
-      'Group child SKUs into parent units (case packs, bundles, kits). Receiving a parent updates every child by its base-unit quantity in one transaction.',
     icon: FolderTree,
     tone: 'violet',
   },
@@ -181,8 +172,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'history',
     short: 'History',
     label: 'Inventory History',
-    description:
-      'Audit trail of every inventory adjustment — receives, returns, damage write-offs, and manual edits. Filter by client, type, and date range.',
     icon: HistoryIcon,
     tone: 'rose',
   },
@@ -2899,8 +2888,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 1) Sticky horizontal icon rail (brand mark + per-tab
                    accent-toned pills + animated underline indicator)
                 2) Animated section header (large gradient icon + tab
-                   label + tab description + right-side action slot
-                   for the existing 200 Low/Out shortcut)
+                   label + right-side action slot for the existing
+                   200 Low/Out shortcut)
           The activeTab state machine is unchanged — only the visual
           chrome around it is. */}
       {hideTabs ? null : (() => {
@@ -3057,8 +3046,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             </aside>
 
             {/* ─── SECTION HEADER ───────────────────────────────────
-                Animated header (icon + title + description + action
-                slot). Re-keys on activeTab so AnimatePresence treats
+                Animated header (icon + title + action slot).
+                Re-keys on activeTab so AnimatePresence treats
                 each tab switch as a fresh enter/exit and the icon
                 spring-rotates in. mb-4 spacing mirrors the original
                 header so downstream toolbar layouts don't shift. */}
@@ -3092,9 +3081,6 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   <h2 className="text-[22px] sm:text-[26px] font-extrabold text-ink font-display tracking-[-0.022em] leading-tight m-0">
                     {viewTitle ?? activeMeta.label}
                   </h2>
-                  <p className="text-[12.5px] sm:text-[13px] text-ink-3 mt-1.5 leading-relaxed max-w-3xl">
-                    {activeMeta.description}
-                  </p>
                 </div>
                 <div className={INVENTORY_HEADER_ACTIONS_CLASS}>
                   {activeTab === 'stock' ? (
