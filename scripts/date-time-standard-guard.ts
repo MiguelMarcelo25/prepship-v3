@@ -110,7 +110,12 @@ const caTimeConsumers = [
   'web/src/pages/PromptLibrary.tsx',
   'web/src/pages/Picklist.tsx',
   'web/src/components/Views/packages-parity.ts',
-  'web/src/components/Views/SettingsView.tsx',
+  // 2026-09-03: SettingsView.tsx no longer renders a timestamp itself (the PS-155 panel
+  // extraction moved every date render out) and its ca-time import was dead, so the pin
+  // now sits on the Settings surfaces that actually format timestamps.
+  'web/src/components/Views/SystemStatusPanel.tsx',
+  'web/src/components/Settings/CarrierIntegrationsCard.tsx',
+  'web/src/components/Settings/PendingClientIntegrationsCard.tsx',
 ];
 for (const file of caTimeConsumers) {
   assert(

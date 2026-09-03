@@ -39,12 +39,6 @@ export const FRONTEND_IMPORT_EXCEPTIONS: readonly FrontendImportException[] = [
     ownerCard: 'PS-441',
     reason: 'Replace the frontend eligibility dependency with the backend-issued workflow DTO.',
   },
-  {
-    sourcePath: 'web/src/components/Views/AutomationAvailabilityPanel.tsx',
-    targetPath: 'src/lib/shipping-service-eligibility',
-    ownerCard: 'PS-441',
-    reason: 'Render backend eligibility facts through a public DTO instead of importing backend policy.',
-  },
   ...[
     'src/lib/analytics-provenance',
     'src/lib/inventory-stock-status',
@@ -64,7 +58,6 @@ export const FRONTEND_IMPORT_EXCEPTIONS: readonly FrontendImportException[] = [
     'web/src/components/Views/orders/best-rate/rate-proof.ts',
     'web/src/components/Views/orders/best-rate/rate-request.ts',
     'web/src/components/Views/OrdersView.tsx',
-    'web/src/components/Views/SettingsView.tsx',
   ].map((sourcePath) => ({
     sourcePath,
     targetPath: 'src/lib/shipping-service-eligibility',

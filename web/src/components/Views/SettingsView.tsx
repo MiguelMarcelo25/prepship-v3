@@ -32,11 +32,6 @@ import {
   ACCENT_GRADIENT,
   ACCENT_ICON_BG,
   ACCENT_ICON_COLOR,
-  ButtonSpinner,
-  SectionCard,
-  SkeletonRow,
-  SkeletonStack,
-  StatusLine,
   type AccentTone,
 } from './settings-ui'
 // PS-155: the Markups panel extracted to ./MarkupsSection (behavior-preserving; props owned by the view).
@@ -46,24 +41,15 @@ import { MarkupsSection } from './MarkupsSection'
 import { MarketplaceFeesSection } from './MarketplaceFeesSection'
 import {
   Settings as SettingsIcon,
-  ChevronDown,
   Loader2,
   Sparkles,
-  AlertTriangle,
-  RefreshCcw,
   Beaker,
   Database,
-  CheckCircle2,
-  XCircle,
-  Trash2,
-  Plus,
   Store,
   Truck,
   Clock,
   MapPin,
   Activity,
-  Lock,
-  Search,
   Percent,
 } from 'lucide-react'
 // 2026-05-13: Ship-From Locations now lives as a Settings tab instead
@@ -74,19 +60,13 @@ import {
 import LocationsView from './LocationsView'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
-import { formatCaDateTimeLabeled } from '../../lib/ca-time'
 import { useShippingAccounts, useClients } from '../../hooks'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
 import type { MarkupType, MarkupsMap as SettingsMarkupsMap } from '../../types/markups'
 import {
-  HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
-  HUGRAB_GROUND_SAVER_BLOCK_REASON,
-} from '../../../../src/lib/shipping-service-eligibility'
-import {
   buildSettingsMarkupRows,
   buildSettingsRefetchStatus,
-  getSettingsMarkupEmptyMessage,
   getSettingsMarkupSavedToastMessage,
   groupSettingsMarkupRows,
   type SettingsRefetchState,
