@@ -10,14 +10,15 @@ const carrierPolicy = read('web/src/components/Settings/CarrierEligibilityPolicy
 const carrierIntegrations = read('web/src/components/Settings/CarrierIntegrationsCard.tsx');
 const pendingIntegrations = read('web/src/components/Settings/PendingClientIntegrationsCard.tsx');
 
-assert.match(settings, /import \{ useQuery, useQueryClient \} from '@tanstack\/react-query'/);
+assert.match(settings, /import \{ useQuery \} from '@tanstack\/react-query'/);
 assert.match(settings, /requestIdleCallback/);
 assert.match(settings, /enabled: settingsQueriesReady && activeSection === 'sandbox'/);
 assert.match(settings, /enabled: settingsQueriesReady && activeSection === 'system'/);
-assert.match(settings, /enabled: settingsQueriesReady && activeSection === 'automation'/);
 assert.match(settings, /api\.get<\{ data: SettingsTestClient\[\] \}>\('\/admin\/test-clients'\)/);
 assert.match(settings, /api\.get<ObservabilityStatus>\('\/observability\/status'/);
-assert.match(settings, /'\/automations\/controls'/);
+// 2026-09-03: the Settings Automations tab and its legacy controls client are
+// retired; AutomationsView owns every /automations/controls read and write.
+assert.doesNotMatch(settings, /automation-availability|\/automations\/controls/);
 assert.doesNotMatch(settings, /setTestClients|setSystemStatus|setAutomationRows/);
 
 assert.match(marketplaceFees, /queryFn: \(\) => apiClient\.fetchMarketplaceFeeRules\(\)/);

@@ -65,7 +65,6 @@ const requiredKeys: Array<[string, string, string[]]> = [
   ['Settings', settings, [
     "['settings', 'test-clients'",
     "['settings', 'observability-status'",
-    "['settings', 'automation-availability'",
     "['settings', 'marketplace-fee-rules'",
     'endpointQueryKeys.stores',
     'endpointQueryKeys.locations',

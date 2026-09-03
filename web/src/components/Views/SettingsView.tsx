@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 // PS-155: presentational helpers + section accent tokens extracted to ./settings-ui (behavior-preserving).
@@ -32,7 +32,6 @@ import {
   ACCENT_GRADIENT,
   ACCENT_ICON_BG,
   ACCENT_ICON_COLOR,
-  AutomationSwitch,
   ButtonSpinner,
   SectionCard,
   SkeletonRow,
@@ -83,7 +82,6 @@ import type { MarkupType, MarkupsMap as SettingsMarkupsMap } from '../../types/m
 import {
   HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
-  isHugrabCarrierDisableProtected,
 } from '../../../../src/lib/shipping-service-eligibility'
 import {
   buildSettingsMarkupRows,
@@ -103,12 +101,10 @@ import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrat
 import { SystemStatusPanel, type ObservabilityStatus } from './SystemStatusPanel'
 import { CacheManagementPanel } from './CacheManagementPanel'
 import { SandboxTestOrdersPanel } from './SandboxTestOrdersPanel'
-// PS-155: Automation availability panel extracted (pure presentation; state + handlers + PS-057
-// protection predicate stay here and are passed in as props).
 
 // Drawer sections — each represents one icon on the rail and one
 // content panel. Order here = rendering order on the rail.
-type DrawerSectionId = 'markups' | 'marketplaceFees' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system' | 'automation'
+type DrawerSectionId = 'markups' | 'marketplaceFees' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system'
 
 const DRAWER_SECTION_KEY = 'settings:active-drawer-section'
 
@@ -129,7 +125,6 @@ function sectionFromPath(pathname: string): DrawerSectionId | null {
     cache: 'cache',
     system: 'system',
     observability: 'system',
-    automation: 'automation',
   }
   return aliases[slug] ?? null
 }
@@ -144,7 +139,6 @@ const SECTION_PATH: Record<DrawerSectionId, string> = {
   sandbox: '/settings/sandbox',
   cache: '/settings/cache',
   system: '/settings/system',
-  automation: '/settings/automation',
 }
 
 function scheduleSettingsQueries(callback: () => void) {
@@ -211,140 +205,12 @@ function formatFlagValue(value: unknown): string {
   return String(value)
 }
 
-type AutomationStoreRow = {
-  storeId: number
-  clientId: number
-  clientName: string
-  active: boolean
-}
-
-type AutomationCarrierRow = {
-  carrierId?: string | null
-  carrierCode?: string | null
-  nickname?: string | null
-  friendlyName?: string | null
-  sourceClientId?: number | null
-  sourceClientName?: string | null
-  disabled?: boolean
-  disabledReason?: string | null
-  services?: AutomationServiceEligibilityRow[]
-  carrier_id?: string | null
-  carrier_code?: string | null
-  friendly_name?: string | null
-  source_client_id?: number | null
-  source_client_name?: string | null
-}
-
-type AutomationCarrierService = {
-  serviceCode?: string | null
-  name?: string | null
-  domestic?: boolean | null
-  international?: boolean | null
-}
-
-type AutomationCarrierCatalogRow = {
-  carrierId?: string | null
-  carrierCode?: string | null
-  nickname?: string | null
-  services?: AutomationCarrierService[]
-}
-
-type AutomationServiceEligibilityRow = {
-  code?: string | null
-  serviceCode?: string | null
-  name: string
-  allowed: boolean
-  disabled?: boolean
-  locked?: boolean
-  ruleId?: string | null
-  reason?: string
-}
-
-type AutomationStoreAvailability = {
-  store: AutomationStoreRow
-  loading: boolean
-  error: string | null
-  carriers: AutomationCarrierRow[]
-}
-
-interface SettingsAutomationQueryData {
-  rows: AutomationStoreAvailability[]
-  updatedAt: string
-}
-
 type SettingsTestClient = { id: number; name: string; order_count: number }
 
-const EMPTY_AUTOMATION_ROWS: AutomationStoreAvailability[] = []
-const EMPTY_AUTOMATION_SERVICE_CATALOG: Record<string, AutomationCarrierService[]> = {}
 const HIDDEN_TEST_CLIENT_NAMES = new Set(['Manual Orders'])
-
-const AUTOMATION_CARRIER_FETCH_CONCURRENCY = 4
-const AUTOMATION_UPS_FALLBACK_SERVICES: AutomationCarrierService[] = [
-  { serviceCode: 'ups_ground', name: 'UPS Ground' },
-  { serviceCode: 'ups_2nd_day_air', name: 'UPS 2nd Day Air' },
-  { serviceCode: 'ups_3_day_select', name: 'UPS 3 Day Select' },
-  { serviceCode: 'ups_ground_saver', name: 'UPS Ground Saver' },
-  { serviceCode: 'ups_surepost_1_lb_or_greater', name: 'UPS Ground Saver (1 lb+)' },
-  { serviceCode: 'ups_surepost_less_than_1_lb', name: 'UPS Ground Saver (<1 lb)' },
-]
-
-function automationCarrierLabel(carrier: AutomationCarrierRow): string {
-  return (
-    carrier.friendlyName ??
-    carrier.friendly_name ??
-    carrier.nickname ??
-    carrier.carrierCode ??
-    carrier.carrier_code ??
-    carrier.carrierId ??
-    carrier.carrier_id ??
-    'Carrier account'
-  )
-}
-
-function automationCarrierCode(carrier: AutomationCarrierRow): string {
-  return (
-    carrier.carrierCode ??
-    carrier.carrier_code ??
-    carrier.carrierId ??
-    carrier.carrier_id ??
-    ''
-  )
-}
-
-function isHugrabClient(name: string): boolean {
-  return name.trim().toLowerCase() === 'hugrab'
-}
-
-function automationCatalogKey(value: string | null | undefined): string {
-  return String(value ?? '').trim().toLowerCase()
-}
-
-function automationServicesForCarrier(
-  carrier: AutomationCarrierRow,
-  catalog: Record<string, AutomationCarrierService[]>,
-): AutomationCarrierService[] {
-  const keys = [
-    carrier.carrierCode,
-    carrier.carrier_code,
-    carrier.carrierId,
-    carrier.carrier_id,
-  ].map(automationCatalogKey).filter(Boolean)
-  for (const key of keys) {
-    const services = catalog[key]
-    if (services?.length) return services
-  }
-  const identity = keys.join(' ')
-  if (identity.includes('ups')) return AUTOMATION_UPS_FALLBACK_SERVICES
-  return []
-}
-
-function automationServiceCode(service: AutomationServiceEligibilityRow | AutomationCarrierService): string {
-  return String((service as AutomationServiceEligibilityRow).serviceCode ?? service.serviceCode ?? (service as AutomationServiceEligibilityRow).code ?? '').trim()
-}
 
 export default function SettingsView() {
   const toastContext = useContext(ToastContext)
-  const queryClient = useQueryClient()
   const location = useLocation()
   const navigate = useNavigate()
   const [activeSection, setActiveSection] = useState<DrawerSectionId>(() => {
@@ -462,9 +328,6 @@ export default function SettingsView() {
     | { kind: 'error'; message: string }
   >({ kind: 'idle' })
   const [seedCount, setSeedCount] = useState<string>('25')
-  const [automationSavingKey, setAutomationSavingKey] = useState<string | null>(null)
-  const [automationQuery, setAutomationQuery] = useState('')
-  const [automationStatusFilter, setAutomationStatusFilter] = useState<'all' | 'disabled' | 'enabled'>('all')
 
   // Keep every GET literal inline with its stable key: repository guards use
   // these call sites to pin the backend owner for each Settings panel.
@@ -515,207 +378,6 @@ export default function SettingsView() {
     ? (systemStatusQuery.error instanceof Error ? systemStatusQuery.error.message : 'Failed to load system status')
     : null
   const refreshSystemStatus = () => systemStatusQuery.refetch()
-
-  const automationAvailabilityQuery = useQuery<SettingsAutomationQueryData>({
-    queryKey: ['settings', 'automation-availability'],
-    enabled: settingsQueriesReady && activeSection === 'automation',
-    queryFn: async () => {
-      const payload = await api.get<{
-        data: Array<{
-          store: AutomationStoreRow
-          carriers: AutomationCarrierRow[]
-        }>
-        updatedAt?: string
-      }>('/automations/controls', { timeoutMs: 20_000 })
-      return {
-        rows: (payload.data ?? []).map((row) => ({
-          store: row.store,
-          loading: false,
-          error: null,
-          carriers: row.carriers ?? [],
-        })),
-        updatedAt: payload.updatedAt ?? new Date().toISOString(),
-      }
-    },
-  })
-  const automationRows = automationAvailabilityQuery.data?.rows ?? EMPTY_AUTOMATION_ROWS
-  const automationServiceCatalog = EMPTY_AUTOMATION_SERVICE_CATALOG
-  const automationUpdatedAt = automationAvailabilityQuery.data?.updatedAt ?? null
-  const automationLoading = (
-    automationAvailabilityQuery.data == null
-    && (!settingsQueriesReady || automationAvailabilityQuery.isPending)
-  ) || automationAvailabilityQuery.isFetching
-  const automationError = automationAvailabilityQuery.isError
-    ? (automationAvailabilityQuery.error instanceof Error
-        ? automationAvailabilityQuery.error.message
-        : 'Failed to load automation carrier map')
-    : null
-  const refreshAutomationAvailability = async () => {
-    await automationAvailabilityQuery.refetch()
-  }
-
-  // Immutably patch carriers for a single store row. Used for optimistic
-  // updates while React Query remains the sole owner of server response data.
-  const patchAutomationStore = useCallback(
-    (storeId: number, updateCarriers: (carriers: AutomationCarrierRow[]) => AutomationCarrierRow[]) => {
-      queryClient.setQueryData<SettingsAutomationQueryData>(
-        ['settings', 'automation-availability'],
-        (current) => current
-          ? {
-              ...current,
-              rows: current.rows.map((row) =>
-                row.store.storeId === storeId ? { ...row, carriers: updateCarriers(row.carriers) } : row,
-              ),
-            }
-          : current,
-      )
-    },
-    [queryClient],
-  )
-
-  function carrierMatches(carrier: AutomationCarrierRow, carrierId: string | null, carrierCode: string): boolean {
-    const id = carrier.carrierId ?? carrier.carrier_id ?? null
-    if (carrierId && id && carrierId === id) return true
-    return Boolean(carrierCode) && automationCarrierCode(carrier).toLowerCase() === carrierCode.toLowerCase()
-  }
-
-  async function toggleAutomationCarrier(row: AutomationStoreAvailability, carrier: AutomationCarrierRow, enabled: boolean) {
-    const carrierId = carrier.carrierId ?? carrier.carrier_id ?? null
-    const carrierCode = automationCarrierCode(carrier)
-    if (!carrierId && !carrierCode) return
-    const key = `carrier:${row.store.storeId}:${carrierId ?? carrierCode}`
-    const prevDisabled = carrier.disabled
-    setAutomationSavingKey(key)
-    // Optimistic: flip just this carrier.
-    patchAutomationStore(row.store.storeId, (carriers) =>
-      carriers.map((c) => (carrierMatches(c, carrierId, carrierCode) ? { ...c, disabled: !enabled } : c)),
-    )
-    try {
-      await api.patch('/automations/controls/carrier', {
-        clientId: row.store.clientId,
-        storeId: row.store.storeId,
-        carrierId,
-        carrierCode: carrierCode || null,
-        disabled: !enabled,
-        reason: enabled ? null : 'Carrier disabled by Automation settings.',
-      })
-      toastContext?.addToast(enabled ? 'Carrier enabled' : 'Carrier disabled', 'success')
-    } catch (err) {
-      // Revert on failure (e.g. 409 PS-057 carrier protection).
-      patchAutomationStore(row.store.storeId, (carriers) =>
-        carriers.map((c) => (carrierMatches(c, carrierId, carrierCode) ? { ...c, disabled: prevDisabled } : c)),
-      )
-      toastContext?.addToast(err instanceof Error ? err.message : 'Failed to save carrier automation', 'error')
-    } finally {
-      setAutomationSavingKey(null)
-    }
-  }
-
-  async function toggleAutomationService(row: AutomationStoreAvailability, carrier: AutomationCarrierRow, service: AutomationServiceEligibilityRow, enabled: boolean) {
-    if (service.locked) return
-    const code = automationServiceCode(service)
-    if (!code && !service.name) return
-    const carrierId = carrier.carrierId ?? carrier.carrier_id ?? null
-    const carrierCode = automationCarrierCode(carrier)
-    const key = `service:${row.store.storeId}:${carrierId ?? carrierCode}:${code || service.name}`
-    const serviceMatches = (svc: AutomationServiceEligibilityRow) =>
-      (Boolean(code) && automationServiceCode(svc) === code) ||
-      (!code && svc.name === service.name)
-    setAutomationSavingKey(key)
-    // Optimistic: flip this service's eligibility (moves it between the
-    // Available and Disabled columns).
-    patchAutomationStore(row.store.storeId, (carriers) =>
-      carriers.map((c) =>
-        carrierMatches(c, carrierId, carrierCode)
-          ? {
-              ...c,
-              services: (c.services ?? []).map((svc) =>
-                serviceMatches(svc) ? { ...svc, allowed: enabled, disabled: !enabled } : svc,
-              ),
-            }
-          : c,
-      ),
-    )
-    try {
-      await api.patch('/automations/controls/service', {
-        clientId: row.store.clientId,
-        storeId: row.store.storeId,
-        carrierId,
-        carrierCode: carrierCode || null,
-        serviceCode: code || null,
-        serviceName: service.name ?? null,
-        disabled: !enabled,
-        reason: enabled ? null : 'Service disabled by Automation settings.',
-      })
-      toastContext?.addToast(enabled ? 'Service enabled' : 'Service disabled', 'success')
-    } catch (err) {
-      // Revert on failure (e.g. 409 HUGRAB Ground Saver/SurePost lock).
-      patchAutomationStore(row.store.storeId, (carriers) =>
-        carriers.map((c) =>
-          carrierMatches(c, carrierId, carrierCode)
-            ? {
-                ...c,
-                services: (c.services ?? []).map((svc) =>
-                  serviceMatches(svc) ? { ...svc, allowed: !enabled, disabled: enabled } : svc,
-                ),
-              }
-            : c,
-        ),
-      )
-      toastContext?.addToast(err instanceof Error ? err.message : 'Failed to save service automation', 'error')
-    } finally {
-      setAutomationSavingKey(null)
-    }
-  }
-
-  // Per-store master toggle: enable/disable every carrier account for a store
-  // in one call. HUGRAB-protected UPS carriers are skipped server-side and in
-  // the optimistic update so PS-057 is never violated.
-  async function toggleAutomationStoreCarriers(row: AutomationStoreAvailability, enabled: boolean) {
-    const key = `store:${row.store.storeId}`
-    const prevCarriers = row.carriers
-    const isProtected = (carrier: AutomationCarrierRow) =>
-      isHugrabCarrierDisableProtected(
-        { clientId: row.store.clientId, clientName: row.store.clientName, storeId: row.store.storeId },
-        {
-          carrierId: carrier.carrierId ?? carrier.carrier_id,
-          carrierCode: automationCarrierCode(carrier),
-          carrierName: automationCarrierLabel(carrier),
-        },
-      )
-    setAutomationSavingKey(key)
-    // Optimistic: flip every non-protected carrier.
-    patchAutomationStore(row.store.storeId, (carriers) =>
-      carriers.map((c) => (!enabled && isProtected(c) ? c : { ...c, disabled: !enabled })),
-    )
-    try {
-      const res = await api.patch<{ data?: { applied?: number; skipped?: unknown[] } }>(
-        '/automations/controls/store-carriers',
-        {
-          clientId: row.store.clientId,
-          storeId: row.store.storeId,
-          disabled: !enabled,
-          reason: enabled ? null : 'All carriers disabled by Automation settings.',
-        },
-      )
-      const skipped = Array.isArray(res?.data?.skipped) ? res.data.skipped.length : 0
-      toastContext?.addToast(
-        enabled ? 'All carriers enabled' : 'All carriers disabled',
-        'success',
-      )
-      if (!enabled && skipped > 0) {
-        toastContext?.addToast(
-          `${skipped} protected carrier${skipped === 1 ? '' : 's'} kept enabled (PS-057)`,
-          'info',
-        )
-      }
-    } catch (err) {
-      patchAutomationStore(row.store.storeId, () => prevCarriers)
-      toastContext?.addToast(err instanceof Error ? err.message : 'Failed to update store carriers', 'error')
-    } finally {
-      setAutomationSavingKey(null)
-    }
-  }
 
   async function handleSeedTestOrders() {
     const count = Number.parseInt(seedCount, 10)
@@ -858,7 +520,6 @@ export default function SettingsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection])
   useEffect(() => {
-    if (activeSection === 'automation') return
     try {
       window.localStorage.setItem(DRAWER_SECTION_KEY, activeSection)
     } catch {
@@ -970,77 +631,6 @@ export default function SettingsView() {
 
   const activeMeta = DRAWER_SECTIONS.find((s) => s.id === activeSection) ?? DRAWER_SECTIONS[0]!
   const ActiveIcon = activeMeta.icon
-  const automationClientGroups = useMemo(() => {
-    const groups = new Map<number, {
-      clientId: number
-      clientName: string
-      stores: AutomationStoreAvailability[]
-      carrierCount: number
-      loadingCount: number
-      errorCount: number
-    }>()
-    for (const row of automationRows) {
-      const current = groups.get(row.store.clientId) ?? {
-        clientId: row.store.clientId,
-        clientName: row.store.clientName,
-        stores: [],
-        carrierCount: 0,
-        loadingCount: 0,
-        errorCount: 0,
-      }
-      current.stores.push(row)
-      current.carrierCount += row.carriers.length
-      if (row.loading) current.loadingCount += 1
-      if (row.error) current.errorCount += 1
-      groups.set(row.store.clientId, current)
-    }
-    return [...groups.values()].sort((a, b) => a.clientName.localeCompare(b.clientName))
-  }, [automationRows])
-
-  // Total count of disabled rules (carriers + services) across all stores —
-  // drives the "Disabled" stat card and gives an at-a-glance health number.
-  const automationDisabledCount = useMemo(
-    () =>
-      automationRows.reduce(
-        (sum, row) =>
-          sum +
-          row.carriers.reduce(
-            (acc, carrier) =>
-              acc +
-              (carrier.disabled ? 1 : 0) +
-              (carrier.services ?? []).filter((service) => service.allowed === false).length,
-            0,
-          ),
-        0,
-      ),
-    [automationRows],
-  )
-
-  // Apply the search query + status filter to the grouped rows.
-  const automationFilteredGroups = useMemo(() => {
-    const query = automationQuery.trim().toLowerCase()
-    const storeHasDisabled = (row: AutomationStoreAvailability) =>
-      row.carriers.some(
-        (carrier) => carrier.disabled || (carrier.services ?? []).some((service) => service.allowed === false),
-      )
-    return automationClientGroups
-      .map((group) => {
-        const stores = group.stores.filter((row) => {
-          if (
-            query &&
-            !group.clientName.toLowerCase().includes(query) &&
-            !String(row.store.storeId).includes(query)
-          ) {
-            return false
-          }
-          if (automationStatusFilter === 'disabled') return storeHasDisabled(row)
-          if (automationStatusFilter === 'enabled') return !storeHasDisabled(row)
-          return true
-        })
-        return { ...group, stores }
-      })
-      .filter((group) => group.stores.length > 0)
-  }, [automationClientGroups, automationQuery, automationStatusFilter])
 
   return (
     <div

@@ -206,14 +206,19 @@ const mainSource = readFileSync('src/main.ts', 'utf8');
 assert.doesNotMatch(mainSource, /app\.route\('\/automation'/, 'The legacy singular route is retired');
 assert.match(mainSource, /app\.route\('\/automations'/, 'The versioned Automations route remains mounted');
 
+// 2026-09-03: the Settings "Automations" tab is gone and the legacy controls
+// implementation it reached (retired by PS-466) is deleted. AutomationsView is
+// the only frontend owner of carrier/service controls; Settings must not grow
+// a shadow client back.
 const settingsSource = readFileSync('web/src/components/Views/SettingsView.tsx', 'utf8');
-assert.match(settingsSource, /\/automations\/controls/, 'Settings compatibility code delegates to the typed Automations API');
-assert.match(settingsSource, /toggleAutomationCarrier/, 'Settings Automation must expose carrier account controls');
-assert.match(settingsSource, /toggleAutomationService/, 'Settings Automation must expose service controls');
+assert.doesNotMatch(settingsSource, /\/automations\/controls/, 'Settings carries no shadow automation-controls client');
+assert.doesNotMatch(settingsSource, /toggleAutomation(?:Carrier|Service|StoreCarriers)/, 'Settings exposes no carrier or service controls');
+assert.doesNotMatch(settingsSource, /'automation'/, 'Settings has no automation drawer section');
 
 const automationsView = readFileSync('web/src/components/Views/AutomationsView.tsx', 'utf8');
 assert.match(automationsView, /\/automations\/controls\/carrier/, 'The Operations Console writes through the typed carrier endpoint');
 assert.match(automationsView, /\/automations\/controls\/service/, 'The Operations Console writes through the typed service endpoint');
+assert.match(automationsView, /["']\/automations\/controls["']/, 'The Operations Console reads control availability through the typed Automations API');
 assert.match(automationsView, /disabled=\{service\.locked \|\| busy != null\}/, 'HUGRAB locked controls remain visibly non-interactive');
 assert.doesNotMatch(automationsView, /["']\/automation\//, 'The Operations Console has no singular-route fallback');
 
