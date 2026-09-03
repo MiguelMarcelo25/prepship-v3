@@ -384,3 +384,54 @@ test.describe('PS-448 Dashboard remount cache proof', () => {
     ).toEqual(firstVisitReads.map((request) => `${request.method} ${request.pathname}`))
   })
 })
+
+// ============================================================================
+// DateRangePicker popover placement (collision-aware, 2026-09-03).
+//
+// The desktop popover used to anchor to the trigger's RIGHT edge at a fixed
+// 640px. The Dashboard trigger sits at the LEFT edge of the title row, so the
+// panel hung ~450px past the view's left edge and #view-dashboard's
+// overflow-x hidden clipped the presets column, the ‹ arrow and Sun–Wed.
+// Proof: at several viewport widths the open dialog lies entirely inside the
+// #view-dashboard box and the controls that used to be clipped are on screen.
+// ============================================================================
+test.describe('DateRangePicker popover stays inside the view', () => {
+  for (const width of [1680, 1280, 1024, 800]) {
+    test(`at ${width}px wide the open popover is fully inside #view-dashboard`, async ({ page }) => {
+      const backend = makeBackend()
+      await page.setViewportSize({ width, height: 900 })
+      await seedAuth(page)
+      await page.route('**/*', backend.route)
+      await page.goto(`${baseUrl}/dashboard`)
+      await page.waitForSelector('text=Out of Stock', { state: 'visible' })
+
+      const trigger = page
+        .locator('button[aria-haspopup="dialog"]')
+        .filter({ hasText: /\d{4}|Select date range/ })
+        .first()
+      await trigger.click()
+      const dialog = page.getByRole('dialog', { name: 'Select date range' })
+      await expect(dialog).toBeVisible()
+
+      const view = await page.locator('#view-dashboard').boundingBox()
+      const box = await dialog.boundingBox()
+      expect(view).not.toBeNull()
+      expect(box).not.toBeNull()
+      expect(box.x).toBeGreaterThanOrEqual(view.x - 1)
+      expect(box.x + box.width).toBeLessThanOrEqual(view.x + view.width + 1)
+      expect(box.width).toBeLessThanOrEqual(641)
+      expect(box.width).toBeGreaterThanOrEqual(360)
+
+      // The leftmost controls that were clipped before the fix.
+      const prev = await dialog.getByRole('button', { name: 'Previous' }).boundingBox()
+      const today = await dialog.getByRole('button', { name: 'Today' }).boundingBox()
+      expect(prev).not.toBeNull()
+      expect(today).not.toBeNull()
+      expect(prev.x).toBeGreaterThanOrEqual(view.x)
+      expect(today.x).toBeGreaterThanOrEqual(view.x)
+
+      const shots = process.env.DRP_PLACEMENT_SHOTS
+      if (shots) await page.screenshot({ path: `${shots}/drp-placement-${width}.png` })
+    })
+  }
+})

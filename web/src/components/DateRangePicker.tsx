@@ -46,8 +46,9 @@
  *     All date math is hand-rolled on `Date`, no library needed.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Calendar, ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { useDateRangePopoverPlacement } from './useDateRangePopoverPlacement'
 import { californiaDateInputValue } from '../lib/ca-time'
 import { api } from '../lib/api'
 
@@ -173,6 +174,10 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
 
   const popoverRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  // Desktop popover anchoring. Measured against the nearest clipping ancestor
+  // so the panel opens toward the side with room and shrinks when neither
+  // side has 640px — see ./date-range-picker-placement.ts for the policy.
+  const placement = useDateRangePopoverPlacement(triggerRef, open)
 
   // Reset draft whenever the popover opens (so cancel + reopen is clean).
   useEffect(() => {
@@ -288,7 +293,11 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
           ref={popoverRef}
           role="dialog"
           aria-label="Select date range"
-          className="fixed left-1/2 top-1/2 z-40 flex max-h-[calc(100vh-4rem)] w-[calc(100vw-1.5rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-card border border-line bg-surface shadow-2xl sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[640px] sm:max-w-[calc(100vw-2rem)] sm:translate-x-0 sm:translate-y-0 sm:flex-row sm:overflow-hidden"
+          data-align={placement.align}
+          style={{ '--drp-width': `${placement.width}px` } as CSSProperties}
+          className={`fixed left-1/2 top-1/2 z-40 flex max-h-[calc(100vh-4rem)] w-[calc(100vw-1.5rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-card border border-line bg-surface shadow-2xl sm:absolute sm:top-12 sm:w-[var(--drp-width,640px)] sm:max-w-[calc(100vw-2rem)] sm:translate-x-0 sm:translate-y-0 sm:flex-row sm:overflow-hidden ${
+            placement.align === 'left' ? 'sm:left-0 sm:right-auto' : 'sm:left-auto sm:right-0'
+          }`}
         >
           {/* Presets column */}
           <div className="border-b border-line bg-surface-2/40 p-2 sm:w-44 sm:border-b-0 sm:border-r">

@@ -956,6 +956,8 @@
     "test:print-queue-label-prefetch": "tsx scripts/print-queue-label-prefetch-guard.ts",
     "test:ps-466-hugrab-closure": "tsx scripts/ps-466-hugrab-hu10-closure-packet.ts",
     "test:ps-470-publish-gate-dirty": "tsx scripts/ps-470-publish-gate-dirty-guard.ts",
+    "test:date-range-picker-placement": "tsx scripts/date-range-picker-placement-guard.ts",
+    "test:date-range-picker-placement:browser": "playwright test web/e2e/dashboard-ps325-proof.spec.js --grep \"DateRangePicker popover\" --reporter=line",
     "test:ps-471-advisory-lock-safety": "tsx scripts/ps-471-advisory-lock-safety-guard.ts",
     "test:ps-472-automation-failure-visibility": "tsx scripts/ps-472-automation-failure-visibility-guard.ts",
     "test:ps-473-provider-error-detail": "tsx scripts/ps-473-provider-error-detail-guard.ts",
