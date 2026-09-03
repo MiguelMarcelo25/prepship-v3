@@ -51,7 +51,6 @@ import {
   classifyDestinationCountry,
   type BillingDestination,
 } from '../services/billing-destination-international';
-import { isBillingReturnLineType } from '../services/billing-row-status';
 import { billingReturnSplitInvoiceArms } from '../services/billing-return-split-arms';
 // PS-488 AC-6: the invoice's reconciliation projection. Pure — it fetches nothing; both
 // of its inputs are supplied by billingInvoiceData.
@@ -2287,9 +2286,10 @@ type InvoiceDetailRow = {
    */
   destination: BillingDestination;
   /**
-   * PS-490: the Order # cell, carrying a " - Return" suffix when the row includes return
-   * activity. Derived from the line types via isBillingReturnLineType (the canonical
-   * predicate), never by re-testing strings here.
+   * The Order # cell. The order number for an outbound row; for a canonical Return row,
+   * reconcileInvoiceRows replaces it with the STORED return reference, bare (e.g.
+   * 2050-RETURN), from billingRowIdentity. #1532: nothing here mints a return marker —
+   * the old `${baseOrderNumber} - Return` form put a second spelling on the same invoice.
    */
   order_number_label: string;
   // PS-275 (item 2): true when this order's prep/fulfillment fee was WAIVED ($0-shipping review).
@@ -2572,16 +2572,13 @@ async function billingInvoiceData(
     const duplicateLabel = duplicateDecision
       ? duplicateOrderStatusLabel(duplicateDecision)
       : null;
-    // PS-490: the Order # cell marks return activity, e.g. "0001 - Return". Adjustments
-    // keep their own label and are never suffixed — they are client-level money with no
-    // order identity.
-    const lineTypes = Array.isArray(r.billing_line_types) ? r.billing_line_types : [];
+    // The Order # cell. Adjustments keep their own label — they are client-level money
+    // with no order identity. #1532: no minted " - Return" here; a return's identity is
+    // its STORED reference, applied by reconcileInvoiceRows to every return_id-bearing
+    // row. Return lines without return_id (historical) keep the bare order number.
     const baseOrderNumber = r.billing_adjustment_id
       ? `Adjustment ${r.billing_adjustment_id.slice(0, 8)}`
       : String(r.order_number ?? r.order_id ?? '');
-    const returnSuffixedOrderNumber = !r.billing_adjustment_id && lineTypes.some(isBillingReturnLineType)
-      ? `${baseOrderNumber} - Return`
-      : baseOrderNumber;
     // PS-505: the duplicate marker moves INTO the Order # identity cell.
     //
     // It previously rode in `billing_status_label`, which is the column this card
@@ -2591,8 +2588,8 @@ async function billingInvoiceData(
     // "this is a copy of order N" is a statement about WHICH ORDER the row is, not about
     // its billing lifecycle. It must not become a replacement Status column.
     const orderNumberLabel = duplicateLabel
-      ? `${returnSuffixedOrderNumber} (${duplicateLabel})`
-      : returnSuffixedOrderNumber;
+      ? `${baseOrderNumber} (${duplicateLabel})`
+      : baseOrderNumber;
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -3135,7 +3132,7 @@ export async function renderInvoiceXlsx(args: {
       replacePickPack: d.replace_pick_pack_amt,
     });
     invoice.addRow({
-      // PS-490: carries the " - Return" suffix; the adjustment label is already baked in
+      // The Order # cell: the order number, or a canonical Return row's stored reference (#1532); the adjustment label is already baked in
       // by the same owner, so the branch that used to live here is gone.
       orderNumber: d.order_number_label,
       shipDate: invoiceBillingActivityDateCell(

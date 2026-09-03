@@ -438,7 +438,7 @@ export default function Invoice() {
                       <td className="py-1 font-mono text-brand">
                         {/* PS-488 M3 — the backend's persisted reference. orderId was
                             never a customer-facing number and is now the last resort. */}
-                        {l.displayReference ?? l.orderNumber ?? l.orderId ?? '—'}
+                        {l.displayReference ? `#${l.displayReference}` : (l.orderNumber ?? l.orderId ?? '—')}
                       </td>
                       <td className="py-1 text-ink-2 capitalize">
                         {/* PS-488 M3 — rowType ('Outbound' / 'Return') is the real kind of

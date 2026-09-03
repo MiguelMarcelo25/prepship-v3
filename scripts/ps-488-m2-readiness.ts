@@ -21,12 +21,12 @@
  * database.
  *
  * SYSTEM READINESS CANNOT BE CLAIMED HERE. This repository can only report on its own
- * writer and on database facts. The Client Portal is a second production writer of
- * canonical return rows whose schema has no `return_id` column at all
- * (client-portal-prepship src/services/billing.ts:776,797; its
- * src/db/schema/billing.ts has no returnId). Until CP-059's writer retirement is
- * deployed, system readiness is BLOCKED regardless of what the counts say — so this
- * command has no code path that can print SYSTEM: READY.
+ * writer and on database facts. The Client Portal WAS a second production writer of
+ * canonical return rows with no `return_id`; CP-059 retired that writer (the portal no
+ * longer inserts billing_line_items at all — confirmed 2026-09-03 under #1532). Rows it
+ * wrote before that remain with return_id NULL and are what the counts below report.
+ * This command still prints no SYSTEM: READY: the historical rows are a data question
+ * for DJ, not something a readiness script may decide.
  */
 import postgres from 'postgres';
 import {

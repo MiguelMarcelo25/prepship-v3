@@ -118,7 +118,7 @@ const richRow: InvoiceCsvDetailRow = {
   // PS-490: both new cells carry backend-resolved values. The serializer renders what the
   // canonical owners decided — it never classifies a country or tests a line type itself.
   destination: 'International',
-  order_number_label: 'PO-9001 - Return',
+  order_number_label: 'PO-9001-RETURN',
 };
 
 // An order with NO row_total (0) — the Total must fall back to
@@ -157,14 +157,14 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 assert.equal(
   lines[1],
   // PS-488 M3: two trailing BLANK cells, not two zeros. This fixture is an outbound
-  // shipment row that merely wears a " - Return" label — it has no return fee at all,
+  // shipment row that merely wears a return-reference label — it has no return fee at all,
   // which is a different fact from having a return fee of $0.00. Printing 0.00 in a
   // return column on every shipment line of every invoice asserted a charge that was
   // never made. returnMoneyRow below covers a real return; the waived case is covered in
   // ps-488-billing-row-reference-guard, where the same number renders WITH presence.
   // PS-513: two additional trailing blank cells for the appended Replace columns — this
   // fixture is an outbound row with no replacement, so both are blank (dashIfZero).
-  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001 - Return,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,,,,,',
+  'Billed 5/4/2026 12:00 AM PT | Fulfilled 5/3/2026 12:00 AM PT,PO-9001-RETURN,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,#90011,International,,,,,,',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 

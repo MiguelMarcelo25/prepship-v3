@@ -128,7 +128,7 @@ function returnRow(over: Record<string, unknown>) {
     has_return_postage_line: false, has_return_processing_line: false,
     row_total: '0', billing_status_label: 'Return', item_names: null, skus: null,
     carrier_code: null, box_label: '—', box_review: false, fee_waived: false,
-    destination: 'Domestic', order_number_label: '#1234-RETURN',
+    destination: 'Domestic', order_number_label: '1234-RETURN',
     ...over,
   } as never;
 }

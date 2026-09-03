@@ -90,28 +90,33 @@ check('an ADJUSTMENT has no destination and renders blank, not Needs Review',
   csvFor({ destination: 'Needs Review', billing_adjustment_id: 'adj-12345678' }));
 
 // ── the Return indicator on the Order # cell ───────────────────────────────
-check('the Order # cell carries the Return suffix the backend resolved',
-  csvFor({ order_number_label: '0001 - Return' }).includes(',0001 - Return,'),
-  csvFor({ order_number_label: '0001 - Return' }));
+check('the Order # cell carries the STORED return reference the backend resolved, bare (#1532)',
+  csvFor({ order_number_label: '0001-RETURN' }).includes(',0001-RETURN,'),
+  csvFor({ order_number_label: '0001-RETURN' }));
 check('without a resolved label the plain order number is still emitted',
   csvFor({}).includes(',N1,'), csvFor({}));
 
 // ── placement: the exports must not own the rule ───────────────────────────
 const route = readFileSync('src/routes/billing.ts', 'utf8').replace(/\r\n/g, '\n');
+// Negative assertions must see CODE, not the prose describing the rule (#1532's own comments
+// name the deleted form). Same stripping as ps-488-billing-row-reference-guard.
+const routeCode = route
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  .replace(/^\s*--.*$/gm, ''); // SQL comment lines inside query templates are prose too
 const csvSrc = readFileSync('src/routes/billing-invoice-csv.ts', 'utf8').replace(/\r\n/g, '\n');
 
 check('the export delegates to the canonical classifier',
   /classifyDestinationCountry\(r\.ship_to_country\)/.test(route));
-check('the export delegates the Return test to isBillingReturnLineType',
-  /lineTypes\.some\(isBillingReturnLineType\)/.test(route));
-// The CSV checks above feed order_number_label directly, which proves the SERIALIZER
-// renders it but never exercises the route's derivation. Pin the construction too, or the
-// suffix could be dropped in routes/billing.ts with every other check still green.
-check('the route actually builds the " - Return" suffix',
-  /\$\{baseOrderNumber\} - Return/.test(route),
-  'the Order # cell must gain the suffix when the order carries return lines');
-check('adjustments never gain a Return suffix',
-  /!r\.billing_adjustment_id && lineTypes\.some\(isBillingReturnLineType\)/.test(route));
+// #1532: the exports never mint a return marker. A return's identity is its STORED
+// reference, applied by reconcileInvoiceRows through billingRowIdentity; the old
+// `${baseOrderNumber} - Return` form put a second spelling on the same invoice, and the
+// route's own line-type test was the second owner that produced it.
+check('the route no longer mints a " - Return" suffix, nor tests line types to do so',
+  !/\$\{\w+\} - Return/.test(routeCode) && !/returnSuffixedOrderNumber/.test(routeCode) && !/isBillingReturnLineType/.test(routeCode),
+  'the Order # cell is the order number, or the stored return reference via reconcile');
+check('adjustments keep their own label and are never suffixed',
+  /r\.billing_adjustment_id\s*\?\s*`Adjustment \$\{r\.billing_adjustment_id\.slice\(0, 8\)\}`/.test(route));
 // THE placement assertion. A naive country test anywhere in an export re-creates the
 // PR bug the canonical owner exists to prevent (see PS-493 for the live instance).
 for (const [label, src] of [['routes/billing.ts', route], ['billing-invoice-csv.ts', csvSrc]] as const) {

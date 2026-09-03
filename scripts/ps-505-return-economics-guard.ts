@@ -405,7 +405,7 @@ check('the duplicate-order marker moved to the Order # cell', () => {
   const routes = readFileSync('src/routes/billing.ts', 'utf8');
   assert.match(
     routes,
-    /duplicateLabel\s*\r?\n?\s*\?\s*`\$\{returnSuffixedOrderNumber\}/,
+    /duplicateLabel\s*\r?\n?\s*\?\s*`\$\{baseOrderNumber\}/,
     'PS-491 duplicate marker must survive in the identity cell, not as a new Status column',
   );
 });

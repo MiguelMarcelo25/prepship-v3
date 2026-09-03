@@ -450,12 +450,14 @@ export function BillingDetailTable({
                         onClick={(e) => { e.stopPropagation(); onOpenOrderDetail(row.orderId as number) }}
                         style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
                       >
-                        {/* PS-488 M3: the backend owns visible identity. A Return row
-                            shows its persisted reference (#1234-RETURN); the outbound
-                            row shows its order number. The click target still opens the
-                            related order — navigation by orderId, identity by
-                            displayReference. No suffix is assembled here. */}
-                        {row.displayReference || row.orderNumber}
+                        {/* PS-488 M3: the backend owns visible identity — the bare
+                            stored reference (1234-RETURN) or order number (1234). The
+                            '#' is this operator surface's own convention (#1532); the
+                            customer exports and the Client Portal render the bare value.
+                            The click target still opens the related order — navigation
+                            by orderId, identity by displayReference. No suffix is
+                            assembled here. */}
+                        {row.displayReference ? `#${row.displayReference}` : row.orderNumber}
                       </button>
                       {row.destinationIsInternational === true ? (
                         <span

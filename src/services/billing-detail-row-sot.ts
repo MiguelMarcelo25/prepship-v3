@@ -134,7 +134,7 @@ export interface BillingDetailRowDto {
   lineTypes?: string[];
   /** PS-488 AC-1 — Outbound or Return, from the relational returnId. */
   rowType?: BillingRowType;
-  /** PS-488 AC-1 — `#1234` or `#1234-RETURN`. Display/search identity, never a key. */
+  /** PS-488 AC-1 — `1234` or `1234-RETURN`, bare (#1532). Display/search identity, never a key. */
   displayReference?: string | null;
   relatedOrderId?: number | string | null;
   returnId?: number | string | null;

@@ -164,7 +164,7 @@ test.describe('PS-488 M3 — return identity', () => {
     // AC-1: rowType comes from the relational returnId, so the outbound row must carry none.
     expect(outbound.returnId, 'the outbound row must not borrow a return identity').toBeNull()
     expect(outbound.returnReference).toBeNull()
-    expect(outbound.displayReference).toBe(`#PS488-M3-${id}-1`)
+    expect(outbound.displayReference).toBe(`PS488-M3-${id}-1`)
     expect(outbound.lineTypes.slice().sort()).toEqual(['package_cost', 'pick_pack', 'shipping'])
 
     // The outbound row's money is EXACTLY what was billed outbound. Return money folded in
@@ -200,11 +200,9 @@ test.describe('PS-488 M3 — return identity', () => {
       expect(row.packageTotal, `${ref} must carry no box cost`).toBe(0)
       expect(row.shippingTotal, `${ref} must carry no outbound shipping`).toBe(0)
       expect(row.returnId, `${ref} must carry a relational return id`).toBeTruthy()
-      // displayReference is asserted as DISTINCT and reference-bearing, not as an exact
-      // format. AC-1's wording describes `#1234-RETURN` while the read model emits
-      // `#<returnReference>`; which is intended is a product question, and pinning either
-      // reading here would turn a guess into a verified fact.
-      expect(row.displayReference).toContain(ref)
+      // #1532 (DJ ruling 2026-09-03): the DTO carries the BARE stored reference, exactly.
+      // The '#' is a per-surface prefix added by the operator table, never by the owner.
+      expect(row.displayReference).toBe(ref)
       expect(row.displayReference).not.toBe(outbound.displayReference)
     }
 

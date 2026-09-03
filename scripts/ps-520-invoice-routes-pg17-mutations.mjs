@@ -23,6 +23,7 @@ const YML = '.github/workflows/render-auto-deploy.yml';
 const DEPLOY_GUARD = 'npm run -s test:ps-520-render-deploy-pin';
 const LEAF = 'src/services/billing-return-line-types.ts';
 const LEAF_GUARD = 'npm run -s test:ps-521-return-vocabulary-leaf';
+const EXPORT_GUARD = 'npm run -s test:ps-490-billing-export-destination';
 const EVENT_CONTRACT = 'src/services/billing-return-event-contract.ts';
 
 /** Replace the Nth (1-based) occurrence, or return null if it does not exist. */
@@ -123,6 +124,10 @@ const MUTATIONS = [
     apply: (s) => replaceNth(s, 'return inList(BILLING_RETURN_LINE_TYPES);', 'return inList([...BILLING_RETURN_LINE_TYPES].reverse());', 1) },
   { name: 'PS-521 — the derived legacy read-only list reversed after the filter', file: EVENT_CONTRACT, checks: [LEAF_GUARD],
     apply: (s) => replaceNth(s, '    !(CANONICAL_RETURN_WRITE_LINE_TYPES as readonly string[]).includes(lineType),\n);', '    !(CANONICAL_RETURN_WRITE_LINE_TYPES as readonly string[]).includes(lineType),\n).reverse();', 1) },
+  // #1532: the deleted ' - Return' form must not come back. The proof cannot see it (its
+  // return has no stored reference), so the export guard owns this one.
+  { name: '#1532 — the export mints a " - Return" suffix again', file: BILLING, checks: [EXPORT_GUARD],
+    apply: (s) => replaceNth(s, 'const orderNumberLabel = duplicateLabel\n      ? `${baseOrderNumber} (${duplicateLabel})`\n      : baseOrderNumber;', 'const orderNumberLabel = duplicateLabel\n      ? `${baseOrderNumber} - Return (${duplicateLabel})`\n      : `${baseOrderNumber} - Return`;', 1) },
 ];
 
 if (!process.env.PS520_PG17_ADMIN_URL && !process.env.PS502_PG17_ADMIN_URL && !process.env.PS488_PG17_ADMIN_URL) {

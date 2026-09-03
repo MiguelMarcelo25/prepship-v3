@@ -83,7 +83,7 @@ check('the canonical classification is stamped onto every outbound shipment', ()
   const rows = reconcileInvoiceRows({ outbound: OUTBOUND, canonical: CANONICAL });
   for (const row of rows.filter((r) => r.rowType === 'Outbound')) {
     assert.equal(row.destination, 'International');
-    assert.equal(row.displayReference, '#1234');
+    assert.equal(row.displayReference, '1234');
   }
 });
 
@@ -98,7 +98,7 @@ check('return rows are APPENDED after all outbound rows, never interleaved', () 
 check('the return row carries its own money and its persisted reference', () => {
   const rows = reconcileInvoiceRows({ outbound: OUTBOUND, canonical: CANONICAL });
   const ret = rows.find((r) => r.rowType === 'Return')!;
-  assert.equal(ret.displayReference, '#1234-RETURN');
+  assert.equal(ret.displayReference, '1234-RETURN');
   assert.equal(ret.returnPostage, 7.73);
   assert.equal(ret.returnProcessing, 3);
   assert.equal(ret.grandTotal, 10.73, '7.73 postage + 3.00 processing');
@@ -167,7 +167,7 @@ const SQL_OUTBOUND = [
 check('the reconciler matches on order_id, the column the invoice actually has', () => {
   const rows = reconcileInvoiceRows({ outbound: SQL_OUTBOUND, canonical: CANONICAL });
   const outbound = rows.find((r) => r.rowType === 'Outbound')!;
-  assert.equal(outbound.displayReference, '#1234',
+  assert.equal(outbound.displayReference, '1234',
     'a snake_case invoice row must still match its canonical counterpart');
 });
 
@@ -189,7 +189,7 @@ check('an appended return row RENDERS — it is not a blank line', () => {
   assert.equal(ret.row_total, '10.73');
   assert.equal(ret.return_postage_amt, '7.73');
   assert.equal(ret.return_processing_amt, '3');
-  assert.equal(ret.order_number_label, '#1234-RETURN', 'the STORED reference, not a minted suffix');
+  assert.equal(ret.order_number_label, '1234-RETURN', 'the STORED reference, not a minted suffix');
   for (const outboundBucket of ['pickpack_amt', 'additional_amt', 'shipping_amt', 'storage_amt', 'package_cost_amt']) {
     assert.equal(ret[outboundBucket], '0', `${outboundBucket} must stay empty on a return row`);
   }
@@ -197,7 +197,7 @@ check('an appended return row RENDERS — it is not a blank line', () => {
   // End to end through the real serializer: this is what an operator downloads.
   const csv = renderInvoiceCsv(rows as never).split('\r\n');
   const cell = (line: string, header: string) => line.split(',')[INVOICE_CSV_HEADERS.indexOf(header as never)];
-  const returnLine = csv.find((l) => l.includes('#1234-RETURN'))!;
+  const returnLine = csv.find((l) => l.includes('1234-RETURN'))!;
   assert.ok(returnLine, 'the return row must reach the CSV at all');
   assert.equal(cell(returnLine, 'Total'), '10.73');
   assert.equal(cell(returnLine, 'Return Postage'), '7.73');

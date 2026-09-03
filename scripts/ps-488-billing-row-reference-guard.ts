@@ -28,17 +28,17 @@ function check(name: string, fn: () => void): void {
   }
 }
 
-check('an outbound order renders #1234 / Outbound', () => {
+check('an outbound order is identified as 1234 / Outbound (bare — #1532)', () => {
   assert.deepEqual(billingRowIdentity({ orderNumber: '1234', orderId: 99 }), {
     rowType: 'Outbound',
-    displayReference: '#1234',
+    displayReference: '1234',
   });
 });
 
-check('a return renders its STORED reference as a separate #1234-RETURN / Return row', () => {
+check('a return is identified by its STORED reference as a separate 1234-RETURN / Return row', () => {
   assert.deepEqual(
     billingRowIdentity({ orderNumber: '1234', orderId: 99, returnId: 7, returnReference: '1234-RETURN' }),
-    { rowType: 'Return', displayReference: '#1234-RETURN' },
+    { rowType: 'Return', displayReference: '1234-RETURN' },
   );
 });
 
@@ -46,7 +46,7 @@ check('additional returns keep the portal-assigned -2 / -3 numbering', () => {
   for (const ref of ['1234-RETURN-2', '1234-RETURN-3']) {
     assert.equal(
       billingRowIdentity({ orderNumber: '1234', returnId: 8, returnReference: ref }).displayReference,
-      `#${ref}`,
+      ref,
     );
   }
 });
@@ -70,20 +70,20 @@ check('row type comes from the relational returnId, not from the reference text'
   // An outbound order number legitimately containing "RETURN" must stay Outbound.
   const r = billingRowIdentity({ orderNumber: 'RETURN-1234', orderId: 99 });
   assert.equal(r.rowType, 'Outbound');
-  assert.equal(r.displayReference, '#RETURN-1234');
+  assert.equal(r.displayReference, 'RETURN-1234');
 });
 
-check('a stored reference that already carries # is not doubled', () => {
+check('a stored reference that carries # still yields the bare identity', () => {
   assert.equal(
-    billingRowIdentity({ returnId: 3, returnReference: '#1234-RETURN' }).displayReference,
-    '#1234-RETURN',
+    billingRowIdentity({ returnId: 3, returnReference: '1234-RETURN' }).displayReference,
+    '1234-RETURN',
   );
-  assert.equal(billingRowIdentity({ orderNumber: '#1234' }).displayReference, '#1234');
+  assert.equal(billingRowIdentity({ orderNumber: '1234' }).displayReference, '1234');
 });
 
-check('a row is never anonymous, but never shows #null or #0 either', () => {
-  assert.equal(billingRowIdentity({ orderNumber: null, orderId: 4242 }).displayReference, '#4242');
-  assert.equal(billingRowIdentity({ orderNumber: '   ', orderId: 4242 }).displayReference, '#4242');
+check('a row is never anonymous, but never shows null or 0 either', () => {
+  assert.equal(billingRowIdentity({ orderNumber: null, orderId: 4242 }).displayReference, '4242');
+  assert.equal(billingRowIdentity({ orderNumber: '   ', orderId: 4242 }).displayReference, '4242');
   for (const bad of [null, undefined, 0, -1, Number.NaN]) {
     assert.equal(
       billingRowIdentity({ orderNumber: null, orderId: bad as number }).displayReference,
@@ -114,7 +114,7 @@ check('an outbound row carries rowType/displayReference/destination on the DTO',
   // the row the Billing columns and CP-059 consume.
   const [row] = toBillingDetailOrderRows([{ ...base, destinationCountry: 'US' }]);
   assert.equal(row.rowType, 'Outbound');
-  assert.equal(row.displayReference, '#1234');
+  assert.equal(row.displayReference, '1234');
   assert.equal(row.destination, 'Domestic');
 });
 
@@ -123,7 +123,7 @@ check('a return row carries its own reference and Return type', () => {
     { ...base, returnId: 7, returnReference: '1234-RETURN', destinationCountry: 'CA' },
   ]);
   assert.equal(row.rowType, 'Return');
-  assert.equal(row.displayReference, '#1234-RETURN');
+  assert.equal(row.displayReference, '1234-RETURN');
   assert.equal(row.destination, 'International');
 });
 
@@ -154,9 +154,9 @@ check('outbound and return stay SEPARATE rows and no fee hides behind #1234', ()
 
   const outbound = rows.find((r) => r.rowType === 'Outbound')!;
   const ret = rows.find((r) => r.rowType === 'Return')!;
-  assert.equal(outbound.displayReference, '#1234');
+  assert.equal(outbound.displayReference, '1234');
   assert.equal(outbound.grandTotal, 2.5, 'no return fee may merge into the outbound row');
-  assert.equal(ret.displayReference, '#1234-RETURN');
+  assert.equal(ret.displayReference, '1234-RETURN');
   assert.equal(ret.grandTotal, 10.73, '7.73 postage + 3.00 processing');
   // PS-505 INVERTED. These previously asserted `ret.shippingTotal === 7.73` and
   // `ret.pickpackTotal === 3` — the dual-bucket behaviour that put one return charge in
@@ -224,14 +224,14 @@ check('the field names the UI reads exist on a real DTO row', () => {
   const table = stripGuardComments(readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8'));
   const invoice = stripGuardComments(readFileSync('web/src/pages/Invoice.tsx', 'utf8'));
 
-  assert.ok(/\{row\.displayReference \|\| row\.orderNumber\}/.test(table),
+  assert.ok(/\{row\.displayReference \? `#\$\{row\.displayReference\}` : row\.orderNumber\}/.test(table),
     'the rendered Order # cell must show the backend reference');
   assert.ok(/case 'orderNumber': return row\.displayReference \|\|/.test(table),
     'the Order # sort must order on the backend reference, or a Return sorts under the outbound number');
   assert.ok(/`return:\$\{row\.returnId\}`/.test(table),
     'the table row key must be the relational return id');
 
-  assert.ok(/\{l\.displayReference \?\? l\.orderNumber \?\? l\.orderId \?\? '—'\}/.test(invoice),
+  assert.ok(/\{l\.displayReference \? `#\$\{l\.displayReference\}` : \(l\.orderNumber \?\? l\.orderId \?\? '—'\)\}/.test(invoice),
     'the invoice Order # cell must show the backend reference');
   assert.ok(/case 'order':\s*return line\.displayReference \?\?/.test(invoice),
     'the invoice Order # sort must order on the backend reference');
