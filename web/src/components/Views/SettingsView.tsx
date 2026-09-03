@@ -63,7 +63,6 @@ import {
   Clock,
   MapPin,
   Activity,
-  Bot,
   Lock,
   Search,
   Percent,
@@ -941,15 +940,6 @@ export default function SettingsView() {
       tone: 'amber',
     },
     {
-      id: 'automation',
-      label: 'Automations workspace',
-      short: 'Automations',
-      description:
-        'Carrier/service controls and versioned workflow rules now live in the top-level Automations workspace.',
-      icon: Bot,
-      tone: 'emerald',
-    },
-    {
       id: 'sandbox',
       label: 'Sandbox — Test Orders',
       short: 'Sandbox',
@@ -1337,32 +1327,9 @@ export default function SettingsView() {
               ) : null}
 
               {/* ─── AUTOMATION panel ──────────────────────────── */}
-              {/* PS-466: the legacy availability panel is gone -- carrier/service controls
-                  moved to the Automations workspace. This section is a compatibility
-                  landing that points there. The HUGRAB carrier-disable protection it
-                  used to hold is backend-owned and unchanged. */}
-              {activeSection === 'automation' ? (
-                <SectionCard
-                  tone="emerald"
-                  icon={<Bot size={18} />}
-                  title="Automations moved"
-                  subtitle="Rules, simulations, history, and carrier/service controls now share one workspace."
-                >
-                  <div className="rounded-lg bg-brand-bg p-4 text-small text-ink-2 ring-1 ring-brand-border">
-                    The legacy <code>/settings/automation</code> URL is retained as a compatibility landing only.
-                    HUGRAB carrier/service protections remain backend-owned and unchanged.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => navigate('/automations')}
-                    className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg bg-brand px-4 text-small font-bold text-white hover:bg-brand-dark"
-                  >
-                    Open Automations workspace
-                    <Sparkles size={14} />
-                  </button>
-                </SectionCard>
-              ) : null}
-
+              {/* Operator request 2026-09-03: the Settings "Automations" pointer tab
+                  is gone — Automations is a top-level sidebar entry. The legacy
+                  /settings/automation URL still redirects there (Home.tsx). */}
               {activeSection === 'sandbox' ? (
                 <SandboxTestOrdersPanel
                   testClients={testClients}

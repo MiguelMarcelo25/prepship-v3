@@ -280,7 +280,9 @@ for (const viewport of [
     } else {
       await expect(page.locator('#inventory-tab-alerts')).toBeVisible()
     }
-    await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Refresh/ })).toBeVisible()
+    // Operator request 2026-09-03: Stock Levels has no Refresh button (it wrapped
+    // onto its own row under the import/edit actions). Other tabs keep it.
+    await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Refresh/ })).toHaveCount(0)
     await expect(page.locator('.inventory-stock-toolbar')).toBeVisible()
     await expectPanelGutter(page, '#inv-panel-stock')
     await expect(page.getByText('B07PKGDPBJ')).toBeVisible()
@@ -317,6 +319,7 @@ for (const viewport of [
     await expect(page.getByText('Receive Inventory')).toBeVisible()
     await expectPanelGutter(page, '#inv-panel-receive')
     await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Import SKUs from Orders/ })).toHaveCount(0)
+    await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Refresh/ })).toBeVisible()
     await page.locator('#inv-panel-receive select').first().selectOption('1')
     const receiveSkuInput = page.getByRole('combobox', { name: 'SKU or product name' }).first()
     await receiveSkuInput.click()

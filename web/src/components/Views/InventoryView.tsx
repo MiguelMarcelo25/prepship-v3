@@ -3142,10 +3142,16 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       <span>{purgeBusy ? 'Purging...' : 'Purge Test Data'}</span>
                     </button>
                   ) : null}
-                  <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={() => void refreshInventoryView()}>
-                    <RefreshCw size={13} strokeWidth={2.25} />
-                    <span>Refresh</span>
-                  </button>
+                  {/* Operator request 2026-09-03: no Refresh on Stock Levels —
+                      it wrapped onto its own row under the four import/edit
+                      actions. The other tabs keep it (Receive, Alerts, Parent
+                      SKUs, History have no other header action). */}
+                  {activeTab !== 'stock' ? (
+                    <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={() => void refreshInventoryView()}>
+                      <RefreshCw size={13} strokeWidth={2.25} />
+                      <span>Refresh</span>
+                    </button>
+                  ) : null}
                 </div>
               </motion.header>
             </AnimatePresence>

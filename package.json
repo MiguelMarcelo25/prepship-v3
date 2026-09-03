@@ -942,6 +942,8 @@
     "test:orders-expedited:browser": "playwright test web/e2e/orders-expedited.spec.js --reporter=line",
     "test:orders-daily-strip:browser": "playwright test web/e2e/orders-daily-strip-resilience.spec.js --reporter=line",
     "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line",
+    "test:settings-rail:browser": "playwright test web/e2e/settings-rail.spec.js --reporter=line",
+    "test:inventory-header:browser": "playwright test web/e2e/inventory-header.spec.js --reporter=line",
     "test:site-actions:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
     "test:workflow-certification:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
     "test:api-contracts": "node scripts/api-contracts-guard.mjs",
