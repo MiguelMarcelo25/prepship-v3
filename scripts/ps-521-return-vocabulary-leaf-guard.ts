@@ -10,6 +10,9 @@
  *  2. Membership cannot drift between the aggregate and the split buckets: executed set
  *     equality, aggregate = postage ∪ processing ∪ bare, buckets disjoint. (The aggregate stays
  *     a LITERAL list for the portal's scraper and for SQL order; this is what makes that safe.)
+ *     ORDER is contractual and held three ways: the executed tuples, the declaration text the
+ *     portal scrapes, and the SQL helpers RENDERED through PgDialect — plus the derived legacy /
+ *     governed / sweep lists, executed.
  *  3. The former owners delegate: billing-row-status.ts declares no vocabulary of its own and
  *     re-exports the leaf's; billing-return-date-correction-apply.ts imports the aggregate
  *     instead of assembling a list; billing-return-event-contract.ts derives its legacy
@@ -21,11 +24,23 @@
  */
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import {
+  ALL_GOVERNED_RETURN_LINE_TYPES,
+  CANONICAL_RETURN_WRITE_LINE_TYPES,
+  LEGACY_RETURN_READ_ONLY_LINE_TYPES,
+} from '../src/services/billing-return-event-contract';
+import { OUTBOUND_SWEEP_PRESERVED_LINE_TYPES } from '../src/services/billing-outbound-sweep';
+import { REPLACEMENT_LINE_TYPES } from '../src/services/replacement-billing-planner';
 import {
   BILLING_RETURN_BARE_LINE_TYPES,
   BILLING_RETURN_LINE_TYPES,
   BILLING_RETURN_POSTAGE_LINE_TYPES,
   BILLING_RETURN_PROCESSING_LINE_TYPES,
+  billingReturnLineTypesSql,
+  billingReturnPostageLineTypesSql,
+  billingReturnProcessingLineTypesSql,
   isBillingReturnLineType,
   isBillingReturnPostageLineType,
   isBillingReturnProcessingLineType,
@@ -78,13 +93,34 @@ check('the aggregate and the split lists are in their CONTRACT order (the SQL in
   assert.deepEqual([...BILLING_RETURN_PROCESSING_LINE_TYPES], [...CONTRACT_ORDER.processing], 'processing order changed');
   assert.deepEqual([...BILLING_RETURN_BARE_LINE_TYPES], [...CONTRACT_ORDER.bare], 'bare order changed');
 });
-check('the rendered SQL in-list carries the spellings in that same order', () => {
+check('the declaration TEXT of the aggregate is in contract order (what the portal scrapes)', () => {
   const src = read(LEAF);
-  // The literal declaration IS what renders: inList() maps the tuple in order. Assert the source
-  // order matches the executed tuple, so a declaration edit cannot disagree with the export.
   const block = /export const BILLING_RETURN_LINE_TYPES = \[([\s\S]*?)\]/.exec(src)?.[1] ?? '';
   const declared = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1]);
   assert.deepEqual(declared, [...CONTRACT_ORDER.all], 'the declaration text is not in contract order');
+});
+// RENDERED, not read. The audit reversed the list INSIDE billingReturnLineTypesSql() — declarations
+// untouched — and every gate stayed green, because the "rendered" check above reread the source.
+// The helpers are now rendered through the real dialect and their bound params compared, in order,
+// with the contract: this is the order every `b.line_type in (...)` arm actually receives.
+const dialect = new PgDialect();
+const renderedParams = (fragment: SQL): unknown[] => dialect.sqlToQuery(fragment).params;
+check('the three SQL helpers RENDER their spellings as bound params in contract order (through PgDialect, executed)', () => {
+  assert.deepEqual(renderedParams(billingReturnLineTypesSql()), [...CONTRACT_ORDER.all], 'aggregate in-list renders out of order');
+  assert.deepEqual(renderedParams(billingReturnPostageLineTypesSql()), [...CONTRACT_ORDER.postage], 'postage in-list renders out of order');
+  assert.deepEqual(renderedParams(billingReturnProcessingLineTypesSql()), [...CONTRACT_ORDER.processing], 'processing in-list renders out of order');
+  const text = dialect.sqlToQuery(billingReturnLineTypesSql()).sql;
+  assert.match(text, /^\(\$1, \$2, \$3, \$4, \$5\)$/, `the aggregate renders as an in-list of five placeholders, got ${text}`);
+});
+// EXECUTED, not documented. The event contract derives its legacy list from the owner and
+// promises "order unchanged"; the audit appended .reverse() and nothing noticed. The derived
+// lists — and the sweep list built from them — are executed and compared with the documented order.
+check('the derived legacy, governed and sweep lists keep their documented order (executed)', () => {
+  const legacy = ['return', 'return_label', 'return_processing'];
+  assert.deepEqual([...LEGACY_RETURN_READ_ONLY_LINE_TYPES], legacy, 'legacy read-only order changed');
+  assert.deepEqual([...ALL_GOVERNED_RETURN_LINE_TYPES], [...CANONICAL_RETURN_WRITE_LINE_TYPES, ...legacy], 'governed order changed');
+  assert.deepEqual([...OUTBOUND_SWEEP_PRESERVED_LINE_TYPES], [...CANONICAL_RETURN_WRITE_LINE_TYPES, ...legacy, ...REPLACEMENT_LINE_TYPES], 'sweep-preserved order changed');
+  assert.deepEqual(new Set(LEGACY_RETURN_READ_ONLY_LINE_TYPES), new Set(CONTRACT_ORDER.all.filter((t) => !(CANONICAL_RETURN_WRITE_LINE_TYPES as readonly string[]).includes(t))), 'legacy ≠ aggregate minus canonical');
 });
 check('postage and processing are disjoint, and neither contains the bare spelling', () => {
   for (const t of BILLING_RETURN_POSTAGE_LINE_TYPES) assert.ok(!(BILLING_RETURN_PROCESSING_LINE_TYPES as readonly string[]).includes(t), `${t} is in both buckets`);
